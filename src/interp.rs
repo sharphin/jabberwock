@@ -404,6 +404,32 @@ impl Interp {
         v
     }
 
+    /// 値の写し。中の own はすべて、それを借りた読むだけの ref にする（own は唯一の持ち主なので写せない）
+    fn view_of(&self, v: Value, span: Span, what: &str) -> Value {
+        match v {
+            Value::Own(slot) => Value::Ref(RefVal {
+                slot,
+                generation: self.heap.slots[slot].generation,
+                path: Vec::new(),
+                borrowed_at: span,
+                what: what.to_string(),
+                mutable: false,
+            }),
+            Value::Struct(def, fields) => {
+                Value::Struct(def, fields.into_iter().map(|f| self.view_of(f, span, what)).collect())
+            }
+            Value::Array(items, list) => {
+                Value::Array(items.into_iter().map(|f| self.view_of(f, span, what)).collect(), list)
+            }
+            Value::Enum { variant, fields, copy } => Value::Enum {
+                variant,
+                fields: fields.into_iter().map(|f| self.view_of(f, span, what)).collect(),
+                copy,
+            },
+            other => other,
+        }
+    }
+
     /// スロットの中の道筋の先にある値
     fn at(&self, slot: usize, path: &[usize]) -> &Value {
         let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
@@ -785,11 +811,32 @@ impl Interp {
                 let ran = !views.is_empty();
                 let mut out = Ok(Flow::Normal);
                 for v in views {
+                    // 構造体などムーブする要素は、その時点の写しを一時的なスロットに置き、読むだけの ref で渡す。
+                    // 写しの中の own は、元の要素の own を借りた ref にする（元が解放されれば、たどったときに検出される）
+                    let (v, copy) = if v.moves() {
+                        let v = self.view_of(v, *var_span, &what);
+                        let slot = self.heap.alloc(v);
+                        let r = RefVal {
+                            slot,
+                            generation: self.heap.slots[slot].generation,
+                            path: Vec::new(),
+                            borrowed_at: *var_span,
+                            what: what.clone(),
+                            mutable: false,
+                        };
+                        (Value::Ref(r), Some(slot))
+                    } else {
+                        (v, None)
+                    };
                     self.frames.last_mut().expect("frame").scopes.push(Vec::new());
                     self.declare(var, v, false, *var_span);
                     let r = self.loop_iteration(body);
                     let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
                     self.drop_scope(scope, *var_span, "次の周回へ進んだ");
+                    if let Some(slot) = copy {
+                        // 写しは捨てる（中は ref だけなので、解放するものはない）
+                        self.vacate(slot, *var_span, "for の次の周回へ進んだ");
+                    }
                     match r {
                         Ok(None) => {}
                         Ok(Some(f)) => {
@@ -1482,6 +1529,31 @@ impl Interp {
                     }
                     None => Value::Enum { variant: Rc::from("None"), fields: Vec::new(), copy: true },
                 },
+                "remove" => {
+                    let i = match vals[0] {
+                        Value::Int(i, _) => i,
+                        _ => unreachable!("type checked"),
+                    };
+                    let k = bounds(i, items.len(), args[0].span)?;
+                    items.remove(k)
+                }
+                "insert" => {
+                    let i = match vals[0] {
+                        Value::Int(i, _) => i,
+                        _ => unreachable!("type checked"),
+                    };
+                    // 末尾（長さと同じ位置）にも入れられる
+                    if i < 0 || i > items.len() as i128 {
+                        let len = items.len();
+                        let v = vals.remove(1);
+                        self.release(v, span, "入れられずに捨てられた");
+                        return Err(Diagnostic::new("insert の位置が範囲の外です")
+                            .primary(args[0].span, format!("位置は {} ですが、長さは {} です", i, len))
+                            .note("入れられる位置は 0〜長さ です"));
+                    }
+                    items.insert(i as usize, vals.remove(1));
+                    Value::Unit
+                }
                 _ => {
                     return Err(Diagnostic::new(format!("メソッド `{}` はありません", name)).primary(span, "ここ"))
                 }

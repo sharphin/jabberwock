@@ -116,6 +116,7 @@
   リストは `Value::Array(_, true)`（いつもムーブ）・`Ty::List`。`[...]` がリストかは型検査が `ArrayLit` の `Cell<bool>` に書く。
   `push` / `pop` は `eval_method` が場所の中のリストをじかに書き換える（丸ごと複製しない）。
   `for x in a`（`Stmt::ForEach`）は `eval_borrow` で借り、始めた時点の要素を回す。own の要素は `RefVal` にして渡す。
+  構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
 
 ## 設計の決めごと
 

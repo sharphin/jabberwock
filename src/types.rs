@@ -903,15 +903,14 @@ impl<'a> Checker<'a> {
                         .primary(iter.span, format!("ここは `{}` です", t.show()))
                         .note("数を回すなら `for i in range(10)` と書きます"));
                 };
-                // 要素はコピーできればコピー、own なら借りた ref で受け取る（配列は借りるだけ）
+                // 要素はコピーできればコピー、own なら own の先を借りた ref、それ以外（構造体など）は
+                // 始めた時点の要素を読むだけの ref で受け取る
                 let vt = if self.copyable(&elem) {
                     elem
                 } else if let Ty::Own(u) = &elem {
                     Ty::Ref(u.clone(), false)
                 } else {
-                    return Err(Diagnostic::new(format!("`{}` の要素は借りられないので、for で回せません", elem.show()))
-                        .primary(iter.span, "要素がコピーできる型か own のときだけ回せる")
-                        .note("`for i in range(a.len())` と添字で回してください"));
+                    Ty::Ref(Box::new(elem), false)
                 };
                 self.scopes.push(HashMap::new());
                 self.declare(var, VarInfo { ty: vt, mutable: false, decl: *var_span })?;
@@ -1420,9 +1419,11 @@ impl<'a> Checker<'a> {
             "len" => (0, I64, false),
             "push" => (1, Ty::Unit, true),
             "pop" => (0, Ty::Enum("Option".to_string(), vec![elem.clone()]), true),
+            "remove" => (1, elem.clone(), true),
+            "insert" => (2, Ty::Unit, true),
             _ => {
                 return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name))
-                    .primary(span, "リストのメソッドは `len()`・`push(x)`・`pop()` です"))
+                    .primary(span, "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)` です"))
             }
         };
         if args.len() != want {
@@ -1433,7 +1434,16 @@ impl<'a> Checker<'a> {
             a.through(rt, self.origin(recv), describe(recv))
                 .require(span, format!("リストを `{}` で書き換えようとした", name).as_str())?;
         }
-        if let Some(a) = args.first() {
+        // 添字（insert・remove の最初の引数）は整数、要素（push・insert の最後の引数）は要素の型
+        let (index, value) = match name {
+            "remove" => (args.first(), None),
+            "insert" => (args.first(), args.get(1)),
+            _ => (None, args.first()),
+        };
+        if let Some(i) = index {
+            self.index_value(i)?;
+        }
+        if let Some(a) = value {
             self.expect(a, elem)?;
         }
         Ok(ret)
