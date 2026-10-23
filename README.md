@@ -74,7 +74,7 @@ let name = match n {                  // Java の switch の矢印形式。値�
 };
 ```
 
-言語仕様の決めごとは [docs/design-decisions.md](docs/design-decisions.md) にまとめている。
+言語仕様は [docs/spec.md](docs/spec.md)、決めた理由は [docs/design-decisions.md](docs/design-decisions.md) にまとめている。
 
 ## 構造体
 
