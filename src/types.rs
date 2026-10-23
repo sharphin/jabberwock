@@ -321,6 +321,8 @@ pub struct TypeInfo {
     pub var_ty: HashMap<Span, Ty>,
     /// 関数の戻り値の型（なければ Unit）
     pub fn_ret: HashMap<String, Ty>,
+    /// enum の型の引数と種類（名前, 中身の型。型の引数は `Ty::Param` のまま）
+    pub enums: HashMap<String, (Vec<String>, Vec<(String, Vec<Ty>)>)>,
 }
 
 impl TypeInfo {
@@ -399,6 +401,8 @@ pub fn check_with_info(prog: &Program) -> R<(Vec<Diagnostic>, TypeInfo)> {
         for v in &en.variants {
             all.push(v.fields.iter().map(|(t, _)| c.resolve(t)).collect::<R<Vec<_>>>()?);
         }
+        let variants = en.variants.iter().map(|v| v.name.clone()).zip(all.iter().cloned()).collect();
+        c.info.enums.insert(en.name.clone(), (en.tparams.clone(), variants));
         c.enums.get_mut(en.name.as_str()).expect("inserted").1 = all;
     }
     for s in &prog.structs {

@@ -70,6 +70,11 @@ impl<'a> Machine<'a> {
                     self.depth -= 1;
                     return Ok(v);
                 }
+                Term::Switch(place, arms, other) => {
+                    let (slot, path) = self.resolve(f, &locs, place)?;
+                    let Value::Enum { variant, .. } = at(self.it, slot, &path) else { unreachable!("switch on an enum") };
+                    arms.iter().find(|(v, _)| *v == *variant).map_or(*other, |(_, b)| *b)
+                }
                 Term::Step { counter, step, next, done } => {
                     let Loc::Live(slot) = locs[*counter] else { unreachable!("loop counter is live") };
                     let st = match self.operand(f, &mut locs, step)? {
@@ -110,7 +115,7 @@ impl<'a> Machine<'a> {
                     return Ok(());
                 }
                 let (slot, path) = self.resolve(f, locs, place)?;
-                let old = std::mem::replace(self.it.at_mut(slot, &path), v);
+                let old = std::mem::replace(at_mut(self.it, slot, &path), v);
                 self.it.release(old, *span, "上書きされて、古い値が解放された");
             }
             Inst::Drop { local, span, why } => {
@@ -139,12 +144,12 @@ impl<'a> Machine<'a> {
         for p in &place.proj {
             match p {
                 Proj::Deref(check, span) => {
-                    let ptr = self.it.at(slot, &path).clone();
+                    let ptr = at(self.it, slot, &path).clone();
                     let (s, pth) = self.it.check_ptr(&ptr, *span, *check)?;
                     slot = s;
                     path = pth;
                 }
-                Proj::Field(i, _) => path.push(*i),
+                Proj::Field(i, _) | Proj::Variant(_, i) => path.push(*i),
             }
         }
         Ok((slot, path))
@@ -161,7 +166,7 @@ impl<'a> Machine<'a> {
             }),
             Operand::Copy(place) => {
                 let (slot, path) = self.resolve(f, locs, place)?;
-                Ok(self.it.at(slot, &path).clone())
+                Ok(at(self.it, slot, &path).clone())
             }
             Operand::Move(l, span) => match locs[*l] {
                 Loc::Live(slot) => {
@@ -207,7 +212,7 @@ impl<'a> Machine<'a> {
             }),
             Rvalue::Ref { place, mutable, what, span } => {
                 let (slot, path) = self.resolve(f, locs, place)?;
-                Ok(match self.it.at(slot, &path) {
+                Ok(match at(self.it, slot, &path) {
                     Value::Own(s) => {
                         let s = *s;
                         Value::Ref(RefVal {
@@ -234,6 +239,13 @@ impl<'a> Machine<'a> {
                         })
                     }
                 })
+            }
+            Rvalue::Enum(variant, ops, copy) => {
+                Ok(Value::Enum { variant: variant.clone(), fields: self.operands(f, locs, ops)?, copy: *copy })
+            }
+            Rvalue::Take(place) => {
+                let (slot, path) = self.resolve(f, locs, place)?;
+                Ok(std::mem::replace(at_mut(self.it, slot, &path), Value::Unit))
             }
             Rvalue::Own(a) => {
                 let v = self.operand(f, locs, a)?;
@@ -289,4 +301,27 @@ impl<'a> Machine<'a> {
             }
         }
     }
+}
+
+/// スロットの中の道筋の先にある値。interp の `at` と違い、enum の中身もたどる（match で受け取るとき）
+fn at<'v>(it: &'v Interp, slot: usize, path: &[usize]) -> &'v Value {
+    let mut v = it.heap.slots[slot].value.as_ref().expect("live slot");
+    for &i in path {
+        v = match v {
+            Value::Struct(_, fields) | Value::Array(fields, _) | Value::Enum { fields, .. } => &fields[i],
+            _ => unreachable!("paths go through structs, arrays and enums"),
+        };
+    }
+    v
+}
+
+fn at_mut<'v>(it: &'v mut Interp, slot: usize, path: &[usize]) -> &'v mut Value {
+    let mut v = it.heap.slots[slot].value.as_mut().expect("live slot");
+    for &i in path {
+        v = match v {
+            Value::Struct(_, fields) | Value::Array(fields, _) | Value::Enum { fields, .. } => &mut fields[i],
+            _ => unreachable!("paths go through structs, arrays and enums"),
+        };
+    }
+    v
 }

@@ -297,6 +297,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             Stmt::Expr(e) => match &e.kind {
                 ExprKind::If { cond, then, els } => self.if_expr(cond, then, els.as_ref(), None)?,
+                ExprKind::Match { scrut, arms, default } => self.match_expr(scrut, arms, default.as_ref(), None)?,
                 _ => {
                     let v = self.expr(e)?;
                     if !matches!(v, Operand::Const(_)) {
@@ -505,6 +506,199 @@ impl<'a, 'p> FnLower<'a, 'p> {
         Ok(())
     }
 
+    /// `match`。`dest` があれば値をそこに入れる
+    fn match_expr(&mut self, scrut: &Expr, arms: &[ast::MatchArm], default: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
+        let st = self.ty(scrut);
+        let s = match self.expr(scrut)? {
+            Operand::Move(t, _) => t,
+            v => {
+                let t = self.temp(st.clone(), scrut.span);
+                self.assign(t, Rvalue::Use(v), scrut.span);
+                t
+            }
+        };
+        let join = self.new_block();
+        let set_unit = |me: &mut Self, span: Span| {
+            if let Some(d) = dest {
+                me.assign(d, Rvalue::Use(Operand::Const(Const::Unit)), span);
+            }
+        };
+        let drop_s = |me: &mut Self, why: &str| {
+            me.emit(Inst::Drop { local: s, span: scrut.span, why: why.to_string() });
+        };
+        // enum（own / ref の先の enum も）
+        let (ety, by_ref, place) = match &st {
+            Ty::Enum(..) => (Some(st.clone()), None, Place::local(s, scrut.span)),
+            Ty::Own(x) | Ty::Ref(x, _) if matches!(**x, Ty::Enum(..)) => {
+                let m = match &st {
+                    Ty::Ref(_, m) => Some(*m),
+                    _ => None,
+                };
+                let mut p = Place::local(s, scrut.span);
+                p.proj.push(Proj::Deref(ast::Check::Required, scrut.span));
+                (Some((**x).clone()), m, p)
+            }
+            _ => (None, None, Place::local(s, scrut.span)),
+        };
+        if let Some(ety) = ety {
+            // 種類ごとに、最初に書いた case へ
+            let mut table: Vec<(Rc<str>, Bb)> = Vec::new();
+            let mut todo = Vec::new();
+            for arm in arms {
+                for (p, _) in &arm.pats {
+                    let ast::Pat::Variant(v, binds) = p else { return Err("enum の match に値の case".to_string()) };
+                    if table.iter().any(|(n, _)| **n == **v) {
+                        continue;
+                    }
+                    let bb = self.new_block();
+                    table.push((Rc::from(v.as_str()), bb));
+                    todo.push((bb, v, binds, &arm.body));
+                }
+            }
+            let other = self.new_block();
+            self.blocks[self.cur].term = Term::Switch(place.clone(), table, other);
+            for (bb, v, binds, body) in todo {
+                self.cur = bb;
+                let ftys = self.variant_fields(&ety, v)?;
+                self.scopes.push(Vec::new());
+                for (i, (b, bspan)) in binds.iter().enumerate() {
+                    let mut fp = place.clone();
+                    fp.proj.push(Proj::Variant(Rc::from(v.as_str()), i));
+                    let value = match by_ref {
+                        // 値の match: 中身を受け取る名前へ移す
+                        None => Rvalue::Take(fp),
+                        Some(_) if b == "_" => continue,
+                        // 借りた match: 中身の own は借りた ref として受け取る
+                        Some(m) if matches!(ftys.get(i), Some(Ty::Own(_))) => {
+                            Rvalue::Ref { place: fp, mutable: m, what: format!("{} の中身 {}", describe(scrut), b), span: *bspan }
+                        }
+                        Some(_) => Rvalue::Use(Operand::Copy(fp)),
+                    };
+                    if b == "_" {
+                        let t = self.temp_of(Ty::Unit, value, *bspan);
+                        self.emit(Inst::Discard { value: t, span: *bspan, why: "match で受け取られずに捨てられた".to_string() });
+                        continue;
+                    }
+                    let ty = self.var_ty(*bspan)?;
+                    let l = self.declare(b, ty, false, *bspan);
+                    self.assign(l, value, *bspan);
+                }
+                drop_s(self, "match で中身を取り出したので、入れ物が解放された");
+                self.block(body, dest)?;
+                self.pop_scope(body.end, "スコープを抜けた");
+                self.blocks[self.cur].term = Term::Goto(join);
+            }
+            self.cur = other;
+            if by_ref.is_none() {
+                let why = "match の default で使われずに捨てられた".to_string();
+                self.emit(Inst::Discard { value: Operand::Move(s, scrut.span), span: scrut.span, why });
+            } else {
+                drop_s(self, "match を終えた");
+            }
+            match default {
+                Some(b) => self.block(b, dest)?,
+                None => set_unit(self, scrut.span),
+            }
+            self.goto_and_switch(join);
+            return Ok(());
+        }
+        // 整数・真偽値・文字列: 上から順に比べる
+        for arm in arms {
+            let hit = self.new_block();
+            for (p, _) in &arm.pats {
+                let c = match p {
+                    ast::Pat::Int(n) => Const::Int(*n, IntTy::I64),
+                    ast::Pat::Bool(b) => Const::Bool(*b),
+                    ast::Pat::Str(t) => Const::Str(Rc::from(t.as_str())),
+                    ast::Pat::Variant(..) => return Err("値の match に enum の case".to_string()),
+                };
+                let eq = Rvalue::Bin(BinOp::Eq, Operand::Copy(place.clone()), Operand::Const(c), scrut.span);
+                let c = self.temp_of(Ty::Bool, eq, scrut.span);
+                let next = self.new_block();
+                self.blocks[self.cur].term = Term::Branch(c, hit, next);
+                self.cur = next;
+            }
+            let miss = self.cur;
+            self.cur = hit;
+            drop_s(self, "match を終えた");
+            self.block(&arm.body, dest)?;
+            self.blocks[self.cur].term = Term::Goto(join);
+            self.cur = miss;
+        }
+        drop_s(self, "match を終えた");
+        match default {
+            Some(b) => self.block(b, dest)?,
+            None => set_unit(self, scrut.span),
+        }
+        self.goto_and_switch(join);
+        Ok(())
+    }
+
+    /// `e?`: Ok / Some なら中身。Err / None なら、評価の途中の値と全部の変数を捨てて、それを関数から返す
+    fn try_expr(&mut self, inner: &Expr, sp: Span) -> L<Operand> {
+        let it = self.ty(inner);
+        let ok = match &it {
+            Ty::Enum(n, _) if n == "Result" => "Ok",
+            Ty::Enum(n, _) if n == "Option" => "Some",
+            _ => return Err("? の型".to_string()),
+        };
+        let t = match self.expr(inner)? {
+            Operand::Move(t, _) => t,
+            _ => return Err("? に定数".to_string()),
+        };
+        let ok_bb = self.new_block();
+        let err_bb = self.new_block();
+        self.blocks[self.cur].term = Term::Switch(Place::local(t, sp), vec![(Rc::from(ok), ok_bb)], err_bb);
+        self.cur = err_bb;
+        // まだ使われていない一時的な値（`f(own 1, g()?)` の `own 1`）。使い終わったものは空なので、drop しても何もしない
+        let in_scope: Vec<Local> = self.scopes.iter().flatten().map(|(_, l)| *l).collect();
+        for l in (0..self.locals.len()).rev() {
+            if l != t && self.locals[l].name.is_empty() && !in_scope.contains(&l) {
+                let why = "`?` で関数を抜けたので、使われずに捨てられた".to_string();
+                self.emit(Inst::Drop { local: l, span: sp, why });
+            }
+        }
+        self.leave(0, sp, "`?` で関数を抜けた");
+        self.terminate(Term::Return(Operand::Move(t, sp)));
+        self.cur = ok_bb;
+        let fty = self.variant_fields(&it, ok)?.pop().unwrap_or(Ty::Unit);
+        let mut fp = Place::local(t, sp);
+        fp.proj.push(Proj::Variant(Rc::from(ok), 0));
+        let r = self.temp_of(fty, Rvalue::Take(fp), sp);
+        self.emit(Inst::Drop { local: t, span: sp, why: "`?` で中身を取り出した".to_string() });
+        Ok(r)
+    }
+
+    /// enum の種類の中身の型（型の引数は置き換え済み）
+    fn variant_fields(&self, t: &Ty, variant: &str) -> L<Vec<Ty>> {
+        let Ty::Enum(n, args) = t else { return Err("enum でない".to_string()) };
+        let (tparams, vs) = self.info.enums.get(n).ok_or("enum の記録がない")?;
+        let map: HashMap<String, Ty> = tparams.iter().cloned().zip(args.iter().cloned()).collect();
+        let (_, fs) = vs.iter().find(|(v, _)| v == variant).ok_or("ない種類")?;
+        Ok(fs.iter().map(|f| types::subst(f, &map)).collect())
+    }
+
+    /// 値として読むとムーブになる型か（interp の `Value::moves` を型で決めたもの）
+    fn moves(&self, t: &Ty) -> L<bool> {
+        Ok(match t {
+            Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..) => false,
+            Ty::Own(_) | Ty::Struct(..) => true,
+            Ty::Enum(n, args) => {
+                let (tparams, vs) = self.info.enums.get(n).ok_or("enum の記録がない")?;
+                let map: HashMap<String, Ty> = tparams.iter().cloned().zip(args.iter().cloned()).collect();
+                for (_, fs) in vs {
+                    for f in fs {
+                        if self.moves(&types::subst(f, &map))? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                false
+            }
+            _ => return Err(format!("型 {}", t.show())),
+        })
+    }
+
     // ------------------------------------------------------------ 式
 
     /// 型検査が決めた「この整数の式を使う型」
@@ -554,7 +748,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             ExprKind::Str(s) => Operand::Const(Const::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => {
                 let l = self.lookup(name).ok_or_else(|| format!("関数を値として使う `{}`", name))?;
-                let read = if moves(&self.locals[l].ty)? { Operand::Move(l, sp) } else { Operand::Copy(Place::local(l, sp)) };
+                let read = if self.moves(&self.locals[l].ty)? { Operand::Move(l, sp) } else { Operand::Copy(Place::local(l, sp)) };
                 self.temp_of(ty, Rvalue::Use(read), sp)
             }
             ExprKind::Cast(inner, t) => {
@@ -578,7 +772,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             ExprKind::Deref(..) | ExprKind::Field(..) => {
                 // ポインタの先・フィールドから取り出せるのはコピーできる値だけ（ムーブする値はまだ扱わない）
-                if moves(&ty)? {
+                if self.moves(&ty)? {
                     return Err("ポインタの先やフィールドからムーブする値を読む".to_string());
                 }
                 let place = self.place(e)?;
@@ -640,8 +834,23 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 self.temp_of(Ty::Str, Rvalue::Builtin("concat".to_string(), strs, sp), sp)
             }
-            ExprKind::Try(_) => return Err("?".to_string()),
-            ExprKind::Variant { .. } | ExprKind::Match { .. } => return Err("enum / match".to_string()),
+            ExprKind::Try(inner) => self.try_expr(inner, sp)?,
+            ExprKind::Variant { variant, args, copy, .. } => {
+                let mut ops = Vec::new();
+                let mut moving = false;
+                for a in args {
+                    moving |= self.moves(&self.ty(a))?;
+                    ops.push(self.expr(a)?);
+                }
+                // 型の引数を含む enum（ジェネリックな関数の中）は、interp と同じく中身で決める
+                let copy = copy.get().unwrap_or(!moving);
+                self.temp_of(ty, Rvalue::Enum(Rc::from(variant.as_str()), ops, copy), sp)
+            }
+            ExprKind::Match { scrut, arms, default } => {
+                let d = self.temp(ty.clone(), sp);
+                self.match_expr(scrut, arms, default.as_ref(), Some(d))?;
+                Operand::Move(d, sp)
+            }
             ExprKind::Index(..) | ExprKind::ArrayLit(..) | ExprKind::ArrayRepeat(..) | ExprKind::MapLit(_) => {
                 return Err("配列・リスト・辞書".to_string())
             }
@@ -816,6 +1025,7 @@ fn reachable(blocks: Vec<Block>) -> Vec<Block> {
         match t {
             Term::Goto(b) => vec![*b],
             Term::Branch(_, a, b) | Term::Step { next: a, done: b, .. } => vec![*a, *b],
+            Term::Switch(_, arms, d) => arms.iter().map(|(_, b)| *b).chain(std::iter::once(*d)).collect(),
             Term::Return(_) | Term::Fail(..) | Term::Unreachable => Vec::new(),
         }
     }
@@ -843,6 +1053,9 @@ fn reachable(blocks: Vec<Block>) -> Vec<Block> {
             b.term = match b.term {
                 Term::Goto(x) => Term::Goto(new_index[x]),
                 Term::Branch(c, x, y) => Term::Branch(c, new_index[x], new_index[y]),
+                Term::Switch(p, arms, d) => {
+                    Term::Switch(p, arms.into_iter().map(|(v, b)| (v, new_index[b])).collect(), new_index[d])
+                }
                 Term::Step { counter, step, next, done } => {
                     Term::Step { counter, step, next: new_index[next], done: new_index[done] }
                 }
@@ -857,11 +1070,3 @@ fn is_place(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
 }
 
-/// 値として読むとムーブになる型か（interp の `Value::moves` を型で決めたもの）
-fn moves(t: &Ty) -> L<bool> {
-    Ok(match t {
-        Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..) => false,
-        Ty::Own(_) | Ty::Struct(..) => true,
-        _ => return Err(format!("型 {}", t.show())),
-    })
-}

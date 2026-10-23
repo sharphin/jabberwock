@@ -73,6 +73,8 @@ pub enum Term {
     Goto(Bb),
     Branch(Operand, Bb, Bb),
     Return(Operand),
+    /// enum の種類で分かれる（場所の値の種類, (種類, 飛ぶ先), どれでもなければ）
+    Switch(Place, Vec<(Rc<str>, Bb)>, Bb),
     /// `for i in range(..)` の次の周回: `counter += step`。型に入れば `next`、あふれたら `done`
     Step { counter: Local, step: Operand, next: Bb, done: Bb },
     /// 実行時エラー（題と位置）
@@ -95,6 +97,8 @@ pub enum Proj {
     Deref(Check, Span),
     /// 構造体のフィールド（定義の順の番号）
     Field(usize, Span),
+    /// enum の中身（`switch` で種類を確かめたあと）。種類の名前は表示用
+    Variant(Rc<str>, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +132,10 @@ pub enum Rvalue {
     Own(Operand),
     /// 構造体の値（フィールドは定義の順）
     Struct(String, Vec<Operand>),
+    /// enum の値（種類, 中身, 値として読むとコピーか）
+    Enum(Rc<str>, Vec<Operand>, bool),
+    /// 場所の値を取り出し、そこを空（`()`）にする（match で enum の中身を受け取る名前へ移す）
+    Take(Place),
     /// 名前のある関数の呼び出し（関数の番号）
     Call(usize, Vec<Operand>, Span),
     /// print と埋め込みで出す文字にする（own / ref は先をたどる）。bool が true なら、値は一時的なので見たあと捨てる
@@ -199,6 +207,10 @@ fn show_term(t: &Term) -> String {
         Term::Goto(b) => format!("goto bb{}", b),
         Term::Branch(c, t, e) => format!("branch {} bb{} bb{}", show_operand(c), t, e),
         Term::Return(o) => format!("return {}", show_operand(o)),
+        Term::Switch(p, arms, d) => {
+            let arms: Vec<String> = arms.iter().map(|(v, b)| format!("{} => bb{}", v, b)).collect();
+            format!("switch {} [{}] それ以外 bb{}", show_place(p), arms.join(", "), d)
+        }
         Term::Step { counter, step, next, done } => {
             format!("step _{} += {} bb{} (あふれたら bb{})", counter, show_operand(step), next, done)
         }
@@ -214,6 +226,7 @@ pub fn show_place(p: &Place) -> String {
             Proj::Deref(Check::Elided, _) => format!("(*{})", s),
             Proj::Deref(..) => format!("(*!{})", s),
             Proj::Field(i, _) => format!("{}.{}", s, i),
+            Proj::Variant(v, i) => format!("({} as {}).{}", s, v, i),
         };
     }
     s
@@ -244,6 +257,9 @@ fn show_rvalue(r: &Rvalue, prog: &Program) -> String {
         Rvalue::Ref { place, .. } => format!("ref {}", show_place(place)),
         Rvalue::Own(a) => format!("own {}", show_operand(a)),
         Rvalue::Struct(n, fs) => format!("{} {{ {} }}", n, ops(fs)),
+        Rvalue::Enum(v, fs, _) if fs.is_empty() => v.to_string(),
+        Rvalue::Enum(v, fs, _) => format!("{}({})", v, ops(fs)),
+        Rvalue::Take(p) => format!("take {}", show_place(p)),
         Rvalue::Call(i, args, _) => format!("{}({})", prog.fns[*i].name, ops(args)),
         Rvalue::Show(o, true, _) => format!("show!({}, 捨てる)", show_operand(o)),
         Rvalue::Show(o, false, _) => format!("show!({})", show_operand(o)),
