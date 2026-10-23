@@ -42,7 +42,7 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
         let fl = FnLower::new(info, &structs, &mut calls, map, name);
         let f = match body {
             Body::Fn(def) => fl.lower(def)?,
-            Body::Lambda { lambda, caps, ret, span } => fl.lower_lambda(&lambda, caps, ret, span)?,
+            Body::Lambda { lambda, caps, ret, span, once } => fl.lower_lambda(&lambda, caps, ret, span, once)?,
         };
         if fns.len() <= i {
             fns.resize_with(i + 1, || None);
@@ -57,7 +57,8 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
 enum Body<'p> {
     Fn(&'p FnDef),
     /// クロージャ。取り込む変数（名前, 外での型）と戻り値の型
-    Lambda { lambda: Rc<ast::Lambda>, caps: Vec<(String, Ty)>, ret: Ty, span: Span },
+    /// `once` なら spawn に渡すクロージャ（1 回だけ呼ぶので、取り込んだ値はそのままの型で受け取る）
+    Lambda { lambda: Rc<ast::Lambda>, caps: Vec<(String, Ty)>, ret: Ty, span: Span, once: bool },
 }
 
 /// 呼ばれた関数に番号をつけ、書き出す順に並べる。ジェネリックな関数は型の引数ごとに作り分ける（`pick<i64>`）
@@ -130,6 +131,8 @@ struct FnLower<'a, 'p> {
     name: String,
     /// クロージャが取り込んだ値の変数
     captures: Vec<Local>,
+    /// 次に書き出すクロージャは `spawn` に渡すもの（1 回だけ呼ばれる）
+    spawning: bool,
     locals: Vec<LocalDecl>,
     blocks: Vec<Block>,
     cur: Bb,
@@ -153,6 +156,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             subst,
             name,
             captures: Vec::new(),
+            spawning: false,
             locals: Vec::new(),
             blocks: vec![Block { insts: Vec::new(), term: Term::Unreachable }],
             cur: 0,
@@ -190,8 +194,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
         })
     }
 
-    /// クロージャの本体。引数のあとに、取り込んだ値（読むだけの写し）を受け取る
-    fn lower_lambda(mut self, l: &ast::Lambda, caps: Vec<(String, Ty)>, ret_ty: Ty, span: Span) -> L<Func> {
+    /// クロージャの本体。引数のあとに、取り込んだ値（読むだけの写し）を受け取る。
+    /// `once`（spawn に渡すもの）なら、取り込んだ値をそのまま受け取るふつうの変数にする
+    fn lower_lambda(mut self, l: &ast::Lambda, caps: Vec<(String, Ty)>, ret_ty: Ty, span: Span, once: bool) -> L<Func> {
         self.scopes.push(Vec::new());
         for p in &l.params {
             let ty = self.var_ty(p.span)?;
@@ -200,6 +205,10 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let ncaps = caps.len();
         let cap_tys = caps.iter().map(|(_, t)| t.clone()).collect();
         for (n, t) in caps {
+            if once {
+                self.declare(&n, t, false, span);
+                continue;
+            }
             let t = match t {
                 Ty::Own(x) => Ty::Ref(x, false),
                 t => t,
@@ -1122,7 +1131,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     _ => Ty::Unit,
                 };
                 let inst = format!("{}::λ{}:{}", self.name, sp.line, sp.col);
-                let body = Body::Lambda { lambda: l.clone(), caps, ret, span: sp };
+                let once = std::mem::replace(&mut self.spawning, false);
+                let body = Body::Lambda { lambda: l.clone(), caps, ret, span: sp, once };
                 let f = self.calls.push(inst, body, self.subst.clone());
                 self.temp_of(ty, Rvalue::Closure(f, ops), sp)
             }
@@ -1177,8 +1187,21 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             "read_line" | "args" => Ok(self.temp_of(ty, Rvalue::Builtin(name.to_string(), Vec::new(), sp), sp)),
             "spawn" => {
+                // 関数の値は作らず、関数の番号と取り込む値を直接渡す（`spawn(関数の番号, 取り込む値...)`）
+                self.spawning = matches!(args[0].kind, ExprKind::Lambda(_));
                 let f = self.expr(&args[0])?;
-                Ok(self.temp_of(ty, Rvalue::Builtin("spawn".to_string(), vec![f], sp), sp))
+                let last = self.blocks[self.cur].insts.pop();
+                let (fi, mut caps) = match (f, last) {
+                    (Operand::Move(t, _), Some(Inst::Assign { place, value: Rvalue::Closure(fi, caps), .. }))
+                        if place.local == t && place.proj.is_empty() =>
+                    {
+                        (fi, caps)
+                    }
+                    _ => return Err("spawn に渡す関数".to_string()),
+                };
+                let mut ops = vec![Operand::Const(Const::Int(fi as i128, IntTy::I64))];
+                ops.append(&mut caps);
+                Ok(self.temp_of(ty, Rvalue::Builtin("spawn".to_string(), ops, sp), sp))
             }
             "chan" => Ok(self.temp_of(ty, Rvalue::Builtin("chan".to_string(), Vec::new(), sp), sp)),
             _ if self.lookup(name).is_some() => {

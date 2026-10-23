@@ -51,7 +51,7 @@
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
 | `tests/typeinfo.rs` | 型検査が式ごとの型・型の引数を記録すること（IR の土台） |
 | `tests/ir.rs` | IR の表示と、書き出せる範囲 |
-| `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない） |
+| `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
@@ -194,7 +194,14 @@
   `blocked >= alive` がデッドロック。エラーは `World.fail` → `aborted` を見て、ほかのスレッドは関数呼び出し・ループ・待ちで抜ける（`aborted_marker`）。
   print の出力は `World` に行ごとに足す（`Interp::output()`）。捨てる task は `settle_tasks` で終わりを待つ。
   IR では `spawn`・`chan`・`task.join`・`chan.send` などは `Rvalue::Builtin`。exec は `start_thread` を共有し、新しいスレッドは `World.load_ir`（lib.rs の `ir_reloader`）で IR を作り直して、
-  関数の番号で 1 回だけ呼ぶ（取り込んだ値は写しにしない）。
+  関数の番号で 1 回だけ呼ぶ（取り込んだ値は写しにしない）。lower は spawn に渡すクロージャを `once` で書き出し（取り込んだ値はそのままの型の変数）、
+  関数の値は作らずに `spawn!(関数の番号, 取り込む値...)` にする。
+  デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
+- スレッド（LLVM）: 区画の空きリスト・`ward_live`・`ward_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
+  生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。
+  送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。
+  チャンネルのメソッドは場所のチャンネルを複製せずに読む（数を取り合わない）。出力は print 1 回のあいだ錠を持つ（`ward_print_begin`）。
+  錠と条件変数は Linux は pthread、Windows は SRWLOCK（windows.h なしで宣言）。
 
 ## 設計の決めごと
 

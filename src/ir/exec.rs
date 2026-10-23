@@ -407,8 +407,9 @@ impl<'a> Machine<'a> {
                 self.it.thread_method(&h, &name[5..], vals, *span)
             }
             Rvalue::Builtin(name, ops, span) if name == "spawn" => {
-                let mut vals = self.operands(f, locs, ops)?;
-                let Value::Func(Callee::Ir(fi), caps) = vals.remove(0) else { unreachable!("spawn takes a function") };
+                let mut caps = self.operands(f, locs, ops)?;
+                let Value::Int(fi, _) = caps.remove(0) else { unreachable!("spawn takes a function number") };
+                let fi = fi as usize;
                 let span = *span;
                 let caps: Vec<Portable> = caps.into_iter().map(|c| self.it.export(c, span)).collect();
                 Ok(self.it.start_thread(span, Box::new(move |it: &mut Interp| {

@@ -14,6 +14,63 @@
 #include <stdlib.h>
 #include <string.h>
 
+// ---------------------------------------------------------------- スレッドの道具（錠と条件変数）
+
+#ifdef _WIN32
+// windows.h なしで宣言する（SRWLOCK と CONDITION_VARIABLE はポインタ 1 つ分。0 で初期化）
+typedef struct {
+    void *p;
+} WLock;
+typedef struct {
+    void *p;
+} WCond;
+#define WLOCK_INIT {0}
+#define WCOND_INIT {0}
+__declspec(dllimport) void __stdcall AcquireSRWLockExclusive(WLock *);
+__declspec(dllimport) void __stdcall ReleaseSRWLockExclusive(WLock *);
+__declspec(dllimport) int __stdcall SleepConditionVariableSRW(WCond *, WLock *, unsigned long, unsigned long);
+__declspec(dllimport) void __stdcall WakeAllConditionVariable(WCond *);
+__declspec(dllimport) void *__stdcall CreateThread(void *, size_t, unsigned long(__stdcall *)(void *), void *, unsigned long, unsigned long *);
+__declspec(dllimport) unsigned long __stdcall WaitForSingleObject(void *, unsigned long);
+__declspec(dllimport) int __stdcall CloseHandle(void *);
+static void lock(WLock *l) { AcquireSRWLockExclusive(l); }
+static void unlock(WLock *l) { ReleaseSRWLockExclusive(l); }
+static void cond_wait(WCond *c, WLock *l) { SleepConditionVariableSRW(c, l, 0xFFFFFFFFul, 0); }
+static void cond_broadcast(WCond *c) { WakeAllConditionVariable(c); }
+typedef void *WThread;
+static unsigned long __stdcall thread_start(void *arg);
+static void thread_new(WThread *t, void *arg) {
+    *t = CreateThread(NULL, (size_t)256 << 20, thread_start, arg, 0x00010000 /* STACK_SIZE_PARAM_IS_A_RESERVATION */, NULL);
+}
+static void thread_join(WThread t) {
+    WaitForSingleObject(t, 0xFFFFFFFFul);
+    CloseHandle(t);
+}
+#else
+#include <pthread.h>
+typedef pthread_mutex_t WLock;
+typedef pthread_cond_t WCond;
+#define WLOCK_INIT PTHREAD_MUTEX_INITIALIZER
+#define WCOND_INIT PTHREAD_COND_INITIALIZER
+static void lock(WLock *l) { pthread_mutex_lock(l); }
+static void unlock(WLock *l) { pthread_mutex_unlock(l); }
+static void cond_wait(WCond *c, WLock *l) { pthread_cond_wait(c, l); }
+static void cond_broadcast(WCond *c) { pthread_cond_broadcast(c); }
+typedef pthread_t WThread;
+static void *thread_start(void *arg);
+static void thread_new(WThread *t, void *arg) {
+    pthread_attr_t a;
+    pthread_attr_init(&a);
+    pthread_attr_setstacksize(&a, (size_t)256 << 20);
+    pthread_create(t, &a, thread_start, arg);
+    pthread_attr_destroy(&a);
+}
+static void thread_join(WThread t) { pthread_join(t, NULL); }
+#endif
+
+// spawn したことがあるか（なければ出力の錠を取らない）。最初の spawn の前に立てるので、ほかのスレッドからは立って見える
+static int g_threaded;
+
 // 位置（ファイル・行・列・長さ）と、その位置の説明。解放の場所なら chain は「連鎖して解放された」の位置
 typedef struct WSite {
     const char *file;
@@ -42,11 +99,18 @@ typedef struct WSb {
 
 static char *out_buf;
 static size_t out_len, out_cap;
+static WLock out_lock = WLOCK_INIT;
 
-void ward_flush(void) {
+static void flush_locked(void) {
     if (out_len) fwrite(out_buf, 1, out_len, stdout);
     out_len = 0;
     fflush(stdout);
+}
+
+void ward_flush(void) {
+    if (g_threaded) lock(&out_lock);
+    flush_locked();
+    if (g_threaded) unlock(&out_lock);
 }
 
 static void out_write(const char *p, size_t n) {
@@ -58,7 +122,12 @@ static void out_write(const char *p, size_t n) {
     }
     memcpy(out_buf + out_len, p, n);
     out_len += n;
-    if (out_len >= 1 << 16) ward_flush();
+    if (out_len >= 1 << 16) flush_locked();
+}
+
+// 1 回の print のあいだ出力の錠を持つ（行が混ざらない）
+void ward_print_begin(void) {
+    if (g_threaded) lock(&out_lock);
 }
 
 // print の 1 つ分（first でなければ前に空白）
@@ -67,7 +136,10 @@ void ward_print_part(WStr *s, int32_t first) {
     out_write(s->data, (size_t)s->len);
 }
 
-void ward_print_end(void) { out_write("\n", 1); }
+void ward_print_end(void) {
+    out_write("\n", 1);
+    if (g_threaded) unlock(&out_lock);
+}
 
 // ---------------------------------------------------------------- エラー
 
@@ -91,7 +163,11 @@ static struct {
 static int nlabels;
 static char err_title[1024];
 
+static WLock err_lock = WLOCK_INIT;
+
 static void begin_error(const char *title) {
+    // エラーを出すのは 1 つのスレッドだけ（出したら終わる。錠は返さない）
+    if (g_threaded) lock(&err_lock);
     ward_flush();
     snprintf(err_title, sizeof err_title, "%s", title);
     nlabels = 0;
@@ -248,12 +324,12 @@ typedef struct WHdr {
 
 // 使い回した区画の、前の解放の位置（エラーで「ここで解放された」を出すため。古いものから消える）
 #define NREUSED 4096
-static struct {
+static _Thread_local struct {
     void *block;
     uint64_t gen;
     const WSite *freed;
 } reused[NREUSED];
-static unsigned reused_n;
+static _Thread_local unsigned reused_n;
 
 // 世代 gen の ref が無効になった解放（世代 gen+1 になったとき）の位置
 static const WSite *freed_at(void *block, uint64_t gen) {
@@ -322,17 +398,18 @@ _Noreturn void ward_fail_insert(int64_t i, int64_t len, const WSite *at) {
 
 // ---------------------------------------------------------------- 区画
 
-int64_t ward_live;
-int64_t ward_depth;
+// 生きている区画の数と呼び出しの深さは、スレッドごと（区画は別のスレッドで解放されうるので、数は全スレッドの合計で見る）
+_Thread_local int64_t ward_live;
+_Thread_local int64_t ward_depth;
 
 #define NCLASS 256
-static void *free_small[NCLASS + 1];
+static _Thread_local void *free_small[NCLASS + 1];
 typedef struct Big {
     struct Big *next;
     size_t size;
     void *payload;
 } Big;
-static Big *free_big;
+static _Thread_local Big *free_big;
 
 static size_t round16(int64_t n) { return n <= 0 ? 16 : ((size_t)n + 15) & ~(size_t)15; }
 
@@ -1073,6 +1150,266 @@ void ward_env_release(WEnv *e, const WSite *site) {
     }
 }
 
+// ---------------------------------------------------------------- スレッド（spawn / task / chan）
+//
+// 待つ操作（recv・join・main の終わり）は、ぜんぶ 1 つの錠 g_lock と条件変数 g_cv で待つ（interp の threads.rs と同じ）。
+// 状態が変わるたびに epoch を進めて blocked を 0 にするので、blocked >= alive がデッドロック。
+// デッドロックは main が自分の待っている位置で知らせる（どのスレッドが見つけても同じ表示になるように）。
+
+static WLock g_lock = WLOCK_INIT;
+static WCond g_cv = WCOND_INIT;
+static int64_t g_alive = 1, g_blocked, g_deadlock, g_waiters;
+static uint64_t g_epoch;
+static _Thread_local int g_is_worker;
+// 終わったスレッドの、生きている区画の数（区画は別のスレッドで解放されうるので、合計で見る）
+static int64_t g_live_done;
+
+static void changed(void) {
+    g_epoch++;
+    g_blocked = 0;
+    // 待っているスレッドがなければ起こさない（送るたびに起こすと遅い）
+    if (g_waiters) cond_broadcast(&g_cv);
+}
+
+static _Noreturn void fail_deadlock(const WSite *at) {
+    begin_error("すべてのスレッドが待ちのまま止まりました (deadlock)");
+    finish_error(at, "ここで待っているが、値を送ったり終わったりできるスレッドがもうない",
+                 "チャンネルの close し忘れや、join・recv の順番を確かめてください");
+}
+
+// g_lock を持って呼ぶ。ready(arg) が真になるまで待つ
+static void wait_until(int (*ready)(void *), void *arg, const WSite *at) {
+    for (;;) {
+        if (!g_is_worker && g_deadlock) {
+            unlock(&g_lock);
+            fail_deadlock(at);
+        }
+        if (ready(arg)) return;
+        g_blocked++;
+        if (g_blocked >= g_alive) {
+            g_deadlock = 1;
+            changed();
+            if (!g_is_worker) {
+                unlock(&g_lock);
+                fail_deadlock(at);
+            }
+        }
+        uint64_t e = g_epoch;
+        g_waiters++;
+        cond_wait(&g_cv, &g_lock);
+        g_waiters--;
+        if (g_epoch == e && g_blocked > 0) g_blocked--;
+    }
+}
+
+// チャンネル: 値の大きさ esize の輪の並び。中身は g_lock を持って触る。数（rc）は不可分の操作で数える
+typedef void (*WDrop)(void *p, const WSite *site);
+typedef struct WChan {
+    int64_t rc;
+    int64_t esize;
+    WDrop drop;
+    char *buf;
+    int64_t head, len, cap;
+    int closed;
+} WChan;
+
+WChan *ward_chan_new(int64_t esize, WDrop drop) {
+    WChan *c = calloc(1, sizeof(WChan));
+    c->rc = 1;
+    c->esize = esize > 0 ? esize : 1;
+    c->drop = drop;
+    return c;
+}
+
+void ward_chan_retain(WChan *c) { __atomic_fetch_add(&c->rc, 1, __ATOMIC_RELAXED); }
+
+void ward_chan_release(WChan *c, const WSite *site) {
+    if (__atomic_sub_fetch(&c->rc, 1, __ATOMIC_ACQ_REL) > 0) return;
+    // 受け取られずに残った値を捨てる
+    for (int64_t i = 0; i < c->len; i++) {
+        if (c->drop) c->drop(c->buf + ((c->head + i) % c->cap) * c->esize, site);
+    }
+    free(c->buf);
+    free(c);
+}
+
+void ward_chan_send(WChan *c, void *v, const WSite *at) {
+    lock(&g_lock);
+    if (c->closed) {
+        unlock(&g_lock);
+        begin_error("閉じたチャンネルに送りました");
+        finish_error(at, "このチャンネルはもう close されている", "送り終わってから close してください");
+    }
+    if (c->len == c->cap) {
+        int64_t cap = c->cap ? c->cap * 2 : 8;
+        char *nb = malloc((size_t)(cap * c->esize));
+        for (int64_t i = 0; i < c->len; i++)
+            memcpy(nb + i * c->esize, c->buf + ((c->head + i) % c->cap) * c->esize, (size_t)c->esize);
+        free(c->buf);
+        c->buf = nb;
+        c->cap = cap;
+        c->head = 0;
+    }
+    memcpy(c->buf + ((c->head + c->len) % c->cap) * c->esize, v, (size_t)c->esize);
+    c->len++;
+    changed();
+    unlock(&g_lock);
+}
+
+static int chan_ready(void *p) {
+    WChan *c = p;
+    return c->len > 0 || c->closed;
+}
+
+// 値が来るまで待つ。閉じて空なら 0
+int32_t ward_chan_recv(WChan *c, void *out, const WSite *at) {
+    lock(&g_lock);
+    wait_until(chan_ready, c, at);
+    int32_t got = 0;
+    if (c->len > 0) {
+        memcpy(out, c->buf + c->head * c->esize, (size_t)c->esize);
+        c->head = (c->head + 1) % c->cap;
+        c->len--;
+        got = 1;
+    }
+    unlock(&g_lock);
+    return got;
+}
+
+void ward_chan_close(WChan *c, const WSite *at) {
+    lock(&g_lock);
+    if (c->closed) {
+        unlock(&g_lock);
+        begin_error("チャンネルを 2 回 close しました");
+        finish_error(at, "このチャンネルはもう close されている", NULL);
+    }
+    c->closed = 1;
+    changed();
+    unlock(&g_lock);
+}
+
+// task: 新しいスレッドと、その戻り値の置き場。持ち主（task の値）だけが解放する。
+// 読むだけの写し（for の要素）は下の 1 ビットを立てたポインタ（解放しない）
+typedef void (*WThunk)(void *args, void *out);
+typedef struct WTask {
+    WThread thread;
+    WThunk thunk;
+    void *args;
+    char *result;
+    int64_t rsize;
+    WDrop drop;
+    int done, joined;
+} WTask;
+
+#define TASK(p) ((WTask *)(((uintptr_t)(p)) & ~(uintptr_t)1))
+
+#ifdef _WIN32
+static unsigned long __stdcall thread_start(void *arg) {
+#else
+static void *thread_start(void *arg) {
+#endif
+    WTask *t = arg;
+    g_is_worker = 1;
+    t->thunk(t->args, t->result);
+    free(t->args);
+    lock(&g_lock);
+    t->done = 1;
+    g_alive--;
+    g_live_done += ward_live;
+    changed();
+    unlock(&g_lock);
+    return 0;
+}
+
+// spawn: thunk(args, 戻り値の置き場) を新しいスレッドで動かす。args は malloc したもの（終わったら解放する）
+WTask *ward_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop) {
+    WTask *t = calloc(1, sizeof(WTask));
+    t->thunk = thunk;
+    t->args = args;
+    t->rsize = rsize > 0 ? rsize : 1;
+    t->result = calloc(1, (size_t)t->rsize);
+    t->drop = drop;
+    g_threaded = 1;
+    lock(&g_lock);
+    g_alive++;
+    changed();
+    unlock(&g_lock);
+    thread_new(&t->thread, t);
+    return t;
+}
+
+void *ward_spawn_args(int64_t size) { return calloc(1, (size_t)(size > 0 ? size : 1)); }
+
+static int task_ready(void *p) { return ((WTask *)p)->done; }
+
+void ward_task_join(void *h, void *out, const WSite *at) {
+    WTask *t = TASK(h);
+    lock(&g_lock);
+    if (t->joined) {
+        unlock(&g_lock);
+        begin_error("この task はもう join しました");
+        finish_error(at, "join で受け取れるのは 1 回だけ", NULL);
+    }
+    t->joined = 1;
+    wait_until(task_ready, t, at);
+    unlock(&g_lock);
+    memcpy(out, t->result, (size_t)t->rsize);
+}
+
+// task を捨てる: join していなければ終わるのを待ち、戻り値を捨てる
+void ward_task_drop(void *h, const WSite *site) {
+    if ((uintptr_t)h & 1) return;
+    WTask *t = h;
+    lock(&g_lock);
+    int joined = t->joined;
+    t->joined = 1;
+    wait_until(task_ready, t, site);
+    unlock(&g_lock);
+    if (!joined && t->drop) t->drop(t->result, site);
+    thread_join(t->thread);
+    free(t->result);
+    free(t);
+}
+
+void *ward_task_view(void *h) { return (void *)((uintptr_t)h | 1); }
+
+static int all_done(void *p) {
+    (void)p;
+    return g_alive == 1;
+}
+
+// main の終わり: ほかのスレッドが終わるのを待つ
+void ward_wait_all(const WSite *at) {
+    if (!g_threaded) return;
+    lock(&g_lock);
+    wait_until(all_done, NULL, at);
+    unlock(&g_lock);
+}
+
+// ほかのスレッドへ送る区画: 世代を進める（送った側に残った ref は、使うとダングリングとして見つかる）
+void ward_send_block(void *p, const WSite *why) {
+    WHdr *h = HDR(p);
+    h->gen++;
+    h->freed = why;
+}
+
+// ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）
+WStr *ward_str_unshare(WStr *s) {
+    if (s->rc < 0) return s;
+    WStr *c = ward_str_new(s->data, s->len);
+    ward_str_release(s);
+    return c;
+}
+
+// ほかのスレッドへ送る辞書: 文字列のキーを複製する（並びの位置は変わらないので、引く表はそのまま）
+void ward_map_unshare_keys(WMap *m) {
+    if (m->kind != 1) return;
+    for (int64_t i = 0; i < m->len; i++) {
+        WStr **k = (WStr **)(m->e + i * m->esize);
+        *k = ward_str_unshare(*k);
+    }
+}
+
 // ---------------------------------------------------------------- 入力
 
 static int g_argc;
@@ -1143,6 +1480,6 @@ int main(int argc, char **argv) {
     g_argv = argv;
     ward_main();
     ward_flush();
-    if (getenv("WARD_LEAKS")) fprintf(stderr, "[live] %lld\n", (long long)ward_live);
+    if (getenv("WARD_LEAKS")) fprintf(stderr, "[live] %lld\n", (long long)(ward_live + g_live_done));
     return 0;
 }

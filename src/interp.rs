@@ -542,6 +542,7 @@ impl Interp {
         std::thread::Builder::new()
             .stack_size(1 << 30)
             .spawn(move || {
+                crate::threads::mark_worker();
                 let mut it = Interp::new(false);
                 it.world = world.clone();
                 it.input = input;

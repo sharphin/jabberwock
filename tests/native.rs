@@ -68,3 +68,21 @@ fn compiled_programs_catch_dangling_refs() {
         "error: 無効になった参照を使いました (dangling reference)\n --> main.ward:5:11\n  = ここで使ったが、借りた先はもう存在しない\n"
     );
 }
+
+#[test]
+fn compiled_programs_run_threads() {
+    if !have_clang() {
+        return;
+    }
+    let src = "fn i64 fib(i64 n) { if n < 2 { return n; } fib(n - 1) + fib(n - 2) }\n\
+               fn main() {\n    let chan<str> c = chan();\n    let task<i64>[] mut ts = [];\n    \
+               for i in range(4) { ts.push(spawn(() -> { c.send(\"done {i}\"); fib(20) })); }\n    \
+               let mut total = 0;\n    for t in ts { total += t.join(); }\n    \
+               let mut n = 0;\n    for i in range(4) { match c.recv() { case Some(m) -> { n += 1; } case None -> {} } }\n    \
+               print(total, n);\n    print(c.recv());\n}";
+    let (code, out, err) = run("threads", src);
+    // 最後の recv は、送るスレッドがもうないのでデッドロック（main の位置で知らせる）
+    assert_eq!(code, Some(1), "{}", err);
+    assert_eq!(out, "27060 4\n");
+    assert!(err.starts_with("error: すべてのスレッドが待ちのまま止まりました (deadlock)\n  --> main.ward:11:11\n"), "{}", err);
+}

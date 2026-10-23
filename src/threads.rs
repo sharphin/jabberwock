@@ -69,6 +69,24 @@ pub struct State {
     pub output: String,
     /// 終わったスレッドのヒープに残っていた数（リーク検査）
     pub leaked: usize,
+    /// デッドロックを見つけた（main が自分の待っている位置で知らせる）
+    deadlock: bool,
+}
+
+thread_local! {
+    /// spawn で作ったスレッドか（main でないか）
+    static IS_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// このスレッドを spawn で作ったものとして印をつける
+pub fn mark_worker() {
+    IS_WORKER.with(|w| w.set(true));
+}
+
+fn deadlock_error(span: Span) -> Diagnostic {
+    Diagnostic::new("すべてのスレッドが待ちのまま止まりました (deadlock)")
+        .primary(span, "ここで待っているが、値を送ったり終わったりできるスレッドがもうない")
+        .note("チャンネルの close し忘れや、join・recv の順番を確かめてください")
 }
 
 /// 1 回の実行で、すべてのスレッドが共有するもの
@@ -98,7 +116,7 @@ pub fn aborted_marker() -> Diagnostic {
 impl World {
     pub fn new(echo: bool, load: Box<dyn Fn() -> Program + Send + Sync>) -> Arc<World> {
         Arc::new(World {
-            state: Mutex::new(State { alive: 1, blocked: 0, epoch: 0, abort: None, output: String::new(), leaked: 0 }),
+            state: Mutex::new(State { alive: 1, blocked: 0, epoch: 0, abort: None, output: String::new(), leaked: 0, deadlock: false }),
             cv: Condvar::new(),
             aborted: AtomicBool::new(false),
             echo,
@@ -143,25 +161,28 @@ impl World {
         self.changed(&mut st);
     }
 
-    /// `ready` が Some を返すまで待つ。全員が待ちのままならデッドロックのエラー
+    /// `ready` が Some を返すまで待つ。全員が待ちのままならデッドロックのエラー。
+    /// どのスレッドが見つけても、main が自分の待っている位置で知らせる（表示が実行のたびに変わらないように）
     fn wait<T>(&self, span: Span, mut ready: impl FnMut(&mut State) -> Option<T>) -> Result<T, Diagnostic> {
+        let main = !IS_WORKER.with(|w| w.get());
         let mut st = self.lock();
         loop {
             if st.abort.is_some() {
                 return Err(aborted_marker());
+            }
+            if main && st.deadlock {
+                return Err(deadlock_error(span));
             }
             if let Some(v) = ready(&mut st) {
                 return Ok(v);
             }
             st.blocked += 1;
             if st.blocked >= st.alive {
-                let d = Diagnostic::new("すべてのスレッドが待ちのまま止まりました (deadlock)")
-                    .primary(span, "ここで待っているが、値を送ったり終わったりできるスレッドがもうない")
-                    .note("チャンネルの close し忘れや、join・recv の順番を確かめてください");
-                st.abort = Some(d);
-                self.aborted.store(true, Ordering::SeqCst);
+                st.deadlock = true;
                 self.changed(&mut st);
-                return Err(aborted_marker());
+                if main {
+                    return Err(deadlock_error(span));
+                }
             }
             let e = st.epoch;
             st = self.cv.wait(st).unwrap_or_else(|e| e.into_inner());

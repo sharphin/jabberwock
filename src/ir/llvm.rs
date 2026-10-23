@@ -40,6 +40,8 @@ enum H {
     Moves,
     /// `i1 (ptr 値)`: 中に own を持つか（interp の `has_own()`）
     HasOwn,
+    /// `void (ptr 値, ptr 位置)`: ほかのスレッドへ送る準備（own の区画の世代を進め、文字列は複製する）
+    Send,
 }
 
 /// プログラム全体を LLVM のテキストにする。`files` はファイルの番号から名前。
@@ -56,8 +58,8 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
     let _ = write!(
         m.code,
         "define void @ward_main() {{\n  %d = load i64, ptr @ward_depth\n  %c = icmp sge i64 %d, {}\n  br i1 %c, label %deep, label %ok\n\
-         deep:\n  call void @ward_fail_depth(ptr {})\n  unreachable\nok:\n  store i64 1, ptr @ward_depth\n  %r = call {} @f{}()\n  ret void\n}}\n\n",
-        MAX_DEPTH, site, ret, main
+         deep:\n  call void @ward_fail_depth(ptr {})\n  unreachable\nok:\n  store i64 1, ptr @ward_depth\n  %r = call {} @f{}()\n  call void @ward_wait_all(ptr {})\n  ret void\n}}\n\n",
+        MAX_DEPTH, site, ret, main, site
     );
     m.finish_helpers()?;
     let mut entries = Vec::new();
@@ -85,9 +87,25 @@ const PRELUDE: &str = r#"; ward が書き出した LLVM IR
 %fnv = type { ptr, ptr }
 %wsrc = type { ptr, ptr }
 
-@ward_depth = external global i64
+@ward_depth = external thread_local(initialexec) global i64
 @ward.unset = private constant %site { ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }
 
+declare void @ward_print_begin()
+declare ptr @ward_chan_new(i64, ptr)
+declare void @ward_chan_retain(ptr)
+declare void @ward_chan_release(ptr, ptr)
+declare void @ward_chan_send(ptr, ptr, ptr)
+declare i32 @ward_chan_recv(ptr, ptr, ptr)
+declare void @ward_chan_close(ptr, ptr)
+declare ptr @ward_spawn(ptr, ptr, i64, ptr)
+declare ptr @ward_spawn_args(i64)
+declare void @ward_task_join(ptr, ptr, ptr)
+declare void @ward_task_drop(ptr, ptr)
+declare ptr @ward_task_view(ptr)
+declare void @ward_wait_all(ptr)
+declare void @ward_send_block(ptr, ptr)
+declare ptr @ward_str_unshare(ptr)
+declare void @ward_map_unshare_keys(ptr)
 declare void @ward_print_part(ptr, i32)
 declare void @ward_print_end()
 declare void @ward_fail(ptr, ptr, ptr, ptr) noreturn
@@ -365,7 +383,7 @@ impl<'p> Module<'p> {
     fn size_align(&mut self, t: &Ty) -> G<(u64, u64)> {
         Ok(match t {
             Ty::Int(i) => (i.bits() as u64 / 8, i.bits() as u64 / 8),
-            Ty::Float | Ty::Str | Ty::Map(..) => (8, 8),
+            Ty::Float | Ty::Str | Ty::Map(..) | Ty::Task(_) | Ty::Chan(_) => (8, 8),
             Ty::Bool | Ty::Unit | Ty::Never => (1, 1),
             Ty::Own(x) if matches!(**x, Ty::Iface(_)) => (16, 8),
             Ty::Own(_) => (8, 8),
@@ -413,7 +431,7 @@ impl<'p> Module<'p> {
     /// 中に解放するもの（own・文字列・リスト・辞書）があるか
     fn needs_drop(&mut self, t: &Ty) -> G<bool> {
         Ok(match t {
-            Ty::Str | Ty::Own(_) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) => true,
+            Ty::Str | Ty::Own(_) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) | Ty::Task(_) | Ty::Chan(_) => true,
             Ty::Array(x, _) => self.needs_drop(x)?,
             Ty::Struct(..) => {
                 for f in self.struct_fields(t)? {
@@ -551,6 +569,7 @@ impl<'p> Module<'p> {
             H::Hazard => ("ptr %p", "i1"),
             H::Less => ("ptr %p, ptr %q, ptr %env", "i32"),
             H::Moves | H::HasOwn => ("ptr %p", "i1"),
+            H::Send => ("ptr %p, ptr %site", "void"),
         };
         let result = match h {
             H::Drop => {
@@ -577,6 +596,10 @@ impl<'p> Module<'p> {
                 let r = self.gen_moves(&mut b, t, h == H::Moves)?;
                 format!("ret i1 {}", r)
             }
+            H::Send => {
+                self.gen_send(&mut b, t)?;
+                "ret void".to_string()
+            }
             H::Less => {
                 let r = self.gen_less(&mut b, t)?;
                 let r = b.val(format!("zext i1 {} to i32", r));
@@ -601,6 +624,14 @@ impl<'p> Module<'p> {
     /// `%p` の値の中の own をすべて解放する
     fn gen_drop(&mut self, b: &mut B, t: &Ty) -> G<()> {
         match t {
+            Ty::Chan(_) => {
+                let v = b.val("load ptr, ptr %p");
+                b.op(format!("call void @ward_chan_release(ptr {}, ptr %site)", v));
+            }
+            Ty::Task(_) => {
+                let v = b.val("load ptr, ptr %p");
+                b.op(format!("call void @ward_task_drop(ptr {}, ptr %site)", v));
+            }
             Ty::Str => {
                 let v = b.val("load ptr, ptr %p");
                 b.op(format!("call void @ward_str_release(ptr {})", v));
@@ -768,6 +799,130 @@ impl<'p> Module<'p> {
         Ok(())
     }
 
+    /// `%p` の値を、ほかのスレッドへ送れるようにする（その場で書き換える）。
+    /// own の区画は世代を進め（送った側に残った ref を無効にする。interp の `export` の解放と同じ）、文字列は複製する
+    fn gen_send(&mut self, b: &mut B, t: &Ty) -> G<()> {
+        let sub = |me: &mut Self, b: &mut B, x: &Ty, p: &str| -> G<()> {
+            if me.needs_drop(x)? {
+                let f = me.helper(H::Send, x);
+                b.op(format!("call void {}(ptr {}, ptr %site)", f, p));
+            }
+            Ok(())
+        };
+        match t {
+            Ty::Str => {
+                let v = b.val("load ptr, ptr %p");
+                let n = b.val(format!("call ptr @ward_str_unshare(ptr {})", v));
+                b.op(format!("store ptr {}, ptr %p", n));
+            }
+            Ty::Own(x) => {
+                let p = b.val("load ptr, ptr %p");
+                b.op(format!("call void @ward_send_block(ptr {}, ptr %site)", p));
+                sub(self, b, x, &p)?;
+            }
+            Ty::Struct(..) => {
+                let st = self.lt(t)?;
+                for (i, f) in self.struct_fields(t)?.iter().enumerate() {
+                    let fp = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 {}", st, i));
+                    sub(self, b, f, &fp)?;
+                }
+            }
+            Ty::Enum(..) => {
+                let vs = self.variants(t)?;
+                let et = self.lt(t)?;
+                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
+                let tag = b.val(format!("load i32, ptr {}", tag));
+                let pl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
+                let done = b.l();
+                let mut cases = Vec::new();
+                let mut bodies = String::new();
+                for (vi, (_, fs)) in vs.iter().enumerate() {
+                    let mut s2 = B { n: b.n, ..B::default() };
+                    let l = s2.l();
+                    cases.push(format!("i32 {}, label %{}", vi, l));
+                    s2.label(&l);
+                    let vt = self.variant_lt(fs)?;
+                    for (i, f) in fs.iter().enumerate() {
+                        let fp = s2.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", vt, pl, i));
+                        sub(self, &mut s2, f, &fp)?;
+                    }
+                    s2.br(&done);
+                    b.n = s2.n;
+                    bodies.push_str(&s2.text);
+                }
+                b.op(format!("switch i32 {}, label %{} [ {} ]", tag, done, cases.join(" ")));
+                b.text.push_str(&bodies);
+                b.label(&done);
+            }
+            Ty::Array(x, n) => {
+                if self.needs_drop(x)? {
+                    let at = self.lt(t)?;
+                    let (i, e) = b.loop_begin(&n.to_string());
+                    let ep = b.val(format!("getelementptr {}, ptr %p, i64 0, i64 {}", at, i));
+                    sub(self, b, x, &ep)?;
+                    b.loop_end(e);
+                }
+            }
+            Ty::List(x) => {
+                if self.needs_drop(x)? {
+                    let xt = self.lt(x)?;
+                    let data = b.val("load ptr, ptr %p");
+                    let lp = b.val("getelementptr %list, ptr %p, i32 0, i32 1");
+                    let len = b.val(format!("load i64, ptr {}", lp));
+                    let (i, e) = b.loop_begin(&len);
+                    let ep = b.val(format!("getelementptr {}, ptr {}, i64 {}", xt, data, i));
+                    sub(self, b, x, &ep)?;
+                    b.loop_end(e);
+                }
+            }
+            Ty::Map(k, v) => {
+                let m = b.val("load ptr, ptr %p");
+                if matches!(**k, Ty::Str) {
+                    b.op(format!("call void @ward_map_unshare_keys(ptr {})", m));
+                }
+                if self.needs_drop(v)? {
+                    let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                    let (i, e) = b.loop_begin(&len);
+                    let vp = b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                    sub(self, b, v, &vp)?;
+                    b.loop_end(e);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// spawn の入口: `void (ptr 取り込んだ値, ptr 戻り値の置き場)`。新しいスレッドで関数 fi を 1 回呼ぶ
+    fn spawn_thunk(&mut self, fi: usize, ctys: &[Ty]) -> G<String> {
+        let name = format!("@spawn{}", fi);
+        let key = (H::Send, format!("spawn {}", fi));
+        if self.helpers.contains_key(&key) {
+            return Ok(name);
+        }
+        self.helpers.insert(key, name.clone());
+        let args_t = self.variant_lt(ctys)?;
+        let mut b = B::default();
+        let mut args = Vec::new();
+        for (i, ct) in ctys.iter().enumerate() {
+            let lt = self.lt(ct)?;
+            let p = b.val(format!("getelementptr {}, ptr %args, i32 0, i32 {}", args_t, i));
+            let v = b.val(format!("load {}, ptr {}", lt, p));
+            args.push(format!("{} {}", lt, v));
+        }
+        let ret_ty = self.prog.fns[fi].ret.clone();
+        let ret = self.lt(&ret_ty)?;
+        b.op("store i64 1, ptr @ward_depth");
+        let r = b.val(format!("call {} @f{}({})", ret, fi, args.join(", ")));
+        b.op(format!("store {} {}, ptr %out", ret, r));
+        let _ = write!(
+            self.code,
+            "define internal void {}(ptr %args, ptr %out) {{\nentry:\n{}{}  ret void\n}}\n\n",
+            name, b.allocas, b.text
+        );
+        Ok(name)
+    }
+
     fn variant_lt(&mut self, fs: &[Ty]) -> G<String> {
         let mut parts = Vec::new();
         for f in fs {
@@ -797,6 +952,17 @@ impl<'p> Module<'p> {
                 let v = b.val("load ptr, ptr %p");
                 b.op(format!("call void @ward_str_retain(ptr {})", v));
                 b.op(format!("store ptr {}, ptr %dst", v));
+            }
+            Ty::Chan(_) => {
+                let v = b.val("load ptr, ptr %p");
+                b.op(format!("call void @ward_chan_retain(ptr {})", v));
+                b.op(format!("store ptr {}, ptr %dst", v));
+            }
+            // task の写しは、解放しない印（下の 1 ビット）をつけたポインタ
+            Ty::Task(_) => {
+                let v = b.val("load ptr, ptr %p");
+                let w = b.val(format!("call ptr @ward_task_view(ptr {})", v));
+                b.op(format!("store ptr {}, ptr %dst", w));
             }
             Ty::Own(_) => {
                 let iface = is_iface_ptr(t);
@@ -962,7 +1128,7 @@ impl<'p> Module<'p> {
                 let tag = b.val(format!("and i64 {}, 1", bits));
                 b.val(format!("icmp eq i64 {}, 0", tag))
             }
-            Ty::Struct(..) | Ty::List(_) | Ty::Map(..) => "true".to_string(),
+            Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Task(_) => "true".to_string(),
             Ty::Fn(..) => env_flag(b, "%p", 3),
             Ty::Enum(..) => {
                 if self.trivial(t)? || !self.enum_moves(t)? {
@@ -996,7 +1162,7 @@ impl<'p> Module<'p> {
     /// 値として取り出すとエラーになりうる型か
     fn can_hazard(&mut self, t: &Ty) -> G<bool> {
         Ok(match t {
-            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) => true,
+            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) | Ty::Task(_) => true,
             Ty::Enum(..) => self.enum_moves(t)?,
             Ty::Array(x, n) => *n > 0 && self.can_hazard(x)?,
             _ => false,
@@ -1035,6 +1201,8 @@ impl<'p> Module<'p> {
         match t {
             Ty::Unit | Ty::Never => lit(self, b, "()"),
             Ty::Fn(..) => lit(self, b, "<関数>"),
+            Ty::Task(_) => lit(self, b, "<task>"),
+            Ty::Chan(_) => lit(self, b, "<chan>"),
             Ty::Int(i) => {
                 let v = b.val(format!("load i{}, ptr %p", i.bits()));
                 let w = widen(b, &v, *i);
@@ -1239,7 +1407,8 @@ impl<'p> Module<'p> {
                 b.val(format!("icmp eq i64 {}, 0", tag))
             }
             Ty::Fn(..) => env_flag(b, "%p", if moves { 1 } else { 2 }),
-            Ty::Struct(..) | Ty::List(_) | Ty::Map(..) if moves => "true".to_string(),
+            Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Task(_) if moves => "true".to_string(),
+            Ty::Task(_) | Ty::Chan(_) => "false".to_string(),
             Ty::Enum(..) if moves => {
                 if self.enum_moves(t)? {
                     "true".to_string()
@@ -1485,7 +1654,7 @@ impl<'p> Module<'p> {
 /// 値として読むとムーブになる型か（lower の `moves` と同じ）
 fn moves(m: &mut Module, t: &Ty) -> G<bool> {
     Ok(match t {
-        Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) => true,
+        Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) | Ty::Task(_) => true,
         Ty::Array(x, _) => moves(m, x)?,
         Ty::Enum(..) => m.enum_moves(t)?,
         _ => false,
@@ -3089,8 +3258,16 @@ impl<'m, 'p> FnGen<'m, 'p> {
 
     fn builtin(&mut self, name: &str, ops: &[Operand], span: Span, want: &Ty) -> G<(String, Ty)> {
         let mut vals = Vec::new();
-        for o in ops {
-            vals.push(self.operand(o)?);
+        // チャンネルのメソッドは、場所のチャンネルを複製せずに読む（数を増やすと、スレッドのあいだで取り合いになる）
+        let borrowed = name.starts_with("chan.") && matches!(ops.first(), Some(Operand::Copy(_)));
+        for (i, o) in ops.iter().enumerate() {
+            match o {
+                Operand::Copy(p) if i == 0 && borrowed => {
+                    let pr = self.place(p, false)?;
+                    vals.push((self.b.val(format!("load ptr, ptr {}", pr.ptr)), pr.ty));
+                }
+                _ => vals.push(self.operand(o)?),
+            }
         }
         let release = |me: &mut Self, vals: &[(String, Ty)]| {
             for (v, t) in vals {
@@ -3100,7 +3277,95 @@ impl<'m, 'p> FnGen<'m, 'p> {
             }
         };
         match name {
+            "spawn" => {
+                let fi: usize = vals[0].0.parse().map_err(|_| "spawn の関数の番号")?;
+                let caps: Vec<(String, Ty)> = vals[1..].to_vec();
+                let ctys: Vec<Ty> = caps.iter().map(|(_, t)| t.clone()).collect();
+                let args_t = self.m.variant_lt(&ctys)?;
+                let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", args_t);
+                let args = self.b.val(format!("call ptr @ward_spawn_args(i64 {})", size));
+                let sent = self.m.site(span, "ほかのスレッドへ送られた");
+                for (i, (v, t)) in caps.iter().enumerate() {
+                    let lt = self.m.lt(t)?;
+                    let p = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", args_t, args, i));
+                    self.b.op(format!("store {} {}, ptr {}", lt, v, p));
+                    if self.m.needs_drop(t)? {
+                        let f = self.m.helper(H::Send, t);
+                        self.b.op(format!("call void {}(ptr {}, ptr {})", f, p, sent));
+                    }
+                }
+                let thunk = self.m.spawn_thunk(fi, &ctys)?;
+                let Ty::Task(r) = want else { return Err("spawn の型".to_string()) };
+                let rsize = self.m.sizeof(r)?;
+                let drop = if self.m.needs_drop(r)? { self.m.helper(H::Drop, r) } else { "null".to_string() };
+                let t = self.b.val(format!("call ptr @ward_spawn(ptr {}, ptr {}, i64 {}, ptr {})", thunk, args, rsize, drop));
+                Ok((t, want.clone()))
+            }
+            "chan" => {
+                let Ty::Chan(x) = want else { return Err("chan の型".to_string()) };
+                let size = self.m.sizeof(x)?;
+                let drop = if self.m.needs_drop(x)? { self.m.helper(H::Drop, x) } else { "null".to_string() };
+                Ok((self.b.val(format!("call ptr @ward_chan_new(i64 {}, ptr {})", size, drop)), want.clone()))
+            }
+            "task.join" => {
+                let lt = self.m.lt(want)?;
+                let out = self.b.alloca(&lt);
+                let site = self.m.site(span, "");
+                self.b.op(format!("call void @ward_task_join(ptr {}, ptr {}, ptr {})", vals[0].0, out, site));
+                Ok((self.b.val(format!("load {}, ptr {}", lt, out)), want.clone()))
+            }
+            "chan.send" | "chan.recv" | "chan.close" => {
+                let c = vals[0].0.clone();
+                let site = self.m.site(span, "");
+                let r = match name {
+                    "chan.send" => {
+                        let (v, t) = vals[1].clone();
+                        let lt = self.m.lt(&t)?;
+                        let tmp = self.b.alloca(&lt);
+                        self.b.op(format!("store {} {}, ptr {}", lt, v, tmp));
+                        if self.m.needs_drop(&t)? {
+                            let sent = self.m.site(span, "ほかのスレッドへ送られた");
+                            let f = self.m.helper(H::Send, &t);
+                            self.b.op(format!("call void {}(ptr {}, ptr {})", f, tmp, sent));
+                        }
+                        self.b.op(format!("call void @ward_chan_send(ptr {}, ptr {}, ptr {})", c, tmp, site));
+                        ("0".to_string(), Ty::Unit)
+                    }
+                    "chan.recv" => {
+                        let Ty::Enum(_, targs) = want else { return Err("recv の型".to_string()) };
+                        let x = targs[0].clone();
+                        let xl = self.m.lt(&x)?;
+                        let out = self.b.alloca(&xl);
+                        let got = self.b.val(format!("call i32 @ward_chan_recv(ptr {}, ptr {}, ptr {})", c, out, site));
+                        let lt = self.m.lt(want)?;
+                        let res = self.b.alloca(&lt);
+                        let none = self.b.val(format!("icmp eq i32 {}, 0", got));
+                        let (_, no) = self.b.if_true(&none);
+                        let nv = self.make_enum(want, "None", Vec::new())?;
+                        self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+                        let done = self.b.l();
+                        self.b.br(&done);
+                        self.b.label(&no);
+                        let v = self.b.val(format!("load {}, ptr {}", xl, out));
+                        let sv = self.make_enum(want, "Some", vec![(v, x)])?;
+                        self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+                        self.b.br(&done);
+                        self.b.label(&done);
+                        (self.b.val(format!("load {}, ptr {}", lt, res)), want.clone())
+                    }
+                    _ => {
+                        self.b.op(format!("call void @ward_chan_close(ptr {}, ptr {})", c, site));
+                        ("0".to_string(), Ty::Unit)
+                    }
+                };
+                // 一時的なチャンネルの値なら捨てる
+                if !borrowed {
+                    self.b.op(format!("call void @ward_chan_release(ptr {}, ptr {})", c, site));
+                }
+                Ok(r)
+            }
             "print" => {
+                self.b.op("call void @ward_print_begin()");
                 for (i, (v, _)) in vals.iter().enumerate() {
                     self.b.op(format!("call void @ward_print_part(ptr {}, i32 {})", v, (i == 0) as i32));
                 }
@@ -3469,6 +3734,8 @@ fn type_name(t: &Ty) -> &'static str {
         Ty::List(_) => "リスト",
         Ty::Fn(..) => "関数",
         Ty::Map(..) => "辞書",
+        Ty::Task(_) => "task",
+        Ty::Chan(_) => "chan",
         _ => "?",
     }
 }

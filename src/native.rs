@@ -70,6 +70,7 @@ fn link_flags(args: &mut Vec<&str>) {
         args.push("-lshell32");
     } else {
         args.push("-lm");
+        args.push("-pthread");
     }
 }
 
