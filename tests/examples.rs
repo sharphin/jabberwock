@@ -255,6 +255,6 @@ fn words_example() {
 #[test]
 fn battle_example() {
     let out = ok(&example("battle"));
-    assert!(out.starts_with("1: ドラゴン の残り 25\n"), "{}", out);
-    assert!(out.ends_with("スライム を倒した\n"), "{}", out);
+    assert!(out.starts_with("1: スライム の残り 3\n"), "{}", out);
+    assert!(out.ends_with("ドラゴン を倒した\n"), "{}", out);
 }

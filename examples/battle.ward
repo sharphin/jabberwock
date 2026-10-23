@@ -34,15 +34,15 @@ fn main() {
     let mut turn = 0;
     while enemies.len() > 0 {
         turn += 1;
-        // 最後の敵を狙う
-        hero.target = Some(ref mut enemies[enemies.len() - 1]);
+        // 先頭の敵を狙う
+        hero.target = Some(ref mut enemies[0]);
         match hero.target {
             case Some(t) -> {
                 t.hit(hero.power);
                 print("{turn}: {t.name()} の残り {t.hp()}");
                 if t.hp() <= 0 {
                     print("{t.name()} を倒した");
-                    enemies.pop();
+                    enemies.remove(0);
                 }
             }
             case None -> {}
