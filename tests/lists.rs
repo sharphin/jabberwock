@@ -148,7 +148,7 @@ fn list_errors() {
     let e = |body: &str| err(&format!("fn main() {{\n{}\n}}", body));
     assert!(e("let i64[] v = [];\nv.push(1);").title.contains("mut ではない"));
     assert!(e("let i64[] mut v = [];\nv.push(\"a\");").title.contains("型が合いません"));
-    assert!(e("let i64[] mut v = [];\nv.sort();").title.contains("メソッド `sort` はありません"));
+    assert!(e("let i64[] mut v = [];\nv.shuffle();").title.contains("メソッド `shuffle` はありません"));
     assert!(e("let i64[] v = [1, 2];\nlet i64[2] w = v;").title.contains("型が合いません"));
     assert!(e("for x in 5 {\n}").title.contains("配列とリスト"));
     assert!(e("let a = [1];\nfor x in a {\n    x = 2;\n}").title.contains("mut ではない"));

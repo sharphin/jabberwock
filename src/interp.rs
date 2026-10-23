@@ -41,6 +41,17 @@ pub enum Value {
     /// 配列（bool が false）とリスト（true）。配列は要素にムーブする値があればムーブ（なければコピー）、
     /// リストはいつもムーブ
     Array(Vec<Value>, bool),
+    /// 関数の値。クロージャは作ったときに取り込んだ外の変数の値を持つ（`Lambda.captures` の順）
+    Func(Callee, Vec<Value>),
+}
+
+/// 関数の値の中身
+#[derive(Debug, Clone)]
+pub enum Callee {
+    /// 名前のある関数（`v.sort_by(less)`）
+    Named(Rc<FnDef>),
+    /// その場で作った関数 `(a, b) -> ...`
+    Lambda(Rc<Lambda>),
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +80,7 @@ impl Value {
             Value::Enum { .. } => "enum",
             Value::Array(_, false) => "配列",
             Value::Array(_, true) => "リスト",
+            Value::Func(..) => "関数",
         }
     }
 
@@ -76,7 +88,9 @@ impl Value {
     fn has_own(&self) -> bool {
         match self {
             Value::Own(_) => true,
-            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) => fields.iter().any(Value::has_own),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
+                fields.iter().any(Value::has_own)
+            }
             _ => false,
         }
     }
@@ -85,6 +99,8 @@ impl Value {
     fn moves(&self) -> bool {
         match self {
             Value::Array(items, list) => *list || items.iter().any(Value::moves),
+            // 取り込んだ値にムーブするものがあればムーブ（なければコピー）
+            Value::Func(_, caps) => caps.iter().any(Value::moves),
             _ => matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. }),
         }
     }
@@ -93,7 +109,7 @@ impl Value {
     fn collect_owns(&self, out: &mut Vec<usize>) {
         match self {
             Value::Own(s) => out.push(*s),
-            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) => {
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
                 fields.iter().for_each(|f| f.collect_owns(out))
             }
             _ => {}
@@ -157,6 +173,8 @@ struct Var {
     mutable: bool,
     /// 宣言した位置（書き換えられないときのエラー用）
     decl: Span,
+    /// クロージャが取り込んだムーブする値を、呼び出しのあいだ読むだけの写しで持っている（値として読めない）
+    view: bool,
 }
 
 struct Frame {
@@ -422,6 +440,7 @@ impl Interp {
                 }
                 format!("{}({})", variant, parts.join(", "))
             }
+            Value::Func(..) => "<関数>".to_string(),
         })
     }
 
@@ -447,6 +466,7 @@ impl Interp {
                 fields: fields.into_iter().map(|f| self.view_of(f, span, what)).collect(),
                 copy,
             },
+            Value::Func(c, caps) => Value::Func(c, caps.into_iter().map(|f| self.view_of(f, span, what)).collect()),
             other => other,
         }
     }
@@ -501,6 +521,34 @@ impl Interp {
         None
     }
 
+    /// 変数を値として読む。ムーブする値ならムーブ（元の変数は使えなくなる）
+    fn read_var(&mut self, name: &str, span: Span) -> R<Value> {
+        let Some(var) = self.find_var(name) else {
+            return self.fn_value(name, span);
+        };
+        let view = var.view;
+        match var.state.clone() {
+            VarState::Live(_) if view => Err(Diagnostic::new(format!("クロージャに取り込んだ `{}` は取り出せません", name))
+                .primary(span, "クロージャは何度も呼べるので、取り込んだ値をムーブできない")
+                .note("`ref` で借りるか、中の値をコピーして使ってください")),
+            // own を読む = ムーブ。元の変数は使えなくなる（変数を借りた ref も無効になる）
+            VarState::Live(slot) if self.heap.slots[slot].value.as_ref().expect("live slot").moves() => {
+                self.find_var(name).expect("var").state = VarState::Moved(span);
+                Ok(self.vacate(slot, span, &format!("`{}` がムーブされた", name)))
+            }
+            VarState::Live(slot) => Ok(self.heap.slots[slot].value.clone().expect("live slot")),
+            VarState::Moved(sp) => Err(moved_error(name, sp, span)),
+        }
+    }
+
+    /// 名前のある関数を値として使う
+    fn fn_value(&self, name: &str, span: Span) -> R<Value> {
+        match self.fns.get(name) {
+            Some(f) => Ok(Value::Func(Callee::Named(f.clone()), Vec::new())),
+            None => Err(undefined_var(name, span)),
+        }
+    }
+
     fn declare(&mut self, name: &str, v: Value, mutable: bool, decl: Span) {
         let slot = self.heap.alloc(v);
         self.frames
@@ -509,7 +557,7 @@ impl Interp {
             .scopes
             .last_mut()
             .expect("scope")
-            .push(Var { name: name.to_string(), state: VarState::Live(slot), mutable, decl });
+            .push(Var { name: name.to_string(), state: VarState::Live(slot), mutable, decl, view: false });
     }
 
     // ------------------------------------------------------------ ポインタ検査
@@ -941,7 +989,9 @@ impl Interp {
         }
         match &e.kind {
             ExprKind::Var(name) => {
-                let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
+                let Some(var) = self.find_var(name) else {
+                    return Ok((self.fn_value(name, e.span)?, true));
+                };
                 match var.state {
                     VarState::Live(slot) => Ok((self.heap.slots[slot].value.clone().expect("live slot"), false)),
                     VarState::Moved(sp) => Err(moved_error(name, sp, e.span)),
@@ -1240,17 +1290,21 @@ impl Interp {
             ExprKind::Float(x) => Ok(Value::Float(*x)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Str(s) => Ok(Value::Str(Rc::from(s.as_str()))),
-            ExprKind::Var(name) => {
-                let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
-                match var.state.clone() {
-                    // own を読む = ムーブ。元の変数は使えなくなる（変数を借りた ref も無効になる）
-                    VarState::Live(slot) if self.heap.slots[slot].value.as_ref().expect("live slot").moves() => {
-                        self.find_var(name).expect("var").state = VarState::Moved(e.span);
-                        Ok(self.vacate(slot, e.span, &format!("`{}` がムーブされた", name)))
+            ExprKind::Var(name) => self.read_var(name, e.span),
+            ExprKind::Lambda(l) => {
+                // 外の変数を、名前で読むのと同じように取り込む（own はムーブ、コピーできる値はコピー）
+                let names = l.captures.borrow().clone();
+                let mut caps = Vec::new();
+                for n in &names {
+                    match self.read_var(n, e.span) {
+                        Ok(v) => caps.push(v),
+                        Err(d) => {
+                            self.discard(caps, e.span);
+                            return Err(d);
+                        }
                     }
-                    VarState::Live(slot) => Ok(self.heap.slots[slot].value.clone().expect("live slot")),
-                    VarState::Moved(sp) => Err(moved_error(name, sp, e.span)),
                 }
+                Ok(Value::Func(Callee::Lambda(l.clone()), caps))
             }
             ExprKind::Own(inner) => {
                 let v = self.eval(inner)?;
@@ -1479,6 +1533,7 @@ impl Interp {
                 }
                 Ok(Value::Unit)
             }
+            _ if self.find_var(name).is_some() => self.call_var(name, args, span),
             _ => {
                 let f = self.fns.get(name).cloned().ok_or_else(|| {
                     Diagnostic::new(format!("未定義の関数 `{}`", name))
@@ -1552,6 +1607,18 @@ impl Interp {
             if name != "len" {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
+            }
+            if name == "sort" || name == "sort_by" {
+                let loc = match (slot, &place) {
+                    (Some(sp), _) => Some(sp),
+                    (None, Some(pl)) => Some((pl.slot, pl.path.clone())),
+                    (None, None) => None,
+                };
+                let r = self.sort_list(loc.as_ref(), &mut rv, vals.into_iter().next(), recv, span);
+                if place.is_none() {
+                    self.release(rv, span, "使い終わった一時的な値");
+                }
+                return r.map(|_| Value::Unit);
             }
             let mut vals = vals;
             let items = match (slot, &place) {
@@ -1691,18 +1758,157 @@ impl Interp {
             return Err(Diagnostic::new("関数呼び出しが深すぎます")
                 .primary(call_span, format!("呼び出しの深さが {} を超えました", MAX_DEPTH)));
         }
-        self.depth += 1;
         let vars: Vec<Var> = f
             .params
             .iter()
             .zip(args)
-            .map(|(p, v)| Var { name: p.name.clone(), state: VarState::Live(self.heap.alloc(v)), mutable: p.mutable, decl: p.span })
+            .map(|(p, v)| Var {
+                name: p.name.clone(),
+                state: VarState::Live(self.heap.alloc(v)),
+                mutable: p.mutable,
+                decl: p.span,
+                view: false,
+            })
             .collect();
-        self.frames.push(Frame { scopes: vec![vars] });
-
         // 戻り値の型がある関数では、本体の最後の `;` のない式が戻り値になる
+        self.run_frame(vars, &f.body, f.ret.is_some())
+    }
+
+    /// リストを並べ替える（安定）。`f` があれば「a を b より前に置くか」を返す関数で比べる。
+    /// 比べる関数には要素を読むだけの写しを渡す（for と同じ）。並べ終わった順に、元の要素を動かす
+    fn sort_list(&mut self, loc: Option<&(usize, Vec<usize>)>, tmp: &mut Value, f: Option<Value>, recv: &Expr, span: Span) -> R<()> {
+        let items = match loc {
+            Some((s, p)) => self.at(*s, p),
+            None => &*tmp,
+        };
+        let Value::Array(items, _) = items else { unreachable!("checked by caller") };
+        let items = items.clone();
+        let n = items.len();
+        let what = format!("{} の要素", describe(recv));
+        let mut temps = Vec::new();
+        let views: Vec<Value> = items
+            .into_iter()
+            .map(|v| {
+                if f.is_none() {
+                    return v; // sort は整数・小数・文字列だけ（コピーできる）
+                }
+                // own の要素は own の先を借りた ref。構造体などは写しを一時的なスロットに置いて借りる
+                let v = self.view_of(v, span, &what);
+                if !v.moves() {
+                    return v;
+                }
+                let slot = self.heap.alloc(v);
+                temps.push(slot);
+                Value::Ref(RefVal {
+                    slot,
+                    generation: self.heap.slots[slot].generation,
+                    path: Vec::new(),
+                    borrowed_at: span,
+                    what: what.clone(),
+                    mutable: false,
+                })
+            })
+            .collect();
+        let mut less = |me: &mut Self, a: usize, b: usize| -> R<bool> {
+            match &f {
+                None => Ok(match (&views[a], &views[b]) {
+                    (Value::Int(x, _), Value::Int(y, _)) => x < y,
+                    (Value::Float(x), Value::Float(y)) => x < y,
+                    (Value::Str(x), Value::Str(y)) => x < y,
+                    _ => unreachable!("type checked: ordered elements"),
+                }),
+                Some(f) => match me.call_func(f, vec![views[a].clone(), views[b].clone()], span)? {
+                    Value::Bool(x) => Ok(x),
+                    other => Err(Diagnostic::new("sort_by の関数は true / false を返します")
+                        .primary(span, format!("{} が返りました", other.type_name()))),
+                },
+            }
+        };
+        let order = merge_sort(self, (0..n).collect(), &mut less);
+        for slot in temps {
+            self.vacate(slot, span, "sort_by の比べ終わった写し");
+        }
+        if let Some(f) = f {
+            self.release(f, span, "sort_by が使い終わった関数");
+        }
+        let order = order?;
+        let items = match loc {
+            Some((s, p)) => self.at_mut(*s, p),
+            None => tmp,
+        };
+        let Value::Array(items, _) = items else {
+            return Err(Diagnostic::new("sort_by の途中でリストが置き換えられました").primary(span, "ここ"));
+        };
+        if items.len() != n {
+            return Err(Diagnostic::new("sort_by の途中でリストの長さが変わりました")
+                .primary(span, format!("始めは {} 個でしたが、今は {} 個です", n, items.len())));
+        }
+        let mut old: Vec<Option<Value>> = std::mem::take(items).into_iter().map(Some).collect();
+        *items = order.into_iter().map(|i| old[i].take().expect("a permutation")).collect();
+        Ok(())
+    }
+
+    /// 変数に入った関数の値を呼ぶ。引数を先に評価してから、変数を借りて読む
+    fn call_var(&mut self, name: &str, args: &[Expr], span: Span) -> R<Value> {
+        let vals = self.eval_all(args)?;
+        let var = self.find_var(name).expect("checked by caller");
+        let v = match var.state.clone() {
+            VarState::Live(slot) => self.heap.slots[slot].value.clone().expect("live slot"),
+            VarState::Moved(sp) => {
+                self.discard(vals, span);
+                return Err(moved_error(name, sp, span));
+            }
+        };
+        let f = match v {
+            Value::Own(_) | Value::Ref(_) => match self.check_ptr(&v, span, Check::Required) {
+                Ok((slot, path)) => self.at(slot, &path).clone(),
+                Err(d) => {
+                    self.discard(vals, span);
+                    return Err(d);
+                }
+            },
+            v => v,
+        };
+        self.call_func(&f, vals, span)
+    }
+
+    /// 関数の値を呼ぶ。`f` は借りて読んだもの（取り込んだ値は呼び出しのあいだ読むだけの写しで渡す）
+    fn call_func(&mut self, f: &Value, args: Vec<Value>, span: Span) -> R<Value> {
+        let Value::Func(callee, caps) = f else {
+            return Err(Diagnostic::new("関数ではない値を呼び出しました")
+                .primary(span, format!("これは {} です", f.type_name())));
+        };
+        let l = match callee {
+            Callee::Named(def) => return self.call_fn(def, args, span),
+            Callee::Lambda(l) => l.clone(),
+        };
+        if self.depth >= MAX_DEPTH {
+            return Err(Diagnostic::new("関数呼び出しが深すぎます")
+                .primary(span, format!("呼び出しの深さが {} を超えました", MAX_DEPTH)));
+        }
+        let mut vars: Vec<Var> = Vec::new();
+        for (p, v) in l.params.iter().zip(args) {
+            let slot = self.heap.alloc(v);
+            vars.push(Var { name: p.name.clone(), state: VarState::Live(slot), mutable: false, decl: p.span, view: false });
+        }
+        let names = l.captures.borrow().clone();
+        for (n, c) in names.iter().zip(caps) {
+            // 取り込んだ own はクロージャのもの。呼び出しの中では、それを借りた ref の写しで使う
+            // （呼び出しの途中で元のクロージャが捨てられても、たどったときに検出される）
+            let view = c.moves();
+            let v = self.view_of(c.clone(), span, n);
+            let slot = self.heap.alloc(v);
+            vars.push(Var { name: n.clone(), state: VarState::Live(slot), mutable: false, decl: span, view });
+        }
+        self.run_frame(vars, &l.body, l.returns.get())
+    }
+
+    /// 新しいフレームで本体を実行する。`want_value` なら最後の `;` のない式が戻り値
+    fn run_frame(&mut self, vars: Vec<Var>, body: &Block, want_value: bool) -> R<Value> {
+        self.depth += 1;
+        self.frames.push(Frame { scopes: vec![vars] });
         let mut by_try = false;
-        let (flow, tail) = match self.exec_block_value(&f.body, f.ret.is_some()) {
+        let (flow, tail) = match self.exec_block_value(body, want_value) {
             Ok(r) => r,
             // `e?` で抜けてきた。途中のスコープは frame に残っているので、下でまとめて解放する
             Err(d) => match self.unwinding.take() {
@@ -1719,7 +1925,7 @@ impl Interp {
         let (value, span, how) = match flow {
             Flow::Return(v, sp) if by_try => (v, sp, "`?` で関数を抜けた"),
             Flow::Return(v, sp) => (v, sp, "関数から return した"),
-            Flow::Normal => (tail, f.body.end, "スコープを抜けた"),
+            Flow::Normal => (tail, body.end, "スコープを抜けた"),
             Flow::Break(_) | Flow::Continue(_) => unreachable!("parser rejects break/continue outside loops"),
         };
         for scope in frame.scopes.into_iter().rev() {
@@ -1730,6 +1936,32 @@ impl Interp {
 }
 
 // ---------------------------------------------------------------- ヘルパ
+
+/// 安定なマージソート。`less` は途中で失敗しうる（比べる関数の実行時エラー）
+fn merge_sort<T>(cx: &mut T, v: Vec<usize>, less: &mut impl FnMut(&mut T, usize, usize) -> R<bool>) -> R<Vec<usize>> {
+    if v.len() <= 1 {
+        return Ok(v);
+    }
+    let mut right = v;
+    let left = right.drain(..right.len() / 2).collect();
+    let left = merge_sort(cx, left, less)?;
+    let right = merge_sort(cx, right, less)?;
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let (mut i, mut j) = (0, 0);
+    while i < left.len() && j < right.len() {
+        // 右が左より真に前のときだけ右を取る（同じなら元の順を保つ）
+        if less(cx, right[j], left[i])? {
+            out.push(right[j]);
+            j += 1;
+        } else {
+            out.push(left[i]);
+            i += 1;
+        }
+    }
+    out.extend_from_slice(&left[i..]);
+    out.extend_from_slice(&right[j..]);
+    Ok(out)
+}
 
 /// 整数を、型検査が決めた型（`Expr.int`）に変換する
 fn convert(e: &Expr, v: Value) -> Value {

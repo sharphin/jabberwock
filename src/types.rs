@@ -40,6 +40,8 @@ pub enum Ty {
     Array(Box<Ty>, u64),
     /// `i64[]`（伸び縮みするリスト）
     List(Box<Ty>),
+    /// `fn bool(i64, i64)`: 関数（名前のある関数とクロージャ）。戻り値がなければ Unit
+    Fn(Vec<Ty>, Box<Ty>),
 }
 
 impl Ty {
@@ -62,6 +64,13 @@ impl Ty {
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
             Ty::Array(t, n) => format!("{}[{}]", t.show(), n),
             Ty::List(t) => format!("{}[]", t.show()),
+            Ty::Fn(ps, r) => {
+                let ps: Vec<String> = ps.iter().map(Ty::show).collect();
+                match &**r {
+                    Ty::Unit => format!("fn({})", ps.join(", ")),
+                    r => format!("fn {}({})", r.show(), ps.join(", ")),
+                }
+            }
         }
     }
 
@@ -110,6 +119,7 @@ fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
         Ty::Ref(x, m) => Ty::Ref(Box::new(subst(x, map)), *m),
         Ty::Array(x, n) => Ty::Array(Box::new(subst(x, map)), *n),
         Ty::List(x) => Ty::List(Box::new(subst(x, map))),
+        Ty::Fn(ps, r) => Ty::Fn(ps.iter().map(|p| subst(p, map)).collect(), Box::new(subst(r, map))),
         _ => t.clone(),
     }
 }
@@ -119,6 +129,7 @@ fn contains_iface(t: &Ty) -> bool {
         Ty::Iface(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_iface),
         Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_iface(x),
+        Ty::Fn(ps, r) => ps.iter().any(contains_iface) || contains_iface(r),
         _ => false,
     }
 }
@@ -128,6 +139,7 @@ fn contains_param(t: &Ty) -> bool {
         Ty::Param(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_param),
         Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_param(x),
+        Ty::Fn(ps, r) => ps.iter().any(contains_param) || contains_param(r),
         _ => false,
     }
 }
@@ -138,6 +150,7 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
         Ty::Param(p) => tparams.contains(p) && !map.contains_key(p),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|a| has_unbound(a, tparams, map)),
         Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => has_unbound(x, tparams, map),
+        Ty::Fn(ps, r) => ps.iter().any(|p| has_unbound(p, tparams, map)) || has_unbound(r, tparams, map),
         _ => false,
     }
 }
@@ -169,6 +182,12 @@ fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String
         (Ty::Own(x), Ty::Own(y)) | (Ty::Ref(x, _), Ty::Ref(y, _)) => unify(x, y, tparams, map),
         (Ty::Array(x, n), Ty::Array(y, m)) if n == m => unify(x, y, tparams, map),
         (Ty::List(x), Ty::List(y)) => unify(x, y, tparams, map),
+        (Ty::Fn(xs, a), Ty::Fn(ys, b)) if xs.len() == ys.len() => {
+            for (x, y) in xs.iter().zip(ys) {
+                unify(x, y, tparams, map);
+            }
+            unify(a, b, tparams, map);
+        }
         _ => {}
     }
 }
@@ -182,6 +201,7 @@ fn convert(e: &Expr, got: &Ty, want: &Ty) {
     }
 }
 
+#[derive(Clone)]
 struct VarInfo {
     ty: Ty,
     mutable: bool,
@@ -252,6 +272,8 @@ struct Checker<'a> {
     bounds: HashMap<String, Vec<String>>,
     /// 今調べているメソッドの構造体のフィールド名（シャドーイングの禁止に使う）
     fields: Vec<String>,
+    /// 今調べているクロージャ（外から順）。本体が始まるスコープの位置と、取り込んだ変数の名前
+    lambdas: Vec<(usize, Vec<String>)>,
     warnings: Vec<Diagnostic>,
 }
 
@@ -277,6 +299,7 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         fns: HashMap::new(),
         scopes: Vec::new(),
         fields: Vec::new(),
+        lambdas: Vec::new(),
         ret: Ty::Unit,
         tparams: Vec::new(),
         interfaces: HashMap::new(),
@@ -414,6 +437,14 @@ impl<'a> Checker<'a> {
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),
             TypeKind::Array(inner, n) => Ty::Array(Box::new(self.resolve(inner)?), *n),
             TypeKind::List(inner) => Ty::List(Box::new(self.resolve(inner)?)),
+            TypeKind::Fn(ps, r) => {
+                let ps = ps.iter().map(|p| self.resolve(p)).collect::<R<Vec<_>>>()?;
+                let r = match r {
+                    Some(r) => self.resolve(r)?,
+                    None => Ty::Unit,
+                };
+                Ty::Fn(ps, Box::new(r))
+            }
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
                 "str" => Ty::Str,
@@ -498,6 +529,8 @@ impl<'a> Checker<'a> {
             Ty::Array(x, _) => self.copyable(x),
             // リストはいつもムーブ（中身はヒープにあり、複製は重いので）
             Ty::List(_) => false,
+            // 関数の値は取り込んだ own を持ちうるのでムーブ
+            Ty::Fn(..) => false,
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
             Ty::Enum(..) => self.variants_of(t).expect("enum").iter().flat_map(|(_, f)| f).all(|t| self.copyable(t)),
         }
@@ -544,7 +577,7 @@ impl<'a> Checker<'a> {
         let mut got: Vec<Option<Ty>> = vec![None; args.len()];
         // 0: ふつうの式、1: 数の式、2: `None` など enum の値（中身の型を相手に合わせたいもの）
         let order = |a: &Expr| match a.kind {
-            ExprKind::Variant { .. } => 2,
+            ExprKind::Variant { .. } | ExprKind::Lambda(_) => 2,
             _ if is_const_tree(a) => 1,
             _ => 0,
         };
@@ -745,6 +778,7 @@ impl<'a> Checker<'a> {
                     .primary(p.span, "同じ名前の引数がすでにある"));
             }
             self.not_a_field(&p.name, p.span)?;
+            self.not_a_fn_name(&p.name, p.span)?;
             params.insert(p.name.clone(), VarInfo { ty: t, mutable: p.mutable, decl: p.span });
         }
         self.scopes = vec![params];
@@ -782,8 +816,127 @@ impl<'a> Checker<'a> {
                 .note("シャドーイング（同じ名前で宣言し直すこと）はできません。別の名前をつけてください"));
         }
         self.not_a_field(name, info.decl)?;
+        self.not_a_fn_name(name, info.decl)?;
         self.scopes.last_mut().expect("scope").insert(name.to_string(), info);
         Ok(())
+    }
+
+    /// 変数に関数と同じ名前はつけられない（`f(x)` がどちらの呼び出しか分からなくなるため）
+    fn not_a_fn_name(&self, name: &str, span: Span) -> R<()> {
+        if self.fns.contains_key(name) || BUILTINS.contains(&name) {
+            return Err(Diagnostic::new(format!("`{}` は関数の名前です", name))
+                .primary(span, "変数や引数に、関数と同じ名前はつけられない")
+                .note("別の名前をつけてください"));
+        }
+        Ok(())
+    }
+
+    /// 変数がどのスコープにあるか（外から数えた位置）
+    fn var_index(&self, name: &str) -> Option<usize> {
+        self.scopes.iter().rposition(|s| s.contains_key(name))
+    }
+
+    /// 式の中で変数を使う。クロージャの外の変数なら、そのクロージャが取り込むものとして覚える
+    fn use_var(&mut self, name: &str) -> Option<VarInfo> {
+        let i = self.var_index(name)?;
+        for (base, caps) in self.lambdas.iter_mut() {
+            if i < *base && !caps.iter().any(|c| c == name) {
+                caps.push(name.to_string());
+            }
+        }
+        self.scopes[i].get(name).cloned()
+    }
+
+    /// 今いるクロージャが取り込んだ（外の）変数か
+    fn is_captured(&self, name: &str) -> bool {
+        match (self.var_index(name), self.lambdas.last()) {
+            (Some(i), Some((base, _))) => i < *base,
+            _ => false,
+        }
+    }
+
+    /// `(a, b) -> 本体`。引数の型は書いてあればそれ、なければ入れる先の関数の型（`hint`）から決める
+    fn lambda(&mut self, l: &Lambda, hint: Option<&Ty>) -> R<Ty> {
+        let (hps, hret) = match hint {
+            Some(Ty::Fn(ps, r)) if ps.len() == l.params.len() => (Some(ps.clone()), Some((**r).clone())),
+            _ => (None, None),
+        };
+        let mut ptys = Vec::new();
+        for (i, p) in l.params.iter().enumerate() {
+            ptys.push(match (&p.ty, &hps) {
+                (Some(te), _) => self.resolve(te)?,
+                (None, Some(ps)) => ps[i].clone(),
+                (None, None) => {
+                    return Err(Diagnostic::new(format!("クロージャの引数 `{}` の型が分かりません", p.name))
+                        .primary(p.span, "型を決める手がかりがない")
+                        .note("`(i64 a) -> ...` のように型を書くか、関数の型が決まっている場所（引数など）で使ってください"))
+                }
+            });
+        }
+        let base = self.scopes.len();
+        self.lambdas.push((base, Vec::new()));
+        self.scopes.push(HashMap::new());
+        let saved_ret = std::mem::replace(&mut self.ret, hret.clone().unwrap_or(Ty::Never));
+        let r = self.lambda_body(l, &ptys, hret.as_ref());
+        self.ret = saved_ret;
+        self.scopes.truncate(base);
+        let (_, caps) = self.lambdas.pop().expect("pushed above");
+        *l.captures.borrow_mut() = caps;
+        let r = r?;
+        l.returns.set(r != Ty::Unit);
+        Ok(Ty::Fn(ptys, Box::new(r)))
+    }
+
+    /// クロージャの本体を調べて、戻り値の型を返す
+    fn lambda_body(&mut self, l: &Lambda, ptys: &[Ty], ret: Option<&Ty>) -> R<Ty> {
+        for (p, t) in l.params.iter().zip(ptys) {
+            self.declare(&p.name, VarInfo { ty: t.clone(), mutable: false, decl: p.span })?;
+        }
+        let Some(ret) = ret else {
+            // 戻り値の型は本体の最後の式から決める（この場合 return は使えない）
+            let got = self.block(&l.body, true, None)?;
+            return Ok(if got == Ty::Never { Ty::Unit } else { got });
+        };
+        if *ret == Ty::Unit {
+            self.block(&l.body, false, None)?;
+            return Ok(Ty::Unit);
+        }
+        let got = self.block(&l.body, true, Some(ret))?;
+        if !self.fits(&got, ret) {
+            let span = tail_expr(&l.body).map_or(l.body.end, |t| t.span);
+            return Err(mismatch(ret, &got, span));
+        }
+        if let Some(t) = tail_expr(&l.body) {
+            convert(t, &got, ret);
+        }
+        Ok(ret.clone())
+    }
+
+    /// 関数の値（変数 `name` の型 `ty`）を呼ぶ
+    fn call_value(&mut self, name: &str, ty: &Ty, args: &[Expr], span: Span) -> R<Ty> {
+        let (ps, ret) = match ty {
+            Ty::Fn(ps, r) => (ps.clone(), (**r).clone()),
+            Ty::Own(x) | Ty::Ref(x, _) if matches!(**x, Ty::Fn(..)) => {
+                let Ty::Fn(ps, r) = &**x else { unreachable!() };
+                (ps.clone(), (**r).clone())
+            }
+            _ => {
+                return Err(Diagnostic::new(format!("`{}` は関数ではありません", name))
+                    .primary(span, format!("`{}` は `{}` です", name, ty.show())))
+            }
+        };
+        if args.len() != ps.len() {
+            return Err(arity_error(name, ps.len(), args.len(), span));
+        }
+        for (a, p) in args.iter().zip(&ps) {
+            let got = self.expr_h(a, Some(p))?;
+            let got = self.auto_borrow(a, got, p)?;
+            if !self.fits(&got, p) {
+                return Err(mismatch(p, &got, a.span));
+            }
+            convert(a, &got, p);
+        }
+        Ok(ret)
     }
 
     /// メソッドの中では、フィールドと同じ名前の引数や変数を作れない
@@ -907,15 +1060,7 @@ impl<'a> Checker<'a> {
                         .primary(iter.span, format!("ここは `{}` です", t.show()))
                         .note("数を回すなら `for i in range(10)` と書きます"));
                 };
-                // 要素はコピーできればコピー、own なら own の先を借りた ref、それ以外（構造体など）は
-                // 始めた時点の要素を読むだけの ref で受け取る
-                let vt = if self.copyable(&elem) {
-                    elem
-                } else if let Ty::Own(u) = &elem {
-                    Ty::Ref(u.clone(), false)
-                } else {
-                    Ty::Ref(Box::new(elem), false)
-                };
+                let vt = self.view_ty(elem);
                 self.scopes.push(HashMap::new());
                 self.declare(var, VarInfo { ty: vt, mutable: false, decl: *var_span })?;
                 let r = self.block(body, false, None);
@@ -929,6 +1074,12 @@ impl<'a> Checker<'a> {
             Stmt::Break(_) | Stmt::Continue(_) => Ok(true),
             Stmt::Return { value, span } => {
                 let ret = self.ret.clone();
+                if ret == Ty::Never {
+                    // 戻り値の型の手がかりがないクロージャ（戻り値は最後の式で決める）
+                    return Err(Diagnostic::new("このクロージャでは return を使えません")
+                        .primary(*span, "戻り値の型が決まっていない")
+                        .note("最後の式（`;` なし）で値を返すか、関数の型が決まっている場所で使ってください"));
+                }
                 match (value, &ret) {
                     (None, Ty::Unit) => {}
                     (None, _) => {
@@ -1107,8 +1258,19 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Bool(_) => Ok(Ty::Bool),
             ExprKind::Str(_) => Ok(Ty::Str),
-            ExprKind::Var(name) => match self.lookup(name) {
-                Some(v) => Ok(v.ty.clone()),
+            ExprKind::Lambda(l) => self.lambda(l, hint),
+            ExprKind::Var(name) => match self.use_var(name) {
+                Some(v) => Ok(v.ty),
+                // 名前のある関数を値として使う（`v.sort_by(less)`）
+                None if self.fns.contains_key(name.as_str()) => {
+                    let sig = &self.fns[name.as_str()];
+                    if sig.method || !sig.tparams.is_empty() {
+                        return Err(Diagnostic::new(format!("`{}` は値として使えません", name))
+                            .primary(e.span, "メソッドや型の引数のある関数は、まだ値にできない")
+                            .note("`(a) -> f(a)` のようにクロージャで包んでください"));
+                    }
+                    Ok(Ty::Fn(sig.params.clone(), Box::new(sig.ret.clone())))
+                }
                 None => Err(Diagnostic::new(format!("未定義の変数 `{}`", name))
                     .primary(e.span, "この名前は見つかりません")),
             },
@@ -1429,6 +1591,18 @@ impl<'a> Checker<'a> {
     }
 
     /// リストのメソッド: `len()`、`push(x)`、`pop()`
+    /// 要素を読むだけで受け取るときの型（for の変数・sort_by の比べる関数の引数）。
+    /// コピーできればコピー、own なら own の先を借りた ref、それ以外（構造体など）は要素を読むだけの ref
+    fn view_ty(&self, elem: Ty) -> Ty {
+        if self.copyable(&elem) {
+            elem
+        } else if let Ty::Own(u) = elem {
+            Ty::Ref(u, false)
+        } else {
+            Ty::Ref(Box::new(elem), false)
+        }
+    }
+
     fn list_method(&mut self, recv: &Expr, rt: &Ty, elem: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
         let (want, ret, mutable) = match name {
             "len" => (0, I64, false),
@@ -1436,9 +1610,12 @@ impl<'a> Checker<'a> {
             "pop" => (0, Ty::Enum("Option".to_string(), vec![elem.clone()]), true),
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
+            "sort" | "sort_by" => (if name == "sort" { 0 } else { 1 }, Ty::Unit, true),
             _ => {
-                return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name))
-                    .primary(span, "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)` です"))
+                return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name)).primary(
+                    span,
+                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`sort()`・`sort_by(f)` です",
+                ))
             }
         };
         if args.len() != want {
@@ -1455,6 +1632,20 @@ impl<'a> Checker<'a> {
             "insert" => (args.first(), args.get(1)),
             _ => (None, args.first()),
         };
+        if name == "sort" {
+            if let Err(why) = self.satisfies(elem, ORDERED) {
+                return Err(Diagnostic::new("この要素は sort で並べられません")
+                    .primary(span, why)
+                    .note("並べ方を決める関数を渡す `sort_by((a, b) -> a.x < b.x)` を使ってください"));
+            }
+        }
+        if name == "sort_by" {
+            // 比べる関数: 「a を b より前に置くか」。要素は読むだけで受け取る
+            let v = self.view_ty(elem.clone());
+            let f = Ty::Fn(vec![v.clone(), v], Box::new(Ty::Bool));
+            self.expect(&args[0], &f)?;
+            return Ok(ret);
+        }
         if let Some(i) = index {
             self.index_value(i)?;
         }
@@ -1670,6 +1861,10 @@ impl<'a> Checker<'a> {
             }
             _ => {}
         }
+        if let Some(v) = self.use_var(name) {
+            // 関数の値を入れた変数（クロージャ）の呼び出し
+            return self.call_value(name, &v.ty, args, span);
+        }
         let Some(sig) = self.fns.get(name) else {
             let d = Diagnostic::new(format!("未定義の関数 `{}`", name)).primary(span, "この関数は定義されていません");
             return Err(if name == "range" { d.note("range(...) は `for i in range(...)` の中でだけ使えます") } else { d });
@@ -1703,10 +1898,14 @@ impl<'a> Checker<'a> {
             t => t.clone(),
         };
         match &inner {
+            // 並べ替えは長さを変えないので、配列にも使える
+            Ty::Array(elem, _) if name == "sort" || name == "sort_by" => {
+                return self.list_method(recv, &rt, elem, name, args, span)
+            }
             Ty::Array(..) => {
                 if name != "len" || !args.is_empty() {
                     return Err(Diagnostic::new(format!("配列にメソッド `{}` はありません", name))
-                        .primary(span, "配列のメソッドは `len()`（長さ）だけです")
+                        .primary(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)` だけです")
                         .note("伸び縮みさせたいなら、リスト `i64[]` を使ってください"));
                 }
                 return Ok(I64);
@@ -1873,6 +2072,11 @@ impl<'a> Checker<'a> {
     fn access(&mut self, e: &Expr) -> R<Access> {
         Ok(match &e.kind {
             ExprKind::Var(name) => {
+                if self.is_captured(name) {
+                    return Err(Diagnostic::new(format!("クロージャに取り込んだ `{}` は書き換えられません", name))
+                        .primary(e.span, "クロージャは外の変数の値を写して持つので、書き換えても外には届かない")
+                        .note("書き換えたいときは、外で `ref mut` を取り、その ref を使ってください"));
+                }
                 let v = self.lookup(name).expect("typed before");
                 if v.mutable {
                     Access::Write

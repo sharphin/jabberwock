@@ -1,4 +1,5 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
@@ -364,6 +365,64 @@ impl Parser {
             Block { stmts: Vec::new(), tail: false, end }
         };
         Ok(FnDef { name, tparams, bounds, ret, params, body, span: header })
+    }
+
+    /// 今の位置の `(` が、その場で作る関数 `(a, b) -> ...` の始まりか（対応する `)` の次が `->`）
+    fn at_lambda(&self) -> bool {
+        let mut depth = 0;
+        for (i, t) in self.toks[self.pos..].iter().enumerate() {
+            match t.tok {
+                Tok::LParen => depth += 1,
+                Tok::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.toks.get(self.pos + i + 1), Some(t) if t.tok == Tok::Arrow);
+                    }
+                }
+                Tok::Eof | Tok::LBrace | Tok::Semi => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// `(a, b) -> 式` / `(i64 a) -> { ... }`。本体は関数の本体と同じ扱い（return はこの関数から返る）
+    fn parse_lambda(&mut self) -> R<Expr> {
+        let start = self.expect(Tok::LParen, "`(`")?;
+        let mut params = Vec::new();
+        while *self.peek() != Tok::RParen {
+            // 名前だけ（`a`）か、型つき（`i64 a`）
+            let ty = if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Comma | Tok::RParen) {
+                None
+            } else {
+                Some(self.parse_type()?)
+            };
+            let span = self.span();
+            let name = self.expect_ident("引数名")?;
+            params.push(LambdaParam { ty, name, span });
+            if !self.eat(Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(Tok::RParen, "`)`")?;
+        self.expect(Tok::Arrow, "`->`")?;
+        let saved = (self.loop_depth, self.in_value_if);
+        self.loop_depth = 0;
+        self.in_value_if = false;
+        let body = if *self.peek() == Tok::LBrace {
+            self.parse_block()
+        } else {
+            self.with_struct_lit(true, |p| p.parse_expr()).map(|e| {
+                let end = e.span;
+                Block { stmts: vec![Stmt::Expr(e)], tail: true, end }
+            })
+        };
+        self.loop_depth = saved.0;
+        self.in_value_if = saved.1;
+        let body = body?;
+        let span = start.join(body.end);
+        let lambda = Lambda { params, body, captures: RefCell::new(Vec::new()), returns: Cell::new(false) };
+        Ok(Expr::new(ExprKind::Lambda(Rc::new(lambda)), span))
     }
 
     /// 今の位置が関数名か（`名前(` か `名前<...>(`）。そうでなければ戻り値の型
@@ -821,6 +880,21 @@ impl Parser {
                     TypeKind::Name(name)
                 }
             }
+            Tok::Fn => {
+                // `fn bool(i64, i64)`: 関数の型。`(` がすぐ来れば戻り値なし
+                self.bump();
+                let ret = if *self.peek() == Tok::LParen { None } else { Some(Box::new(self.parse_type()?)) };
+                self.expect(Tok::LParen, "`(`")?;
+                let mut params = Vec::new();
+                while *self.peek() != Tok::RParen {
+                    params.push(self.parse_type()?);
+                    if !self.eat(Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Tok::RParen, "`)`")?;
+                TypeKind::Fn(params, ret)
+            }
             Tok::LParen => {
                 // `(own i64)[]`: かっこでまとめる（`own i64[]` は「own のリスト」ではなく「リストの own」）
                 self.bump();
@@ -1108,6 +1182,7 @@ impl Parser {
                     Ok(Expr::new(ExprKind::Var(name), start))
                 }
             }
+            Tok::LParen if self.at_lambda() => self.parse_lambda(),
             Tok::LParen => {
                 let start = self.bump().span;
                 let inner = self.with_struct_lit(true, |p| p.parse_expr())?;
@@ -1310,6 +1385,13 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             }
         }
         ExprKind::ArrayRepeat(x, _, _) => bind_this(x, ctx, scopes),
+        ExprKind::Lambda(l) => {
+            // メソッドの中のクロージャでも、フィールド名は this.名前 になる（this を取り込む）
+            let l = Rc::get_mut(l).expect("lambdas are not shared while parsing");
+            scopes.push(l.params.iter().map(|p| p.name.clone()).collect());
+            bind_this_block(&mut l.body, ctx, scopes);
+            scopes.pop();
+        }
         ExprKind::MethodCall(recv, _, args) => {
             bind_this(recv, ctx, scopes);
             for a in args {

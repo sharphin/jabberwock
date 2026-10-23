@@ -40,6 +40,7 @@
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
+| `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
 ## 大事な不変条件
@@ -121,6 +122,14 @@
   `push` / `pop` は `eval_method` が場所の中のリストをじかに書き換える（丸ごと複製しない）。
   `for x in a`（`Stmt::ForEach`）は `eval_borrow` で借り、始めた時点の要素を回す。own の要素は `RefVal` にして渡す。
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
+
+- クロージャ: `ExprKind::Lambda(Rc<Lambda>)`、型は `Ty::Fn(引数, 戻り値)`。types の `lambda` が引数の型を書いた型か入れる先の型（hint）から決め、
+  本体で使った外の変数を `use_var` で集めて `Lambda.captures` に書く（`lambdas` に (外のスコープの数, 名前) を積む）。取り込んだ変数への代入は `access` で弾く。
+  interp の値は `Value::Func(Callee, 取り込んだ値)`。作るときに captures の順で `read_var`（own はムーブ）。
+  呼ぶとき（`call_func`）は取り込んだ値を `view_of` の写し（own → 読むだけの ref）で新しいフレームに置き、ムーブする値だった変数は `Var.view` で取り出しを禁止する。
+  `f(x)` は、`f` という変数があれば関数の値の呼び出し（`call_var`。引数が先、変数はあとで借りる）。変数に関数と同じ名前は禁止（`not_a_fn_name`）。
+  名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
+  `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 
 ## 設計の決めごと
 

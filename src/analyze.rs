@@ -335,7 +335,13 @@ impl<'a> FnAnalyzer<'a> {
         match &e.kind {
             ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => None,
             ExprKind::Var(name) => {
-                let id = self.lookup(name)?;
+                let Some(id) = self.lookup(name) else {
+                    // 名前のある関数を値として使う。どこから何が渡されるか分からないので、引数は何も仮定しない
+                    if let Some(n) = self.pinned.get(name.as_str()).map(Vec::len) {
+                        self.record_call(name, vec![false; n]);
+                    }
+                    return None;
+                };
                 let f = self.facts.get(&id).copied();
                 let is_ref = matches!(f, Some(Fact::RefTo(_) | Fact::Pinned));
                 if !borrow && !is_ref {
@@ -347,6 +353,32 @@ impl<'a> FnAnalyzer<'a> {
             ExprKind::Own(inner) => {
                 self.expr(inner, false);
                 Some(Fact::Own)
+            }
+            ExprKind::Lambda(l) => {
+                // 作るときに外の変数を値として読む（インタプリタと同じ順。own ならムーブ）
+                for n in l.captures.borrow().iter() {
+                    if let Some(id) = self.lookup(n) {
+                        if !matches!(self.facts.get(&id), Some(Fact::RefTo(_) | Fact::Pinned)) {
+                            self.kill(id);
+                        }
+                    }
+                }
+                // 本体はいつ呼ばれるか分からないので、何も分からないところから調べる
+                let scopes = std::mem::take(&mut self.scopes);
+                let facts = std::mem::take(&mut self.facts);
+                let loops = std::mem::take(&mut self.loops);
+                self.scopes.push(Vec::new());
+                for p in &l.params {
+                    self.declare(&p.name, None);
+                }
+                for n in l.captures.borrow().iter() {
+                    self.declare(n, None);
+                }
+                self.block(&l.body);
+                self.scopes = scopes;
+                self.facts = facts;
+                self.loops = loops;
+                None
             }
             ExprKind::Ref(inner, _) => self.ref_of(inner),
             // `r.f` も r が own / ref なら先をたどるので、`*r` と同じ判定
@@ -659,6 +691,7 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
             }
         }
         ExprKind::ArrayRepeat(x, _, _) => expr_checks(x, f),
+        ExprKind::Lambda(l) => for_each_check(&l.body, f),
     }
 }
 

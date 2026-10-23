@@ -1,4 +1,5 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use crate::diag::Span;
 
@@ -21,6 +22,8 @@ pub enum TypeKind {
     Array(Box<TypeExpr>, u64),
     /// `i64[]`: 伸び縮みするリスト
     List(Box<TypeExpr>),
+    /// `fn bool(i64, i64)`: 関数の型。戻り値がなければ None
+    Fn(Vec<TypeExpr>, Option<Box<TypeExpr>>),
 }
 
 /// 整数の型
@@ -239,6 +242,8 @@ pub enum ExprKind {
     ArrayRepeat(Box<Expr>, u64, Cell<bool>),
     /// `"x = {x}"`: 埋め込みのある文字列。式は print と同じく借りて読む（ムーブしない）
     Interp(Vec<InterpPart>),
+    /// `(a, b) -> a < b`: その場で作る関数（クロージャ）
+    Lambda(Rc<Lambda>),
     /// `p.name(args)` : メソッド呼び出し。メソッドは `構造体名.name` という名前の関数で、
     /// 最初の引数 `this` に p を借りて渡す（p が own / ref ならその先、構造体の値なら一時的にヒープへ移して借りる）
     MethodCall(Box<Expr>, String, Vec<Expr>),
@@ -388,4 +393,24 @@ pub struct Program {
     pub enums: Vec<EnumDef>,
     pub interfaces: Vec<InterfaceDef>,
     pub fns: Vec<FnDef>,
+}
+
+/// その場で作る関数 `(a, b) -> 式` / `(i64 a) -> { ... }`
+#[derive(Debug)]
+pub struct Lambda {
+    pub params: Vec<LambdaParam>,
+    /// 本体。式で書いたときは、その式だけの（値を返す）ブロック
+    pub body: Block,
+    /// 取り込む外の変数の名前（型検査が本体を調べて決める）。作るときにこの順で値として読む
+    pub captures: RefCell<Vec<String>>,
+    /// 値を返すか（戻り値の型が () でない。型検査が書く）
+    pub returns: Cell<bool>,
+}
+
+#[derive(Debug)]
+pub struct LambdaParam {
+    /// 書かなければ、渡す先の関数の型から決める
+    pub ty: Option<TypeExpr>,
+    pub name: String,
+    pub span: Span,
 }
