@@ -17,8 +17,8 @@
 | 1 | **（解決）** クロージャが外の辞書・構造体をムーブする（`keys.sort_by((a, b) -> total[a] > total[b])` のあと `total` が使えない） | parallel_words・shop | 先に `let t = ref total;` を取り、`t` を取り込む | 大 |
 | 2 | **（解決）** リストの要素を取り出しながら回せない（`for p in parts` の p は `ref`。スレッドへ渡せない） | parallel_words・shop | `loop { match parts.pop() { ... } }`（逆順になる） | 中 |
 | 3 | **（解決）** match の形を重ねられない（`case Some(Op(op))`） | calc | 「終わり」を表す種類を enum に足すか、match を 2 段にする | 中 |
-| 4 | リストに `filter` / `map` がない | shop | for で新しいリストに push | 小 |
-| 5 | Option を Result の関数で `?` できない（`s.to_int()?`）。Option → Result に変える関数がない | calc | match で受けて `return Err(...)` | 小 |
+| 4 | **（解決）** リストに `filter` / `map` がない | shop | for で新しいリストに push | 小 |
+| 5 | **（解決: `ok_or(o, e)?`）** Option を Result の関数で `?` できない（`s.to_int()?`）。Option → Result に変える関数がない | calc | match で受けて `return Err(...)` | 小 |
 | 6 | 値を返さない task の型が書けない（`task<???>[]`） | parallel_words | クロージャから `0` を返して `task<i64>` にする | 小 |
 | 7 | 文字列を途中で改行できない（複数行の文字列がない） | parallel_words | `\n` を書く | 小 |
 | 8 | 文字型がない（`"0123456789".contains(c)` で数字かを調べる） | calc | 1 文字の str で比べる | 小（未実装の一覧にある） |

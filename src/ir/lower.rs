@@ -121,6 +121,14 @@ struct Loop {
     cont_depth: usize,
 }
 
+/// `each_in` が要素ごとにすること
+enum Each<'b> {
+    /// for の本体（と else）
+    Body(&'b ast::Block, Option<&'b ast::Block>),
+    /// `a.map(f)` / `a.filter(f)`: 関数の値 `f` を呼び、結果（filter なら残す要素）を `out` に push する
+    Map { f: Local, out: Local, filter: bool, rty: Ty },
+}
+
 struct FnLower<'a, 'p> {
     info: &'a TypeInfo,
     structs: &'a HashMap<String, Rc<ast::StructDef>>,
@@ -606,10 +614,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Ty::Map(k, _) => (**k).clone(),
             _ => Ty::Int(IntTy::I64),
         };
-        let i64t = Ty::Int(IntTy::I64);
         // 隠れた変数（ループの外へ出るとき drop する）
         self.scopes.push(Vec::new());
-        let hidden = self.scopes.len();
         let mut src = if is_place(iter) && !matches!(&iter.kind, ExprKind::Var(n) if self.lookup(n).is_none()) {
             self.place(iter)?
         } else {
@@ -628,6 +634,26 @@ impl<'a, 'p> FnLower<'a, 'p> {
             return Err("要素の中の辞書の for (k, v)".to_string());
         }
         let what = format!("{} の要素", describe(iter));
+        self.each_in(key, var, var_span, iter.span, elem, key_ty, src, what, Each::Body(body, els))
+    }
+
+    /// for の本体（`for_each`）と `a.map(f)` / `a.filter(f)` で共通: 始めた時点の要素を、読むだけの形で 1 つずつ渡す。
+    /// 呼ぶ前に隠れた変数のスコープを積んでおくこと（ここで片づける）
+    #[allow(clippy::too_many_arguments)]
+    fn each_in(
+        &mut self,
+        key: Option<&(String, Span)>,
+        var: &str,
+        var_span: Span,
+        iter_span: Span,
+        elem: Ty,
+        key_ty: Ty,
+        src: Place,
+        what: String,
+        act: Each,
+    ) -> L<()> {
+        let i64t = Ty::Int(IntTy::I64);
+        let hidden = self.scopes.len();
         let items = self.declare("", Ty::List(Box::new(elem.clone())), false, var_span);
         self.assign(items, Rvalue::Items { place: src.clone(), what: what.clone(), span: var_span }, var_span);
         let keys = match key {
@@ -657,7 +683,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
         self.scopes.push(Vec::new());
         let at = |l: Local| {
             let mut p = rd(l);
-            p.proj.push(Proj::Index(Operand::Copy(rd(i)), var_span, iter.span));
+            p.proj.push(Proj::Index(Operand::Copy(rd(i)), var_span, iter_span));
             p
         };
         // own の要素は読むだけの ref になっている。ムーブする要素（構造体など）は写しを置いて、読むだけの ref で渡す
@@ -678,19 +704,49 @@ impl<'a, 'p> FnLower<'a, 'p> {
             self.assign(k, Rvalue::Use(Operand::Copy(at(keys))), *ks);
         }
         // own の要素は、読むだけの ref として受け取る
-        let vt = match self.var_ty(var_span)? {
-            Ty::Own(x) => Ty::Ref(x, false),
-            t => t,
+        let vt = match &act {
+            Each::Body(..) => match self.var_ty(var_span)? {
+                Ty::Own(x) => Ty::Ref(x, false),
+                t => t,
+            },
+            Each::Map { .. } => match &view {
+                Some(_) => Ty::Ref(Box::new(elem.clone()), false),
+                None => elem.clone(),
+            },
         };
-        let v = self.declare(var, vt, false, var_span);
+        let v = self.declare(var, vt.clone(), false, var_span);
         let value = match view {
             Some(w) => Rvalue::Ref { place: rd(w), mutable: false, follows: false, what, span: var_span },
             None => Rvalue::Use(Operand::Copy(at(items))),
         };
         self.assign(v, value, var_span);
-        self.loops.push(Loop { brk: exit, brk_depth: hidden, cont: next, cont_depth: hidden + 1 });
-        self.block(body, None)?;
-        self.loops.pop();
+        let els = match act {
+            Each::Body(body, els) => {
+                self.loops.push(Loop { brk: exit, brk_depth: hidden, cont: next, cont_depth: hidden + 1 });
+                self.block(body, None)?;
+                self.loops.pop();
+                els
+            }
+            Each::Map { f, out, filter, rty } => {
+                let r = self.temp_of(rty, Rvalue::CallValue(Operand::Copy(rd(f)), vec![Operand::Copy(rd(v))], var_span), var_span);
+                let push = |me: &mut Self, x: Operand| {
+                    let op = Rvalue::SeqOp { name: "push".to_string(), place: rd(out), args: vec![x], span: var_span, arg_span: var_span };
+                    let u = me.temp_of(Ty::Unit, op, var_span);
+                    me.emit(Inst::Discard { value: u, span: var_span, why: String::new() });
+                };
+                if filter {
+                    let keep = self.new_block();
+                    let skip = self.new_block();
+                    self.blocks[self.cur].term = Term::Branch(r, keep, skip);
+                    self.cur = keep;
+                    push(self, Operand::Copy(rd(v)));
+                    self.goto_and_switch(skip);
+                } else {
+                    push(self, r);
+                }
+                None
+            }
+        };
         self.goto_and_switch(next);
         self.pop_scope(var_span, "次の周回へ進んだ");
         let inc = Rvalue::Bin(BinOp::Add, Operand::Copy(rd(i)), Operand::Const(Const::Int(1, IntTy::I64)), var_span);
@@ -1519,6 +1575,27 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let r = self.temp_of(ty, Rvalue::Builtin(format!("{}.{}", kind, name), ops, sp), sp);
                 self.drop_temp(&temp, sp);
                 Ok(r)
+            }
+            Ty::List(elem) | Ty::Array(elem, _) if name == "map" || name == "filter" => {
+                // for x in a と同じ形で要素を回し、関数の値を呼ぶ
+                let f = match vals.pop() {
+                    Some(Operand::Move(f, _)) => f,
+                    _ => return Err("map の関数".to_string()),
+                };
+                let src = recv_place(self)?.ok_or("定数の receiver")?;
+                let out = self.temp(ty.clone(), sp);
+                self.assign(out, Rvalue::Array(Vec::new(), true), sp);
+                let rty = match (&self.ty(&args[0]), name) {
+                    (_, "filter") => Ty::Bool,
+                    (Ty::Fn(_, r), _) => (**r).clone(),
+                    _ => return Err("map の関数の型".to_string()),
+                };
+                self.scopes.push(vec![(String::new(), f)]);
+                let what = format!("{} の要素", describe(recv));
+                let act = Each::Map { f, out, filter: name == "filter", rty };
+                self.each_in(None, "", sp, recv.span, *elem, Ty::Int(IntTy::I64), src, what, act)?;
+                self.drop_temp(&temp, sp);
+                Ok(Operand::Move(out, sp))
             }
             Ty::Array(..) | Ty::List(_) | Ty::Map(..) => {
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;

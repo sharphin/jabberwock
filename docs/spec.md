@@ -429,6 +429,8 @@ fn Result<i64, str> calc(i64 a, i64 b, i64 c) {
 ```
 
 - 例外はない。失敗するかもしれない関数は `Result<T, E>` を返す。
+- `ok_or(o, e)` は Option を Result にする（`Some(x)` → `Ok(x)`、`None` → `Err(e)`）。Result を返す関数の中で Option に `?` を使いたいときに:
+  `let n = ok_or(s.to_int(), "数ではない")?;`
   `Result` は最初から `enum Result<T, E> { Ok(T value); Err(E error); }` として定義されている。`Ok(x)` / `Err(e)` は短い書き方。
 - `e?` は、e が `Ok(x)` なら `x`。`Err(e)` なら、関数からその `Err(e)` を返す。
   - 使えるのは Result を返す関数の中だけ。Err の型は関数の Err の型と同じでなければならない（変換はしない）。
@@ -646,7 +648,15 @@ for x in v { ... } else { print("空でした"); }
 ```
 
 - メソッドは `len()`（i64）、`push(x)`、`pop()`（`Option<T>`）、`insert(i, x)`、`remove(i)`（取り出した要素 `T`）、
-  `reverse()`（逆順にする）、`drain()`（全部の要素を新しいリストに移して返す。元は空になる）、`sort()`、`sort_by(f)`。
+  `reverse()`（逆順にする）、`drain()`（全部の要素を新しいリストに移して返す。元は空になる）、`sort()`、`sort_by(f)`、
+  `map(f)`（要素ごとに f を呼んだ結果の新しいリスト）、`filter(f)`（f が true を返した要素だけの新しいリスト）。
+- `map` / `filter` は配列にも使え、元のリストは変えない（mut でなくてよい）。f は要素を `for x in a` の x と同じ形で受け取る
+  （コピーできればコピー、own なら `ref T`、構造体などは読むだけの `ref T`）。`filter` はコピーできる要素だけ（残す要素をコピーするため）。
+
+  ```
+  let names = people.map((p) -> p.name);            // str[]
+  let adults = ages.filter((a) -> a >= 20);          // i64[]
+  ```
   `len` 以外は書き換えなので、持ち主が mut であること。
 - `remove(i)` の i は 0〜長さ-1、`insert(i, x)` の i は 0〜長さ（長さなら末尾に足す）。範囲の外は実行時エラー。
 - リストは値として読むといつもムーブ（中身の数でもコピーしない）。

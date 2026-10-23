@@ -55,7 +55,8 @@ pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String 
 
 /// どのプログラムにも最初からある定義。`Some(x)` / `None` / `Ok(x)` / `Err(e)` は
 /// `Option.Some(x)` などの短い書き方
-const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\nenum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n}\n";
+const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\nenum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n}\n\
+fn Result<T, E> ok_or<T, E>(Option<T> o, E e) {\n    match o {\n        case Some(v) -> Ok(v);\n        case None -> Err(e);\n    }\n}\n";
 
 /// 字句解析と構文解析をして（`use` したモジュールも読む）、最初からある定義（`Option`）を前に足す。
 /// 読んだファイルも返す（エラーの表示に使う）
@@ -72,6 +73,10 @@ fn add_prelude(mut prog: ast::Program) -> ast::Program {
     let mut enums = prelude.enums;
     enums.append(&mut prog.enums);
     prog.enums = enums;
+    // Option を Result に変える `ok_or(o, e)`（`?` で使う）
+    let mut fns = prelude.fns;
+    fns.append(&mut prog.fns);
+    prog.fns = fns;
     prog
 }
 

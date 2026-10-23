@@ -241,3 +241,18 @@ fn main() {
 }";
     assert_eq!(ok(src), "Err(x) Err(x) None\n");
 }
+
+#[test]
+fn ok_or_turns_an_option_into_a_result() {
+    let src = "
+fn Result<i64, str> parse(str s) {
+    let n = ok_or(s.to_int(), \"数ではない: {s}\")?;
+    Ok(n * 2)
+}
+fn main() {
+    print(parse(\"21\"), parse(\"x\"));
+    let Option<own i64> a = None;
+    print(ok_or(a, own 5));
+}";
+    assert_eq!(ok(src), "Ok(42) Err(数ではない: x)\nErr(5)\n");
+}

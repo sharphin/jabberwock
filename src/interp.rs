@@ -2132,7 +2132,7 @@ impl Interp {
             _ => None,
         };
         if let Some(slot) = seq_slot {
-            if name != "len" {
+            if !matches!(name, "len" | "map" | "filter") {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
             }
@@ -2147,6 +2147,21 @@ impl Interp {
                     self.release(rv, span, "使い終わった一時的な値");
                 }
                 return r.map(|_| Value::Unit);
+            }
+            if name == "map" || name == "filter" {
+                let items = match (&slot, &place) {
+                    (Some((s, path)), _) => self.at(*s, path).clone(),
+                    (None, Some(pl)) => self.place_mut(pl).clone(),
+                    (None, None) => rv.clone(),
+                };
+                let Value::Array(items, _) = items else { unreachable!("checked above") };
+                let f = vals.into_iter().next().expect("one function");
+                let r = self.map_list(items, &f, name == "filter", recv, span);
+                self.release(f, span, "使い終わった関数の値");
+                if place.is_none() {
+                    self.release(rv, span, "使い終わった一時的な値");
+                }
+                return r;
             }
             let mut vals = vals;
             let items = match (slot, &place) {
@@ -2361,6 +2376,57 @@ impl Interp {
 
     /// リストを並べ替える（安定）。`f` があれば「a を b より前に置くか」を返す関数で比べる。
     /// 比べる関数には要素を読むだけの写しを渡す（for と同じ）。並べ終わった順に、元の要素を動かす
+    /// `a.map(f)` / `a.filter(f)`。始めた時点の要素を、`for x in a` の x と同じ形（own は ref、構造体は読むだけの写し）で f に渡す
+    fn map_list(&mut self, items: Vec<Value>, f: &Value, filter: bool, recv: &Expr, span: Span) -> R<Value> {
+        let what = format!("{} の要素", describe(recv));
+        let mut out = Vec::new();
+        for v in items {
+            let v = match v {
+                Value::Own(slot) => Value::Ref(RefVal {
+                    slot,
+                    generation: self.heap.slots[slot].generation,
+                    path: Vec::new(),
+                    borrowed_at: span,
+                    what: what.clone(),
+                    mutable: false,
+                }),
+                other => other,
+            };
+            let (v, copy) = if v.moves() {
+                let v = self.view_of(v, span, &what);
+                let slot = self.heap.alloc(v);
+                let r = RefVal {
+                    slot,
+                    generation: self.heap.slots[slot].generation,
+                    path: Vec::new(),
+                    borrowed_at: span,
+                    what: what.clone(),
+                    mutable: false,
+                };
+                (Value::Ref(r), Some(slot))
+            } else {
+                (v, None)
+            };
+            let r = self.call_func(f, vec![v.clone()], span);
+            if let Some(slot) = copy {
+                self.vacate(slot, span, "map の次の要素へ進んだ");
+            }
+            let r = match r {
+                Ok(r) => r,
+                Err(d) => {
+                    self.discard(out, span);
+                    return Err(d);
+                }
+            };
+            match (filter, r) {
+                (false, r) => out.push(r),
+                (true, Value::Bool(true)) => out.push(v),
+                (true, _) => {}
+            }
+        }
+        Ok(Value::Array(out, true))
+    }
+
     fn sort_list(&mut self, loc: Option<&(usize, Vec<usize>)>, tmp: &mut Value, f: Option<Value>, recv: &Expr, span: Span) -> R<()> {
         let items = match loc {
             Some((s, p)) => self.at(*s, p),

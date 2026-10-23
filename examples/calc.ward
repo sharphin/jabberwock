@@ -22,10 +22,7 @@ fn Result<Tok[], str> lex(str src) {
         if "0123456789".contains(c) {
             let mut n = 0;
             while i < cs.len() && "0123456789".contains(cs[i]) {
-                match cs[i].to_int() {
-                    case Some(d) -> { n = n * 10 + d; }
-                    case None -> return Err("数ではない");
-                }
+                n = n * 10 + ok_or(cs[i].to_int(), "数ではない")?;
                 i += 1;
             }
             out.push(Tok.Num(n));

@@ -1123,6 +1123,8 @@ impl<'a> Checker<'a> {
     /// `(a, b) -> 本体`。引数の型は書いてあればそれ、なければ入れる先の関数の型（`hint`）から決める
     fn lambda(&mut self, l: &Lambda, hint: Option<&Ty>) -> R<Ty> {
         let (hps, hret) = match hint {
+            // 戻り値が Never の手がかりは「引数の型だけ分かっている」（`a.map(f)`）
+            Some(Ty::Fn(ps, r)) if ps.len() == l.params.len() && **r == Ty::Never => (Some(ps.clone()), None),
             Some(Ty::Fn(ps, r)) if ps.len() == l.params.len() => (Some(ps.clone()), Some((**r).clone())),
             _ => (None, None),
         };
@@ -1941,12 +1943,14 @@ impl<'a> Checker<'a> {
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
             "reverse" => (0, Ty::Unit, true),
+            // 読むだけ。戻り値の型は関数を調べてから決める
+            "map" | "filter" => (1, Ty::Unit, false),
             "drain" => (0, Ty::List(Box::new(elem.clone())), true),
             "sort" | "sort_by" => (if name == "sort" { 0 } else { 1 }, Ty::Unit, true),
             _ => {
                 return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name)).primary(
                     span,
-                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`sort()`・`sort_by(f)` です",
+                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)` です",
                 ))
             }
         };
@@ -1977,6 +1981,32 @@ impl<'a> Checker<'a> {
             let f = Ty::Fn(vec![v.clone(), v], Box::new(Ty::Bool));
             self.expect(&args[0], &f)?;
             return Ok(ret);
+        }
+        if name == "filter" {
+            // 残す要素はコピーする（構造体や own は drain してから選ぶ）
+            if !self.copyable(elem) {
+                return Err(Diagnostic::new(format!("`{}` の要素は filter で選べません", elem.show()))
+                    .primary(span, "filter は要素をコピーして新しいリストを作る")
+                    .note("`for x in a.drain() { if ... { b.push(x); } }` と書いてください"));
+            }
+            let f = Ty::Fn(vec![elem.clone()], Box::new(Ty::Bool));
+            self.expect(&args[0], &f)?;
+            return Ok(Ty::List(Box::new(elem.clone())));
+        }
+        if name == "map" {
+            // 関数は要素を読むだけで受け取る（for x in a の x と同じ）。戻り値の型は関数から決める
+            let v = self.view_ty(elem.clone());
+            let hint = Ty::Fn(vec![v.clone()], Box::new(Ty::Never));
+            let ft = self.expr_h(&args[0], Some(&hint))?;
+            let r = match &ft {
+                Ty::Fn(ps, r) if ps.len() == 1 && self.fits(&v, &ps[0]) => (**r).clone(),
+                _ => return Err(mismatch(&Ty::Fn(vec![v], Box::new(Ty::Param("U".to_string()))), &ft, args[0].span)),
+            };
+            if r == Ty::Unit {
+                return Err(Diagnostic::new("map の関数が値を返しません")
+                    .primary(args[0].span, "要素ごとの新しい値を返す関数を渡してください"));
+            }
+            return Ok(Ty::List(Box::new(r)));
         }
         if let Some(i) = index {
             self.index_value(i)?;
@@ -2354,14 +2384,14 @@ impl<'a> Checker<'a> {
             t => t.clone(),
         };
         match &inner {
-            // 並べ替えは長さを変えないので、配列にも使える
-            Ty::Array(elem, _) if name == "sort" || name == "sort_by" => {
+            // 並べ替えは長さを変えないので、配列にも使える。map / filter は新しいリストを作る
+            Ty::Array(elem, _) if matches!(name, "sort" | "sort_by" | "map" | "filter") => {
                 return self.list_method(recv, &rt, elem, name, args, span)
             }
             Ty::Array(..) => {
                 if name != "len" || !args.is_empty() {
                     return Err(Diagnostic::new(format!("配列にメソッド `{}` はありません", name))
-                        .primary(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)` だけです")
+                        .primary(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)`・`map(f)`・`filter(f)` だけです")
                         .note("伸び縮みさせたいなら、リスト `i64[]` を使ってください"));
                 }
                 return Ok(I64);

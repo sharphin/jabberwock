@@ -169,6 +169,8 @@
   （`borrowable`）の取り込みを `Lambda.borrowed` に記録して、中では `ref T` に見せる。interp（`make_ref`）・analyze（事実を消さない）・lower（`Rvalue::Ref`）は
   その取り込みを `ref 名前` として作る。
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
+  `map` / `filter` は interp の `map_list`、lower は for と同じ `each_in`（`Each::Map`）で書き出す（exec / llvm は何もしない）。
+  `ok_or` は `lib.rs` の `PRELUDE` に ward で書いた関数。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 
 - IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（`Proj::Deref` はいつも `Check::Required` で書き出す）。

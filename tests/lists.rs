@@ -266,3 +266,38 @@ fn bool j2() { false }
 ";
     assert_eq!(ok(src), "28 0\n11\n22\n[3, 2, 1]\n3\n2\n空\n10\n");
 }
+
+#[test]
+fn map_and_filter() {
+    // map の関数は要素を for x in a の x と同じ形で受け取る。filter はコピーできる要素だけ
+    let src = "struct P { str name; i64 age; own i64 score; }
+fn i64 dbl(i64 x) { x * 2 }
+fn main() {
+    let xs = [1, 2, 3, 4, 5];
+    let k = 3;
+    print(xs.filter((x) -> x > k), xs.map((x) -> x * x), xs.map(dbl));
+    let P[] ps = [P { name: \"a\", age: 30, score: own 5 }, P { name: \"b\", age: 20, score: own 7 }];
+    let names = ps.map((p) -> p.name);
+    let total = ps.map((p) -> *p.score + p.age);
+    print(names, total);
+    let (own i64)[] os = [own 1, own 2];
+    print(os.map((o) -> *o + 10));
+    print(\"a,b,,c\".split(\",\").filter((s) -> s != \"\").map((s) -> s.to_upper()));
+    let ys = ps.map((p) -> own (p.age));
+    print(ys);
+    let m = [\"x\": 1];
+    print(xs.map((x) -> x + m[\"x\"]), m);
+}
+";
+    assert_eq!(
+        ok(src),
+        "[4, 5] [1, 4, 9, 16, 25] [2, 4, 6, 8, 10]\n[a, b] [35, 27]\n[11, 12]\n[A, B, C]\n[30, 20]\n[2, 3, 4, 5, 6] [x: 1]\n"
+    );
+    let d = ward::run_source("
+struct P { i64 a; }
+fn main() {
+    let P[] ps = [P { a: 1 }];
+    let qs = ps.filter((p) -> p.a > 0);
+}", false).error.expect("expected an error");
+    assert_eq!(d.title, "`P` の要素は filter で選べません");
+}
