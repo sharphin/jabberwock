@@ -405,6 +405,8 @@ impl<'a> Machine<'a> {
                         Ok(Value::Unit)
                     }
                     "concat" => Ok(Value::Str(Rc::from(strs().concat().as_str()))),
+                    "read_line" => self.it.read_line(*span),
+                    "args" => Ok(self.it.args_value()),
                     "assert" => {
                         if !as_bool(vals[0].clone(), *span)? {
                             return Err(Diagnostic::new("assert に失敗しました").primary(*span, "この条件が false でした"));

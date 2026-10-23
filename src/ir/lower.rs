@@ -1170,7 +1170,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.emit(Inst::Discard { value: v, span: sp, why });
                 Ok(Operand::Const(Const::Unit))
             }
-            "read_line" | "args" => Err("入力".to_string()),
+            "read_line" | "args" => Ok(self.temp_of(ty, Rvalue::Builtin(name.to_string(), Vec::new(), sp), sp)),
             _ if self.lookup(name).is_some() => {
                 // 引数を先に評価してから、変数を借りて読む（interp の `call_var`）
                 let mut vals = Vec::new();

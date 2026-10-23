@@ -131,8 +131,10 @@ pub fn run_with_modules(src: &str, mods: &[(&str, &str)]) -> Outcome {
 
 /// 入力（`read_line()` が読む）を文字列で渡して実行する（テスト用）
 pub fn run_source_with_input(src: &str, input: &str, args: &[&str]) -> Outcome {
-    let input = std::io::Cursor::new(input.as_bytes().to_vec());
-    run_program(src, &no_modules, false, true, Box::new(input), args.iter().map(|a| a.to_string()).collect())
+    let bytes = input.as_bytes().to_vec();
+    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    let input = Box::new(std::io::Cursor::new(bytes.clone()));
+    in_big_stack(|| run_inner(src, &no_modules, false, true, input, args, Some(bytes)))
 }
 
 /// `input` は `read_line()` が読む入力、`args` は `args()` が返す引数。
@@ -145,10 +147,14 @@ pub fn run_program(
     input: Box<dyn std::io::BufRead + Send>,
     args: Vec<String>,
 ) -> Outcome {
+    in_big_stack(|| run_inner(src, read, echo, elide, input, args, None))
+}
+
+fn in_big_stack(f: impl FnOnce() -> Outcome + Send) -> Outcome {
     std::thread::scope(|s| {
         std::thread::Builder::new()
             .stack_size(1 << 30)
-            .spawn_scoped(s, || run_inner(src, read, echo, elide, input, args))
+            .spawn_scoped(s, f)
             .expect("failed to spawn interpreter thread")
             .join()
             .expect("interpreter thread panicked")
@@ -162,6 +168,7 @@ fn run_inner(
     elide: bool,
     input: Box<dyn std::io::BufRead + Send>,
     args: Vec<String>,
+    replay: Option<Vec<u8>>,
 ) -> Outcome {
     let (prog, files) = parse(src, read);
     let fail = |d: Diagnostic| Outcome {
@@ -192,15 +199,19 @@ fn run_inner(
     });
     drop(info);
     let mut it = interp::Interp::new(echo);
+    let io = (replay, args.clone());
     it.set_io(input, args);
     let res = it.run(prog);
+    // 入力を使うプログラムは、同じ入力をもう一度渡せるときだけ突き合わせる
+    let lowered = lowered.filter(|p| io.0.is_some() || !p.uses_input());
     if let Some(irp) = lowered {
-        if let Some(diff) = ir_mismatch(&irp, &it.output, res.as_ref().err(), it.live_objects()) {
+        let input = io.0.clone().unwrap_or_default();
+        if let Some(diff) = ir_mismatch(&irp, &it.output, res.as_ref().err(), it.live_objects(), &input, &io.1) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
         // WARD_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
         if std::env::var_os("WARD_NATIVE").is_some() {
-            if let Some(diff) = native_mismatch(&irp, &files, &it.output, res.as_ref().err(), it.live_objects()) {
+            if let Some(diff) = native_mismatch(&irp, &files, &it.output, res.as_ref().err(), it.live_objects(), &input, &io.1) {
                 panic!("実行ファイルの結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
             }
         }
@@ -218,8 +229,16 @@ fn run_inner(
 }
 
 /// IR を実行して、インタプリタの結果（出力・エラーの題と位置・残ったヒープの数）と違えばその説明を返す
-fn ir_mismatch(irp: &ir::Program, output: &str, error: Option<&Diagnostic>, live: usize) -> Option<String> {
+fn ir_mismatch(
+    irp: &ir::Program,
+    output: &str,
+    error: Option<&Diagnostic>,
+    live: usize,
+    input: &[u8],
+    args: &[String],
+) -> Option<String> {
     let mut it = interp::Interp::new(false);
+    it.set_io(Box::new(std::io::Cursor::new(input.to_vec())), args.to_vec());
     let res = ir::exec::run(irp, &mut it);
     if it.output != output {
         return Some(format!("出力が違う\ninterp:\n{}\nIR:\n{}", output, it.output));
@@ -242,7 +261,10 @@ fn native_mismatch(
     output: &str,
     error: Option<&Diagnostic>,
     live: usize,
+    input: &[u8],
+    args: &[String],
 ) -> Option<String> {
+    use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let trace = std::env::var_os("WARD_NATIVE_TRACE").is_some();
@@ -263,7 +285,19 @@ fn native_mismatch(
         Ok(e) => e,
         Err(e) => return Some(format!("{}\n--- ll ---\n{}", e, ll)),
     };
-    let run = std::process::Command::new(&exe).env("WARD_LEAKS", "1").stdin(std::process::Stdio::null()).output();
+    let child = std::process::Command::new(&exe)
+        .args(args)
+        .env("WARD_LEAKS", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let run = child.and_then(|mut c| {
+        if let Some(mut si) = c.stdin.take() {
+            let _ = si.write_all(input);
+        }
+        c.wait_with_output()
+    });
     let out = match run {
         Ok(o) => o,
         Err(e) => return Some(format!("実行できません: {}", e)),

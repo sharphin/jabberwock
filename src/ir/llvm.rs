@@ -139,6 +139,8 @@ declare ptr @ward_str_slice(ptr, i64, i64, ptr)
 declare ptr @ward_str_replace(ptr, ptr, ptr)
 declare ptr @ward_str_repeat(ptr, i64, ptr)
 declare i32 @ward_str_to_int(ptr, ptr)
+declare i32 @ward_read_line(ptr)
+declare void @ward_args(ptr)
 
 "#;
 
@@ -3097,6 +3099,31 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.op("unreachable");
                 self.b.label(&ok);
                 Ok(("0".to_string(), Ty::Unit))
+            }
+            "read_line" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @ward_read_line(ptr {})", out));
+                let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
+                let lt = self.m.lt(want)?;
+                let res = self.b.alloca(&lt);
+                let (_, no) = self.b.if_true(&none);
+                let nv = self.make_enum(want, "None", Vec::new())?;
+                self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+                let done = self.b.l();
+                self.b.br(&done);
+                self.b.label(&no);
+                let line = self.b.val(format!("load ptr, ptr {}", out));
+                let sv = self.make_enum(want, "Some", vec![(line, Ty::Str)])?;
+                self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+                self.b.br(&done);
+                self.b.label(&done);
+                Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
+            }
+            "args" => {
+                let out = self.b.alloca("%list");
+                self.b.op(format!("store %list zeroinitializer, ptr {}", out));
+                self.b.op(format!("call void @ward_args(ptr {})", out));
+                Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
             _ if name.starts_with("str.") => {
                 let r = self.str_method(&name[4..], &vals, span, want)?;

@@ -183,6 +183,17 @@ pub enum Rvalue {
     Builtin(String, Vec<Operand>, Span),
 }
 
+impl Program {
+    /// 入力（`read_line`）を使うか
+    pub fn uses_input(&self) -> bool {
+        self.fns.iter().any(|f| {
+            f.blocks.iter().any(|b| {
+                b.insts.iter().any(|i| matches!(i, Inst::Assign { value: Rvalue::Builtin(n, ..), .. } if n == "read_line"))
+            })
+        })
+    }
+}
+
 impl Place {
     pub fn local(l: Local, span: Span) -> Place {
         Place { local: l, proj: Vec::new(), span }

@@ -341,6 +341,30 @@ impl Interp {
     }
 
     /// `read_line()` が読む入力と、`args()` が返す引数を決める
+    /// `read_line()`: 1 行読む（終わりの改行は取る）。入力が終わっていれば None
+    pub(crate) fn read_line(&mut self, span: Span) -> R<Value> {
+        let mut line = String::new();
+        let n = self
+            .input
+            .read_line(&mut line)
+            .map_err(|e| Diagnostic::new("入力を読めませんでした").primary(span, e.to_string()))?;
+        if n == 0 {
+            return Ok(none());
+        }
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+        Ok(some(Value::Str(Rc::from(line.as_str()))))
+    }
+
+    /// `args()`: コマンドライン引数のリスト
+    pub(crate) fn args_value(&self) -> Value {
+        Value::Array(self.args.iter().map(|a| Value::Str(Rc::from(a.as_str()))).collect(), true)
+    }
+
     pub fn set_io(&mut self, input: Box<dyn BufRead + Send>, args: Vec<String>) {
         self.input = input;
         self.args = args;
@@ -1632,24 +1656,8 @@ impl Interp {
                 self.release(v, span, &why);
                 Ok(Value::Unit)
             }
-            "read_line" => {
-                // 1 行読む（終わりの改行は取る）。入力が終わっていれば None
-                let mut line = String::new();
-                let n = self.input.read_line(&mut line).map_err(|e| {
-                    Diagnostic::new("入力を読めませんでした").primary(span, e.to_string())
-                })?;
-                if n == 0 {
-                    return Ok(none());
-                }
-                if line.ends_with('\n') {
-                    line.pop();
-                    if line.ends_with('\r') {
-                        line.pop();
-                    }
-                }
-                Ok(some(Value::Str(Rc::from(line.as_str()))))
-            }
-            "args" => Ok(Value::Array(self.args.iter().map(|a| Value::Str(Rc::from(a.as_str()))).collect(), true)),
+            "read_line" => self.read_line(span),
+            "args" => Ok(self.args_value()),
             "assert" => {
                 if args.len() != 1 {
                     return Err(arity_error("assert", 1, args.len(), span));

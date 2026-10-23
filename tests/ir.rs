@@ -68,6 +68,9 @@ fn main() {
 
 #[test]
 fn unsupported_programs_say_why() {
-    let e = ir_text("fn main() {\n    print(read_line());\n}", &no_modules).unwrap_err();
-    assert!(e.contains("入力"), "{}", e);
+    let src = "fn main() {\n    let ms = [[\"a\": 1]];\n    for (k, v) in ms[0] {\n        print(k, v);\n    }\n}";
+    let e = ir_text(src, &no_modules).unwrap_err();
+    assert!(e.contains("要素の中の辞書"), "{}", e);
+    // 書き出せなくてもインタプリタでは動く
+    assert_eq!(run_source(src, false).output, "a 1\n");
 }

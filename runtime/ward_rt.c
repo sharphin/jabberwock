@@ -920,11 +920,44 @@ void ward_env_release(WEnv *e, const WSite *site) {
     }
 }
 
+// ---------------------------------------------------------------- 入力
+
+static int g_argc;
+static char **g_argv;
+
+// 1 行読む（終わりの改行は取る）。入力が終わっていれば 0
+int32_t ward_read_line(WStr **out) {
+    ward_flush();
+    WSb *b = ward_sb_new();
+    int c, any = 0;
+    while ((c = getchar()) != EOF) {
+        any = 1;
+        if (c == '\n') break;
+        char ch = (char)c;
+        ward_sb_push(b, &ch, 1);
+    }
+    if (!any) {
+        free(b->p);
+        free(b);
+        return 0;
+    }
+    if (b->len > 0 && b->p[b->len - 1] == '\r') b->len--;
+    *out = ward_sb_finish(b);
+    return 1;
+}
+
+// コマンドライン引数（プログラムの名前は除く）
+void ward_args(WList *out) {
+    for (int i = 1; i < g_argc; i++) push_str(out, ward_str_new(g_argv[i], (int64_t)strlen(g_argv[i])));
+}
+
 // ---------------------------------------------------------------- 入口
 
 void ward_main(void);
 
-int main(void) {
+int main(int argc, char **argv) {
+    g_argc = argc;
+    g_argv = argv;
     ward_main();
     ward_flush();
     if (getenv("WARD_LEAKS")) fprintf(stderr, "[live] %lld\n", (long long)ward_live);
