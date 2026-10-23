@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
 use crate::lexer::{Tok, Token};
@@ -155,7 +157,7 @@ impl Parser {
             _ => {
                 let e = self.parse_expr()?;
                 if *self.peek() == Tok::Assign {
-                    if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(_)) {
+                    if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..)) {
                         return Err(Diagnostic::new("構文エラー: ここには代入できません")
                             .primary(e.span, "代入先は変数名か `*p` だけです"));
                     }
@@ -239,7 +241,7 @@ impl Parser {
                 let start = self.bump().span;
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Deref(Box::new(e)), span })
+                Ok(Expr { kind: ExprKind::Deref(Box::new(e), Cell::new(Check::Unvisited)), span })
             }
             Tok::Ref => {
                 let start = self.bump().span;

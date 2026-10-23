@@ -6,8 +6,8 @@
 //!              世代が進むので、古い参照を使った瞬間に「確実に」検出できる。
 //!              検出時は「借りた → 解放された → 使った」を時系列で報告する。
 //!
-//! 今はすべて実行時に検査している。将来は静的解析で「絶対安全」と証明できた箇所の
-//! 検査を消していく（速さ）。証明できない箇所だけ実行時検査が残る（安全）。
+//! 静的解析（`analyze`）が「絶対安全」と証明できた `*p` は世代チェックを飛ばす（速さ）。
+//! 証明できない箇所だけ実行時検査が残る（安全）。
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -133,6 +133,10 @@ pub struct Interp {
     pub output: String,
     echo: bool,
     depth: usize,
+    /// 実行時に行った ref の世代チェックの回数
+    pub ref_checks: usize,
+    /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
+    pub ref_checks_elided: usize,
 }
 
 impl Interp {
@@ -144,6 +148,8 @@ impl Interp {
             output: String::new(),
             echo,
             depth: 0,
+            ref_checks: 0,
+            ref_checks_elided: 0,
         }
     }
 
@@ -225,12 +231,21 @@ impl Interp {
     // ------------------------------------------------------------ ポインタ検査
 
     /// ポインタの先のスロットを返す。参照が古ければ時系列付きのエラーにする。
-    fn check_ptr(&self, p: &Value, use_span: Span) -> R<usize> {
+    /// `check` が `Elided` なら、静的解析が安全を証明済みなので世代チェックを飛ばす。
+    fn check_ptr(&mut self, p: &Value, use_span: Span, check: Check) -> R<usize> {
         match p {
             Value::Own(s) => Ok(*s),
             Value::Ref(r) => {
                 let slot = &self.heap.slots[r.slot];
-                if slot.generation == r.generation && slot.value.is_some() {
+                let valid = slot.generation == r.generation && slot.value.is_some();
+                if check == Check::Elided {
+                    // 解析の誤りを見逃さないよう、デバッグビルドでだけ念のため確かめる
+                    debug_assert!(valid, "static analysis elided the check of a dangling ref");
+                    self.ref_checks_elided += 1;
+                    return Ok(r.slot);
+                }
+                self.ref_checks += 1;
+                if valid {
                     return Ok(r.slot);
                 }
                 let mut d = Diagnostic::new("無効になった参照を使いました (dangling reference)")
@@ -335,9 +350,9 @@ impl Interp {
                 }
                 Ok(())
             }
-            ExprKind::Deref(inner) => {
+            ExprKind::Deref(inner, check) => {
                 let (p, _) = self.eval_borrow(inner)?;
-                let slot = self.check_ptr(&p, target.span)?;
+                let slot = self.check_ptr(&p, target.span, check.get())?;
                 let old = self.heap.slots[slot].value.replace(newv);
                 if let Some(Value::Own(child)) = old {
                     self.free(child, span, "上書きされて、古い値が解放された");
@@ -361,9 +376,9 @@ impl Interp {
                     VarState::Moved(sp) => Err(moved_error(name, *sp, e.span)),
                 }
             }
-            ExprKind::Deref(inner) => {
+            ExprKind::Deref(inner, check) => {
                 let (p, temp) = self.eval_borrow(inner)?;
-                let slot = self.check_ptr(&p, e.span)?;
+                let slot = self.check_ptr(&p, e.span, check.get())?;
                 let v = self.heap.slots[slot].value.clone().expect("live slot has a value");
                 if temp {
                     if let Value::Own(tmp) = p {
@@ -402,7 +417,7 @@ impl Interp {
                 Ok(Value::Own(self.heap.alloc(v)))
             }
             ExprKind::Ref(inner) => {
-                if !matches!(inner.kind, ExprKind::Var(_) | ExprKind::Deref(_)) {
+                if !matches!(inner.kind, ExprKind::Var(_) | ExprKind::Deref(..)) {
                     return Err(Diagnostic::new("借用できない式です")
                         .primary(inner.span, "`ref` は変数か `*p` にだけ使えます")
                         .note("`let x = own ...` で変数に入れてから `ref x` としてください"));
@@ -421,7 +436,7 @@ impl Interp {
                         .note("値を借りたいときは、まず `own` に入れてください")),
                 }
             }
-            ExprKind::Deref(_) => {
+            ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
                 if let Value::Own(_) = v {
                     return Err(Diagnostic::new("ポインタの先にある own は取り出せません")
@@ -562,7 +577,7 @@ impl Interp {
 fn describe(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
-        ExprKind::Deref(inner) => format!("*{}", describe(inner)),
+        ExprKind::Deref(inner, _) => format!("*{}", describe(inner)),
         _ => "式".to_string(),
     }
 }
