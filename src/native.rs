@@ -84,8 +84,11 @@ fn path_str(p: &Path) -> Result<&str, String> {
 
 static RUNTIME_OBJECT: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// テストの突き合わせ用: 実行時ライブラリを一度だけコンパイルしておき、`.ll` だけをコンパイルしてつなぐ
+/// テストの突き合わせ用: 実行時ライブラリを一度だけコンパイルしておき、`.ll` だけをコンパイルしてつなぐ。
+/// ふだんは速く作れる `-O1`。`WARD_NATIVE=o2` なら `ward build` と同じ `-O2` と LTO で作る（最適化に頼る書き出しの確かめ）
 pub fn compile_with_cached_runtime(ll: &str, dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let o2 = std::env::var("WARD_NATIVE").is_ok_and(|v| v == "o2");
+    let opt: &[&str] = if o2 { &["-O2", "-flto"] } else { &["-O1"] };
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let obj = {
         let mut g = RUNTIME_OBJECT.lock().unwrap_or_else(|e| e.into_inner());
@@ -93,7 +96,9 @@ pub fn compile_with_cached_runtime(ll: &str, dir: &Path, name: &str) -> Result<P
             let rt = dir.join("ward_rt.c");
             let o = dir.join("ward_rt.o");
             fs::write(&rt, RUNTIME_C).map_err(|e| e.to_string())?;
-            run_clang(&["-c", "-O1", path_str(&rt)?, "-o", path_str(&o)?])?;
+            let mut args = vec!["-c", path_str(&rt)?, "-o", path_str(&o)?];
+            args.extend(opt);
+            run_clang(&args)?;
             *g = Some(o);
         }
         g.clone().expect("compiled")
@@ -101,7 +106,11 @@ pub fn compile_with_cached_runtime(ll: &str, dir: &Path, name: &str) -> Result<P
     let llp = dir.join(format!("{}.ll", name));
     fs::write(&llp, ll).map_err(|e| e.to_string())?;
     let exe = dir.join(exe_name(name));
-    let mut args = vec!["-O1", path_str(&llp)?, path_str(&obj)?, "-o", path_str(&exe)?, "-Wno-override-module"];
+    let mut args = vec![path_str(&llp)?, path_str(&obj)?, "-o", path_str(&exe)?, "-Wno-override-module"];
+    args.extend(opt);
+    if o2 {
+        args.push("-fuse-ld=lld");
+    }
     link_flags(&mut args);
     run_clang(&args)?;
     Ok(exe)

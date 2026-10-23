@@ -77,6 +77,19 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
     Ok(m.output())
 }
 
+/// 型にもとづく別名の情報（TBAA）。リストの頭（要素の領域・長さ）と、リスト・辞書の要素の中の数やポインタは
+/// 別の場所にあると LLVM に教える。要素へ書き込んでも長さを読み直さずに済み、添字の範囲の確認をループの外へ出せる。
+/// 印のない読み書き（構造体ごとの写し・実行時ライブラリ）は、どれとも重なりうるものとして扱われる
+const TBAA: &str = "!9000 = !{!\"ward\"}\n!9001 = !{!\"ward list header\", !9000, i64 0}\n!9002 = !{!\"ward element\", !9000, i64 0}\n\
+!9003 = !{!9001, !9001, i64 0}\n!9004 = !{!9002, !9002, i64 0}\n";
+const TBAA_HEADER: &str = ", !tbaa !9003";
+const TBAA_ELEMENT: &str = ", !tbaa !9004";
+
+/// 1 回の load / store で読み書きする型（要素の印をつけてよいもの）
+fn scalar_lt(lt: &str) -> bool {
+    matches!(lt, "i1" | "i8" | "i16" | "i32" | "i64" | "double" | "ptr")
+}
+
 const PRELUDE: &str = r#"; ward が書き出した LLVM IR
 %ref = type { ptr, ptr, i64, ptr }
 %iref = type { ptr, ptr, i64, ptr, i64 }
@@ -303,7 +316,7 @@ impl<'p> Module<'p> {
     }
 
     fn output(&self) -> String {
-        format!("{}{}\n{}\n{}", PRELUDE, self.types, self.globals, self.code)
+        format!("{}{}\n{}\n{}{}", PRELUDE, self.types, self.globals, self.code, TBAA)
     }
 
     fn fresh(&mut self) -> usize {
@@ -2075,7 +2088,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         self.b.label(&no);
                     }
                 } else {
-                    self.b.op(format!("store {} {}, ptr {}", lt, v, pr.ptr));
+                    let tag = if pr.list && scalar_lt(&lt) { TBAA_ELEMENT } else { "" };
+                    self.b.op(format!("store {} {}, ptr {}{}", lt, v, pr.ptr, tag));
                 }
             }
             Inst::Drop { local, span, why } => {
@@ -2253,9 +2267,9 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         }
                         Ty::List(x) => {
                             let lp = self.b.val(format!("getelementptr %list, ptr {}, i32 0, i32 1", r.ptr));
-                            let len = self.b.val(format!("load i64, ptr {}", lp));
+                            let len = self.b.val(format!("load i64, ptr {}{}", lp, TBAA_HEADER));
                             let i = self.index(&kv, &kt, &len, *key_span)?;
-                            let data = self.b.val(format!("load ptr, ptr {}", r.ptr));
+                            let data = self.b.val(format!("load ptr, ptr {}{}", r.ptr, TBAA_HEADER));
                             let xt = self.m.lt(&x)?;
                             r.ptr = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", xt, data, i));
                             r.ty = *x;
@@ -2362,7 +2376,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
             }),
             Operand::Copy(p) => {
                 let pr = self.place(p, false)?;
-                let v = self.read_copy(&pr.ptr, &pr.ty)?;
+                let v = self.read_place(&pr)?;
                 Ok((v, pr.ty))
             }
             Operand::Move(l, span) => {
@@ -2462,6 +2476,15 @@ impl<'m, 'p> FnGen<'m, 'p> {
     }
 
     /// 場所の値を複製して読む
+    /// たどった場所の写しを読む（リスト・辞書の要素の中の数なら、要素の印をつける）
+    fn read_place(&mut self, pr: &PlaceRes) -> G<String> {
+        let lt = self.m.lt(&pr.ty)?;
+        if pr.list && self.m.trivial(&pr.ty)? && scalar_lt(&lt) {
+            return Ok(self.b.val(format!("load {}, ptr {}{}", lt, pr.ptr, TBAA_ELEMENT)));
+        }
+        self.read_copy(&pr.ptr, &pr.ty)
+    }
+
     fn read_copy(&mut self, ptr: &str, ty: &Ty) -> G<String> {
         let lt = self.m.lt(ty)?;
         if self.m.trivial(ty)? {
@@ -3024,7 +3047,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     self.b.op("unreachable");
                     self.b.label(&ok);
                 }
-                let v = self.read_copy(&pr.ptr, &pr.ty)?;
+                let v = self.read_place(&pr)?;
                 Ok((v, pr.ty))
             }
             Rvalue::Show(o, temp, span) => {
