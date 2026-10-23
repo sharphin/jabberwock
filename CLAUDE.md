@@ -26,6 +26,7 @@
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
 | `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
+| `src/ir/analyze.rs` | IR の上で ref の世代チェックを消す解析（`Proj::Deref` の `Check` を書く） |
 | `tests/examples.rs` | 言語の基本動作 |
 | `tests/analyze.rs` | 検査を消す解析。消せる例と、消してはいけない例 |
 | `tests/structs.rs` | 構造体 |
@@ -156,7 +157,7 @@
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 
-- IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（解析のあと。`Check` を `Proj::Deref` に写す）。
+- IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（`Proj::Deref` はいつも `Check::Required` で書き出す）。
   **デバッグビルドでは `run_inner` が、書き出せたプログラムを IR でも実行し、出力・エラーの題と位置・残ったヒープの数を interp と突き合わせる**
   （違えば panic。全テストが自動で突き合わせになる）。interp の動きを変えたら lower / exec も同じに直すこと。
   書き出しの決まり: 式の値はいつも一時的な変数に入れ、一時的な変数はちょうど 1 回 `move` で読む。名前のある変数は、ムーブする型
@@ -168,6 +169,11 @@
   取り込んだ値は呼ぶときに `view_of` の写しで最後の引数として渡す（`Callee::Ir`）。interface を型として使ったメソッド呼び出しは、
   その名前のメソッドを持つ構造体の表（`CallDyn`）。match の中身は `take`（`(x as Some).0`）で受け取る。添字は `Proj::Index`（先に計算した添字を持つ）。
   まだ書き出せないもの: 入力（`read_line` / `args`）だけ。
+- IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。
+  事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `Pinned`。
+  前向きのデータフローで、合流は共通部分。引数が Pinned かは関数をまたいで固定点まで回す（呼ばれない関数・関数の値の引数は何も仮定しない）。
+  **根拠: own 型の局所変数にはいつも own が入っている**（自動で借りた一時的な値・`for` の要素の写しは `ref` 型にする。exec が debug_assert で確かめる）。
+  消せた数は AST の解析以上（テストの 348 本すべてで、AST 110 箇所 → IR 451 箇所。数える場所の数は IR のほうが多い）。
 
 ## 設計の決めごと
 

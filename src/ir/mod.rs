@@ -7,6 +7,7 @@
 //! 型はすべて具体的（ジェネリクスは型ごとに作り分けた関数になる）。
 //! 正しさは `exec`（IR を実行する小さなインタプリタ）と今のインタプリタの出力を突き合わせて確かめる。
 
+pub mod analyze;
 pub mod exec;
 pub mod lower;
 
@@ -52,6 +53,7 @@ pub struct LocalDecl {
     pub span: Span,
 }
 
+#[derive(Clone)]
 pub struct Block {
     pub insts: Vec<Inst>,
     pub term: Term,
@@ -133,8 +135,9 @@ pub enum Rvalue {
     Un(UnOp, Operand, Span),
     /// 数の変換（`as` と、型検査が決めた自動の変換）。数でない値はそのまま
     Cast(Operand, Ty),
-    /// `ref 場所`。own なら先を、ref なら同じ先を、それ以外はその場所を借りる。`what` はエラー表示用の名前
-    Ref { place: Place, mutable: bool, what: String, span: Span },
+    /// `ref 場所`。own なら先を、ref なら同じ先を、それ以外はその場所を借りる。`what` はエラー表示用の名前。
+    /// `follows` は場所の値が own / ref か（型から決めたもの。検査を消す解析が使う）
+    Ref { place: Place, mutable: bool, follows: bool, what: String, span: Span },
     /// `own 値`
     Own(Operand),
     /// 構造体の値（フィールドは定義の順）

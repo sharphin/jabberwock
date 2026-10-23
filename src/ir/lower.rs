@@ -635,7 +635,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
             p.proj.push(Proj::Index(Operand::Copy(rd(i)), var_span, iter.span));
             p
         };
-        // ムーブする要素（構造体など）は写しを置いて、読むだけの ref で渡す
+        // own の要素は読むだけの ref になっている。ムーブする要素（構造体など）は写しを置いて、読むだけの ref で渡す
+        let elem = match elem {
+            Ty::Own(x) => Ty::Ref(x, false),
+            t => t,
+        };
         let view = if self.moves(&elem)? {
             let w = self.declare("", elem.clone(), false, var_span);
             self.assign(w, Rvalue::Use(Operand::Copy(at(items))), var_span);
@@ -648,10 +652,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
             let k = self.declare(kn, kt, false, *ks);
             self.assign(k, Rvalue::Use(Operand::Copy(at(keys))), *ks);
         }
-        let vt = self.var_ty(var_span)?;
+        // own の要素は、読むだけの ref として受け取る
+        let vt = match self.var_ty(var_span)? {
+            Ty::Own(x) => Ty::Ref(x, false),
+            t => t,
+        };
         let v = self.declare(var, vt, false, var_span);
         let value = match view {
-            Some(w) => Rvalue::Ref { place: rd(w), mutable: false, what, span: var_span },
+            Some(w) => Rvalue::Ref { place: rd(w), mutable: false, follows: false, what, span: var_span },
             None => Rvalue::Use(Operand::Copy(at(items))),
         };
         self.assign(v, value, var_span);
@@ -764,7 +772,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                         Some(_) if b == "_" => continue,
                         // 借りた match: 中身の own は借りた ref として受け取る
                         Some(m) if matches!(ftys.get(i), Some(Ty::Own(_))) => {
-                            Rvalue::Ref { place: fp, mutable: m, what: format!("{} の中身 {}", describe(scrut), b), span: *bspan }
+                            let what = format!("{} の中身 {}", describe(scrut), b);
+                            Rvalue::Ref { place: fp, mutable: m, follows: true, what, span: *bspan }
                         }
                         Some(_) => Rvalue::Use(Operand::Copy(fp)),
                     };
@@ -910,8 +919,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
         if e.borrow.get() {
             // `ref T` の引数に `ref` なしで渡した場所は自動で借りる（変換はしない）
             let place = self.place(e)?;
-            let r = Rvalue::Ref { place, mutable: false, what: describe(e), span: e.span };
-            return Ok(self.temp_of(self.ty(e), r, e.span));
+            let (follows, ty) = match self.ty(e) {
+                Ty::Own(x) | Ty::Ref(x, _) => (true, Ty::Ref(x, false)),
+                t => (false, Ty::Ref(Box::new(t), false)),
+            };
+            let r = Rvalue::Ref { place, mutable: false, follows, what: describe(e), span: e.span };
+            return Ok(self.temp_of(ty, r, e.span));
         }
         let v = self.expr_kind(e)?;
         // 型検査がつけた変換の印（interp の `convert`）
@@ -970,7 +983,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             ExprKind::Ref(inner, mutable) => {
                 let place = self.place(inner)?;
-                self.temp_of(ty, Rvalue::Ref { place, mutable: *mutable, what: describe(inner), span: sp }, sp)
+                let follows = matches!(self.ty(inner), Ty::Own(_) | Ty::Ref(..));
+                self.temp_of(ty, Rvalue::Ref { place, mutable: *mutable, follows, what: describe(inner), span: sp }, sp)
             }
             ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..) => {
                 // ポインタの先・フィールド・要素から取り出せるのはコピーできる値だけ（ムーブする値なら実行時エラー）
@@ -1226,7 +1240,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;
                 let this_ty = Ty::Ref(Box::new(Ty::Struct(sname.clone(), sargs.clone())), mutable);
-                let this = self.temp_of(this_ty, Rvalue::Ref { place: pl, mutable, what: describe(recv), span: recv.span }, sp);
+                let r = Rvalue::Ref { place: pl, mutable, follows: false, what: describe(recv), span: recv.span };
+                let this = self.temp_of(this_ty, r, sp);
                 let f = self.calls.index(&full, &targs)?;
                 let mut ops = vec![this];
                 ops.append(&mut vals);
@@ -1350,13 +1365,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
     /// `base` の場所 `p` から、`e`（`*base`・`base.f`・`base[k]`）の場所へ進む。own / ref の先は自動でたどる
     fn project(&mut self, p: &mut Place, e: &Expr, base: &Expr, key: Option<Operand>) -> L<()> {
         let bt = self.ty(base);
+        // 検査を消すかは、IR の上の解析（`ir::analyze`）が決める
         let inner = match (&e.kind, &bt) {
-            (ExprKind::Deref(_, c), _) => {
-                p.proj.push(Proj::Deref(c.get(), e.span));
+            (ExprKind::Deref(..), _) => {
+                p.proj.push(Proj::Deref(ast::Check::Required, e.span));
                 return Ok(());
             }
-            (ExprKind::Field(_, _, c) | ExprKind::Index(_, _, c), Ty::Own(t) | Ty::Ref(t, _)) => {
-                p.proj.push(Proj::Deref(c.get(), e.span));
+            (ExprKind::Field(..) | ExprKind::Index(..), Ty::Own(t) | Ty::Ref(t, _)) => {
+                p.proj.push(Proj::Deref(ast::Check::Required, e.span));
                 (**t).clone()
             }
             _ => bt.clone(),

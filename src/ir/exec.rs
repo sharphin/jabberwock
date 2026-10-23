@@ -110,6 +110,11 @@ impl<'a> Machine<'a> {
             Inst::Assign { place, value, span } => {
                 let v = self.rvalue(f, locs, value)?;
                 if place.proj.is_empty() {
+                    // 解析は「own 型の変数には own が入っている」を根拠にする
+                    debug_assert!(
+                        !matches!(f.locals[place.local].ty, Ty::Own(_)) || matches!(v, Value::Own(_)),
+                        "own 型の {} に own でない値", f.locals[place.local].name
+                    );
                     match locs[place.local] {
                         Loc::Live(slot) => {
                             let old = self.it.heap.slots[slot].value.replace(v).expect("live slot");
@@ -246,7 +251,7 @@ impl<'a> Machine<'a> {
                 (Value::Float(x), Ty::Int(t)) => Value::Int(t.wrap(float_to_int(x)), *t),
                 (v, _) => v,
             }),
-            Rvalue::Ref { place, mutable, what, span } => {
+            Rvalue::Ref { place, mutable, what, span, .. } => {
                 let (slot, path) = self.resolve(f, locs, place)?;
                 Ok(match at(self.it, slot, &path) {
                     Value::Own(s) => {

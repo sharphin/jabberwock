@@ -84,9 +84,11 @@ pub fn typed(src: &str, read: Reader) -> Result<(ast::Program, types::TypeInfo),
 /// IR（中間表現）を読みやすい文字にする（`ward --ir`）。エラーや、まだ書き出せない書き方があれば Err
 pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
     let (prog, info) = typed(src, read).map_err(|d| d.title)?;
-    analyze::analyze(&prog);
     ir::lower::lower(&prog, &info)
-        .map(|p| p.to_string())
+        .map(|mut p| {
+            ir::analyze::analyze(&mut p);
+            p.to_string()
+        })
         .map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))
 }
 
@@ -171,6 +173,10 @@ fn run_inner(
     let analysis = if elide { analyze::analyze(&prog) } else { analyze::Stats::default() };
     // デバッグビルドでは、書き出せるプログラムは IR でも実行して結果を突き合わせる（IR の書き出しの検査）
     let lowered = if cfg!(debug_assertions) { ir::lower::lower(&prog, &info).ok() } else { None };
+    let lowered = lowered.map(|mut p| {
+        ir::analyze::analyze(&mut p);
+        p
+    });
     drop(info);
     let mut it = interp::Interp::new(echo);
     it.set_io(input, args);
