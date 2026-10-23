@@ -113,7 +113,7 @@ fn mismatch(want: &Ty, got: &Ty, span: Span) -> Diagnostic {
 }
 
 /// 型の引数を具体的な型に置き換える（決まっていないものはそのまま）
-fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
+pub fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
     match t {
         Ty::Param(p) => map.get(p).cloned().unwrap_or_else(|| t.clone()),
         Ty::Struct(n, args) => Ty::Struct(n.clone(), args.iter().map(|a| subst(a, map)).collect()),

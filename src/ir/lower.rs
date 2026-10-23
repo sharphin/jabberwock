@@ -13,7 +13,7 @@ use std::rc::Rc;
 use super::*;
 use crate::ast::{self, Expr, ExprKind, FnDef, InterpPart, Stmt, TypeKind};
 use crate::interp::{describe, BUILTINS};
-use crate::types::TypeInfo;
+use crate::types::{self, TypeInfo};
 
 /// 書き出せなかった理由
 type L<T> = Result<T, String>;
@@ -35,12 +35,11 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
     if !defs.contains_key("main") {
         return Err("main がない".to_string());
     }
-    let mut calls = Calls { by_name: HashMap::new(), queue: VecDeque::new() };
-    calls.index("main");
+    let mut calls = Calls { defs, by_name: HashMap::new(), queue: VecDeque::new() };
+    calls.index("main", &HashMap::new())?;
     let mut fns: Vec<Option<Func>> = Vec::new();
-    while let Some((name, i)) = calls.queue.pop_front() {
-        let def = defs.get(name.as_str()).ok_or_else(|| format!("関数 `{}` がない", name))?;
-        let f = FnLower::new(info, &structs, &mut calls).lower(def)?;
+    while let Some((name, def, map, i)) = calls.queue.pop_front() {
+        let f = FnLower::new(info, &structs, &mut calls, map).lower(def, name)?;
         if fns.len() <= i {
             fns.resize_with(i + 1, || None);
         }
@@ -50,21 +49,50 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
     Ok(Program { fns, by_name: calls.by_name, structs })
 }
 
-/// 呼ばれた関数に番号をつけ、書き出す順に並べる
-struct Calls {
+/// 呼ばれた関数に番号をつけ、書き出す順に並べる。ジェネリックな関数は型の引数ごとに作り分ける（`pick<i64>`）
+struct Calls<'p> {
+    defs: HashMap<&'p str, &'p FnDef>,
     by_name: HashMap<String, usize>,
-    queue: VecDeque<(String, usize)>,
+    /// (作り分けた名前, 定義, 型の引数, 番号)
+    queue: VecDeque<(String, &'p FnDef, HashMap<String, Ty>, usize)>,
 }
 
-impl Calls {
-    fn index(&mut self, name: &str) -> usize {
-        if let Some(&i) = self.by_name.get(name) {
-            return i;
+impl<'p> Calls<'p> {
+    /// `name` を型の引数 `targs`（具体的な型）で呼ぶときの関数の番号
+    fn index(&mut self, name: &str, targs: &HashMap<String, Ty>) -> L<usize> {
+        let def = *self.defs.get(name).ok_or_else(|| format!("関数 `{}` がない", name))?;
+        let mut args = Vec::new();
+        for p in &def.tparams {
+            let t = targs.get(p).ok_or_else(|| format!("`{}` の型の引数 `{}` が分からない", name, p))?;
+            if contains_param(t) {
+                return Err(format!("`{}` の型の引数が決まらない", name));
+            }
+            args.push(t.clone());
+        }
+        let inst = if args.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}<{}>", name, args.iter().map(Ty::show).collect::<Vec<_>>().join(", "))
+        };
+        if let Some(&i) = self.by_name.get(&inst) {
+            return Ok(i);
         }
         let i = self.by_name.len();
-        self.by_name.insert(name.to_string(), i);
-        self.queue.push_back((name.to_string(), i));
-        i
+        self.by_name.insert(inst.clone(), i);
+        let map = def.tparams.iter().cloned().zip(args).collect();
+        self.queue.push_back((inst, def, map, i));
+        Ok(i)
+    }
+}
+
+fn contains_param(t: &Ty) -> bool {
+    match t {
+        Ty::Param(_) => true,
+        Ty::Struct(_, a) | Ty::Enum(_, a) => a.iter().any(contains_param),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_param(x),
+        Ty::Map(k, v) => contains_param(k) || contains_param(v),
+        Ty::Fn(ps, r) => ps.iter().any(contains_param) || contains_param(r),
+        _ => false,
     }
 }
 
@@ -77,10 +105,12 @@ struct Loop {
     cont_depth: usize,
 }
 
-struct FnLower<'a> {
+struct FnLower<'a, 'p> {
     info: &'a TypeInfo,
     structs: &'a HashMap<String, Rc<ast::StructDef>>,
-    calls: &'a mut Calls,
+    calls: &'a mut Calls<'p>,
+    /// 作り分けている関数の型の引数（`T` → 具体的な型）
+    subst: HashMap<String, Ty>,
     locals: Vec<LocalDecl>,
     blocks: Vec<Block>,
     cur: Bb,
@@ -89,12 +119,18 @@ struct FnLower<'a> {
     loops: Vec<Loop>,
 }
 
-impl<'a> FnLower<'a> {
-    fn new(info: &'a TypeInfo, structs: &'a HashMap<String, Rc<ast::StructDef>>, calls: &'a mut Calls) -> Self {
+impl<'a, 'p> FnLower<'a, 'p> {
+    fn new(
+        info: &'a TypeInfo,
+        structs: &'a HashMap<String, Rc<ast::StructDef>>,
+        calls: &'a mut Calls<'p>,
+        subst: HashMap<String, Ty>,
+    ) -> Self {
         FnLower {
             info,
             structs,
             calls,
+            subst,
             locals: Vec::new(),
             blocks: vec![Block { insts: Vec::new(), term: Term::Unreachable }],
             cur: 0,
@@ -103,16 +139,13 @@ impl<'a> FnLower<'a> {
         }
     }
 
-    fn lower(mut self, f: &FnDef) -> L<Func> {
-        if !f.tparams.is_empty() {
-            return Err(format!("ジェネリックな関数 `{}`", f.name));
-        }
+    fn lower(mut self, f: &FnDef, name: String) -> L<Func> {
         self.scopes.push(Vec::new());
         for p in &f.params {
             let ty = self.var_ty(p.span)?;
             self.declare(&p.name, ty, p.mutable, p.span);
         }
-        let ret_ty = self.info.fn_ret.get(&f.name).cloned().unwrap_or(Ty::Unit);
+        let ret_ty = types::subst(&self.info.fn_ret.get(&f.name).cloned().unwrap_or(Ty::Unit), &self.subst);
         let ret = if f.ret.is_some() {
             let r = self.temp(ret_ty.clone(), f.body.end);
             self.block(&f.body, Some(r))?;
@@ -124,7 +157,7 @@ impl<'a> FnLower<'a> {
         self.leave(0, f.body.end, "スコープを抜けた");
         self.terminate(Term::Return(ret));
         Ok(Func {
-            name: f.name.clone(),
+            name,
             params: f.params.len(),
             ret: ret_ty,
             locals: self.locals,
@@ -136,11 +169,19 @@ impl<'a> FnLower<'a> {
     // ------------------------------------------------------------ 道具
 
     fn var_ty(&self, decl: Span) -> L<Ty> {
-        self.info.var_ty.get(&decl).cloned().ok_or_else(|| "変数の型が記録されていない".to_string())
+        let t = self.info.var_ty.get(&decl).ok_or_else(|| "変数の型が記録されていない".to_string())?;
+        Ok(types::subst(t, &self.subst))
     }
 
+    /// 式の型（作り分けている型の引数は具体的な型に置き換える）
     fn ty(&self, e: &Expr) -> Ty {
-        self.info.ty(e).cloned().unwrap_or(Ty::Unit)
+        self.info.ty(e).map_or(Ty::Unit, |t| types::subst(t, &self.subst))
+    }
+
+    /// 呼び出しの式で型検査が決めた型の引数（具体的な型に置き換えたもの）
+    fn targs(&self, e: &Expr) -> HashMap<String, Ty> {
+        let m = self.info.targs.get(&(e as *const Expr)).cloned().unwrap_or_default();
+        m.into_iter().map(|(k, v)| (k, types::subst(&v, &self.subst))).collect()
     }
 
     fn new_local(&mut self, name: &str, ty: Ty, mutable: bool, span: Span) -> Local {
@@ -587,7 +628,8 @@ impl<'a> FnLower<'a> {
                 let rv = self.expr(r)?;
                 self.temp_of(ty, Rvalue::Bin(*op, lv, rv, sp), sp)
             }
-            ExprKind::Call(name, args) => return self.call(name, args, ty, sp),
+            ExprKind::Call(name, args) => return self.call(e, name, args, ty),
+            ExprKind::MethodCall(recv, name, args) => return self.method(e, recv, name, args, ty),
             ExprKind::Interp(parts) => {
                 let mut strs = Vec::new();
                 for p in parts {
@@ -604,7 +646,6 @@ impl<'a> FnLower<'a> {
                 return Err("配列・リスト・辞書".to_string())
             }
             ExprKind::Lambda(_) => return Err("クロージャ".to_string()),
-            ExprKind::MethodCall(..) => return Err("メソッド呼び出し".to_string()),
         })
     }
 
@@ -628,7 +669,8 @@ impl<'a> FnLower<'a> {
         Ok(self.temp_of(Ty::Str, r, e.span))
     }
 
-    fn call(&mut self, name: &str, args: &[Expr], ty: Ty, sp: Span) -> L<Operand> {
+    fn call(&mut self, e: &Expr, name: &str, args: &[Expr], ty: Ty) -> L<Operand> {
+        let sp = e.span;
         match name {
             "print" => {
                 let mut strs = Vec::new();
@@ -657,9 +699,79 @@ impl<'a> FnLower<'a> {
                 for a in args {
                     vals.push(self.expr(a)?);
                 }
-                let f = self.calls.index(name);
+                let f = self.calls.index(name, &self.targs(e))?;
                 Ok(self.temp_of(ty, Rvalue::Call(f, vals, sp), sp))
             }
+        }
+    }
+
+    /// `recv.name(args)`（interp の `eval_method`）。一時的な receiver は先に評価し、場所の receiver は引数のあとで借りる
+    fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], ty: Ty) -> L<Operand> {
+        let sp = e.span;
+        let rt = self.ty(recv);
+        let (inner, ptr) = match &rt {
+            Ty::Own(x) | Ty::Ref(x, _) => ((**x).clone(), true),
+            t => (t.clone(), false),
+        };
+        let temp = if is_place(recv) { None } else { Some(self.expr(recv)?) };
+        let mut vals = Vec::new();
+        for a in args {
+            vals.push(self.expr(a)?);
+        }
+        // receiver の場所。own / ref なら先をたどる（interp は種類を調べるため、いつも世代チェックをする）
+        let recv_place = |me: &mut Self| -> L<Option<Place>> {
+            let mut pl = match &temp {
+                None => me.place(recv)?,
+                Some(Operand::Move(t, _)) => Place::local(*t, recv.span),
+                Some(_) => return Ok(None),
+            };
+            if ptr {
+                pl.proj.push(Proj::Deref(ast::Check::Required, recv.span));
+            }
+            Ok(Some(pl))
+        };
+        match inner {
+            Ty::Str => {
+                let text = match recv_place(self)? {
+                    Some(pl) => Operand::Copy(pl),
+                    None => temp.clone().expect("a constant receiver"),
+                };
+                let mut ops = vec![text];
+                ops.append(&mut vals);
+                let r = self.temp_of(ty, Rvalue::Builtin(format!("str.{}", name), ops, sp), sp);
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
+            Ty::Struct(sname, sargs) => {
+                let full = format!("{}.{}", sname, name);
+                let def = *self.calls.defs.get(full.as_str()).ok_or("ないメソッド")?;
+                let mutable = matches!(def.params[0].ty.kind, TypeKind::Ref(_, true));
+                // 型の引数: 型検査が決めたもの。interface の条件で呼んだ（`T` の）ときは、構造体の型の引数から
+                let mut targs = self.targs(e);
+                if let Some(sd) = self.structs.get(&sname) {
+                    for (p, a) in sd.tparams.iter().zip(&sargs) {
+                        targs.entry(p.clone()).or_insert_with(|| a.clone());
+                    }
+                }
+                let pl = recv_place(self)?.ok_or("定数の receiver")?;
+                let this_ty = Ty::Ref(Box::new(Ty::Struct(sname.clone(), sargs.clone())), mutable);
+                let this = self.temp_of(this_ty, Rvalue::Ref { place: pl, mutable, what: describe(recv), span: recv.span }, sp);
+                let f = self.calls.index(&full, &targs)?;
+                let mut ops = vec![this];
+                ops.append(&mut vals);
+                let r = self.temp_of(ty, Rvalue::Call(f, ops, sp), sp);
+                // 一時的な receiver は、呼び出しが終わったら捨てる
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
+            _ => Err(format!("{} のメソッド", inner.show())),
+        }
+    }
+
+    fn drop_temp(&mut self, temp: &Option<Operand>, span: Span) {
+        if let Some(Operand::Move(t, _)) = temp {
+            let why = "メソッドの呼び出しに使い終わった一時的な値".to_string();
+            self.emit(Inst::Drop { local: *t, span, why });
         }
     }
 

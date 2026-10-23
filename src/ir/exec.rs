@@ -9,7 +9,7 @@ use std::rc::Rc;
 use super::*;
 use crate::ast::UnOp;
 use crate::diag::Diagnostic;
-use crate::interp::{as_bool, binary, float_to_int, moved_error, Interp, RefVal, Value, MAX_DEPTH};
+use crate::interp::{as_bool, binary, float_to_int, moved_error, str_method, Interp, RefVal, Value, MAX_DEPTH};
 
 type R<T> = Result<T, Diagnostic>;
 
@@ -254,6 +254,11 @@ impl<'a> Machine<'a> {
                     self.it.release(v, *span, "使い終わった一時的な値");
                 }
                 Ok(Value::Str(Rc::from(shown?.as_str())))
+            }
+            Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
+                let mut vals = self.operands(f, locs, ops)?;
+                let Value::Str(text) = vals.remove(0) else { unreachable!("string method on a string") };
+                str_method(&text, &name[4..], vals, *span)
             }
             Rvalue::Builtin(name, ops, span) => {
                 let vals = self.operands(f, locs, ops)?;

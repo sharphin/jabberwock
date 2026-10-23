@@ -2262,7 +2262,7 @@ fn str_list<'a>(items: impl Iterator<Item = &'a str>) -> Value {
 }
 
 /// 文字列のメソッド。位置と長さは文字単位（バイトではない）
-fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
+pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
     let s = |i: usize| match &vals[i] {
         Value::Str(x) => Ok(x.clone()),
         other => Err(Diagnostic::new("文字列が必要です").primary(span, format!("{} が渡された", other.type_name()))),
