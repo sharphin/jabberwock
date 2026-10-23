@@ -1,4 +1,4 @@
-//! 静的解析: 「この `*r` の借りた先は必ず生きている」と証明できた箇所の世代チェックを消す。
+//! 静的解析: 「この `*r` / `r.f` の借りた先は必ず生きている」と証明できた箇所の世代チェックを消す。
 //!
 //! 実行時の世代チェックは安全の最後の砦。ただし毎回払うと遅い。そこで実行前にプログラムを
 //! 読み、証明できた `*r` には `Check::Elided` を書き込む。インタプリタはそこだけ検査を飛ばす。
@@ -177,7 +177,7 @@ impl<'a> FnAnalyzer<'a> {
                             }
                         }
                     }
-                    ExprKind::Deref(inner, check) => self.deref(inner, check),
+                    ExprKind::Deref(inner, check) | ExprKind::Field(inner, _, check) => self.deref(inner, check),
                     _ => {}
                 }
             }
@@ -248,8 +248,15 @@ impl<'a> FnAnalyzer<'a> {
                     _ => None,
                 }
             }
-            ExprKind::Deref(inner, check) => {
+            // `r.f` も r が own / ref なら先をたどるので、`*r` と同じ判定
+            ExprKind::Deref(inner, check) | ExprKind::Field(inner, _, check) => {
                 self.deref(inner, check);
+                None
+            }
+            ExprKind::StructLit(_, inits) => {
+                for init in inits {
+                    self.expr(&init.value, false);
+                }
                 None
             }
             ExprKind::Unary(_, inner) => {
@@ -298,6 +305,7 @@ impl<'a> FnAnalyzer<'a> {
         }
     }
 
+    /// `*inner` か `inner.f` の検査を消せるか判定する。`inner` は読んでもムーブしない。
     fn deref(&mut self, inner: &Expr, check: &Cell<Check>) {
         self.expr(inner, true);
         let safe = match &inner.kind {
@@ -352,9 +360,14 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
     match &e.kind {
         ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
         ExprKind::Own(i) | ExprKind::Ref(i) | ExprKind::Unary(_, i) => expr_checks(i, f),
-        ExprKind::Deref(i, c) => {
+        ExprKind::Deref(i, c) | ExprKind::Field(i, _, c) => {
             f(c);
             expr_checks(i, f);
+        }
+        ExprKind::StructLit(_, inits) => {
+            for init in inits {
+                expr_checks(&init.value, f);
+            }
         }
         ExprKind::Binary(_, l, r) => {
             expr_checks(l, f);

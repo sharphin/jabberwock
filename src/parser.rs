@@ -9,11 +9,13 @@ type R<T> = Result<T, Diagnostic>;
 pub struct Parser {
     toks: Vec<Token>,
     pos: usize,
+    /// `if` / `while` の条件の中では `Name {` を構造体リテラルと読まない（ブロックの `{` と区別するため）
+    no_struct_lit: bool,
 }
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0 }
+        Parser { toks, pos: 0, no_struct_lit: false }
     }
 
     fn peek(&self) -> &Tok {
@@ -72,18 +74,47 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> R<Program> {
         let mut fns = Vec::new();
+        let mut structs = Vec::new();
         loop {
             self.skip_seps();
-            if *self.peek() == Tok::Eof {
+            match self.peek() {
+                Tok::Eof => break,
+                Tok::Struct => structs.push(self.parse_struct()?),
+                _ => fns.push(self.parse_fn()?),
+            }
+        }
+        Ok(Program { structs, fns })
+    }
+
+    fn parse_struct(&mut self) -> R<StructDef> {
+        let start = self.expect(Tok::Struct, "`struct`")?;
+        let name = self.expect_ident("構造体名")?;
+        let span = start.join(self.prev_span());
+        self.expect(Tok::LBrace, "`{`")?;
+        let mut fields: Vec<String> = Vec::new();
+        self.skip_newlines();
+        while *self.peek() != Tok::RBrace {
+            let fspan = self.span();
+            let f = self.expect_ident("フィールド名")?;
+            if fields.contains(&f) {
+                return Err(Diagnostic::new(format!("フィールド `{}` が二重に定義されています", f))
+                    .primary(fspan, "同じ名前のフィールドがすでにある"));
+            }
+            fields.push(f);
+            self.skip_newlines();
+            if *self.peek() == Tok::Comma {
+                self.bump();
+                self.skip_newlines();
+            } else {
                 break;
             }
-            fns.push(self.parse_fn()?);
         }
-        Ok(Program { fns })
+        self.expect(Tok::RBrace, "`}`")?;
+        Ok(StructDef { name, fields, span })
     }
 
     fn parse_fn(&mut self) -> R<FnDef> {
-        let start = self.expect(Tok::Fn, "`fn`（トップレベルには関数定義だけ書けます）")?;
+        let start = self.expect(Tok::Fn, "`fn` か `struct`（トップレベルには関数と構造体の定義だけ書けます）")?;
         let name = self.expect_ident("関数名")?;
         self.expect(Tok::LParen, "`(`")?;
         let mut params = Vec::new();
@@ -141,7 +172,7 @@ impl Parser {
             Tok::If => self.parse_if(),
             Tok::While => {
                 self.bump();
-                let cond = self.parse_expr()?;
+                let cond = self.parse_cond()?;
                 let body = self.parse_block()?;
                 Ok(Stmt::While { cond, body })
             }
@@ -157,9 +188,9 @@ impl Parser {
             _ => {
                 let e = self.parse_expr()?;
                 if *self.peek() == Tok::Assign {
-                    if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..)) {
+                    if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..)) {
                         return Err(Diagnostic::new("構文エラー: ここには代入できません")
-                            .primary(e.span, "代入先は変数名か `*p` だけです"));
+                            .primary(e.span, "代入先は変数名か `*p` か `p.f` だけです"));
                     }
                     self.bump();
                     self.skip_newlines();
@@ -175,7 +206,7 @@ impl Parser {
 
     fn parse_if(&mut self) -> R<Stmt> {
         self.expect(Tok::If, "`if`")?;
-        let cond = self.parse_expr()?;
+        let cond = self.parse_cond()?;
         let then = self.parse_block()?;
 
         // `}` の次の行に else がある書き方も許す
@@ -201,6 +232,18 @@ impl Parser {
         self.parse_binary(1)
     }
 
+    /// `if` / `while` の条件。ここでは構造体リテラルを書けない（括弧で囲めば書ける）。
+    fn parse_cond(&mut self) -> R<Expr> {
+        self.with_struct_lit(false, |p| p.parse_expr())
+    }
+
+    fn with_struct_lit<T>(&mut self, allowed: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = std::mem::replace(&mut self.no_struct_lit, !allowed);
+        let r = f(self);
+        self.no_struct_lit = saved;
+        r
+    }
+
     fn parse_binary(&mut self, min_prec: u8) -> R<Expr> {
         let mut lhs = self.parse_unary()?;
         loop {
@@ -222,6 +265,7 @@ impl Parser {
 
     /// 前置演算子。
     /// `ref` と `*` は強く結びつく（`ref a`, `*r + 1` は `(*r) + 1`）。
+    /// `.f` はさらに強い（`ref p.x` は `ref (p.x)`、`*p.x` は `*(p.x)`）。
     /// `own` は右側の式全体を取る（`own n * 2` は `own (n * 2)`）。
     fn parse_unary(&mut self) -> R<Expr> {
         match self.peek().clone() {
@@ -255,8 +299,20 @@ impl Parser {
                 let span = start.join(e.span);
                 Ok(Expr { kind: ExprKind::Own(Box::new(e)), span })
             }
-            _ => self.parse_primary(),
+            _ => self.parse_postfix(),
         }
+    }
+
+    fn parse_postfix(&mut self) -> R<Expr> {
+        let mut e = self.parse_primary()?;
+        while *self.peek() == Tok::Dot {
+            self.bump();
+            let fspan = self.span();
+            let name = self.expect_ident("フィールド名")?;
+            let span = e.span.join(fspan);
+            e = Expr { kind: ExprKind::Field(Box::new(e), name, Cell::new(Check::Unvisited)), span };
+        }
+        Ok(e)
     }
 
     fn parse_primary(&mut self) -> R<Expr> {
@@ -284,7 +340,7 @@ impl Parser {
                     self.skip_newlines();
                     let mut args = Vec::new();
                     while *self.peek() != Tok::RParen {
-                        args.push(self.parse_expr()?);
+                        args.push(self.with_struct_lit(true, |p| p.parse_expr())?);
                         self.skip_newlines();
                         if *self.peek() == Tok::Comma {
                             self.bump();
@@ -298,6 +354,8 @@ impl Parser {
                         kind: ExprKind::Call(name, args),
                         span: start.join(end),
                     })
+                } else if *self.peek() == Tok::LBrace && !self.no_struct_lit {
+                    self.parse_struct_lit(name, start)
                 } else {
                     Ok(Expr { kind: ExprKind::Var(name), span: start })
                 }
@@ -305,13 +363,36 @@ impl Parser {
             Tok::LParen => {
                 let start = self.bump().span;
                 self.skip_newlines();
-                let inner = self.parse_expr()?;
+                let inner = self.with_struct_lit(true, |p| p.parse_expr())?;
                 self.skip_newlines();
                 let end = self.expect(Tok::RParen, "`)`")?;
                 Ok(Expr { kind: inner.kind, span: start.join(end) })
             }
             _ => Err(self.unexpected("式")),
         }
+    }
+
+    fn parse_struct_lit(&mut self, name: String, start: Span) -> R<Expr> {
+        self.expect(Tok::LBrace, "`{`")?;
+        self.skip_newlines();
+        let mut fields = Vec::new();
+        while *self.peek() != Tok::RBrace {
+            let span = self.span();
+            let fname = self.expect_ident("フィールド名")?;
+            self.expect(Tok::Colon, "`:`")?;
+            self.skip_newlines();
+            let value = self.with_struct_lit(true, |p| p.parse_expr())?;
+            fields.push(FieldInit { name: fname, span, value });
+            self.skip_newlines();
+            if *self.peek() == Tok::Comma {
+                self.bump();
+                self.skip_newlines();
+            } else {
+                break;
+            }
+        }
+        let end = self.expect(Tok::RBrace, "`}`")?;
+        Ok(Expr { kind: ExprKind::StructLit(name, fields), span: start.join(end) })
     }
 }
 

@@ -37,7 +37,7 @@ fn main() {
     let outcome = ward::run_source_with(&src, true, elide);
     if stats {
         let a = outcome.analysis;
-        eprintln!("[stats] `*p` の箇所: 検査を消せた {} / 実行時に残る {}", a.elided, a.required);
+        eprintln!("[stats] `*p` と `p.f` の箇所: 検査を消せた {} / 実行時に残る {}", a.elided, a.required);
         eprintln!(
             "[stats] ref の世代チェック: 実行 {} 回 / 省略 {} 回",
             outcome.ref_checks, outcome.ref_checks_elided

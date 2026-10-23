@@ -54,9 +54,20 @@ pub enum ExprKind {
     Ref(Box<Expr>),
     /// `*p` : own / ref の先を読む。2つ目は静的解析の結論（世代チェックを消せるか）。
     Deref(Box<Expr>, Cell<Check>),
+    /// `e.f` : フィールド。`e` が own / ref なら自動で先をたどる（そのときの検査が `Check`）。
+    Field(Box<Expr>, String, Cell<Check>),
+    /// `Name { f: e, ... }` : 構造体リテラル。フィールドはソースに書いた順
+    StructLit(String, Vec<FieldInit>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+}
+
+#[derive(Debug, Clone)]
+pub struct FieldInit {
+    pub name: String,
+    pub span: Span,
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +95,22 @@ pub struct FnDef {
     pub span: Span,
 }
 
+/// `struct Name { a, b }`。フィールドに型はまだない。
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<String>,
+    pub span: Span,
+}
+
+impl StructDef {
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        self.fields.iter().position(|f| f == name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub structs: Vec<StructDef>,
     pub fns: Vec<FnDef>,
 }

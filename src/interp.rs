@@ -3,8 +3,8 @@
 //! 安全性の仕組み（この言語の看板）:
 //!   * `own`  : 唯一の所有者。代入・引数渡しで「ムーブ」され、元の変数は使えなくなる。
 //!   * `ref`  : 世代付き参照。(スロット番号, 世代) を持つ。所有者が解放されるとスロットの
-//!              世代が進むので、古い参照を使った瞬間に「確実に」検出できる。
-//!              検出時は「借りた → 解放された → 使った」を時系列で報告する。
+//!     世代が進むので、古い参照を使った瞬間に「確実に」検出できる。
+//!     検出時は「借りた → 解放された → 使った」を時系列で報告する。
 //!
 //! 静的解析（`analyze`）が「絶対安全」と証明できた `*p` は世代チェックを飛ばす（速さ）。
 //! 証明できない箇所だけ実行時検査が残る（安全）。
@@ -30,6 +30,8 @@ pub enum Value {
     Own(usize),
     /// 世代付き参照
     Ref(RefVal),
+    /// 構造体。フィールドは定義の順。中に own を持ちうるので、値として読むとムーブになる。
+    Struct(Rc<StructDef>, Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,25 @@ impl Value {
             Value::Str(_) => "文字列",
             Value::Own(_) => "own",
             Value::Ref(_) => "ref",
+            Value::Struct(..) => "構造体",
+        }
+    }
+
+    /// 中に（フィールドも含めて）own を持っているか
+    fn has_own(&self) -> bool {
+        match self {
+            Value::Own(_) => true,
+            Value::Struct(_, fields) => fields.iter().any(Value::has_own),
+            _ => false,
+        }
+    }
+
+    /// 中にある own のスロットをすべて集める
+    fn collect_owns(&self, out: &mut Vec<usize>) {
+        match self {
+            Value::Own(s) => out.push(*s),
+            Value::Struct(_, fields) => fields.iter().for_each(|f| f.collect_owns(out)),
+            _ => {}
         }
     }
 
@@ -60,6 +81,11 @@ impl Value {
             Value::Str(s) => s.to_string(),
             Value::Own(s) => format!("<own #{}>", s),
             Value::Ref(r) => format!("<ref #{}>", r.slot),
+            Value::Struct(def, fields) => {
+                let parts: Vec<String> =
+                    def.fields.iter().zip(fields).map(|(n, v)| format!("{}: {}", n, v.show())).collect();
+                format!("{} {{ {} }}", def.name, parts.join(", "))
+            }
         }
     }
 }
@@ -121,6 +147,17 @@ struct Frame {
     scopes: Vec<Vec<Var>>,
 }
 
+/// 書き込み・読み出しができる場所（変数かヒープのスロット）と、その中のフィールドの道筋
+struct Place {
+    root: Root,
+    path: Vec<usize>,
+}
+
+enum Root {
+    Var(String),
+    Slot(usize),
+}
+
 enum Flow {
     Normal,
     Return(Value, Span),
@@ -130,6 +167,7 @@ pub struct Interp {
     heap: Heap,
     frames: Vec<Frame>,
     fns: HashMap<String, Rc<FnDef>>,
+    structs: HashMap<String, Rc<StructDef>>,
     pub output: String,
     echo: bool,
     depth: usize,
@@ -145,6 +183,7 @@ impl Interp {
             heap: Heap::new(),
             frames: Vec::new(),
             fns: HashMap::new(),
+            structs: HashMap::new(),
             output: String::new(),
             echo,
             depth: 0,
@@ -159,6 +198,13 @@ impl Interp {
     }
 
     pub fn run(&mut self, prog: Program) -> R<()> {
+        for s in prog.structs {
+            if self.structs.contains_key(&s.name) {
+                return Err(Diagnostic::new(format!("構造体 `{}` が二重に定義されています", s.name))
+                    .primary(s.span, "ここで再定義されている"));
+            }
+            self.structs.insert(s.name.clone(), Rc::new(s));
+        }
         for f in prog.fns {
             if BUILTINS.contains(&f.name.as_str()) {
                 return Err(Diagnostic::new(format!("`{}` は組み込み関数の名前です", f.name))
@@ -190,16 +236,27 @@ impl Interp {
             self.heap.slots[s].generation = g.wrapping_add(1);
             self.heap.history.insert((s, g), Freed { span, why });
             self.heap.free_list.push(s);
-            if let Value::Own(child) = inner {
+            let mut children = Vec::new();
+            inner.collect_owns(&mut children);
+            for child in children {
                 work.push((child, "持ち主が解放されたので、中身も連鎖して解放された".to_string()));
             }
         }
     }
 
+    /// 値を捨てる。中にある own は（構造体のフィールドも含めて）すべて解放する。
+    fn release(&mut self, v: Value, span: Span, why: &str) {
+        let mut owns = Vec::new();
+        v.collect_owns(&mut owns);
+        for s in owns {
+            self.free(s, span, why);
+        }
+    }
+
     fn drop_scope(&mut self, scope: Vec<Var>, span: Span, how: &str) {
         for var in scope.into_iter().rev() {
-            if let VarState::Live(Value::Own(slot)) = var.state {
-                self.free(slot, span, &format!("`{}` は{}ので解放された", var.name, how));
+            if let VarState::Live(v) = var.state {
+                self.release(v, span, &format!("`{}` は{}ので解放された", var.name, how));
             }
         }
     }
@@ -298,9 +355,7 @@ impl Interp {
             }
             Stmt::Expr(e) => {
                 let v = self.eval(e)?;
-                if let Value::Own(slot) = v {
-                    self.free(slot, e.span, "どこにも束縛されず、そのまま捨てられた");
-                }
+                self.release(v, e.span, "どこにも束縛されず、そのまま捨てられた");
                 Ok(Flow::Normal)
             }
             Stmt::If { cond, then, els } => {
@@ -345,8 +400,8 @@ impl Interp {
                         .ok_or_else(|| undefined_var(name, target.span))?;
                     std::mem::replace(&mut var.state, VarState::Live(newv))
                 };
-                if let VarState::Live(Value::Own(slot)) = old {
-                    self.free(slot, span, &format!("`{}` に再代入されて、古い値が解放された", name));
+                if let VarState::Live(v) = old {
+                    self.release(v, span, &format!("`{}` に再代入されて、古い値が解放された", name));
                 }
                 Ok(())
             }
@@ -354,12 +409,18 @@ impl Interp {
                 let (p, _) = self.eval_borrow(inner)?;
                 let slot = self.check_ptr(&p, target.span, check.get())?;
                 let old = self.heap.slots[slot].value.replace(newv);
-                if let Some(Value::Own(child)) = old {
-                    self.free(child, span, "上書きされて、古い値が解放された");
+                if let Some(v) = old {
+                    self.release(v, span, "上書きされて、古い値が解放された");
                 }
                 Ok(())
             }
-            _ => unreachable!("parser only produces Var/Deref assignment targets"),
+            ExprKind::Field(..) => {
+                let place = self.place(target)?;
+                let old = std::mem::replace(self.place_mut(&place), newv);
+                self.release(old, span, &format!("`{}` が上書きされて、古い値が解放された", describe(target)));
+                Ok(())
+            }
+            _ => unreachable!("parser only produces Var/Deref/Field assignment targets"),
         }
     }
 
@@ -382,7 +443,7 @@ impl Interp {
                 let v = self.heap.slots[slot].value.clone().expect("live slot has a value");
                 if temp {
                     if let Value::Own(tmp) = p {
-                        if matches!(v, Value::Own(_)) {
+                        if v.has_own() {
                             return Err(Diagnostic::new("一時的な own の中から own を取り出せません")
                                 .primary(e.span, "先に変数に入れてください"));
                         }
@@ -391,7 +452,115 @@ impl Interp {
                 }
                 Ok((v, false))
             }
+            ExprKind::Field(base, name, check) => {
+                if is_place(base) {
+                    let place = self.place(e)?;
+                    return Ok((self.place_mut(&place).clone(), false));
+                }
+                // 一時的な値のフィールド（`make().x` など）
+                let tmp = self.eval(base)?;
+                let (v, holder) = match &tmp {
+                    Value::Struct(def, fields) => (fields[self.field_index(def, name, e.span)?].clone(), None),
+                    Value::Own(_) | Value::Ref(_) => {
+                        let slot = self.check_ptr(&tmp, e.span, check.get())?;
+                        let v = self.field_of_slot(slot, name, e.span)?.clone();
+                        (v, matches!(tmp, Value::Own(_)).then_some(slot))
+                    }
+                    other => return Err(not_a_struct(other, base.span)),
+                };
+                if v.has_own() && !matches!(tmp, Value::Ref(_)) {
+                    return Err(Diagnostic::new("一時的な値の中から own を取り出せません")
+                        .primary(e.span, "先に変数に入れてください"));
+                }
+                match holder {
+                    Some(slot) => self.free(slot, e.span, "使い終わった一時的な値"),
+                    None => self.release(tmp, e.span, "使い終わった一時的な値"),
+                }
+                Ok((v, false))
+            }
             _ => Ok((self.eval(e)?, true)),
+        }
+    }
+
+    // ------------------------------------------------------------ 場所
+
+    /// 代入やフィールド読み出しの対象になる場所を求める。own / ref は自動でたどる。
+    fn place(&mut self, e: &Expr) -> R<Place> {
+        match &e.kind {
+            ExprKind::Var(name) => {
+                let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
+                if let VarState::Moved(sp) = var.state {
+                    return Err(moved_error(name, sp, e.span));
+                }
+                Ok(Place { root: Root::Var(name.clone()), path: Vec::new() })
+            }
+            ExprKind::Deref(inner, check) => {
+                let (p, temp) = self.eval_borrow(inner)?;
+                if temp && matches!(p, Value::Own(_)) {
+                    // 一時的な own の中に書き込んでも、すぐ捨てられてしまう
+                    return Err(Diagnostic::new("一時的な own の中は場所として使えません")
+                        .primary(inner.span, "先に変数に入れてください"));
+                }
+                let slot = self.check_ptr(&p, e.span, check.get())?;
+                Ok(Place { root: Root::Slot(slot), path: Vec::new() })
+            }
+            ExprKind::Field(base, name, check) => {
+                let mut place = self.place(base)?;
+                // 構造体を丸ごと複製しないよう、ここで必要なものだけ取り出す
+                let here = match self.place_mut(&place) {
+                    Value::Struct(def, _) => Ok(def.clone()),
+                    v => Err(v.clone()),
+                };
+                match here {
+                    Ok(def) => {
+                        place.path.push(self.field_index(&def, name, e.span)?);
+                        Ok(place)
+                    }
+                    Err(p @ (Value::Own(_) | Value::Ref(_))) => {
+                        let slot = self.check_ptr(&p, e.span, check.get())?;
+                        let idx = match &self.heap.slots[slot].value {
+                            Some(Value::Struct(def, _)) => self.field_index(def, name, e.span)?,
+                            Some(other) => return Err(not_a_struct(other, base.span)),
+                            None => unreachable!("check_ptr returns live slots"),
+                        };
+                        Ok(Place { root: Root::Slot(slot), path: vec![idx] })
+                    }
+                    Err(other) => Err(not_a_struct(&other, base.span)),
+                }
+            }
+            _ => unreachable!("only Var/Deref/Field are places"),
+        }
+    }
+
+    fn place_mut(&mut self, place: &Place) -> &mut Value {
+        let mut v = match &place.root {
+            Root::Var(name) => match &mut self.find_var(name).expect("place var").state {
+                VarState::Live(v) => v,
+                VarState::Moved(_) => unreachable!("place() rejects moved vars"),
+            },
+            Root::Slot(s) => self.heap.slots[*s].value.as_mut().expect("live slot"),
+        };
+        for &i in &place.path {
+            v = match v {
+                Value::Struct(_, fields) => &mut fields[i],
+                _ => unreachable!("place path goes through structs"),
+            };
+        }
+        v
+    }
+
+    fn field_index(&self, def: &StructDef, name: &str, span: Span) -> R<usize> {
+        def.field_index(name).ok_or_else(|| {
+            Diagnostic::new(format!("`{}` にフィールド `{}` はありません", def.name, name))
+                .primary(span, "このフィールドは定義されていません")
+                .note(format!("`{}` のフィールド: {}", def.name, def.fields.join(", ")))
+        })
+    }
+
+    fn field_of_slot(&self, slot: usize, name: &str, span: Span) -> R<&Value> {
+        match self.heap.slots[slot].value.as_ref().expect("live slot") {
+            Value::Struct(def, fields) => Ok(&fields[self.field_index(def, name, span)?]),
+            other => Err(not_a_struct(other, span)),
         }
     }
 
@@ -404,9 +573,9 @@ impl Interp {
                 let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
                 match var.state.clone() {
                     // own を読む = ムーブ。元の変数は使えなくなる。
-                    VarState::Live(Value::Own(slot)) => {
+                    VarState::Live(v @ (Value::Own(_) | Value::Struct(..))) => {
                         var.state = VarState::Moved(e.span);
-                        Ok(Value::Own(slot))
+                        Ok(v)
                     }
                     VarState::Live(v) => Ok(v),
                     VarState::Moved(sp) => Err(moved_error(name, sp, e.span)),
@@ -417,9 +586,9 @@ impl Interp {
                 Ok(Value::Own(self.heap.alloc(v)))
             }
             ExprKind::Ref(inner) => {
-                if !matches!(inner.kind, ExprKind::Var(_) | ExprKind::Deref(..)) {
+                if !is_place(inner) {
                     return Err(Diagnostic::new("借用できない式です")
-                        .primary(inner.span, "`ref` は変数か `*p` にだけ使えます")
+                        .primary(inner.span, "`ref` は変数か `*p` か `p.f` にだけ使えます")
                         .note("`let x = own ...` で変数に入れてから `ref x` としてください"));
                 }
                 let (p, _) = self.eval_borrow(inner)?;
@@ -438,12 +607,49 @@ impl Interp {
             }
             ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if let Value::Own(_) = v {
-                    return Err(Diagnostic::new("ポインタの先にある own は取り出せません")
+                if v.has_own() || matches!(v, Value::Struct(..)) {
+                    return Err(Diagnostic::new(format!("ポインタの先にある {} は取り出せません", v.type_name()))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`*p = ...` で置き換えてください"));
                 }
                 Ok(v)
+            }
+            ExprKind::Field(..) => {
+                let (v, _) = self.eval_borrow(e)?;
+                if v.has_own() || matches!(v, Value::Struct(..)) {
+                    return Err(Diagnostic::new(format!("フィールドにある {} は取り出せません", v.type_name()))
+                        .primary(e.span, "所有権をここから動かすことはできない")
+                        .note("`ref` で借りるか、`p.f = ...` で置き換えてください"));
+                }
+                Ok(v)
+            }
+            ExprKind::StructLit(name, inits) => {
+                let def = self.structs.get(name).cloned().ok_or_else(|| {
+                    Diagnostic::new(format!("未定義の構造体 `{}`", name))
+                        .primary(e.span, "この構造体は定義されていません")
+                })?;
+                // 書いた順に評価し、定義の順に並べる
+                let mut slots: Vec<Option<Value>> = vec![None; def.fields.len()];
+                for init in inits {
+                    let idx = self.field_index(&def, &init.name, init.span)?;
+                    if slots[idx].is_some() {
+                        return Err(Diagnostic::new(format!("フィールド `{}` が二回書かれています", init.name))
+                            .primary(init.span, "ここが二回目"));
+                    }
+                    slots[idx] = Some(self.eval(&init.value)?);
+                }
+                let missing: Vec<&str> = def
+                    .fields
+                    .iter()
+                    .zip(&slots)
+                    .filter(|(_, v)| v.is_none())
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(Diagnostic::new(format!("`{}` のフィールドが足りません", name))
+                        .primary(e.span, format!("{} がありません", missing.join(", "))));
+                }
+                Ok(Value::Struct(def, slots.into_iter().map(|v| v.expect("checked")).collect()))
             }
             ExprKind::Unary(op, inner) => {
                 let v = self.eval(inner)?;
@@ -485,9 +691,7 @@ impl Interp {
                     let (v, temp) = self.eval_borrow(a)?;
                     parts.push(v.show());
                     if temp {
-                        if let Value::Own(s) = v {
-                            temps.push((s, a.span));
-                        }
+                        temps.push((v, a.span));
                     }
                 }
                 let line = parts.join(" ");
@@ -496,8 +700,8 @@ impl Interp {
                 if self.echo {
                     println!("{}", line);
                 }
-                for (s, sp) in temps {
-                    self.free(s, sp, "print の引数として使い終わった一時的な値");
+                for (v, sp) in temps {
+                    self.release(v, sp, "print の引数として使い終わった一時的な値");
                 }
                 Ok(Value::Unit)
             }
@@ -506,13 +710,11 @@ impl Interp {
                     return Err(arity_error("drop", 1, args.len(), span));
                 }
                 let v = self.eval(&args[0])?;
-                if let Value::Own(slot) = v {
-                    let why = match &args[0].kind {
-                        ExprKind::Var(n) => format!("`{}` が drop で明示的に解放された", n),
-                        _ => "drop で明示的に解放された".to_string(),
-                    };
-                    self.free(slot, span, &why);
-                }
+                let why = match &args[0].kind {
+                    ExprKind::Var(n) => format!("`{}` が drop で明示的に解放された", n),
+                    _ => "drop で明示的に解放された".to_string(),
+                };
+                self.release(v, span, &why);
                 Ok(Value::Unit)
             }
             "assert" => {
@@ -578,8 +780,19 @@ fn describe(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Deref(inner, _) => format!("*{}", describe(inner)),
+        ExprKind::Field(base, name, _) => format!("{}.{}", describe(base), name),
         _ => "式".to_string(),
     }
+}
+
+/// 場所として扱える式か（`ref` やフィールド代入の対象になれる）
+fn is_place(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
+}
+
+fn not_a_struct(v: &Value, span: Span) -> Diagnostic {
+    Diagnostic::new("フィールドを持たない値です")
+        .primary(span, format!("{} は構造体ではありません", v.type_name()))
 }
 
 fn undefined_var(name: &str, span: Span) -> Diagnostic {
