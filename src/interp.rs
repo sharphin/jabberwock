@@ -26,6 +26,8 @@ pub enum Value {
     Unit,
     /// 整数。値は i128 で持ち、型 `IntTy` の範囲に入れておく
     Int(i128, IntTy),
+    /// 小数（f64）
+    Float(f64),
     Bool(bool),
     Str(Rc<str>),
     /// 唯一の所有者（ヒープのスロット番号）
@@ -58,6 +60,7 @@ impl Value {
         match self {
             Value::Unit => "()",
             Value::Int(..) => "整数",
+            Value::Float(_) => "小数",
             Value::Bool(_) => "真偽値",
             Value::Str(_) => "文字列",
             Value::Own(_) => "own",
@@ -388,6 +391,8 @@ impl Interp {
         Ok(match v {
             Value::Unit => "()".to_string(),
             Value::Int(n, _) => n.to_string(),
+            // 整数と見分けがつくよう、3.0 は `3.0` と出す
+            Value::Float(x) => format!("{:?}", x),
             Value::Bool(b) => b.to_string(),
             Value::Str(s) => s.to_string(),
             Value::Own(_) | Value::Ref(_) => {
@@ -1217,18 +1222,22 @@ impl Interp {
                 other => Err(Diagnostic::new("`?` は Result か Option に使います")
                     .primary(e.span, format!("ここは {} です", other.type_name()))),
             },
-            ExprKind::Cast(inner, ty) => match self.eval(inner)? {
-                Value::Int(n, _) => {
-                    let t = match &ty.kind {
-                        TypeKind::Name(name) => IntTy::from_name(name),
-                        _ => None,
-                    }
-                    .expect("the type checker allows only integer casts");
-                    Ok(Value::Int(t.wrap(n), t))
+            ExprKind::Cast(inner, ty) => {
+                let target = match &ty.kind {
+                    TypeKind::Name(name) => IntTy::from_name(name),
+                    _ => None,
+                };
+                match (self.eval(inner)?, target) {
+                    (Value::Int(n, _), Some(t)) => Ok(Value::Int(t.wrap(n), t)),
+                    (Value::Int(n, _), None) => Ok(Value::Float(n as f64)),
+                    // 小数 → 整数は 0 の方へ切り捨て、型の幅で一周させる（NaN は 0）
+                    (Value::Float(x), Some(t)) => Ok(Value::Int(t.wrap(float_to_int(x)), t)),
+                    (Value::Float(x), None) => Ok(Value::Float(x)),
+                    (other, _) => Err(Diagnostic::new("as で変換できるのは数だけです")
+                        .primary(inner.span, format!("ここは {} です", other.type_name()))),
                 }
-                other => Err(Diagnostic::new("as で変換できるのは整数だけです")
-                    .primary(inner.span, format!("ここは {} です", other.type_name()))),
-            },
+            }
+            ExprKind::Float(x) => Ok(Value::Float(*x)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Str(s) => Ok(Value::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => {
@@ -1305,6 +1314,7 @@ impl Interp {
                 match (op, v) {
                     // あふれたら一周する（決まった結果になる。定数なら型検査が警告を出す）
                     (UnOp::Neg, Value::Int(n, t)) => Ok(Value::Int(t.wrap(-n), t)),
+                    (UnOp::Neg, Value::Float(x)) => Ok(Value::Float(-x)),
                     (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
                     (_, other) => Err(Diagnostic::new("型が合わない演算です")
                         .primary(e.span, format!("{} にはこの演算を使えません", other.type_name()))),
@@ -1724,8 +1734,18 @@ impl Interp {
 /// 整数を、型検査が決めた型（`Expr.int`）に変換する
 fn convert(e: &Expr, v: Value) -> Value {
     match (v, e.int.get()) {
+        (Value::Int(n, _), _) if e.float.get() => Value::Float(n as f64),
         (Value::Int(n, _), Some(t)) => Value::Int(t.wrap(n), t),
         (v, _) => v,
+    }
+}
+
+/// 小数を整数にする（0 の方へ切り捨て）。i128 に入らないものは端に寄せ、NaN は 0
+fn float_to_int(x: f64) -> i128 {
+    if x.is_nan() {
+        0
+    } else {
+        x.trunc().clamp(i128::MIN as f64, i128::MAX as f64) as i128
     }
 }
 
@@ -1920,6 +1940,22 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             };
             Ok(Value::Int(t.wrap(res), *t))
         }
+        // 小数は IEEE 754 のまま（0 で割ると inf / NaN。エラーにはしない）
+        (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem, Value::Float(a), Value::Float(b)) => {
+            Ok(Value::Float(match op {
+                BinOp::Add => a + b,
+                BinOp::Sub => a - b,
+                BinOp::Mul => a * b,
+                BinOp::Div => a / b,
+                _ => a % b,
+            }))
+        }
+        (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Float(a), Value::Float(b)) => Ok(Value::Bool(match op {
+            BinOp::Lt => a < b,
+            BinOp::Le => a <= b,
+            BinOp::Gt => a > b,
+            _ => a >= b,
+        })),
         (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Str(a), Value::Str(b)) => Ok(Value::Bool(match op {
             BinOp::Lt => a < b,
             BinOp::Le => a <= b,
@@ -1937,6 +1973,7 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
         (BinOp::Eq | BinOp::Ne, _, _) => {
             let eq = match (&l, &r) {
                 (Value::Int(a, _), Value::Int(b, _)) => a == b,
+                (Value::Float(a), Value::Float(b)) => a == b,
                 (Value::Bool(a), Value::Bool(b)) => a == b,
                 (Value::Str(a), Value::Str(b)) => a == b,
                 (Value::Unit, Value::Unit) => true,

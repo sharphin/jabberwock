@@ -18,6 +18,8 @@ const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     Int(IntTy),
+    /// 小数（f64）
+    Float,
     Bool,
     Str,
     /// 値なし（戻り値のない関数の呼び出しなど）
@@ -44,6 +46,7 @@ impl Ty {
     pub fn show(&self) -> String {
         match self {
             Ty::Int(t) => t.name().to_string(),
+            Ty::Float => "f64".to_string(),
             Ty::Bool => "bool".to_string(),
             Ty::Str => "str".to_string(),
             Ty::Unit => "値なし".to_string(),
@@ -414,10 +417,11 @@ impl<'a> Checker<'a> {
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
                 "str" => Ty::Str,
+                "f64" => Ty::Float,
                 _ if IntTy::from_name(n).is_some() => Ty::Int(IntTy::from_name(n).expect("checked")),
-                "isize" | "f32" | "f64" => {
+                "isize" | "f32" => {
                     return Err(Diagnostic::new(format!("型 `{}` はまだ使えません", n))
-                        .primary(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）だけです"))
+                        .primary(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）と f64 だけです"))
                 }
                 _ if self.tparams.contains(n) => Ty::Param(n.clone()),
                 _ if self.interfaces.contains_key(n.as_str()) => {
@@ -488,7 +492,7 @@ impl<'a> Checker<'a> {
     /// 型の引数（`T`）は分からないのでコピーとは言えない
     fn copyable(&self, t: &Ty) -> bool {
         match t {
-            Ty::Int(_) | Ty::Bool | Ty::Str | Ty::Ref(..) | Ty::Unit | Ty::Never => true,
+            Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Ref(..) | Ty::Unit | Ty::Never => true,
             Ty::Own(_) | Ty::Struct(..) | Ty::Param(_) | Ty::Iface(_) => false,
             // 要素がコピーできる配列はコピー（Rust と同じ）
             Ty::Array(x, _) => self.copyable(x),
@@ -967,6 +971,11 @@ impl<'a> Checker<'a> {
     /// `hint` は値を入れる先の型。整数の定数（`300` や `1 + 2`）はその型になる（なければ i64）
     fn expr_ctx(&mut self, e: &Expr, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
         if is_const_tree(e) {
+            if let Some(Ty::Float) = hint {
+                // 整数の書き方でも、小数の場所では小数として計算する（`let f64 x = 7 / 2;` は 3.5）
+                set_float_tree(e);
+                return Ok(Ty::Float);
+            }
             let t = match hint {
                 Some(Ty::Int(t)) => *t,
                 _ => IntTy::I64,
@@ -975,6 +984,7 @@ impl<'a> Checker<'a> {
         }
         match &e.kind {
             ExprKind::Int(_) => unreachable!("integer literals are constant trees"),
+            ExprKind::Float(_) => Ok(Ty::Float),
             ExprKind::Try(inner) => self.try_expr(inner, e.span, hint),
             ExprKind::Index(base, idx, _) => {
                 // インタプリタと同じく、添字を先に調べる
@@ -1084,16 +1094,16 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Cast(inner, te) => {
                 let target = self.resolve(te)?;
-                let Ty::Int(t) = target else {
-                    return Err(Diagnostic::new("`as` で変換できるのは整数の型だけです")
-                        .primary(te.span, format!("`{}` は整数の型ではありません", target.show())));
-                };
+                if !matches!(target, Ty::Int(_) | Ty::Float) {
+                    return Err(Diagnostic::new("`as` で変換できるのは数の型（整数と f64）だけです")
+                        .primary(te.span, format!("`{}` は数の型ではありません", target.show())));
+                }
                 let got = self.expr(inner)?;
-                if !matches!(got, Ty::Int(_)) {
-                    return Err(Diagnostic::new("`as` で変換できるのは整数だけです")
+                if !matches!(got, Ty::Int(_) | Ty::Float) {
+                    return Err(Diagnostic::new("`as` で変換できるのは数（整数と f64）だけです")
                         .primary(inner.span, format!("ここは `{}` です", got.show())));
                 }
-                Ok(Ty::Int(t))
+                Ok(target)
             }
             ExprKind::Bool(_) => Ok(Ty::Bool),
             ExprKind::Str(_) => Ok(Ty::Str),
@@ -1267,6 +1277,7 @@ impl<'a> Checker<'a> {
                 Ok(Ty::Bool)
             }
             ExprKind::Unary(UnOp::Neg, inner) => match self.expr_h(inner, hint)? {
+                Ty::Float => Ok(Ty::Float),
                 Ty::Int(t) if t.signed() => Ok(Ty::Int(t)),
                 Ty::Int(t) => Err(Diagnostic::new(format!("符号なしの型 `{}` に `-` は使えません", t.name()))
                     .primary(e.span, "ここ")
@@ -1338,11 +1349,11 @@ impl<'a> Checker<'a> {
         let outer = if arith { hint } else { None };
         let (lt, rt) = if is_const_tree(l) {
             let rt = self.expr_h(r, outer)?;
-            let h = if matches!(rt, Ty::Int(_)) { Some(&rt) } else { outer };
+            let h = if matches!(rt, Ty::Int(_) | Ty::Float) { Some(&rt) } else { outer };
             (self.expr_h(l, h)?, rt)
         } else {
             let lt = self.expr_h(l, outer)?;
-            let h = if matches!(lt, Ty::Int(_)) { Some(&lt) } else { outer };
+            let h = if matches!(lt, Ty::Int(_) | Ty::Float) { Some(&lt) } else { outer };
             let rt = self.expr_h(r, h)?;
             (lt, rt)
         };
@@ -1363,6 +1374,10 @@ impl<'a> Checker<'a> {
             BinOp::Add if lt == Ty::Str && rt == Ty::Str => Ok(Ty::Str),
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => match (&lt, &rt) {
                 (Ty::Int(_), Ty::Int(_)) => Ok(Ty::Int(self.common(l, &lt, r, &rt, span)?)),
+                (Ty::Float, Ty::Float) => Ok(Ty::Float),
+                (Ty::Float, Ty::Int(_)) | (Ty::Int(_), Ty::Float) => {
+                    Err(bad().note("整数と小数をまぜて計算するときは、`x as f64` のように型をそろえてください"))
+                }
                 _ => Err(bad()),
             },
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => match (&lt, &rt) {
@@ -1370,7 +1385,7 @@ impl<'a> Checker<'a> {
                     self.common(l, &lt, r, &rt, span)?;
                     Ok(Ty::Bool)
                 }
-                (Ty::Str, Ty::Str) => Ok(Ty::Bool),
+                (Ty::Str, Ty::Str) | (Ty::Float, Ty::Float) => Ok(Ty::Bool),
                 _ if lt == rt && self.is_ordered_param(&lt) => Ok(Ty::Bool),
                 (Ty::Param(_), _) | (_, Ty::Param(_)) => Err(bad().note("型の引数どうしを比べるには `<T: ordered>` と条件をつけてください")),
                 _ => Err(bad()),
@@ -1383,7 +1398,7 @@ impl<'a> Checker<'a> {
                 if lt == rt && self.is_ordered_param(&lt) {
                     return Ok(Ty::Bool);
                 }
-                if lt == rt && matches!(lt, Ty::Bool | Ty::Str) {
+                if lt == rt && matches!(lt, Ty::Bool | Ty::Str | Ty::Float) {
                     Ok(Ty::Bool)
                 } else {
                     Err(Diagnostic::new("型が合わない比較です")
@@ -1502,10 +1517,10 @@ impl<'a> Checker<'a> {
             return if ok { Ok(()) } else { Err(format!("`{}` に条件 `{}` がついていません", p, bound)) };
         }
         if bound == ORDERED {
-            return if matches!(t, Ty::Int(_) | Ty::Str) {
+            return if matches!(t, Ty::Int(_) | Ty::Float | Ty::Str) {
                 Ok(())
             } else {
-                Err(format!("`{}` は大小を比べられません（ordered は整数と str だけ）", t.show()))
+                Err(format!("`{}` は大小を比べられません（ordered は整数・f64・str だけ）", t.show()))
             };
         }
         let Ty::Struct(sname, targs) = t else {
@@ -1897,6 +1912,19 @@ fn is_const_tree(e: &Expr) -> bool {
             is_const_tree(l) && is_const_tree(r)
         }
         _ => false,
+    }
+}
+
+/// 定数の式の中の数をすべて小数にする（実行時に小数として計算する）
+fn set_float_tree(e: &Expr) {
+    e.float.set(true);
+    match &e.kind {
+        ExprKind::Unary(_, inner) => set_float_tree(inner),
+        ExprKind::Binary(_, l, r) => {
+            set_float_tree(l);
+            set_float_tree(r);
+        }
+        _ => {}
     }
 }
 

@@ -2,6 +2,8 @@ use crate::diag::{Diagnostic, Span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
+    /// 小数（`1.5`）。書いたままの文字
+    Float(String),
     Int(i128),
     Str(String),
     /// `{...}` の埋め込みがある文字列 `"x = {x}"`
@@ -75,6 +77,7 @@ impl Tok {
     pub fn describe(&self) -> String {
         match self {
             Tok::Int(n) => format!("整数 `{}`", n),
+            Tok::Float(t) => format!("小数 `{}`", t),
             Tok::Str(_) | Tok::Interp(_) => "文字列".to_string(),
             Tok::Ident(s) => format!("名前 `{}`", s),
             Tok::Eof => "ファイルの終わり".to_string(),
@@ -194,6 +197,19 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 while i < chars.len() && chars[i].is_ascii_digit() {
                     i += 1;
                     col += 1;
+                }
+                // `1.5` は小数（`.` のあとに数字が続くときだけ）
+                if chars.get(i) == Some(&'.') && matches!(chars.get(i + 1), Some(c) if c.is_ascii_digit()) {
+                    i += 1;
+                    col += 1;
+                    while i < chars.len() && chars[i].is_ascii_digit() {
+                        i += 1;
+                        col += 1;
+                    }
+                    let text: String = chars[s..i].iter().collect();
+                    let span = Span { line, col: start_col, len: i - s };
+                    out.push(Token { tok: Tok::Float(text), span });
+                    continue;
                 }
                 let text: String = chars[s..i].iter().collect();
                 let span = Span { line, col: start_col, len: i - s };

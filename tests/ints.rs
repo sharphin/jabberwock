@@ -106,8 +106,8 @@ fn narrowing_needs_as() {
 fn as_converts_and_wraps() {
     assert_eq!(out("let i64 x = 300;\nprint(x as u8, -1 as u8, 255 as i8, x as i16);"), "44 255 -1 300\n");
     assert_eq!(out("let u8 a = 250;\nprint(a as i64 + 10, (a + 10) as i64);"), "260 4\n");
-    assert!(err("print(true as u8);").title.contains("`as` で変換できるのは整数だけ"));
-    assert!(err("print(1 as bool);").title.contains("整数の型だけ"));
+    assert!(err("print(true as u8);").title.contains("`as` で変換できるのは数"));
+    assert!(err("print(1 as bool);").title.contains("数の型"));
 }
 
 #[test]

@@ -333,7 +333,7 @@ impl<'a> FnAnalyzer<'a> {
 
     fn expr_kind(&mut self, e: &Expr, borrow: bool) -> Option<Fact> {
         match &e.kind {
-            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) => None,
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => None,
             ExprKind::Var(name) => {
                 let id = self.lookup(name)?;
                 let f = self.facts.get(&id).copied();
@@ -597,7 +597,7 @@ fn for_each_check(b: &Block, f: &mut impl FnMut(&Cell<Check>)) {
 
 fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
     match &e.kind {
-        ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
         ExprKind::Own(i) | ExprKind::Ref(i, _) | ExprKind::Unary(_, i) | ExprKind::Cast(i, _) | ExprKind::Try(i) => {
             expr_checks(i, f)
         }

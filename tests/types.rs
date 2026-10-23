@@ -117,7 +117,7 @@ fn missing_types_in_signatures_get_a_friendly_error() {
 #[test]
 fn unknown_and_not_yet_supported_types() {
     assert!(type_err("fn f(Nope n) {\n}\nfn main() {\n}").title.contains("未定義の型 `Nope`"));
-    assert!(type_err("fn f(f64 n) {\n}\nfn main() {\n}").title.contains("`f64` はまだ使えません"));
+    assert!(type_err("fn f(f32 n) {\n}\nfn main() {\n}").title.contains("`f32` はまだ使えません"));
 }
 
 // ---------------------------------------------------------------- 型の食い違い

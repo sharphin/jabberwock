@@ -983,6 +983,11 @@ impl Parser {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Int(n), span))
             }
+            Tok::Float(t) => {
+                let span = self.bump().span;
+                let v = t.parse::<f64>().map_err(|_| Diagnostic::new("小数の書き方がおかしいです").primary(span, "ここ"))?;
+                Ok(Expr::new(ExprKind::Float(v), span))
+            }
             Tok::Str(s) => {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Str(s), span))
@@ -1275,7 +1280,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             let (n, args) = (n.clone(), std::mem::take(args));
             e.kind = ExprKind::MethodCall(this(e.span), n, args);
         }
-        ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
         ExprKind::Cast(i, _)
         | ExprKind::Try(i)
         | ExprKind::Own(i)

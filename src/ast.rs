@@ -150,11 +150,13 @@ pub struct Expr {
     /// 型検査が「自動で借りる」と決めた引数（`ref T` の引数に `ref` なしで渡した場所）。
     /// interp と analyze は `ref e` と同じに扱う
     pub borrow: Cell<bool>,
+    /// 型検査が「この整数の書き方は小数（f64）として使う」と決めた（`let f64 x = 1;` の `1`）
+    pub float: Cell<bool>,
 }
 
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Expr {
-        Expr { kind, span, int: Cell::new(None), borrow: Cell::new(false) }
+        Expr { kind, span, int: Cell::new(None), borrow: Cell::new(false), float: Cell::new(false) }
     }
 }
 
@@ -195,6 +197,7 @@ pub enum Check {
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     Int(i128),
+    Float(f64),
     Bool(bool),
     Str(String),
     Var(String),

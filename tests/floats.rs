@@ -1,0 +1,94 @@
+//! 小数（f64）のテスト
+
+use ward::{run_source, run_source_with};
+
+fn ok(src: &str) -> String {
+    let o = run_source(src, false);
+    if let Some(d) = &o.error {
+        panic!("unexpected error:\n{}", d.render("test.ward", src));
+    }
+    assert_eq!(o.live_objects, 0, "heap objects leaked");
+    let off = run_source_with(src, false, false);
+    assert_eq!(o.output, off.output, "elision changed the output");
+    o.output
+}
+
+fn main_ok(body: &str) -> String {
+    ok(&format!("fn main() {{\n{}\n}}", body))
+}
+
+fn err(body: &str) -> ward::diag::Diagnostic {
+    let o = run_source(&format!("fn main() {{\n{}\n}}", body), false);
+    assert_eq!(o.output, "", "a program with a type error must not run");
+    o.error.expect("expected an error")
+}
+
+#[test]
+fn float_arithmetic_and_printing() {
+    let o = main_ok("
+    let y = 1.5;
+    print(y + 0.25, y * 2.0, y / 2.0, -y, 7.5 % 2.0);
+    print(3.0, 0.1 + 0.2, 1.0 / 0.0, \"y = {y}\");
+    print(y < 2.0, y >= 1.5, y == 1.5, y != 1.5);");
+    assert_eq!(o, "1.75 3.0 0.75 -1.5 1.5\n3.0 0.30000000000000004 inf y = 1.5\ntrue true true false\n");
+}
+
+#[test]
+fn integer_literals_become_floats_where_a_float_is_wanted() {
+    // 数の書き方は相手の型に合わせる。小数の場所では、整数の書き方でも小数として計算する
+    let o = ok("
+fn f64 area(f64 r) {
+    3.14 * r * r
+}
+
+fn main() {
+    let f64 x = 7 / 2;
+    let f64 mut s = 0;
+    s += 1;
+    print(x, s, area(2), 2 * 1.5);
+}");
+    assert_eq!(o, "3.5 1.0 12.56 3.0\n");
+}
+
+#[test]
+fn casts_between_integers_and_floats() {
+    let o = main_ok("
+    let n = 10;
+    print(n as f64 / 4.0, 2.9 as i64, -2.9 as i64, 300.7 as u8);
+    let f64 mut s = 0.0;
+    for i in range(4) {
+        s += i as f64 * 0.5;
+    }
+    print(s);");
+    assert_eq!(o, "2.5 2 -2 44\n3.0\n");
+}
+
+#[test]
+fn floats_are_ordered_and_copyable() {
+    let o = ok("
+fn T max<T: ordered>(T a, T b) {
+    if a > b { a } else { b }
+}
+
+struct P {
+    f64 x;
+}
+
+fn main() {
+    let p = P { x: 0.5 };
+    let f64[] mut v = [1.5, 2.5];
+    v.push(p.x);
+    print(max(1.5, 2.5), v, p.x);
+}");
+    assert_eq!(o, "2.5 [1.5, 2.5, 0.5] 0.5\n");
+}
+
+#[test]
+fn float_errors() {
+    let d = err("let x = 1.5;\nlet n = 3;\nprint(x + n);");
+    assert!(d.title.contains("型が合わない演算"), "{}", d.title);
+    assert!(d.note.as_deref().unwrap_or("").contains("as f64"));
+    assert!(err("let i64 n = 1.5;").title.contains("型が合いません"));
+    assert!(err("let b = true as f64;").title.contains("as"));
+    assert!(err("let f32 x = 1.0;").title.contains("まだ使えません"));
+}

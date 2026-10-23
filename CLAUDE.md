@@ -36,6 +36,7 @@
 | `tests/strings.rs` | 文字列の埋め込み `"x = {x}"` |
 | `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
 | `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a` |
+| `tests/floats.rs` | 小数 f64 |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
@@ -68,6 +69,8 @@
 - 整数の値は `Value::Int(i128, IntTy)`。計算は i128 でして、型の幅で一周させる（`IntTy::wrap`）。
 - 型検査は整数の式に「この型で使う」という印 `Expr.int` をつける（数の書き方を相手に合わせる・自動の変換）。
   interp は `eval` / `eval_flow` の最後にその型へ変換する（`convert`）。印をつけるのは `types.rs` の `convert` / `set_tree` だけ。
+- 小数は `Value::Float(f64)`・`Ty::Float`。数だけの式が f64 の場所にあれば、型検査が `set_float_tree` で `Expr.float` をつけ、
+  interp の `convert` が整数を小数にする（中の数すべてにつけるので、計算も小数でする）。
 - 整数のあふれは一周する。定数の式（`is_const_tree`）の結果が型に入らないときだけ `types.rs` が警告を出す（そのまま書いた数ならエラー）。
   警告は `Diagnostic::warning` で、実行は止めない（`Outcome.warnings`、CLI は実行前に表示）。
 - enum の値は `Value::Enum { variant, fields, copy }`。`copy` は型検査が `ExprKind::Variant` の `Cell<bool>` に書く
