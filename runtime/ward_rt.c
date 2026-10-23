@@ -93,6 +93,7 @@ typedef struct WList {
 typedef struct WSb {
     char *p;
     int64_t len, cap;
+    char inline_buf[48];
 } WSb;
 
 // ---------------------------------------------------------------- 出力
@@ -367,9 +368,22 @@ _Noreturn void ward_fail_dangling(const WSite *use, const WSite *borrowed, void 
     finish_error(use, "ここで使ったが、借りた先はもう存在しない", "参照は、借りた元の所有者より長くは生きられません");
 }
 
-static void fmt_int(char *buf, size_t n, int64_t v, int32_t is_unsigned) {
-    if (is_unsigned) snprintf(buf, n, "%llu", (unsigned long long)v);
-    else snprintf(buf, n, "%lld", (long long)v);
+// 整数を 10 進の文字にする（buf は 21 バイト以上）。書いた長さを返す
+static int fmt_int(char *buf, size_t n, int64_t v, int32_t is_unsigned) {
+    (void)n;
+    char tmp[24];
+    int k = 0;
+    int neg = !is_unsigned && v < 0;
+    uint64_t u = neg ? 0 - (uint64_t)v : (uint64_t)v;
+    do {
+        tmp[k++] = (char)('0' + u % 10);
+        u /= 10;
+    } while (u);
+    int len = 0;
+    if (neg) buf[len++] = '-';
+    while (k) buf[len++] = tmp[--k];
+    buf[len] = 0;
+    return len;
 }
 
 _Noreturn void ward_fail_bounds(int64_t i, int32_t is_unsigned, int64_t len, const WSite *at) {
@@ -552,8 +566,47 @@ const WSite *ward_view_site(void *v) { return CELL(v)->site; }
 
 // ---------------------------------------------------------------- 文字列
 
+// 文字列と文字の組み立て用の小さい領域（16 バイト刻みの空き領域の鎖。区画と違って世代の頭はない）
+#define SCLASS 64
+static _Thread_local void *free_bytes[SCLASS + 1];
+
+static void *bytes_alloc(size_t n) {
+    size_t c = (n + 15) >> 4;
+    if (c > SCLASS) {
+        void *p = malloc(n);
+        if (!p) ward_bug("メモリが足りません");
+        return p;
+    }
+    void *p = free_bytes[c];
+    if (p) {
+        free_bytes[c] = *(void **)p;
+        return p;
+    }
+    return slab_take(c << 4);
+}
+
+static void bytes_free(void *p, size_t n) {
+    size_t c = (n + 15) >> 4;
+    if (c > SCLASS) {
+        free(p);
+        return;
+    }
+    *(void **)p = free_bytes[c];
+    free_bytes[c] = p;
+}
+
+static size_t str_bytes(int64_t len) { return sizeof(WStr) + (size_t)len + 1; }
+
+static WStr *str_alloc(int64_t len) {
+    WStr *s = bytes_alloc(str_bytes(len));
+    s->rc = 1;
+    s->len = len;
+    s->data[len] = 0;
+    return s;
+}
+
 WStr *ward_str_new(const char *p, int64_t n) {
-    WStr *s = malloc(sizeof(WStr) + (size_t)n + 1);
+    WStr *s = bytes_alloc(str_bytes(n));
     s->rc = 1;
     s->len = n;
     memcpy(s->data, p, (size_t)n);
@@ -566,16 +619,13 @@ void ward_str_retain(WStr *s) {
 }
 
 void ward_str_release(WStr *s) {
-    if (s->rc > 0 && --s->rc == 0) free(s);
+    if (s->rc > 0 && --s->rc == 0) bytes_free(s, str_bytes(s->len));
 }
 
 WStr *ward_str_concat(WStr *a, WStr *b) {
-    WStr *s = malloc(sizeof(WStr) + (size_t)(a->len + b->len) + 1);
-    s->rc = 1;
-    s->len = a->len + b->len;
+    WStr *s = str_alloc(a->len + b->len);
     memcpy(s->data, a->data, (size_t)a->len);
     memcpy(s->data + a->len, b->data, (size_t)b->len);
-    s->data[s->len] = 0;
     return s;
 }
 
@@ -592,17 +642,27 @@ int32_t ward_str_eq(WStr *a, WStr *b) { return a->len == b->len && memcmp(a->dat
 // ---------------------------------------------------------------- 文字にする
 
 WSb *ward_sb_new(void) {
-    WSb *b = malloc(sizeof(WSb));
-    b->cap = 64;
+    WSb *b = bytes_alloc(sizeof(WSb));
+    b->cap = sizeof b->inline_buf;
     b->len = 0;
-    b->p = malloc(64);
+    b->p = b->inline_buf;
     return b;
+}
+
+static void sb_drop(WSb *b) {
+    if (b->p != b->inline_buf) bytes_free(b->p, (size_t)b->cap);
+    bytes_free(b, sizeof(WSb));
 }
 
 void ward_sb_push(WSb *b, const char *p, int64_t n) {
     if (b->len + n > b->cap) {
-        while (b->len + n > b->cap) b->cap *= 2;
-        b->p = realloc(b->p, (size_t)b->cap);
+        int64_t cap = b->cap;
+        while (b->len + n > cap) cap *= 2;
+        char *np = bytes_alloc((size_t)cap);
+        memcpy(np, b->p, (size_t)b->len);
+        if (b->p != b->inline_buf) bytes_free(b->p, (size_t)b->cap);
+        b->p = np;
+        b->cap = cap;
     }
     memcpy(b->p + b->len, p, (size_t)n);
     b->len += n;
@@ -613,8 +673,15 @@ void ward_sb_str(WSb *b, WStr *s) { ward_sb_push(b, s->data, s->len); }
 
 void ward_sb_int(WSb *b, int64_t v, int32_t is_unsigned) {
     char buf[32];
-    fmt_int(buf, sizeof buf, v, is_unsigned);
-    ward_sb_cstr(b, buf);
+    int n = fmt_int(buf, sizeof buf, v, is_unsigned);
+    ward_sb_push(b, buf, n);
+}
+
+// 整数を文字列にする（`"{n}"` の n だけのとき）
+WStr *ward_str_int(int64_t v, int32_t is_unsigned) {
+    char buf[32];
+    int n = fmt_int(buf, sizeof buf, v, is_unsigned);
+    return ward_str_new(buf, n);
 }
 
 // Rust の `{:?}` と同じ形（いちばん短く元に戻る桁。1e16 以上と 1e-4 未満は指数の形）
@@ -735,8 +802,7 @@ void ward_sb_float(WSb *b, double x) {
 
 WStr *ward_sb_finish(WSb *b) {
     WStr *s = ward_str_new(b->p, b->len);
-    free(b->p);
-    free(b);
+    sb_drop(b);
     return s;
 }
 
@@ -1481,8 +1547,7 @@ int32_t ward_read_line(WStr **out) {
         ward_sb_push(b, &ch, 1);
     }
     if (!any) {
-        free(b->p);
-        free(b);
+        sb_drop(b);
         return 0;
     }
     if (b->len > 0 && b->p[b->len - 1] == '\r') b->len--;

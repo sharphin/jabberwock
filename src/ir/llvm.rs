@@ -135,6 +135,7 @@ declare void @ward_sb_str(ptr, ptr)
 declare void @ward_sb_int(ptr, i64, i32)
 declare void @ward_sb_float(ptr, double)
 declare ptr @ward_sb_finish(ptr)
+declare ptr @ward_str_int(i64, i32)
 declare i64 @ward_f2i(double, i32, i32)
 declare void @ward_list_reserve(ptr, i64, i64)
 declare ptr @ward_list_push_slot(ptr, i64)
@@ -3028,15 +3029,23 @@ impl<'m, 'p> FnGen<'m, 'p> {
             }
             Rvalue::Show(o, temp, span) => {
                 let use_site = self.m.site(*span, "");
-                let sb = self.b.val("call ptr @ward_sb_new()");
                 match (o, temp) {
                     (Operand::Copy(p), false) => {
+                        let sb = self.b.val("call ptr @ward_sb_new()");
                         let pr = self.place(p, false)?;
                         let f = self.m.helper(H::Show, &pr.ty);
                         self.b.op(format!("call void {}(ptr {}, ptr {}, i64 0, ptr {})", f, pr.ptr, sb, use_site));
+                        Ok((self.b.val(format!("call ptr @ward_sb_finish(ptr {})", sb)), Ty::Str))
                     }
                     _ => {
                         let (v, t) = self.operand(o)?;
+                        // 整数は組み立てずにそのまま文字列にする
+                        if let Ty::Int(i) = t {
+                            let w = widen(&mut self.b, &v, i);
+                            let r = self.b.val(format!("call ptr @ward_str_int(i64 {}, i32 {})", w, !i.signed() as i32));
+                            return Ok((r, Ty::Str));
+                        }
+                        let sb = self.b.val("call ptr @ward_sb_new()");
                         let lt = self.m.lt(&t)?;
                         let tmp = self.b.alloca(&lt);
                         self.b.op(format!("store {} {}, ptr {}", lt, v, tmp));
@@ -3047,9 +3056,9 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             let v2 = self.b.val(format!("load {}, ptr {}", lt, tmp));
                             self.discard(&v2, &t, *span, why)?;
                         }
+                        Ok((self.b.val(format!("call ptr @ward_sb_finish(ptr {})", sb)), Ty::Str))
                     }
                 }
-                Ok((self.b.val(format!("call ptr @ward_sb_finish(ptr {})", sb)), Ty::Str))
             }
             Rvalue::Builtin(name, ops, span) => self.builtin(name, ops, *span, want),
         }
@@ -3452,6 +3461,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.op("call void @ward_print_end()");
                 release(self, &vals);
                 Ok(("0".to_string(), Ty::Unit))
+            }
+            "concat" if vals.len() == 2 => {
+                let r = self.b.val(format!("call ptr @ward_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));
+                release(self, &vals);
+                Ok((r, Ty::Str))
             }
             "concat" => {
                 let sb = self.b.val("call ptr @ward_sb_new()");
