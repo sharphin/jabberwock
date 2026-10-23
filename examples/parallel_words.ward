@@ -21,10 +21,10 @@ fn main() {
         parts[i % workers].push(l);
     }
     let chan<i64[str]> results = chan();
-    let task<i64>[] mut ts = [];
+    let task<()>[] mut ts = [];
     for p in parts.drain() {
         // drain で取り出した要素は値なので、スレッドへ渡せる
-        ts.push(spawn(() -> { results.send(count(p)); 0 }));
+        ts.push(spawn(() -> { results.send(count(p)); }));
     }
     let i64[str] mut total = [];
     for i in range(workers) {

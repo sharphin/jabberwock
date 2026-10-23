@@ -238,3 +238,22 @@ fn main() {
 }";
     assert_eq!(ok(src), "140 28\n");
 }
+
+#[test]
+fn tasks_without_a_value() {
+    let src = "
+fn main() {
+    let chan<i64> c = chan();
+    let task<()>[] mut ts = [];
+    for i in range(3) {
+        ts.push(spawn(() -> { c.send(i); }));
+    }
+    for t in ts.drain() { t.join(); }
+    let mut s = 0;
+    for i in range(3) {
+        match c.recv() { case Some(x) -> { s += x; } case None -> {} }
+    }
+    print(s);
+}";
+    assert_eq!(ok(src), "3\n");
+}

@@ -1010,9 +1010,14 @@ impl Parser {
             Tok::LParen => {
                 // `(own i64)[]`: かっこでまとめる（`own i64[]` は「own のリスト」ではなく「リストの own」）
                 self.bump();
-                let inner = self.parse_type()?;
-                self.expect(Tok::RParen, "`)`")?;
-                inner.kind
+                if self.eat(Tok::RParen) {
+                    // `()`: 値なし（`task<()>`・`fn ()(i64)` と書くより `fn (i64)`）
+                    TypeKind::Name("()".to_string())
+                } else {
+                    let inner = self.parse_type()?;
+                    self.expect(Tok::RParen, "`)`")?;
+                    inner.kind
+                }
             }
             _ => return Err(self.unexpected("型")),
         };

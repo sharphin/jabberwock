@@ -543,6 +543,7 @@ impl<'a> Checker<'a> {
             }
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
+                "()" => Ty::Unit,
                 "str" => Ty::Str,
                 "f64" => Ty::Float,
                 _ if IntTy::from_name(n).is_some() => Ty::Int(IntTy::from_name(n).expect("checked")),

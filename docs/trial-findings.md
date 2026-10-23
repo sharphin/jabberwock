@@ -19,7 +19,7 @@
 | 3 | **（解決）** match の形を重ねられない（`case Some(Op(op))`） | calc | 「終わり」を表す種類を enum に足すか、match を 2 段にする | 中 |
 | 4 | **（解決）** リストに `filter` / `map` がない | shop | for で新しいリストに push | 小 |
 | 5 | **（解決: `ok_or(o, e)?`）** Option を Result の関数で `?` できない（`s.to_int()?`）。Option → Result に変える関数がない | calc | match で受けて `return Err(...)` | 小 |
-| 6 | 値を返さない task の型が書けない（`task<???>[]`） | parallel_words | クロージャから `0` を返して `task<i64>` にする | 小 |
+| 6 | **（解決: `task<()>`）** 値を返さない task の型が書けない（`task<???>[]`） | parallel_words | クロージャから `0` を返して `task<i64>` にする | 小 |
 | 7 | 文字列を途中で改行できない（複数行の文字列がない） | parallel_words | `\n` を書く | 小 |
 | 8 | 文字型がない（`"0123456789".contains(c)` で数字かを調べる） | calc | 1 文字の str で比べる | 小（未実装の一覧にある） |
 | — | 辞書の要素を `ref mut m[k]` で借りられない | shop | `m[k].f -= 1` と毎回キーで引く | 決めたとおり（中の場所が変わるため） |
