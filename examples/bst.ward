@@ -1,0 +1,69 @@
+// 二分探索木（試しに書いたプログラム）
+// 今は own でない値を借りられないので、フィールドを own Option<own Node> にしている
+struct Node {
+    i64 key;
+    own Option<own Node> left;
+    own Option<own Node> right;
+}
+
+struct Tree {
+    own Option<own Node> root;
+    i64 size;
+
+    fn mut insert(i64 key) {
+        size += 1;
+        match ref mut root {
+            case None -> root = own Some(own Node { key: key, left: own None, right: own None });
+            case Some(n) -> insert_at(n, key);
+        }
+    }
+
+    fn bool contains(i64 key) {
+        let mut cur = ref root;
+        loop {
+            match cur {
+                case None -> return false;
+                case Some(n) -> {
+                    if n.key == key { return true; }
+                    if key < n.key { cur = ref n.left; } else { cur = ref n.right; }
+                }
+            }
+        }
+    }
+}
+
+fn insert_at(ref mut Node n, i64 key) {
+    if key < n.key {
+        match ref mut n.left {
+            case None -> n.left = own Some(own Node { key: key, left: own None, right: own None });
+            case Some(c) -> insert_at(c, key);
+        }
+    } else {
+        match ref mut n.right {
+            case None -> n.right = own Some(own Node { key: key, left: own None, right: own None });
+            case Some(c) -> insert_at(c, key);
+        }
+    }
+}
+
+fn walk(ref Option<own Node> t, ref mut i64[] out) {
+    match ref t {
+        case None -> {}
+        case Some(n) -> {
+            walk(ref n.left, out);
+            out.push(n.key);
+            walk(ref n.right, out);
+        }
+    }
+}
+
+fn main() {
+    let mut t = Tree { root: own None, size: 0 };
+    for k in [5, 3, 8, 1, 4, 9, 7] {
+        t.insert(k);
+    }
+    let own i64[] mut keys = own [];
+    walk(ref t.root, ref mut keys);
+    print("size {t.size}: {*keys}");
+    print(t.contains(4), t.contains(6));
+}

@@ -239,3 +239,22 @@ fn renders_japanese_source_without_panicking() {
     let text = d.render("t.ward", src);
     assert!(text.contains("use after move"));
 }
+
+// ---------------------------------------------------------------- 試しに書いたプログラム
+
+#[test]
+fn bst_example() {
+    assert_eq!(ok(&example("bst")), "size 7: [1, 3, 4, 5, 7, 8, 9]\ntrue false\n");
+}
+
+#[test]
+fn words_example() {
+    assert_eq!(ok(&example("words")), "the: 3\ncat: 1\nand: 2\ndog: 1\nbird: 1\n");
+}
+
+#[test]
+fn battle_example() {
+    let out = ok(&example("battle"));
+    assert!(out.starts_with("1: ドラゴン の残り 25\n"), "{}", out);
+    assert!(out.ends_with("スライム を倒した\n"), "{}", out);
+}
