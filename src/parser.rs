@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
-use crate::lexer::{Tok, Token};
+use crate::lexer::{StrPart, Tok, Token};
 
 type R<T> = Result<T, Diagnostic>;
 
@@ -949,6 +949,33 @@ impl Parser {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Str(s), span))
             }
+            Tok::Interp(parts) => {
+                let span = self.bump().span;
+                let mut out = Vec::new();
+                for p in parts {
+                    match p {
+                        StrPart::Lit(s) => out.push(InterpPart::Lit(s)),
+                        StrPart::Code(toks) => {
+                            // 埋め込みの中の式を、同じ規則（enum・構造体の名前）で読む
+                            let mut sub = Parser {
+                                toks,
+                                pos: 0,
+                                no_struct_lit: false,
+                                loop_depth: 0,
+                                in_value_if: true,
+                                enum_names: self.enum_names.clone(),
+                                struct_names: self.struct_names.clone(),
+                            };
+                            let e = sub.parse_expr()?;
+                            if *sub.peek() != Tok::Eof {
+                                return Err(sub.unexpected("`}`（埋め込みの終わり）"));
+                            }
+                            out.push(InterpPart::Expr(e));
+                        }
+                    }
+                }
+                Ok(Expr::new(ExprKind::Interp(out), span))
+            }
             Tok::True => {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Bool(true), span))
@@ -1190,6 +1217,13 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
         ExprKind::Variant { args, .. } | ExprKind::Call(_, args) => {
             for a in args {
                 bind_this(a, ctx, scopes);
+            }
+        }
+        ExprKind::Interp(parts) => {
+            for p in parts {
+                if let InterpPart::Expr(x) = p {
+                    bind_this(x, ctx, scopes);
+                }
             }
         }
         ExprKind::MethodCall(recv, _, args) => {

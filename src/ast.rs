@@ -220,9 +220,17 @@ pub enum ExprKind {
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// `"x = {x}"`: 埋め込みのある文字列。式は print と同じく借りて読む（ムーブしない）
+    Interp(Vec<InterpPart>),
     /// `p.name(args)` : メソッド呼び出し。メソッドは `構造体名.name` という名前の関数で、
     /// 最初の引数 `this` に p を借りて渡す（p が own / ref ならその先、構造体の値なら一時的にヒープへ移して借りる）
     MethodCall(Box<Expr>, String, Vec<Expr>),
+}
+
+#[derive(Debug, Clone)]
+pub enum InterpPart {
+    Lit(String),
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone)]

@@ -4,6 +4,8 @@ use crate::diag::{Diagnostic, Span};
 pub enum Tok {
     Int(i128),
     Str(String),
+    /// `{...}` の埋め込みがある文字列 `"x = {x}"`
+    Interp(Vec<StrPart>),
     Ident(String),
     // キーワード
     Fn,
@@ -71,7 +73,7 @@ impl Tok {
     pub fn describe(&self) -> String {
         match self {
             Tok::Int(n) => format!("整数 `{}`", n),
-            Tok::Str(_) => "文字列".to_string(),
+            Tok::Str(_) | Tok::Interp(_) => "文字列".to_string(),
             Tok::Ident(s) => format!("名前 `{}`", s),
             Tok::Eof => "ファイルの終わり".to_string(),
             other => format!("`{}`", other.symbol()),
@@ -141,7 +143,15 @@ impl Tok {
     }
 }
 
-#[derive(Debug, Clone)]
+/// 埋め込みのある文字列の部品
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrPart {
+    Lit(String),
+    /// `{` と `}` の中の式のトークン（最後は Eof）
+    Code(Vec<Token>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub tok: Tok,
     pub span: Span,
@@ -233,6 +243,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 i += 1;
                 col += 1;
                 let mut text = String::new();
+                let mut parts: Vec<StrPart> = Vec::new();
                 loop {
                     if i >= chars.len() || chars[i] == '\n' {
                         return Err(Diagnostic::new("文字列が閉じていません").primary(
@@ -245,6 +256,64 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         i += 1;
                         col += 1;
                         break;
+                    }
+                    if (ch == '{' || ch == '}') && chars.get(i + 1) == Some(&ch) {
+                        // `{{` / `}}` は `{` / `}` そのもの
+                        text.push(ch);
+                        i += 2;
+                        col += 2;
+                        continue;
+                    }
+                    if ch == '}' {
+                        return Err(Diagnostic::new("文字列の中の `}` に対応する `{` がありません")
+                            .primary(Span { line, col, len: 1 }, "`}` そのものを書くなら `}}` と書いてください"));
+                    }
+                    if ch == '{' {
+                        // 埋め込み: 対応する `}` までを式として字句解析する
+                        let open_col = col;
+                        let mut depth = 1;
+                        let mut j = i + 1;
+                        while j < chars.len() && chars[j] != '\n' {
+                            match chars[j] {
+                                '{' => depth += 1,
+                                '}' => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                '"' => {
+                                    return Err(Diagnostic::new("埋め込みの `{` が閉じていません")
+                                        .primary(Span { line, col: open_col, len: 1 }, "この `{` の `}` より先に `\"` がある")
+                                        .note("`{` そのものは `{{` と書きます。`{ }` の中には文字列を書けないので、先に変数に入れてください"))
+                                }
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                        if j >= chars.len() || chars[j] != '}' {
+                            return Err(Diagnostic::new("埋め込みの `{` が閉じていません").primary(
+                                Span { line, col: open_col, len: 1 },
+                                "`{` そのものを書くなら `{{` と書いてください",
+                            ));
+                        }
+                        let code: String = chars[i + 1..j].iter().collect();
+                        if code.trim().is_empty() {
+                            return Err(Diagnostic::new("埋め込みの `{ }` が空です")
+                                .primary(Span { line, col: open_col, len: j - i + 1 }, "中に式を書いてください"));
+                        }
+                        let mut toks = lex(&code)?;
+                        for t in &mut toks {
+                            // 部分の字句解析の位置を、元のファイルでの位置に直す
+                            t.span = Span { line, col: t.span.col + open_col, len: t.span.len };
+                        }
+                        if !text.is_empty() {
+                            parts.push(StrPart::Lit(std::mem::take(&mut text)));
+                        }
+                        parts.push(StrPart::Code(toks));
+                        col += j - i + 1;
+                        i = j + 1;
+                        continue;
                     }
                     if ch == '\\' {
                         let esc = chars.get(i + 1).copied();
@@ -269,8 +338,16 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         col += 1;
                     }
                 }
+                let tok = if parts.is_empty() {
+                    Tok::Str(text)
+                } else {
+                    if !text.is_empty() {
+                        parts.push(StrPart::Lit(text));
+                    }
+                    Tok::Interp(parts)
+                };
                 out.push(Token {
-                    tok: Tok::Str(text),
+                    tok,
                     span: Span { line, col: start_col, len: col - start_col },
                 });
             }

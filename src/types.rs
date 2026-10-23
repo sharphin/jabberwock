@@ -900,6 +900,15 @@ impl<'a> Checker<'a> {
         match &e.kind {
             ExprKind::Int(_) => unreachable!("integer literals are constant trees"),
             ExprKind::Try(inner) => self.try_expr(inner, e.span, hint),
+            ExprKind::Interp(parts) => {
+                // print と同じく、どんな値でも文字にできる
+                for p in parts {
+                    if let InterpPart::Expr(x) = p {
+                        self.value(x)?;
+                    }
+                }
+                Ok(Ty::Str)
+            }
             ExprKind::Cast(inner, te) => {
                 let target = self.resolve(te)?;
                 let Ty::Int(t) = target else {

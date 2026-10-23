@@ -1026,6 +1026,33 @@ impl Interp {
             }
             ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
             ExprKind::MethodCall(recv, name, args) => self.eval_method(recv, name, args, e.span),
+            ExprKind::Interp(parts) => {
+                // print と同じく借りて読み、作った一時的な値は使い終わったら解放する
+                let mut out = String::new();
+                let mut temps = Vec::new();
+                for p in parts {
+                    match p {
+                        InterpPart::Lit(s) => out.push_str(s),
+                        InterpPart::Expr(x) => {
+                            let (v, temp) = match self.eval_borrow(x) {
+                                Ok(r) => r,
+                                Err(d) => {
+                                    self.discard(temps, x.span);
+                                    return Err(d);
+                                }
+                            };
+                            out.push_str(&v.show());
+                            if temp {
+                                temps.push(v);
+                            }
+                        }
+                    }
+                }
+                for v in temps {
+                    self.release(v, e.span, "文字列に埋め込んで使い終わった一時的な値");
+                }
+                Ok(Value::Str(Rc::from(out.as_str())))
+            }
             ExprKind::If { .. } | ExprKind::Match { .. } => {
                 let (flow, v) = self.eval_flow(e, true)?;
                 // 値として使う if / match の中では return / break / continue をパーサが禁止している

@@ -32,7 +32,8 @@
 | `tests/generics.rs` | ジェネリクス（関数・構造体・enum の型の引数） |
 | `tests/results.rs` | Result と `?`（途中で抜けたときの解放も） |
 | `tests/methods.rs` | メソッド（`this`・`fn mut`・構造体の値への呼び出し・静的メソッド） |
-| `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>` |
+| `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>`・interface を型として使う |
+| `tests/strings.rs` | 文字列の埋め込み `"x = {x}"` |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -91,6 +92,9 @@
   interface を型として使うときは `Ty::Iface`（own / ref の先にだけ書ける。`resolve_pointee`）。`own S` → `own I`、
   `ref S` → `ref I` は `Checker::fits`（`assignable` に interface を足したもの）で許す。interp は何もしない（値の構造体名でメソッドを探す）。
   メソッド呼び出しは `T` も interface も `iface_method_call`。if / match の枝は、入れる先が interface なら `join` がそれにまとめる。
+
+- 文字列の埋め込み: lexer が `{...}` の中を別に字句解析して `Tok::Interp`（位置は元のファイルに直す）、
+  パーサが同じ enum / 構造体の名前で式に読む（`ExprKind::Interp`）。値は print と同じく `eval_borrow` で借りて読む（analyze も borrow）。
 
 ## 設計の決めごと
 

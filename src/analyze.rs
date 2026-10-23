@@ -416,6 +416,15 @@ impl<'a> FnAnalyzer<'a> {
                 }
                 None
             }
+            ExprKind::Interp(parts) => {
+                // print と同じく借りて読む
+                for p in parts {
+                    if let InterpPart::Expr(x) = p {
+                        self.expr(x, true);
+                    }
+                }
+                None
+            }
             ExprKind::MethodCall(recv, name, args) => {
                 // インタプリタと同じ順: 一時的な値の receiver は先に評価（ムーブ）、
                 // 変数などの場所なら引数のあとで借りる
@@ -574,6 +583,13 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
             expr_checks(recv, f);
             for a in args {
                 expr_checks(a, f);
+            }
+        }
+        ExprKind::Interp(parts) => {
+            for p in parts {
+                if let InterpPart::Expr(x) = p {
+                    expr_checks(x, f);
+                }
             }
         }
     }
