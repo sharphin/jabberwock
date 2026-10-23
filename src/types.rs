@@ -290,6 +290,10 @@ struct Checker<'a> {
     modules: &'a [String],
     /// 今調べている関数のモジュール（最初のファイルなら None）
     module: Option<&'a str>,
+    /// 式ごとの型などの記録
+    info: TypeInfo,
+    /// いちばん最近 `instantiate` で決めた型の引数（呼び出しの式が受け取って記録する）
+    pending_targs: Option<HashMap<String, Ty>>,
 }
 
 /// interface のメソッドの形（`this` を除いた引数）
@@ -306,8 +310,28 @@ const ORDERED: &str = "ordered";
 
 const STR_METHODS: &str = "len, byte_len, chars, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
 
+/// 型検査で分かったこと（IR への書き出しに使う）。式は構文木の中の位置（アドレス）で引く
+#[derive(Default)]
+pub struct TypeInfo {
+    /// 式の型（ジェネリックな関数の中では `T` を含む）。整数の自動変換の印（`Expr.int`）はこれとは別
+    pub expr_ty: HashMap<*const Expr, Ty>,
+    /// 呼び出し・構造体や enum の値を作る式で決めた型の引数
+    pub targs: HashMap<*const Expr, HashMap<String, Ty>>,
+}
+
+impl TypeInfo {
+    pub fn ty(&self, e: &Expr) -> Option<&Ty> {
+        self.expr_ty.get(&(e as *const Expr))
+    }
+}
+
 /// プログラム全体の型を調べる。よければ警告（実行は止めない）を返す
 pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
+    Ok(check_with_info(prog)?.0)
+}
+
+/// 型を調べて、警告と、式ごとの型などの記録を返す
+pub fn check_with_info(prog: &Program) -> R<(Vec<Diagnostic>, TypeInfo)> {
     let mut c = Checker {
         structs: HashMap::new(),
         enums: HashMap::new(),
@@ -322,6 +346,8 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         warnings: Vec::new(),
         modules: &prog.modules,
         module: None,
+        info: TypeInfo::default(),
+        pending_targs: None,
     };
     for s in &prog.structs {
         if c.structs.contains_key(s.name.as_str()) {
@@ -414,7 +440,7 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
     for f in &prog.fns {
         c.check_fn(f)?;
     }
-    Ok(c.warnings)
+    Ok((c.warnings, c.info))
 }
 
 impl<'a> Checker<'a> {
@@ -632,6 +658,7 @@ impl<'a> Checker<'a> {
             }
             convert(a, t, &want);
         }
+        self.pending_targs = Some(map.clone());
         Ok(map)
     }
 
@@ -1172,6 +1199,24 @@ impl<'a> Checker<'a> {
     /// 式の型。`want_value` が false なら、if / match は文として使われている（値を捨てる）。
     /// `hint` は値を入れる先の型。整数の定数（`300` や `1 + 2`）はその型になる（なければ i64）
     fn expr_ctx(&mut self, e: &Expr, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
+        self.pending_targs = None;
+        let t = self.expr_kind(e, want_value, hint)?;
+        // 同じ式を何度か調べることがある（警告のための調べ直しなど）。最後に調べた結果を残す
+        self.info.expr_ty.insert(e as *const Expr, t.clone());
+        let instantiates = matches!(
+            e.kind,
+            ExprKind::Call(..) | ExprKind::MethodCall(..) | ExprKind::StructLit(..) | ExprKind::Variant { .. }
+        );
+        match self.pending_targs.take() {
+            Some(m) if instantiates => {
+                self.info.targs.insert(e as *const Expr, m);
+            }
+            _ => {}
+        }
+        Ok(t)
+    }
+
+    fn expr_kind(&mut self, e: &Expr, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
         if is_const_tree(e) {
             if let Some(Ty::Float) = hint {
                 // 整数の書き方でも、小数の場所では小数として計算する（`let f64 x = 7 / 2;` は 3.5）
@@ -2225,7 +2270,7 @@ impl<'a> Checker<'a> {
 }
 
 /// 整数の数だけでできた式か（`300`、`-1`、`60 * 60`）。値はコンパイルの時点で決まる
-fn is_const_tree(e: &Expr) -> bool {
+pub fn is_const_tree(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Int(_) => true,
         ExprKind::Unary(UnOp::Neg, inner) => is_const_tree(inner),

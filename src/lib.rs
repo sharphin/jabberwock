@@ -72,6 +72,14 @@ fn add_prelude(mut prog: ast::Program) -> ast::Program {
     prog
 }
 
+/// 構文解析と型検査をして、プログラムと型の記録を返す（IR への書き出しや、そのテスト用）。
+/// `TypeInfo` は構文木の中の式の位置で引くので、返したプログラムは書き換えないこと
+pub fn typed(src: &str, read: Reader) -> Result<(ast::Program, types::TypeInfo), Diagnostic> {
+    let prog = parse(src, read).0?;
+    let (_, info) = types::check_with_info(&prog)?;
+    Ok((prog, info))
+}
+
 /// 実行せずに型検査だけして、警告と読んだファイルを返す（エラーがあれば警告は空。エラーは実行時に返る）
 pub fn warnings(src: &str, read: Reader) -> (Vec<Diagnostic>, Vec<(String, String)>) {
     let (prog, files) = parse(src, read);

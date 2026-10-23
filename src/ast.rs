@@ -433,3 +433,99 @@ pub struct LambdaParam {
     pub name: String,
     pub span: Span,
 }
+
+// ---------------------------------------------------------------- 走査
+
+/// ブロックの中の式を、外から順にすべてたどる。`f` が false を返したら、その式の中には入らない
+pub fn walk_block(b: &Block, f: &mut dyn FnMut(&Expr) -> bool) {
+    for s in &b.stmts {
+        walk_stmt(s, f);
+    }
+}
+
+pub fn walk_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr) -> bool) {
+    match s {
+        Stmt::Let { init, .. } => walk_expr(init, f),
+        Stmt::Assign { target, value, .. } => {
+            walk_expr(target, f);
+            walk_expr(value, f);
+        }
+        Stmt::Expr(e) => walk_expr(e, f),
+        Stmt::While { cond, body } => {
+            walk_expr(cond, f);
+            walk_block(body, f);
+        }
+        Stmt::Loop { body } => walk_block(body, f),
+        Stmt::For { range, body, els, .. } => {
+            range.iter().for_each(|a| walk_expr(a, f));
+            walk_block(body, f);
+            if let Some(els) = els {
+                walk_block(els, f);
+            }
+        }
+        Stmt::ForEach { iter, body, els, .. } => {
+            walk_expr(iter, f);
+            walk_block(body, f);
+            if let Some(els) = els {
+                walk_block(els, f);
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Return { value, .. } => {
+            if let Some(e) = value {
+                walk_expr(e, f);
+            }
+        }
+    }
+}
+
+pub fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> bool) {
+    if !f(e) {
+        return;
+    }
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Cast(x, _) | ExprKind::Try(x) | ExprKind::Own(x) | ExprKind::Ref(x, _) | ExprKind::Deref(x, _) => walk_expr(x, f),
+        ExprKind::Field(x, ..) | ExprKind::Unary(_, x) | ExprKind::ArrayRepeat(x, ..) => walk_expr(x, f),
+        ExprKind::Variant { args, .. } | ExprKind::Call(_, args) | ExprKind::ArrayLit(args, _) => {
+            args.iter().for_each(|a| walk_expr(a, f))
+        }
+        ExprKind::StructLit(_, inits) => inits.iter().for_each(|i| walk_expr(&i.value, f)),
+        ExprKind::If { cond, then, els } => {
+            walk_expr(cond, f);
+            walk_block(then, f);
+            if let Some(els) = els {
+                walk_block(els, f);
+            }
+        }
+        ExprKind::Match { scrut, arms, default } => {
+            walk_expr(scrut, f);
+            arms.iter().for_each(|a| walk_block(&a.body, f));
+            if let Some(d) = default {
+                walk_block(d, f);
+            }
+        }
+        ExprKind::Binary(_, l, r) | ExprKind::Index(l, r, _) => {
+            walk_expr(l, f);
+            walk_expr(r, f);
+        }
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                walk_expr(k, f);
+                walk_expr(v, f);
+            }
+        }
+        ExprKind::Interp(parts) => {
+            for p in parts {
+                if let InterpPart::Expr(x) = p {
+                    walk_expr(x, f);
+                }
+            }
+        }
+        ExprKind::Lambda(l) => walk_block(&l.body, f),
+        ExprKind::MethodCall(recv, _, args) => {
+            walk_expr(recv, f);
+            args.iter().for_each(|a| walk_expr(a, f));
+        }
+    }
+}

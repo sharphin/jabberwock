@@ -41,6 +41,7 @@
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
+| `tests/typeinfo.rs` | 型検査が式ごとの型・型の引数を記録すること（IR の土台） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
@@ -131,6 +132,10 @@
   モジュールの中の定義と参照は `qualify` が `geom.名前` に書き換える。全部を 1 つの `Program` にまとめるので、types / analyze / interp は
   モジュールを知らない（types だけ、モジュールの中で関数と同じ名前の変数を弾くために `Checker.module` を見る。メソッド名は `rsplit_once('.')` で分ける）。
   `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `ward::render`。
+- IR への準備（設計は `docs/ir-design.md`）: `types::check_with_info` が `TypeInfo` を返す。式の型（`expr_ty`）と、
+  呼び出し・構造体 / enum の値の式で決めた型の引数（`targs`。`instantiate` が `pending_targs` に置き、`expr_ctx` が受け取る）。
+  キーは構文木の中の式のアドレスなので、`Program` を書き換えないこと。数だけの式（`is_const_tree`）は根だけ記録する。
+  式をたどるのは `ast::walk_block` / `walk_expr`。
 - 深い再帰（呼び出しの深さ 5000）で Rust のスタックがあふれないよう、`exec_stmt` / `eval_kind` の枠を大きくしない（大きな処理は `#[inline(never)]` の別関数へ。`exec_for_each` など）。
   テストは `cargo test --no-fail-fast` で全部のファイルを走らせて確かめる（スタックあふれは途中で止まり、後ろのテストが走らない）。
 - 辞書: `Value::Map(Box<MapVal>)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。
