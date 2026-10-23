@@ -12,14 +12,17 @@
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use crate::ast::*;
 use crate::diag::{Diagnostic, Span};
+use crate::threads::{aborted_marker, Chan, Entry, Portable, Task, World};
 
 type R<T> = Result<T, Diagnostic>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
+pub(crate) const BUILTINS: [&str; 7] = ["print", "drop", "assert", "read_line", "args", "spawn", "chan"];
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -45,6 +48,10 @@ pub enum Value {
     Func(Callee, Vec<Value>),
     /// 辞書。入れた順に並ぶ（表示と for の順）。いつもムーブ
     Map(Box<MapVal>),
+    /// `spawn` したスレッド（ムーブ）
+    Task(Arc<Task>),
+    /// チャンネル（コピーしても同じものを指す）
+    Chan(Arc<Chan>),
 }
 
 /// 辞書の中身。`entries` が入れた順の (キー, 値)、`index` がキーから位置を引く表
@@ -138,6 +145,8 @@ impl Value {
             Value::Array(_, true) => "リスト",
             Value::Func(..) => "関数",
             Value::Map(_) => "辞書",
+            Value::Task(_) => "task",
+            Value::Chan(_) => "chan",
         }
     }
 
@@ -159,8 +168,20 @@ impl Value {
             Value::Array(items, list) => *list || items.iter().any(Value::moves),
             // 取り込んだ値にムーブするものがあればムーブ（なければコピー）
             Value::Func(_, caps) => caps.iter().any(Value::moves),
-            Value::Map(_) => true,
+            Value::Map(_) | Value::Task(_) => true,
             _ => matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. }),
+        }
+    }
+
+    /// 中にある task をすべて集める（捨てるときに終わるのを待つ）
+    fn collect_tasks(&self, out: &mut Vec<Arc<Task>>) {
+        match self {
+            Value::Task(t) => out.push(t.clone()),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
+                fields.iter().for_each(|f| f.collect_tasks(out))
+            }
+            Value::Map(m) => m.entries.iter().for_each(|(_, v)| v.collect_tasks(out)),
+            _ => {}
         }
     }
 
@@ -306,8 +327,8 @@ pub struct Interp {
     frames: Vec<Frame>,
     fns: HashMap<String, Rc<FnDef>>,
     structs: HashMap<String, Rc<StructDef>>,
-    pub output: String,
-    echo: bool,
+    /// スレッドのあいだで共有するもの（出力・待ち合わせ・エラー）
+    pub(crate) world: Arc<World>,
     depth: usize,
     /// `e?` で関数を抜けている途中なら、返す値（`Err(x)` / `None`）と `?` の場所。
     /// そのあいだ R は Err を返して、呼び出し中の関数（`call_fn`）まで戻る
@@ -316,8 +337,8 @@ pub struct Interp {
     pub ref_checks: usize,
     /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
     pub ref_checks_elided: usize,
-    /// `read_line()` が読む入力
-    input: Box<dyn BufRead + Send>,
+    /// `read_line()` が読む入力（スレッドで共有）
+    input: Arc<Mutex<Box<dyn BufRead + Send>>>,
     /// `args()` が返すコマンドライン引数
     args: Vec<String>,
 }
@@ -329,15 +350,23 @@ impl Interp {
             frames: Vec::new(),
             fns: HashMap::new(),
             structs: HashMap::new(),
-            output: String::new(),
-            echo,
+            world: World::new(echo, Box::new(|| unreachable!("spawn needs World set by run_inner"))),
             depth: 0,
             unwinding: None,
             ref_checks: 0,
             ref_checks_elided: 0,
-            input: Box::new(std::io::empty()),
+            input: Arc::new(Mutex::new(Box::new(std::io::empty()))),
             args: Vec::new(),
         }
+    }
+
+    /// print が出した内容（すべてのスレッドの分）
+    pub fn output(&self) -> String {
+        self.world.lock().output.clone()
+    }
+
+    pub fn set_world(&mut self, w: Arc<World>) {
+        self.world = w;
     }
 
     /// `read_line()` が読む入力と、`args()` が返す引数を決める
@@ -346,6 +375,8 @@ impl Interp {
         let mut line = String::new();
         let n = self
             .input
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .read_line(&mut line)
             .map_err(|e| Diagnostic::new("入力を読めませんでした").primary(span, e.to_string()))?;
         if n == 0 {
@@ -366,16 +397,49 @@ impl Interp {
     }
 
     pub fn set_io(&mut self, input: Box<dyn BufRead + Send>, args: Vec<String>) {
-        self.input = input;
+        self.input = Arc::new(Mutex::new(input));
         self.args = args;
     }
 
-    /// 解放されていないヒープオブジェクトの数（リーク検査用）
+    /// 解放されていないヒープオブジェクトの数（リーク検査用。終わったスレッドの分も足す）
     pub fn live_objects(&self) -> usize {
-        self.heap.live()
+        self.heap.live() + self.world.lock().leaked
     }
 
     pub fn run(&mut self, prog: Program) -> R<()> {
+        self.load(prog)?;
+        let main = self.fns.get("main").cloned().ok_or_else(|| {
+            Diagnostic::new("`main` 関数がありません").note("`fn main() { ... }` を定義してください")
+        })?;
+        let r = self.call_fn(&main, Vec::new(), main.span);
+        if r.is_err() {
+            // 実行時エラーで止まったときも、残っている変数を片づける（リーク検査を正しくするため）
+            while let Some(frame) = self.frames.pop() {
+                for scope in frame.scopes.into_iter().rev() {
+                    self.drop_scope(scope, main.span, "エラーで止まった");
+                }
+            }
+        }
+        let r = match r {
+            // ほかのスレッドが終わるのを待つ
+            Ok(_) => self.world.wait_all(main.span),
+            Err(d) => {
+                self.world.fail(d.clone());
+                Err(d)
+            }
+        };
+        if r.is_err() {
+            self.world.wait_stopped();
+        }
+        let abort = self.world.lock().abort.clone();
+        match abort {
+            Some(d) => Err(d),
+            None => r,
+        }
+    }
+
+    /// 構造体と関数を登録する
+    fn load(&mut self, prog: Program) -> R<()> {
         for s in prog.structs {
             if self.structs.contains_key(&s.name) {
                 return Err(Diagnostic::new(format!("構造体 `{}` が二重に定義されています", s.name))
@@ -394,19 +458,198 @@ impl Interp {
             }
             self.fns.insert(f.name.clone(), Rc::new(f));
         }
-        let main = self.fns.get("main").cloned().ok_or_else(|| {
-            Diagnostic::new("`main` 関数がありません").note("`fn main() { ... }` を定義してください")
-        })?;
-        let r = self.call_fn(&main, Vec::new(), main.span);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------ スレッド
+
+    /// 値をヒープから切り離す（ほかのスレッドへ送る）。中の own のスロットは解放する
+    /// （送った側に残った ref は、使うとダングリングとして見つかる）
+    pub(crate) fn export(&mut self, v: Value, span: Span) -> Portable {
+        match v {
+            Value::Unit => Portable::Unit,
+            Value::Int(n, t) => Portable::Int(n, t),
+            Value::Float(x) => Portable::Float(x),
+            Value::Bool(b) => Portable::Bool(b),
+            Value::Str(s) => Portable::Str(s.to_string()),
+            Value::Own(slot) => {
+                let inner = self.vacate(slot, span, "ほかのスレッドへ送られた");
+                Portable::Own(Box::new(self.export(inner, span)))
+            }
+            Value::Struct(def, fields) => {
+                Portable::Struct(def.name.clone(), fields.into_iter().map(|f| self.export(f, span)).collect())
+            }
+            Value::Enum { variant, fields, copy } => Portable::Enum {
+                variant: variant.to_string(),
+                fields: fields.into_iter().map(|f| self.export(f, span)).collect(),
+                copy,
+            },
+            Value::Array(items, list) => Portable::Array(items.into_iter().map(|x| self.export(x, span)).collect(), list),
+            Value::Map(m) => {
+                Portable::Map(m.entries.into_iter().map(|(k, v)| (self.export(k, span), self.export(v, span))).collect())
+            }
+            Value::Task(t) => Portable::Task(t),
+            Value::Chan(c) => Portable::Chan(c),
+            Value::Ref(_) | Value::Func(..) => unreachable!("type checked: not sendable"),
+        }
+    }
+
+    /// ほかのスレッドから来た値を、このヒープに置く
+    pub(crate) fn import(&mut self, p: Portable) -> Value {
+        match p {
+            Portable::Unit => Value::Unit,
+            Portable::Int(n, t) => Value::Int(n, t),
+            Portable::Float(x) => Value::Float(x),
+            Portable::Bool(b) => Value::Bool(b),
+            Portable::Str(s) => Value::Str(Rc::from(s.as_str())),
+            Portable::Own(x) => {
+                let v = self.import(*x);
+                Value::Own(self.heap.alloc(v))
+            }
+            Portable::Struct(name, fields) => {
+                let def = self.structs[&name].clone();
+                Value::Struct(def, fields.into_iter().map(|f| self.import(f)).collect())
+            }
+            Portable::Enum { variant, fields, copy } => Value::Enum {
+                variant: Rc::from(variant.as_str()),
+                fields: fields.into_iter().map(|f| self.import(f)).collect(),
+                copy,
+            },
+            Portable::Array(items, list) => Value::Array(items.into_iter().map(|x| self.import(x)).collect(), list),
+            Portable::Map(entries) => {
+                let mut m = MapVal::default();
+                for (k, v) in entries {
+                    let (k, v) = (self.import(k), self.import(v));
+                    m.insert(k, v);
+                }
+                Value::Map(Box::new(m))
+            }
+            Portable::Task(t) => Value::Task(t),
+            Portable::Chan(c) => Value::Chan(c),
+        }
+    }
+
+    /// `spawn(f)`: f を新しいスレッドで動かす。取り込んだ値はそのスレッドへ移す
+    fn spawn(&mut self, arg: &Expr, span: Span) -> R<Value> {
+        let f = self.eval(arg)?;
+        let Value::Func(callee, caps) = f else { unreachable!("type checked: spawn takes a function") };
+        let entry = match &callee {
+            Callee::Named(d) => Entry::Named(d.name.clone()),
+            Callee::Lambda(_) => Entry::Lambda(arg.span),
+            Callee::Ir(_) => unreachable!("IR functions run only in ir::exec"),
+        };
+        let caps: Vec<Portable> = caps.into_iter().map(|c| self.export(c, span)).collect();
+        let task = Arc::new(Task::default());
+        let world = self.world.clone();
+        world.started();
+        let (t2, input, args) = (task.clone(), self.input.clone(), self.args.clone());
+        std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn(move || {
+                let prog = (world.load)();
+                let mut it = Interp::new(false);
+                it.world = world.clone();
+                it.input = input;
+                it.args = args;
+                match it.run_entry(prog, entry, caps, span) {
+                    Ok(v) => {
+                        let p = it.export(v, span);
+                        let leaked = it.heap.live();
+                        world.finished(&t2, Ok(p), leaked);
+                    }
+                    Err(d) => {
+                        world.fail(d);
+                        let leaked = it.heap.live();
+                        world.finished(&t2, Err(()), leaked);
+                    }
+                }
+            })
+            .expect("failed to spawn a thread");
+        Ok(Value::Task(task))
+    }
+
+    /// 新しいスレッドの中: プログラムを登録して、spawn に渡された関数を 1 回だけ呼ぶ
+    /// （1 回だけなので、取り込んだ own は写しにせず、そのまま変数に置く。中から取り出してよい）
+    fn run_entry(&mut self, prog: Program, entry: Entry, caps: Vec<Portable>, span: Span) -> R<Value> {
+        self.load(prog)?;
+        let r = match entry {
+            Entry::Named(n) => {
+                let f = self.fns[&n].clone();
+                self.call_fn(&f, Vec::new(), span)
+            }
+            Entry::Lambda(at) => {
+                let mut found = None;
+                for f in self.fns.values() {
+                    walk_block(&f.body, &mut |e| {
+                        if let ExprKind::Lambda(l) = &e.kind {
+                            if e.span == at {
+                                found = Some(l.clone());
+                            }
+                        }
+                        found.is_none()
+                    });
+                }
+                let l = found.expect("the same program has the same lambda");
+                let names = l.captures.borrow().clone();
+                let mut vars = Vec::new();
+                for (n, c) in names.iter().zip(caps) {
+                    let v = self.import(c);
+                    let slot = self.heap.alloc(v);
+                    vars.push(Var { name: n.clone(), state: VarState::Live(slot), mutable: false, decl: span, view: false });
+                }
+                self.run_frame(vars, &l.body, l.returns.get())
+            }
+        };
         if r.is_err() {
-            // 実行時エラーで止まったときも、残っている変数を片づける（リーク検査を正しくするため）
             while let Some(frame) = self.frames.pop() {
                 for scope in frame.scopes.into_iter().rev() {
-                    self.drop_scope(scope, main.span, "エラーで止まった");
+                    self.drop_scope(scope, span, "エラーで止まった");
                 }
             }
         }
-        r.map(|_| ())
+        r
+    }
+
+    /// task と chan のメソッド
+    fn thread_method(&mut self, h: &Value, name: &str, mut vals: Vec<Value>, span: Span) -> R<Value> {
+        match (h, name) {
+            (Value::Task(t), "join") => {
+                let p = self.world.join(t, span)?;
+                Ok(self.import(p))
+            }
+            (Value::Chan(c), "send") => {
+                let v = vals.remove(0);
+                let p = self.export(v, span);
+                self.world.send(c, p, span)?;
+                Ok(Value::Unit)
+            }
+            (Value::Chan(c), "recv") => Ok(match self.world.recv(c, span)? {
+                Some(p) => {
+                    let v = self.import(p);
+                    let copy = !v.moves();
+                    Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy }
+                }
+                None => none(),
+            }),
+            (Value::Chan(c), "close") => {
+                self.world.close(c, span)?;
+                Ok(Value::Unit)
+            }
+            _ => unreachable!("type checked: task / chan method"),
+        }
+    }
+
+    /// 捨てる値の中の task が終わるのを待つ（戻り値は捨てる）
+    fn settle_tasks(&mut self, v: &Value, span: Span) {
+        let mut tasks = Vec::new();
+        v.collect_tasks(&mut tasks);
+        for t in tasks {
+            // エラーで止まったなら、world に残っている（あとで main が返す）
+            if let Ok(Some(p)) = self.world.forget(&t, span) {
+                let v = self.import(p);
+                self.release(v, span, "join されずに捨てられた task の戻り値");
+            }
+        }
     }
 
     // ------------------------------------------------------------ 解放
@@ -422,11 +665,19 @@ impl Interp {
             self.heap.slots[s].generation = g.wrapping_add(1);
             self.heap.history.insert((s, g), Freed { span, why });
             self.heap.free_list.push(s);
+            self.settle_tasks(&inner, span);
             let mut children = Vec::new();
             inner.collect_owns(&mut children);
             for child in children {
                 work.push((child, "持ち主が解放されたので、中身も連鎖して解放された".to_string()));
             }
+        }
+    }
+
+    /// エラーで止まるときに、渡しそこねた値を解放する
+    fn discard_all(&mut self, vals: Vec<Value>, span: Span) {
+        for v in vals {
+            self.release(v, span, "エラーで止まったので捨てられた");
         }
     }
 
@@ -456,6 +707,7 @@ impl Interp {
 
     /// 値を捨てる。中にある own は（構造体のフィールドも含めて）すべて解放する。
     pub(crate) fn release(&mut self, v: Value, span: Span, why: &str) {
+        self.settle_tasks(&v, span);
         let mut owns = Vec::new();
         v.collect_owns(&mut owns);
         for s in owns {
@@ -525,6 +777,8 @@ impl Interp {
                 format!("{}({})", variant, parts.join(", "))
             }
             Value::Func(..) => "<関数>".to_string(),
+            Value::Task(_) => "<task>".to_string(),
+            Value::Chan(_) => "<chan>".to_string(),
             Value::Map(m) => {
                 let mut parts = Vec::new();
                 for (k, v) in &m.entries {
@@ -859,6 +1113,9 @@ impl Interp {
 
     /// ループ本体を1周実行し、ループを続けるかどうかを返す
     fn loop_iteration(&mut self, body: &Block) -> R<Option<Flow>> {
+        if self.world.aborted.load(Ordering::Relaxed) {
+            return Err(aborted_marker());
+        }
         match self.exec_block(body)? {
             Flow::Normal | Flow::Continue(_) => Ok(None),
             Flow::Break(_) => Ok(Some(Flow::Normal)),
@@ -1634,11 +1891,7 @@ impl Interp {
                     }
                 }
                 let line = parts.join(" ");
-                self.output.push_str(&line);
-                self.output.push('\n');
-                if self.echo {
-                    println!("{}", line);
-                }
+                self.world.print_line(&line);
                 for (v, sp) in temps {
                     self.release(v, sp, "print の引数として使い終わった一時的な値");
                 }
@@ -1657,6 +1910,8 @@ impl Interp {
                 Ok(Value::Unit)
             }
             "read_line" => self.read_line(span),
+            "spawn" => self.spawn(&args[0], span),
+            "chan" => Ok(Value::Chan(Arc::new(Chan::default()))),
             "args" => Ok(self.args_value()),
             "assert" => {
                 if args.len() != 1 {
@@ -1726,6 +1981,25 @@ impl Interp {
                 self.release(rv, span, "使い終わった一時的な値");
             }
             return str_method(&text, name, vals, span);
+        }
+        // task と chan のメソッド
+        let handle = match &rv {
+            Value::Task(_) | Value::Chan(_) => Some(rv.clone()),
+            Value::Own(_) | Value::Ref(_) => {
+                let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.at(slot, &path) {
+                    v @ (Value::Task(_) | Value::Chan(_)) => Some(v.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(h) = handle {
+            let r = self.thread_method(&h, name, vals, span);
+            if place.is_none() {
+                self.release(rv, span, "使い終わった一時的な値");
+            }
+            return r;
         }
         // 配列・リストのメソッド（`len()`・`push(x)`・`pop()`）
         let seq_slot = match &rv {
@@ -1938,6 +2212,10 @@ impl Interp {
     }
 
     fn call_fn(&mut self, f: &Rc<FnDef>, args: Vec<Value>, call_span: Span) -> R<Value> {
+        if self.world.aborted.load(Ordering::Relaxed) {
+            self.discard_all(args, call_span);
+            return Err(aborted_marker());
+        }
         if self.depth >= MAX_DEPTH {
             return Err(Diagnostic::new("関数呼び出しが深すぎます")
                 .primary(call_span, format!("呼び出しの深さが {} を超えました", MAX_DEPTH)));

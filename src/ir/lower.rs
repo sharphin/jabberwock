@@ -1176,6 +1176,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 Ok(Operand::Const(Const::Unit))
             }
             "read_line" | "args" => Ok(self.temp_of(ty, Rvalue::Builtin(name.to_string(), Vec::new(), sp), sp)),
+            "spawn" | "chan" => Err("スレッド（spawn / chan）".to_string()),
             _ if self.lookup(name).is_some() => {
                 // 引数を先に評価してから、変数を借りて読む（interp の `call_var`）
                 let mut vals = Vec::new();

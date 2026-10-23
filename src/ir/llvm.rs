@@ -299,7 +299,7 @@ impl<'p> Module<'p> {
             Ty::Int(i) => format!("i{}", i.bits()),
             Ty::Float => "double".to_string(),
             Ty::Bool => "i1".to_string(),
-            Ty::Str | Ty::Map(..) => "ptr".to_string(),
+            Ty::Str | Ty::Map(..) | Ty::Task(_) | Ty::Chan(_) => "ptr".to_string(),
             Ty::Unit | Ty::Never => "i8".to_string(),
             Ty::Own(x) if matches!(**x, Ty::Iface(_)) => "%iown".to_string(),
             Ty::Own(_) => "ptr".to_string(),

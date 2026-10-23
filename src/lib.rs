@@ -9,6 +9,7 @@ pub mod lexer;
 pub mod modules;
 pub mod native;
 pub mod parser;
+pub mod threads;
 pub mod types;
 
 use diag::Diagnostic;
@@ -157,6 +158,21 @@ pub fn run_program(
     in_big_stack(|| run_inner(src, read, echo, elide, input, args, None))
 }
 
+/// 新しいスレッドのために、読んだファイルからプログラムを作り直す（型検査と解析も同じにする）
+fn reloader(files: &[(String, String)], elide: bool) -> Box<dyn Fn() -> ast::Program + Send + Sync> {
+    let files = files.to_vec();
+    Box::new(move || {
+        let read = |name: &str| files.iter().skip(1).find(|(n, _)| n == name).map(|(_, s)| s.clone());
+        let (prog, _) = parse(&files[0].1, &read);
+        let prog = prog.expect("parsed before");
+        types::check_with_info(&prog).expect("checked before");
+        if elide {
+            analyze::analyze(&prog);
+        }
+        prog
+    })
+}
+
 fn in_big_stack(f: impl FnOnce() -> Outcome + Send) -> Outcome {
     std::thread::scope(|s| {
         std::thread::Builder::new()
@@ -206,6 +222,7 @@ fn run_inner(
     });
     drop(info);
     let mut it = interp::Interp::new(echo);
+    it.set_world(threads::World::new(echo, reloader(&files, elide)));
     let io = (replay, args.clone());
     it.set_io(input, args);
     let res = it.run(prog);
@@ -213,18 +230,18 @@ fn run_inner(
     let lowered = lowered.filter(|p| io.0.is_some() || !p.uses_input());
     if let Some(irp) = lowered {
         let input = io.0.clone().unwrap_or_default();
-        if let Some(diff) = ir_mismatch(&irp, &it.output, res.as_ref().err(), it.live_objects(), &input, &io.1) {
+        if let Some(diff) = ir_mismatch(&irp, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
         // WARD_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
         if std::env::var_os("WARD_NATIVE").is_some() {
-            if let Some(diff) = native_mismatch(&irp, &files, &it.output, res.as_ref().err(), it.live_objects(), &input, &io.1) {
+            if let Some(diff) = native_mismatch(&irp, &files, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
                 panic!("実行ファイルの結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
             }
         }
     }
     Outcome {
-        output: it.output.clone(),
+        output: it.output(),
         error: res.err(),
         warnings,
         live_objects: it.live_objects(),
@@ -247,8 +264,8 @@ fn ir_mismatch(
     let mut it = interp::Interp::new(false);
     it.set_io(Box::new(std::io::Cursor::new(input.to_vec())), args.to_vec());
     let res = ir::exec::run(irp, &mut it);
-    if it.output != output {
-        return Some(format!("出力が違う\ninterp:\n{}\nIR:\n{}", output, it.output));
+    if it.output() != output {
+        return Some(format!("出力が違う\ninterp:\n{}\nIR:\n{}", output, it.output()));
     }
     let key = |d: &Diagnostic| (d.title.clone(), d.labels.iter().find(|l| l.primary).map(|l| l.span));
     match (error, res.as_ref().err()) {

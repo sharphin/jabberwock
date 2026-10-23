@@ -402,8 +402,7 @@ impl<'a> Machine<'a> {
                 match name.as_str() {
                     "print" => {
                         let line = strs().join(" ");
-                        self.it.output.push_str(&line);
-                        self.it.output.push('\n');
+                        self.it.world.print_line(&line);
                         Ok(Value::Unit)
                     }
                     "concat" => Ok(Value::Str(Rc::from(strs().concat().as_str()))),

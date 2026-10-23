@@ -21,6 +21,7 @@
 | `src/analyze.rs` | 静的解析。証明できた `*p` / `p.f` の ref 世代チェックを消す |
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
+| `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`ward build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
@@ -54,6 +55,7 @@
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
+| `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
 ## 大事な不変条件
@@ -184,6 +186,13 @@
   前向きのデータフローで、合流は共通部分。引数が Pinned かは関数をまたいで固定点まで回す（呼ばれない関数・関数の値の引数は何も仮定しない）。
   **根拠: own 型の局所変数にはいつも own が入っている**（自動で借りた一時的な値・`for` の要素の写しは `ref` 型にする。exec が debug_assert で確かめる）。
   消せた数は AST の解析以上（テストの 348 本すべてで、AST 110 箇所 → IR 451 箇所。数える場所の数は IR のほうが多い）。
+- スレッド（interp）: 型は `Ty::Task(R)` / `Ty::Chan(T)`。送れる型かは types.rs の `sendable`（spawn の取り込み・戻り値・chan の T）。
+  interp はスレッドごとに別の `Interp` を本物のスレッドで動かす。構文木は Rc を含むので、新しいスレッドは `World.load`（lib.rs の `reloader`）で
+  ソースから読み直し、クロージャは式の位置（`Entry::Lambda(span)`）で探す。値は `export`（own のスロットは「ほかのスレッドへ送られた」で解放）→
+  `Portable` → `import` で運ぶ。spawn の関数は 1 回だけ呼ぶので、取り込んだ値は写しにせずそのまま置く（`run_entry`）。
+  待つ操作はすべて `World` の 1 つの錠と条件変数（`wait`）。状態が変わるたびに `epoch` を進めて `blocked` を 0 にするので、
+  `blocked >= alive` がデッドロック。エラーは `World.fail` → `aborted` を見て、ほかのスレッドは関数呼び出し・ループ・待ちで抜ける（`aborted_marker`）。
+  print の出力は `World` に行ごとに足す（`Interp::output()`）。捨てる task は `settle_tasks` で終わりを待つ。IR / LLVM はまだ（lower が Err）。
 
 ## 設計の決めごと
 

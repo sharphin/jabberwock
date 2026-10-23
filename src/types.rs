@@ -13,7 +13,7 @@ use crate::diag::{Diagnostic, Span};
 
 type R<T> = Result<T, Diagnostic>;
 
-const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
+const BUILTINS: [&str; 7] = ["print", "drop", "assert", "read_line", "args", "spawn", "chan"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -44,6 +44,10 @@ pub enum Ty {
     Fn(Vec<Ty>, Box<Ty>),
     /// `i64[str]`: 辞書（キーの型, 値の型）
     Map(Box<Ty>, Box<Ty>),
+    /// `task<R>`: `spawn` で作ったスレッド（`join()` で R を受け取る）
+    Task(Box<Ty>),
+    /// `chan<T>`: スレッドのあいだで値を送るチャンネル
+    Chan(Box<Ty>),
 }
 
 impl Ty {
@@ -67,6 +71,8 @@ impl Ty {
             Ty::Array(t, n) => format!("{}[{}]", t.show(), n),
             Ty::List(t) => format!("{}[]", t.show()),
             Ty::Map(k, v) => format!("{}[{}]", v.show(), k.show()),
+            Ty::Task(t) => format!("task<{}>", t.show()),
+            Ty::Chan(t) => format!("chan<{}>", t.show()),
             Ty::Fn(ps, r) => {
                 let ps: Vec<String> = ps.iter().map(Ty::show).collect();
                 match &**r {
@@ -123,6 +129,8 @@ pub fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
         Ty::Array(x, n) => Ty::Array(Box::new(subst(x, map)), *n),
         Ty::List(x) => Ty::List(Box::new(subst(x, map))),
         Ty::Map(k, v) => Ty::Map(Box::new(subst(k, map)), Box::new(subst(v, map))),
+        Ty::Task(x) => Ty::Task(Box::new(subst(x, map))),
+        Ty::Chan(x) => Ty::Chan(Box::new(subst(x, map))),
         Ty::Fn(ps, r) => Ty::Fn(ps.iter().map(|p| subst(p, map)).collect(), Box::new(subst(r, map))),
         _ => t.clone(),
     }
@@ -132,7 +140,7 @@ fn contains_iface(t: &Ty) -> bool {
     match t {
         Ty::Iface(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_iface),
-        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_iface(x),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) | Ty::Task(x) | Ty::Chan(x) => contains_iface(x),
         Ty::Fn(ps, r) => ps.iter().any(contains_iface) || contains_iface(r),
         Ty::Map(k, v) => contains_iface(k) || contains_iface(v),
         _ => false,
@@ -143,7 +151,7 @@ fn contains_param(t: &Ty) -> bool {
     match t {
         Ty::Param(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_param),
-        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_param(x),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) | Ty::Task(x) | Ty::Chan(x) => contains_param(x),
         Ty::Fn(ps, r) => ps.iter().any(contains_param) || contains_param(r),
         Ty::Map(k, v) => contains_param(k) || contains_param(v),
         _ => false,
@@ -155,7 +163,9 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
     match pattern {
         Ty::Param(p) => tparams.contains(p) && !map.contains_key(p),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|a| has_unbound(a, tparams, map)),
-        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => has_unbound(x, tparams, map),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) | Ty::Task(x) | Ty::Chan(x) => {
+            has_unbound(x, tparams, map)
+        }
         Ty::Fn(ps, r) => ps.iter().any(|p| has_unbound(p, tparams, map)) || has_unbound(r, tparams, map),
         Ty::Map(k, v) => has_unbound(k, tparams, map) || has_unbound(v, tparams, map),
         _ => false,
@@ -188,7 +198,7 @@ fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String
         }
         (Ty::Own(x), Ty::Own(y)) | (Ty::Ref(x, _), Ty::Ref(y, _)) => unify(x, y, tparams, map),
         (Ty::Array(x, n), Ty::Array(y, m)) if n == m => unify(x, y, tparams, map),
-        (Ty::List(x), Ty::List(y)) => unify(x, y, tparams, map),
+        (Ty::List(x), Ty::List(y)) | (Ty::Task(x), Ty::Task(y)) | (Ty::Chan(x), Ty::Chan(y)) => unify(x, y, tparams, map),
         (Ty::Map(k, x), Ty::Map(j, y)) => {
             unify(k, j, tparams, map);
             unify(x, y, tparams, map);
@@ -471,6 +481,19 @@ impl<'a> Checker<'a> {
     fn resolve(&self, t: &TypeExpr) -> R<Ty> {
         Ok(match &t.kind {
             TypeKind::Own(inner) => Ty::Own(Box::new(self.resolve_pointee(inner)?)),
+            TypeKind::App(n, args) if n == "task" || n == "chan" => {
+                if args.len() != 1 {
+                    return Err(Diagnostic::new(format!("`{}` の型の引数の数が違います", n))
+                        .primary(t.span, format!("1 個必要ですが {} 個書かれています", args.len())));
+                }
+                let x = self.resolve(&args[0])?;
+                if n == "task" {
+                    Ty::Task(Box::new(x))
+                } else {
+                    self.require_sendable(&x, args[0].span, "チャンネルで送る値")?;
+                    Ty::Chan(Box::new(x))
+                }
+            }
             TypeKind::App(n, args) => {
                 let want = match (self.structs.get(n.as_str()), self.enums.get(n.as_str())) {
                     (Some((d, _)), _) => d.tparams.len(),
@@ -584,6 +607,45 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// ほかのスレッドへ渡せる型か（中に ref・関数の値・型の引数・interface を含まない）。だめなら理由
+    fn sendable(&self, t: &Ty, seen: &mut Vec<String>) -> Result<(), String> {
+        match t {
+            Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Chan(_) => Ok(()),
+            Ty::Ref(..) => Err(format!("`{}` は ref なので、ほかのスレッドへは渡せません", t.show())),
+            Ty::Fn(..) => Err("関数の値は、ほかのスレッドへは渡せません".to_string()),
+            Ty::Param(p) => Err(format!("型の引数 `{}` は ref かもしれないので、ほかのスレッドへは渡せません", p)),
+            Ty::Iface(i) => Err(format!("interface `{}` の中身は分からないので、ほかのスレッドへは渡せません", i)),
+            Ty::Own(x) | Ty::Array(x, _) | Ty::List(x) | Ty::Task(x) => self.sendable(x, seen),
+            Ty::Map(k, v) => self.sendable(k, seen).and_then(|_| self.sendable(v, seen)),
+            Ty::Struct(n, args) | Ty::Enum(n, args) => {
+                let key = t.show();
+                if seen.contains(&key) {
+                    return Ok(());
+                }
+                seen.push(key);
+                let inner: Vec<Ty> = if matches!(t, Ty::Struct(..)) {
+                    let (d, tys) = &self.structs[n.as_str()];
+                    let map = Self::targs(&d.tparams, args);
+                    tys.iter().map(|x| subst(x, &map)).collect()
+                } else {
+                    self.variants_of(t).expect("enum").into_iter().flat_map(|(_, f)| f).collect()
+                };
+                for x in &inner {
+                    self.sendable(x, seen).map_err(|why| format!("`{}` の中: {}", t.show(), why))?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn require_sendable(&self, t: &Ty, span: Span, what: &str) -> R<()> {
+        self.sendable(t, &mut Vec::new()).map_err(|why| {
+            Diagnostic::new(format!("{}に `{}` は使えません", what, t.show()))
+                .primary(span, why)
+                .note("スレッドに渡せるのは own とコピーできる値（数・文字列・構造体など、中に ref のないもの）だけです")
+        })
+    }
+
     /// 値として読んだときにコピーされる型か（own や構造体を中に持ちうるならムーブ）。
     /// 型の引数（`T`）は分からないのでコピーとは言えない
     fn copyable(&self, t: &Ty) -> bool {
@@ -596,6 +658,9 @@ impl<'a> Checker<'a> {
             Ty::List(_) | Ty::Map(..) => false,
             // 関数の値は取り込んだ own を持ちうるのでムーブ
             Ty::Fn(..) => false,
+            // スレッドを待てるのは 1 か所だけ。チャンネルはコピーしても同じものを指す
+            Ty::Task(_) => false,
+            Ty::Chan(_) => true,
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
             Ty::Enum(..) => self.variants_of(t).expect("enum").iter().flat_map(|(_, f)| f).all(|t| self.copyable(t)),
         }
@@ -1833,6 +1898,82 @@ impl<'a> Checker<'a> {
         Ok(ret)
     }
 
+    /// `spawn(f)`: 引数のないクロージャか関数の名前を、新しいスレッドで動かす
+    fn spawn(&mut self, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
+        if args.len() != 1 {
+            return Err(arity_error("spawn", 1, args.len(), span));
+        }
+        let a = &args[0];
+        let fn_hint = Ty::Fn(Vec::new(), Box::new(match hint {
+            Some(Ty::Task(r)) => (**r).clone(),
+            _ => Ty::Unit,
+        }));
+        let ok_shape = match &a.kind {
+            ExprKind::Lambda(_) => true,
+            ExprKind::Var(n) => self.lookup(n).is_none() && self.fns.contains_key(n.as_str()),
+            _ => false,
+        };
+        if !ok_shape {
+            return Err(Diagnostic::new("spawn にはその場で書いたクロージャか、関数の名前を渡してください")
+                .primary(a.span, "ここで取り込んだ値が、ほかのスレッドへ渡せるか分からない")
+                .note("`spawn(() -> work(data))` のように書いてください"));
+        }
+        let hint_ok = matches!(hint, Some(Ty::Task(_)));
+        let t = self.expr_h(a, if hint_ok { Some(&fn_hint) } else { None })?;
+        let Ty::Fn(ps, ret) = t else { unreachable!("lambda or function") };
+        if !ps.is_empty() {
+            return Err(Diagnostic::new("spawn に渡す関数は引数を取れません")
+                .primary(a.span, format!("引数が {} 個ある", ps.len()))
+                .note("値はクロージャに取り込んで渡してください（`spawn(() -> work(x))`）"));
+        }
+        if let ExprKind::Lambda(l) = &a.kind {
+            for c in l.captures.borrow().iter() {
+                let Some(v) = self.lookup(c) else { continue };
+                let (ty, decl) = (v.ty.clone(), v.decl);
+                self.sendable(&ty, &mut Vec::new()).map_err(|why| {
+                    Diagnostic::new(format!("`{}` はほかのスレッドへ渡せません", c))
+                        .label(decl, format!("`{}` は `{}`", c, ty.show()))
+                        .primary(a.span, why)
+                        .note("スレッドに渡せるのは own とコピーできる値（中に ref のないもの）だけです")
+                })?;
+            }
+        }
+        self.require_sendable(&ret, a.span, "スレッドの戻り値")?;
+        Ok(Ty::Task(ret))
+    }
+
+    /// `t.join()`: スレッドが終わるのを待って、戻り値を受け取る（1 回だけ）
+    fn task_method(&mut self, r: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        if name != "join" {
+            return Err(Diagnostic::new(format!("task にメソッド `{}` はありません", name))
+                .primary(span, "task のメソッドは `join()` だけです"));
+        }
+        if !args.is_empty() {
+            return Err(arity_error(name, 0, args.len(), span));
+        }
+        Ok(r.clone())
+    }
+
+    /// チャンネルのメソッド
+    fn chan_method(&mut self, x: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        let (params, ret) = match name {
+            "send" => (vec![x.clone()], Ty::Unit),
+            "recv" => (vec![], Ty::Enum("Option".to_string(), vec![x.clone()])),
+            "close" => (vec![], Ty::Unit),
+            _ => {
+                return Err(Diagnostic::new(format!("chan にメソッド `{}` はありません", name))
+                    .primary(span, "chan のメソッドは `send(x)`・`recv()`・`close()` です"))
+            }
+        };
+        if args.len() != params.len() {
+            return Err(arity_error(name, params.len(), args.len(), span));
+        }
+        for (a, t) in args.iter().zip(&params) {
+            self.expect(a, t)?;
+        }
+        Ok(ret)
+    }
+
     /// 文字列のメソッド。位置と長さは文字単位
     fn str_method(&mut self, name: &str, args: &[Expr], span: Span) -> R<Ty> {
         let list = Ty::List(Box::new(Ty::Str));
@@ -2026,6 +2167,18 @@ impl<'a> Checker<'a> {
                     Ty::Enum("Option".to_string(), vec![Ty::Str])
                 });
             }
+            "spawn" => return self.spawn(args, span, hint),
+            "chan" => {
+                if !args.is_empty() {
+                    return Err(arity_error(name, 0, args.len(), span));
+                }
+                return match hint {
+                    Some(t @ Ty::Chan(_)) => Ok(t.clone()),
+                    _ => Err(Diagnostic::new("chan() の型が分かりません")
+                        .primary(span, "何を送るチャンネルか決める手がかりがない")
+                        .note("`let chan<i64> c = chan();` のように型を書いてください")),
+                };
+            }
             "drop" | "assert" => {
                 if args.len() != 1 {
                     return Err(arity_error(name, 1, args.len(), span));
@@ -2091,6 +2244,8 @@ impl<'a> Checker<'a> {
             Ty::List(elem) => return self.list_method(recv, &rt, elem, name, args, span),
             Ty::Map(k, v) => return self.map_method(recv, &rt, k, v, name, args, span),
             Ty::Str => return self.str_method(name, args, span),
+            Ty::Task(r) => return self.task_method(r, name, args, span),
+            Ty::Chan(x) => return self.chan_method(x, name, args, span),
             Ty::Param(p) => {
                 let ifaces: Vec<String> =
                     self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).cloned().collect();
