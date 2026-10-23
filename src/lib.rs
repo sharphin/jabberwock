@@ -95,14 +95,21 @@ pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
 
 /// LLVM のテキスト（`ward --ll`）。`main` は最初のファイルの名前（エラーの位置に出す）
 pub fn llvm_text(src: &str, read: Reader, main: &str) -> Result<String, String> {
+    llvm_build(src, read, main, false)
+}
+
+/// `ward build` 用の LLVM IR。`release` なら実行時エラーは使った位置だけ出す（ソースを入れない）。
+/// 書けないときは、表示する文（ソースの行つきのエラー）を返す
+pub fn llvm_build(src: &str, read: Reader, main: &str, release: bool) -> Result<String, String> {
     let (prog, files) = parse(src, read);
-    let prog = prog.map_err(|d| d.title)?;
-    let (_, info) = types::check_with_info(&prog).map_err(|d| d.title)?;
-    let mut irp = ir::lower::lower(&prog, &info).map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))?;
-    ir::analyze::analyze(&mut irp);
     let names: Vec<String> =
         files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.ward", m) }).collect();
-    ir::llvm::emit(&irp, &names).map_err(|r| format!("まだ LLVM に書き出せない書き方があります: {}", r))
+    let prog = prog.map_err(|d| render(&d, main, &files))?;
+    let (_, info) = types::check_with_info(&prog).map_err(|d| render(&d, main, &files))?;
+    let mut irp = ir::lower::lower(&prog, &info).map_err(|r| format!("まだ IR に書き出せない書き方があります: {}\n", r))?;
+    ir::analyze::analyze(&mut irp);
+    let sources: Vec<String> = if release { Vec::new() } else { files.iter().map(|(_, t)| t.clone()).collect() };
+    ir::llvm::emit(&irp, &names, &sources).map_err(|r| format!("まだ LLVM に書き出せない書き方があります: {}\n", r))
 }
 
 /// 実行せずに型検査だけして、警告と読んだファイルを返す（エラーがあれば警告は空。エラーは実行時に返る）
@@ -270,7 +277,8 @@ fn native_mismatch(
     let trace = std::env::var_os("WARD_NATIVE_TRACE").is_some();
     let names: Vec<String> =
         files.iter().enumerate().map(|(i, (m, _))| if i == 0 { "main.ward".to_string() } else { format!("{}.ward", m) }).collect();
-    let ll = match ir::llvm::emit(irp, &names) {
+    let sources: Vec<String> = files.iter().map(|(_, t)| t.clone()).collect();
+    let ll = match ir::llvm::emit(irp, &names, &sources) {
         Ok(t) => t,
         Err(why) => {
             if trace {
@@ -319,20 +327,10 @@ fn native_mismatch(
                 }
             }
             Some(d) => {
-                let title = stderr.lines().find_map(|l| l.strip_prefix("エラー: ")).unwrap_or("");
-                let at = stderr.lines().find_map(|l| l.trim_start().strip_prefix("==> ")).unwrap_or("");
-                let at = at.split("  ").next().unwrap_or("");
-                let want = d.labels.iter().find(|l| l.primary).map(|l| {
-                    format!("{}:{}:{}", names.get(l.span.file).map_or("?", |s| s.as_str()), l.span.line, l.span.col)
-                });
-                if out.status.code() != Some(1) || title != d.title || Some(at.to_string()) != want {
-                    Some(format!(
-                        "エラーが違う\ninterp: {} at {:?}\n実行ファイル（{:?}）:\n{}",
-                        d.title,
-                        want,
-                        out.status.code(),
-                        stderr
-                    ))
+                let shown: Vec<(&str, &str)> = names.iter().zip(files).map(|(n, (_, t))| (n.as_str(), t.as_str())).collect();
+                let want = d.render_in(&shown);
+                if out.status.code() != Some(1) || stderr != want {
+                    Some(format!("エラーが違う\ninterp:\n{}\n実行ファイル（{:?}）:\n{}", want, out.status.code(), stderr))
                 } else {
                     None
                 }

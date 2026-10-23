@@ -289,7 +289,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
     }
 
     fn assign(&mut self, l: Local, value: Rvalue, span: Span) {
-        self.emit(Inst::Assign { place: Place::local(l, span), value, span });
+        self.emit(Inst::Assign { place: Place::local(l, span), value, span, what: String::new() });
     }
 
     /// 値を新しい一時的な変数に入れ、それを読む operand を返す
@@ -373,7 +373,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 // 値を先に計算し、そのあとで場所を求める（interp の assign と同じ順）
                 let v = self.expr(value)?;
                 let place = self.place(target)?;
-                self.emit(Inst::Assign { place, value: Rvalue::Use(v), span: *span });
+                self.emit(Inst::Assign { place, value: Rvalue::Use(v), span: *span, what: describe(target) });
             }
             Stmt::Expr(e) => match &e.kind {
                 ExprKind::If { cond, then, els } => self.if_expr(cond, then, els.as_ref(), None)?,
@@ -780,7 +780,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
                         Some(_) if b == "_" => continue,
                         // 借りた match: 中身の own は借りた ref として受け取る
                         Some(m) if matches!(ftys.get(i), Some(Ty::Own(_))) => {
-                            let what = format!("{} の中身 {}", describe(scrut), b);
+                            // interp は借りた ref の説明を使う（`match ref s` なら `s`）
+                            let base = match &scrut.kind {
+                                ExprKind::Ref(x, _) => describe(x),
+                                _ => describe(scrut),
+                            };
+                            let what = format!("{} の中身 {}", base, b);
                             Rvalue::Ref { place: fp, mutable: m, follows: true, what, span: *bspan }
                         }
                         Some(_) => Rvalue::Use(Operand::Copy(fp)),

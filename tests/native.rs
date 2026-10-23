@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-use ward::{llvm_text, native, no_modules};
+use ward::{llvm_build, native, no_modules};
 
 fn have_clang() -> bool {
     Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
@@ -11,7 +11,11 @@ fn have_clang() -> bool {
 
 /// 実行ファイルを作って走らせる（終了コード, 標準出力, 標準エラー）
 fn run(name: &str, src: &str) -> (Option<i32>, String, String) {
-    let ll = llvm_text(src, &no_modules, "main.ward").expect("lowers to LLVM");
+    run_with(name, src, false)
+}
+
+fn run_with(name: &str, src: &str, release: bool) -> (Option<i32>, String, String) {
+    let ll = llvm_build(src, &no_modules, "main.ward", release).expect("lowers to LLVM");
     let dir = std::env::temp_dir().join(format!("ward-native-test-{}", std::process::id()));
     let exe = native::compile(&ll, &dir, name, "-O1").expect("clang compiles");
     let out = Command::new(&exe).env("WARD_LEAKS", "1").output().expect("runs");
@@ -42,6 +46,25 @@ fn compiled_programs_catch_dangling_refs() {
     let (code, out, err) = run("dangling", src);
     assert_eq!(code, Some(1));
     assert_eq!(out, "");
-    assert!(err.contains("エラー: 無効になった参照を使いました (dangling reference)"), "{}", err);
-    assert!(err.contains("==> main.ward:5:11"), "{}", err);
+    // インタプリタと同じ、時系列のエラー表示
+    let want = "error: 無効になった参照を使いました (dangling reference)
+ --> main.ward:5:11
+  |
+3 |     let r = ref a;
+  |             ----- ここで `a` を借りた
+4 |     drop(a);
+  |     ------- ここで解放された: `a` が drop で明示的に解放された
+5 |     print(*r);
+  |           ^^ ここで使ったが、借りた先はもう存在しない
+  |
+  = note: 参照は、借りた元の所有者より長くは生きられません
+";
+    assert_eq!(err, want);
+    // --release では使った位置だけ
+    let (code, _, err) = run_with("dangling_release", src, true);
+    assert_eq!(code, Some(1));
+    assert_eq!(
+        err,
+        "error: 無効になった参照を使いました (dangling reference)\n --> main.ward:5:11\n  = ここで使ったが、借りた先はもう存在しない\n"
+    );
 }

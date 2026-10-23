@@ -70,7 +70,8 @@ pub struct Block {
 pub enum Inst {
     /// `場所 = 値`。値を先に計算してから場所を求める。場所に古い値があれば解放する（代入）。
     /// 場所が変数そのもので、まだ値がない（宣言・ムーブ済み）なら、新しく置く
-    Assign { place: Place, value: Rvalue, span: Span },
+    /// `what` は場所の説明（上書きで古い値を解放したときのエラー表示。interp の `describe`）
+    Assign { place: Place, value: Rvalue, span: Span, what: String },
     /// 変数の寿命の終わり: 中の own をすべて解放し、変数の場所も解放する（世代が進み、変数を借りた ref は無効になる）。
     /// ムーブ済みなら何もしない（LLVM ではムーブの印を見る）
     Drop { local: Local, span: Span, why: String },
@@ -191,6 +192,15 @@ impl Program {
                 b.insts.iter().any(|i| matches!(i, Inst::Assign { value: Rvalue::Builtin(n, ..), .. } if n == "read_line"))
             })
         })
+    }
+}
+
+/// 上書きで古い値を解放したときの説明（interp と同じ）
+pub fn overwritten(what: &str) -> String {
+    if what.is_empty() {
+        "上書きされて、古い値が解放された".to_string()
+    } else {
+        format!("`{}` が上書きされて、古い値が解放された", what)
     }
 }
 

@@ -17,7 +17,7 @@
 // 位置（ファイル・行・列・長さ）と、その位置の説明。解放の場所なら chain は「連鎖して解放された」の位置
 typedef struct WSite {
     const char *file;
-    int32_t line, col, len, pad;
+    int32_t line, col, len, fileno;
     const char *text;
     const struct WSite *chain;
 } WSite;
@@ -71,19 +71,142 @@ void ward_print_end(void) { out_write("\n", 1); }
 
 // ---------------------------------------------------------------- エラー
 
-static void put_site(const char *mark, const WSite *s, const char *label) {
-    fprintf(stderr, "  %s %s:%d:%d  %s\n", mark, s->file, s->line, s->col, label ? label : "");
-}
+static int is_cont_b(unsigned char c) { return (c & 0xC0) == 0x80; }
 
-static _Noreturn void finish_error(const WSite *at, const char *label, const char *note) {
-    put_site("==>", at, label);
-    if (note) fprintf(stderr, "   = %s\n", note);
-    exit(1);
-}
+// 書き出したコードが置く: ファイルの名前と中身（エラーでソースの行を出すため。`--release` では空）
+typedef struct WSrc {
+    const char *name;
+    const char *text;
+} WSrc;
+extern const WSrc ward_files[];
+extern const int32_t ward_nfiles;
+
+// エラーの位置を集めてから、`Diagnostic::render_in` と同じ形で出す
+#define MAXL 8
+static struct {
+    const WSite *s;
+    char text[600];
+    int primary;
+} labels[MAXL];
+static int nlabels;
+static char err_title[1024];
 
 static void begin_error(const char *title) {
     ward_flush();
-    fprintf(stderr, "エラー: %s\n", title);
+    snprintf(err_title, sizeof err_title, "%s", title);
+    nlabels = 0;
+}
+
+static void put_site(const WSite *s, const char *label) {
+    if (nlabels == MAXL) return;
+    labels[nlabels].s = s;
+    snprintf(labels[nlabels].text, sizeof labels[nlabels].text, "%s", label ? label : "");
+    labels[nlabels].primary = 0;
+    nlabels++;
+}
+
+// ソースの ln 行目（1 始まり）。Rust の `lines()` と同じ区切り
+static const char *line_of(const char *src, int ln, int64_t *len) {
+    const char *p = src;
+    for (int i = 1; i < ln && *p; i++) {
+        const char *nl = strchr(p, '\n');
+        p = nl ? nl + 1 : p + strlen(p);
+    }
+    const char *e = strchr(p, '\n');
+    int64_t n = e ? (int64_t)(e - p) : (int64_t)strlen(p);
+    if (n > 0 && p[n - 1] == '\r') n--;
+    *len = n;
+    return p;
+}
+
+static void spaces(int n) {
+    for (int i = 0; i < n; i++) fputc(' ', stderr);
+}
+
+static void arrow(int width, const WSite *s) {
+    spaces(width);
+    fprintf(stderr, "--> %s:%d:%d\n", s->file, s->line, s->col);
+    spaces(width);
+    fprintf(stderr, " |\n");
+}
+
+static int label_after(const WSite *a, const WSite *b, int main_file) {
+    int ka = a->fileno != main_file, kb = b->fileno != main_file;
+    if (ka != kb) return ka > kb;
+    if (a->fileno != b->fileno) return a->fileno > b->fileno;
+    if (a->line != b->line) return a->line > b->line;
+    return a->col > b->col;
+}
+
+static _Noreturn void finish_error(const WSite *at, const char *label, const char *note) {
+    put_site(at, label);
+    labels[nlabels - 1].primary = 1;
+    fprintf(stderr, "error: %s\n", err_title);
+    if (ward_nfiles == 0) {
+        // --release: 使った位置だけ
+        fprintf(stderr, " --> %s:%d:%d\n", at->file, at->line, at->col);
+        fprintf(stderr, "  = %s\n", label ? label : "");
+        exit(1);
+    }
+    int order[MAXL], main_file = at->fileno;
+    for (int i = 0; i < nlabels; i++) order[i] = i;
+    for (int i = 1; i < nlabels; i++)
+        for (int j = i; j > 0 && label_after(labels[order[j - 1]].s, labels[order[j]].s, main_file); j--) {
+            int t = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = t;
+        }
+    int maxline = 1;
+    for (int i = 0; i < nlabels; i++)
+        if (labels[i].s->line > maxline) maxline = labels[i].s->line;
+    char tmp[16];
+    int width = snprintf(tmp, sizeof tmp, "%d", maxline);
+    arrow(width, at);
+    int last = 0, cur = main_file;
+    for (int k = 0; k < nlabels; k++) {
+        const WSite *s = labels[order[k]].s;
+        if (s->fileno != cur) {
+            // 別のファイルの位置
+            cur = s->fileno;
+            last = 0;
+            arrow(width, s);
+        }
+        const char *src = cur < ward_nfiles ? ward_files[cur].text : ward_files[0].text;
+        int64_t n;
+        const char *line = line_of(src, s->line, &n);
+        if (s->line != last) {
+            if (last != 0 && s->line > last + 1) {
+                spaces(width);
+                fprintf(stderr, " ...\n");
+            }
+            fprintf(stderr, "%*d | ", width, s->line);
+            for (int64_t i = 0; i < n; i++) fputc(line[i] == '\t' ? ' ' : line[i], stderr);
+            fputc('\n', stderr);
+            last = s->line;
+        }
+        // 下線: 列は文字単位。ASCII でない文字は 2 桁
+        int lead = 0, mark = 0, col = 1, upto = s->col + (s->len > 0 ? s->len : 1);
+        for (int64_t i = 0; i < n; col++) {
+            int w = (unsigned char)line[i] < 0x80 ? 1 : 2;
+            if (col < s->col) lead += w;
+            else if (col < upto) mark += w;
+            i++;
+            while (i < n && is_cont_b((unsigned char)line[i])) i++;
+        }
+        if (mark < 1) mark = 1;
+        spaces(width);
+        fprintf(stderr, " | ");
+        spaces(lead);
+        for (int m = 0; m < mark; m++) fputc(labels[order[k]].primary ? '^' : '-', stderr);
+        fprintf(stderr, " %s\n", labels[order[k]].text);
+    }
+    if (note) {
+        spaces(width);
+        fprintf(stderr, " |\n");
+        spaces(width);
+        fprintf(stderr, " = note: %s\n", note);
+    }
+    exit(1);
 }
 
 _Noreturn void ward_fail(const char *title, const WSite *at, const char *label, const char *note) {
@@ -111,7 +234,7 @@ _Noreturn void ward_fail_moved(const char *name, const WSite *moved, const WSite
         finish_error(use, label, "ループの中で own を渡すと、2周目には手元に残っていません");
     }
     snprintf(label, sizeof label, "ここで `%s` の所有権が移動した", name);
-    put_site("-->", moved, label);
+    put_site(moved, label);
     snprintf(label, sizeof label, "ここで `%s` を使ったが、もう所有していない", name);
     finish_error(use, label, "移した後も使いたいなら `ref` で借りてください（例: `f(ref a)`）");
 }
@@ -123,15 +246,34 @@ typedef struct WHdr {
 
 #define HDR(p) ((WHdr *)((char *)(p) - sizeof(WHdr)))
 
-_Noreturn void ward_fail_dangling(const WSite *use, const WSite *borrowed, void *block) {
+// 使い回した区画の、前の解放の位置（エラーで「ここで解放された」を出すため。古いものから消える）
+#define NREUSED 4096
+static struct {
+    void *block;
+    uint64_t gen;
+    const WSite *freed;
+} reused[NREUSED];
+static unsigned reused_n;
+
+// 世代 gen の ref が無効になった解放（世代 gen+1 になったとき）の位置
+static const WSite *freed_at(void *block, uint64_t gen) {
+    if (HDR(block)->gen == gen + 1) return HDR(block)->freed;
+    for (unsigned k = 0; k < NREUSED; k++) {
+        unsigned i = (reused_n - 1 - k) % NREUSED;
+        if (reused[i].block == block && reused[i].gen == gen + 1) return reused[i].freed;
+    }
+    return NULL;
+}
+
+_Noreturn void ward_fail_dangling(const WSite *use, const WSite *borrowed, void *block, uint64_t gen) {
     char label[512];
     begin_error("無効になった参照を使いました (dangling reference)");
     snprintf(label, sizeof label, "ここで `%s` を借りた", borrowed->text);
-    put_site("-->", borrowed, label);
-    const WSite *f = HDR(block)->freed;
+    put_site(borrowed, label);
+    const WSite *f = freed_at(block, gen);
     if (f) {
         snprintf(label, sizeof label, "ここで解放された: %s", f->text);
-        put_site("-->", f, label);
+        put_site(f, label);
     }
     finish_error(use, "ここで使ったが、借りた先はもう存在しない", "参照は、借りた元の所有者より長くは生きられません");
 }
@@ -194,12 +336,22 @@ static Big *free_big;
 
 static size_t round16(int64_t n) { return n <= 0 ? 16 : ((size_t)n + 15) & ~(size_t)15; }
 
+static void remember_reuse(void *p) {
+    unsigned i = reused_n++ % NREUSED;
+    reused[i].block = p;
+    reused[i].gen = HDR(p)->gen;
+    reused[i].freed = HDR(p)->freed;
+}
+
 void *ward_alloc(int64_t size) {
     size_t s = round16(size);
     void *p = NULL;
     if (s / 16 <= NCLASS) {
         p = free_small[s / 16];
-        if (p) free_small[s / 16] = *(void **)p;
+        if (p) {
+            free_small[s / 16] = *(void **)p;
+            remember_reuse(p);
+        }
     } else {
         for (Big **b = &free_big; *b; b = &(*b)->next) {
             if ((*b)->size == s) {
@@ -207,6 +359,7 @@ void *ward_alloc(int64_t size) {
                 *b = x->next;
                 p = x->payload;
                 free(x);
+                remember_reuse(p);
                 break;
             }
         }
@@ -272,7 +425,7 @@ void ward_view_free(void *v) { free(CELL(v)); }
 // 写しの先（世代を確かめる）
 void *ward_view_target(void *v, const WSite *use) {
     WCell *c = CELL(v);
-    if (HDR(c->target)->gen != c->gen) ward_fail_dangling(use, c->site, c->target);
+    if (HDR(c->target)->gen != c->gen) ward_fail_dangling(use, c->site, c->target, c->gen);
     return c->target;
 }
 
@@ -955,7 +1108,37 @@ void ward_args(WList *out) {
 
 void ward_main(void);
 
+#ifdef _WIN32
+// Windows: 端末の文字コードを UTF-8 にし、引数は UTF-16 から UTF-8 に直す（windows.h なしで宣言する）
+#include <wchar.h>
+__declspec(dllimport) int __stdcall SetConsoleOutputCP(unsigned);
+__declspec(dllimport) int __stdcall SetConsoleCP(unsigned);
+__declspec(dllimport) wchar_t *__stdcall GetCommandLineW(void);
+__declspec(dllimport) wchar_t **__stdcall CommandLineToArgvW(const wchar_t *, int *);
+__declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+
+static void win_setup(int *argc, char ***argv) {
+    SetConsoleOutputCP(65001);
+    SetConsoleCP(65001);
+    int n = 0;
+    wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
+    if (!w) return;
+    char **a = malloc(sizeof(char *) * (size_t)(n + 1));
+    for (int i = 0; i < n; i++) {
+        int len = WideCharToMultiByte(65001, 0, w[i], -1, NULL, 0, NULL, NULL);
+        a[i] = malloc((size_t)len);
+        WideCharToMultiByte(65001, 0, w[i], -1, a[i], len, NULL, NULL);
+    }
+    a[n] = NULL;
+    *argc = n;
+    *argv = a;
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    win_setup(&argc, &argv);
+#endif
     g_argc = argc;
     g_argv = argv;
     ward_main();

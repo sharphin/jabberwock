@@ -107,7 +107,7 @@ impl<'a> Machine<'a> {
 
     fn inst(&mut self, f: &Func, locs: &mut [Loc], inst: &Inst) -> R<()> {
         match inst {
-            Inst::Assign { place, value, span } => {
+            Inst::Assign { place, value, span, what } => {
                 let v = self.rvalue(f, locs, value)?;
                 if place.proj.is_empty() {
                     // 解析は「own 型の変数には own が入っている」を根拠にする
@@ -127,7 +127,7 @@ impl<'a> Machine<'a> {
                 }
                 let (slot, path) = self.resolve_in(f, locs, place, true)?;
                 let old = std::mem::replace(at_mut(self.it, slot, &path), v);
-                self.it.release(old, *span, "上書きされて、古い値が解放された");
+                self.it.release(old, *span, &overwritten(what));
             }
             Inst::Drop { local, span, why } => {
                 if let Loc::Live(slot) = locs[*local] {
@@ -268,7 +268,9 @@ impl<'a> Machine<'a> {
                     Value::Ref(r) => Value::Ref(RefVal { mutable: *mutable, ..r.clone() }),
                     _ => {
                         if self.it.through_list(slot, &path) {
-                            return Err(Diagnostic::new("リスト・辞書の中の値は借りられません").primary(*span, "ここ"));
+                            return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
+                                .primary(*span, "リストや辞書は伸び縮みするので、中の場所が変わる")
+                                .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
                         }
                         Value::Ref(RefVal {
                             slot,

@@ -22,12 +22,12 @@
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
-| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ） |
+| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`ward build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
 | `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
 | `src/ir/llvm.rs` | IR → LLVM のテキスト（`ward --ll`）。書き出せない書き方は `Err(理由)` |
-| `src/native.rs` | clang を呼んで実行ファイルを作る（実行時ライブラリはコンパイラの中に入れてある） |
+| `src/native.rs` | clang を呼んで実行ファイルを作る（`ward build`。実行時ライブラリはコンパイラの中に入れてある） |
 | `runtime/ward_rt.c` | 実行時ライブラリ（区画と世代・文字列・リスト・辞書・出力・エラー） |
 | `src/ir/analyze.rs` | IR の上で ref の世代チェックを消す解析（`Proj::Deref` の `Check` を書く） |
 | `tests/examples.rs` | 言語の基本動作 |
@@ -172,11 +172,13 @@
   ジェネリックな関数は型の引数ごとに作り分ける（`Calls::index`。名前は `pick<i64>`）。クロージャの本体は別の関数（`main::λ行:列`）で、
   取り込んだ値は呼ぶときに `view_of` の写しで最後の引数として渡す（`Callee::Ir`）。interface を型として使ったメソッド呼び出しは、
   その名前のメソッドを持つ構造体の表（`CallDyn`）。match の中身は `take`（`(x as Some).0`）で受け取る。添字は `Proj::Index`（先に計算した添字を持つ）。
-  まだ書き出せないもの: 入力（`read_line` / `args`）だけ。
+  入力（`read_line` / `args`）は組み込み。入力を読むプログラムは、テストが入力を渡したときだけ突き合わせる。
 - LLVM（`ir::llvm::emit`）: 値の形は docs/ir-design.md の「7 で決めたこと」。**`WARD_NATIVE=1 cargo test` で全テストを実行ファイルでも突き合わせる**
   （`lib.rs` の `native_mismatch`。clang が要る）。IR の動きを変えたら llvm.rs も同じに直し、これを走らせること。
   own の写し（下の 1 ビット）・interface の構造体の番号・変数の状態（null / `@ward.unset` / ムーブした位置）が要。
-  実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
+  実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す。
+  実行時エラーは interp の `render_in` と一字一句同じに出す（突き合わせは全文を比べる）。interp のエラーの文を変えたら llvm.rs / ward_rt.c も直す。
+  `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
 - IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。
   事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `Pinned`。
   前向きのデータフローで、合流は共通部分。引数が Pinned かは関数をまたいで固定点まで回す（呼ばれない関数・関数の値の引数は何も仮定しない）。

@@ -11,6 +11,8 @@ cargo run -- --stats examples/counter.ward     # ref の検査をどれだけ消
 cargo run -- --no-elide examples/counter.ward  # 静的解析なし（全部実行時に検査）
 cargo run -- --ir examples/fib.ward            # 実行せず IR（中間表現）を表示
 cargo run -- --ll examples/fib.ward            # 実行せず LLVM IR を表示（clang でコンパイルできる）
+cargo run -- build examples/fib.ward           # 実行ファイル fib を作る（clang が要る。docs/native.md）
+cargo run -- build --release examples/fib.ward # 実行時エラーは使った位置だけ出す
 cargo run -- examples/words.ward "a b a"        # ファイル名のあとの引数は args() で受け取れる
 cargo test
 ```

@@ -42,8 +42,9 @@ enum H {
     HasOwn,
 }
 
-/// プログラム全体を LLVM のテキストにする。`files` はファイルの番号から名前
-pub fn emit(prog: &Program, files: &[String]) -> G<String> {
+/// プログラム全体を LLVM のテキストにする。`files` はファイルの番号から名前。
+/// `sources` はファイルの中身（エラーでソースの行を出すため）。空なら位置だけ出す（`--release`）
+pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
     let mut m = Module::new(prog, files);
     for (i, f) in prog.fns.iter().enumerate() {
         FnGen::new(&mut m, f, i).run()?;
@@ -59,6 +60,19 @@ pub fn emit(prog: &Program, files: &[String]) -> G<String> {
         MAX_DEPTH, site, ret, main
     );
     m.finish_helpers()?;
+    let mut entries = Vec::new();
+    for (i, text) in sources.iter().enumerate() {
+        let name = m.cstr(files.get(i).map_or("?", |s| s.as_str()));
+        let text = m.cstr(text);
+        entries.push(format!("%wsrc {{ ptr {}, ptr {} }}", name, text));
+    }
+    let _ = writeln!(
+        m.globals,
+        "@ward_files = constant [{} x %wsrc] [{}]\n@ward_nfiles = constant i32 {}",
+        entries.len(),
+        entries.join(", "),
+        entries.len()
+    );
     Ok(m.output())
 }
 
@@ -69,6 +83,7 @@ const PRELUDE: &str = r#"; ward が書き出した LLVM IR
 %list = type { ptr, i64, i64 }
 %site = type { ptr, i32, i32, i32, i32, ptr, ptr }
 %fnv = type { ptr, ptr }
+%wsrc = type { ptr, ptr }
 
 @ward_depth = external global i64
 @ward.unset = private constant %site { ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }
@@ -78,7 +93,7 @@ declare void @ward_print_end()
 declare void @ward_fail(ptr, ptr, ptr, ptr) noreturn
 declare void @ward_bug(ptr) noreturn
 declare void @ward_fail_moved(ptr, ptr, ptr) noreturn
-declare void @ward_fail_dangling(ptr, ptr, ptr) noreturn
+declare void @ward_fail_dangling(ptr, ptr, ptr, i64) noreturn
 declare void @ward_fail_bounds(i64, i32, i64, ptr) noreturn
 declare void @ward_fail_depth(ptr) noreturn
 declare void @ward_fail_nokey(i32, i64, i32, ptr) noreturn
@@ -471,8 +486,8 @@ impl<'p> Module<'p> {
         let t = self.cstr(text);
         let _ = writeln!(
             self.globals,
-            "{} = private unnamed_addr constant %site {{ ptr {}, i32 {}, i32 {}, i32 {}, i32 0, ptr {}, ptr {} }}",
-            name, file, span.line, span.col, span.len, t, chain
+            "{} = private unnamed_addr constant %site {{ ptr {}, i32 {}, i32 {}, i32 {}, i32 {}, ptr {}, ptr {} }}",
+            name, file, span.line, span.col, span.len, span.file, t, chain
         );
         name
     }
@@ -1569,10 +1584,19 @@ fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str) -> String {
     let g = b.val(format!("load i64, ptr {}", hp));
     let bad = b.val(format!("icmp ne i64 {}, {}", g, gen));
     let (_, ok) = b.if_true(&bad);
-    b.op(format!("call void @ward_fail_dangling(ptr {}, ptr {}, ptr {})", use_site, site, blk));
+    b.op(format!("call void @ward_fail_dangling(ptr {}, ptr {}, ptr {}, i64 {})", use_site, site, blk, gen));
     b.op("unreachable");
     b.label(&ok);
     addr
+}
+
+/// 中の own を取り出そうとしたときの案内（interp と同じ）
+fn copy_out_note(what: &str) -> &'static str {
+    match what {
+        "ポインタの先" => "`ref` で借りるか、`*p = ...` で置き換えてください",
+        "フィールド" => "`ref` で借りるか、`p.f = ...` で置き換えてください",
+        _ => "`ref a[i]` で借りるか、`a[i] = ...` で置き換えてください",
+    }
 }
 
 fn esc(s: &str) -> String {
@@ -1818,7 +1842,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
 
     fn inst(&mut self, inst: &Inst, taken: &[Local]) -> G<()> {
         match inst {
-            Inst::Assign { place, value, span } => {
+            Inst::Assign { place, value, span, what } => {
                 let want = self.place_ty(place)?;
                 let v = self.rvalue(value, &want)?;
                 if place.proj.is_empty() {
@@ -1842,7 +1866,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         None => None,
                     };
                     self.b.op(format!("store {} {}, ptr {}", lt, ov, old));
-                    let site = self.m.site(*span, "上書きされて、古い値が解放された");
+                    let site = self.m.site(*span, &super::overwritten(what));
                     let d = self.m.helper(H::Drop, &pr.ty);
                     self.b.op(format!("call void {}(ptr {}, ptr {})", d, old, site));
                     if let Some(no) = skip {
@@ -2191,7 +2215,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let title = self.m.cstr(&format!("クロージャに取り込んだ `{}` は取り出せません", f.locals[l].name));
                 let lab = self.m.cstr("クロージャは何度も呼べるので、取り込んだ値をムーブできない");
                 let s = self.m.site(span, "");
-                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, lab));
+                let note = self.m.cstr("`ref` で借りるか、中の値をコピーして使ってください");
+                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, lab, note));
                 self.b.op("unreachable");
                 self.b.label(&ok);
                 if always {
@@ -2425,9 +2450,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     t => {
                         if pr.list {
                             let title = self.m.cstr("リスト・辞書の中の値は借りられません");
-                            let l = self.m.cstr("ここ");
+                            let l = self.m.cstr("リストや辞書は伸び縮みするので、中の場所が変わる");
                             let s = self.m.site(*span, "");
-                            self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
+                            let note = self.m.cstr("要素を借りたいときは、要素を own にしてください（`(own T)[]`）");
+                            self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
                             self.b.op("unreachable");
                             let after = self.b.l();
                             self.b.label(&after);
@@ -2749,7 +2775,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     let title = self.m.cstr(&format!("{}にある {} は取り出せません", what, type_name(&pr.ty)));
                     let l = self.m.cstr("所有権をここから動かすことはできない");
                     let s = self.m.site(*span, "");
-                    self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
+                    let note = self.m.cstr(copy_out_note(what));
+                    self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
                     self.b.op("unreachable");
                     self.b.label(&ok);
                 }
