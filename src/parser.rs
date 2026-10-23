@@ -810,7 +810,7 @@ impl Parser {
                         // 大文字で始まる名前・`名前(...)`・数や文字列なら、重ねた形
                         let nested = match self.peek().clone() {
                             Tok::Ident(n) => {
-                                *self.peek2() == Tok::LParen || n.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+                                *self.peek2() == Tok::LParen || n.starts_with(|c: char| c.is_ascii_uppercase())
                             }
                             _ => true,
                         };
