@@ -10,6 +10,7 @@ use super::*;
 use crate::ast::UnOp;
 use crate::diag::Diagnostic;
 use crate::interp::{
+    Callee,
     as_bool, binary, bounds, float_to_int, locate, merge_sort, moved_error, none, some, str_method, Interp, MapVal, RefVal,
     Value, MAX_DEPTH,
 };
@@ -29,23 +30,26 @@ enum Loc {
 /// `main` を実行する。出力・ヒープは `it` に残る
 pub fn run(prog: &Program, it: &mut Interp) -> R<()> {
     let main = prog.by_name["main"];
-    let mut m = Machine { prog, it, depth: 0 };
-    m.call(main, Vec::new(), prog.fns[main].span).map(|_| ())
+    let mut m = Machine { prog, it, depth: 0, views: Vec::new() };
+    m.call(main, Vec::new(), Vec::new(), prog.fns[main].span).map(|_| ())
 }
 
 struct Machine<'a> {
     prog: &'a Program,
     it: &'a mut Interp,
     depth: usize,
+    /// 呼び出し中の関数ごとに、取り込んだムーブする値の写しを持つ変数（値として読めない。interp の `Var.view`）
+    views: Vec<Vec<Local>>,
 }
 
 impl<'a> Machine<'a> {
-    fn call(&mut self, fi: usize, args: Vec<Value>, span: Span) -> R<Value> {
+    fn call(&mut self, fi: usize, args: Vec<Value>, views: Vec<Local>, span: Span) -> R<Value> {
         if self.depth >= MAX_DEPTH {
             return Err(Diagnostic::new("関数呼び出しが深すぎます")
                 .primary(span, format!("呼び出しの深さが {} を超えました", MAX_DEPTH)));
         }
         self.depth += 1;
+        self.views.push(views);
         let prog = self.prog;
         let f = &prog.fns[fi];
         let mut locs = vec![Loc::Unset; f.locals.len()];
@@ -71,6 +75,7 @@ impl<'a> Machine<'a> {
                 Term::Return(o) => {
                     let v = self.operand(f, &mut locs, o)?;
                     self.depth -= 1;
+                    self.views.pop();
                     return Ok(v);
                 }
                 Term::Switch(place, arms, other) => {
@@ -187,6 +192,18 @@ impl<'a> Machine<'a> {
                 let (slot, path) = self.resolve(f, locs, place)?;
                 Ok(at(self.it, slot, &path).clone())
             }
+            Operand::Read(l, span) => match locs[*l] {
+                Loc::Live(_) if matches!(self.views.last(), Some(v) if v.contains(l)) => {
+                    Err(Diagnostic::new(format!("クロージャに取り込んだ `{}` は取り出せません", f.locals[*l].name))
+                        .primary(*span, "クロージャは何度も呼べるので、取り込んだ値をムーブできない"))
+                }
+                Loc::Live(slot) if self.it.heap.slots[slot].value.as_ref().expect("live slot").moves() => {
+                    self.operand(f, locs, &Operand::Move(*l, *span))
+                }
+                Loc::Live(slot) => Ok(self.it.heap.slots[slot].value.clone().expect("live slot")),
+                Loc::Moved(at) => Err(moved_error(&f.locals[*l].name, at, *span)),
+                Loc::Unset => unreachable!("read of an unset local _{} in {}", l, f.name),
+            },
             Operand::Move(l, span) => match locs[*l] {
                 Loc::Live(slot) => {
                     let name = &f.locals[*l].name;
@@ -317,7 +334,22 @@ impl<'a> Machine<'a> {
             }
             Rvalue::Call(fi, ops, span) => {
                 let args = self.operands(f, locs, ops)?;
-                self.call(*fi, args, *span)
+                self.call(*fi, args, Vec::new(), *span)
+            }
+            Rvalue::Closure(fi, ops) => Ok(Value::Func(Callee::Ir(*fi), self.operands(f, locs, ops)?)),
+            Rvalue::CallValue(fv, ops, span) => {
+                let args = self.operands(f, locs, ops)?;
+                let fv = self.operand(f, locs, fv)?;
+                self.call_value(&fv, args, *span)
+            }
+            Rvalue::CopyOut(place, what, span) => {
+                let (slot, path) = self.resolve(f, locs, place)?;
+                let v = at(self.it, slot, &path).clone();
+                if v.has_own() || v.moves() {
+                    return Err(Diagnostic::new(format!("{}にある {} は取り出せません", what, v.type_name()))
+                        .primary(*span, "所有権をここから動かすことはできない"));
+                }
+                Ok(v)
             }
             Rvalue::Show(o, temp, span) => {
                 let v = self.operand(f, locs, o)?;
@@ -362,8 +394,30 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// 関数の値を呼ぶ（interp の `call_func`）。取り込んだ値は読むだけの写しにして、最後の引数として渡す
+    fn call_value(&mut self, fv: &Value, mut args: Vec<Value>, span: Span) -> R<Value> {
+        let Value::Func(Callee::Ir(fi), caps) = fv else {
+            return Err(Diagnostic::new("関数ではない値を呼び出しました")
+                .primary(span, format!("これは {} です", fv.type_name())));
+        };
+        let callee = &self.prog.fns[*fi];
+        let first = callee.params - callee.captures;
+        let mut views = Vec::new();
+        for (i, c) in caps.iter().enumerate() {
+            let l = first + i;
+            if c.moves() {
+                views.push(l);
+            }
+            args.push(self.it.view_of(c.clone(), span, &callee.locals[l].name));
+        }
+        self.call(*fi, args, views, span)
+    }
+
     /// 配列・リスト・辞書の操作（interp の `eval_method` の配列・辞書の部分と同じ）
     fn seq_op(&mut self, name: &str, slot: usize, path: &[usize], mut vals: Vec<Value>, span: Span, arg_span: Span) -> R<Value> {
+        if name == "sort_by" {
+            return self.sort_by(slot, path, vals.remove(0), span);
+        }
         if name == "sort" {
             let Value::Array(items, _) = at(self.it, slot, path) else { unreachable!("sort on an array") };
             let items = items.clone();
@@ -435,6 +489,57 @@ impl<'a> Machine<'a> {
             }
             _ => unreachable!("array method {}", name),
         })
+    }
+
+    /// `sort_by(f)`（interp の `sort_list`）。比べる関数には要素の読むだけの写しを渡し、並べ終わった順に元の要素を動かす
+    fn sort_by(&mut self, slot: usize, path: &[usize], f: Value, span: Span) -> R<Value> {
+        let Value::Array(items, _) = at(self.it, slot, path) else { unreachable!("sort_by on an array") };
+        let items = items.clone();
+        let n = items.len();
+        let what = "要素";
+        let mut temps = Vec::new();
+        let views: Vec<Value> = items
+            .into_iter()
+            .map(|v| {
+                let v = self.it.view_of(v, span, what);
+                if !v.moves() {
+                    return v;
+                }
+                let s = self.it.heap.alloc(v);
+                temps.push(s);
+                Value::Ref(RefVal {
+                    slot: s,
+                    generation: self.it.heap.slots[s].generation,
+                    path: Vec::new(),
+                    borrowed_at: span,
+                    what: what.to_string(),
+                    mutable: false,
+                })
+            })
+            .collect();
+        let mut less = |me: &mut Self, a: usize, b: usize| -> R<bool> {
+            match me.call_value(&f, vec![views[a].clone(), views[b].clone()], span)? {
+                Value::Bool(x) => Ok(x),
+                other => Err(Diagnostic::new("sort_by の関数は true / false を返します")
+                    .primary(span, format!("{} が返りました", other.type_name()))),
+            }
+        };
+        let order = merge_sort(self, (0..n).collect(), &mut less);
+        for s in temps {
+            self.it.vacate(s, span, "sort_by の比べ終わった写し");
+        }
+        self.it.release(f, span, "sort_by が使い終わった関数");
+        let order = order?;
+        let Value::Array(items, _) = at_mut(self.it, slot, path) else {
+            return Err(Diagnostic::new("sort_by の途中でリストが置き換えられました").primary(span, "ここ"));
+        };
+        if items.len() != n {
+            return Err(Diagnostic::new("sort_by の途中でリストの長さが変わりました")
+                .primary(span, format!("始めは {} 個でしたが、今は {} 個です", n, items.len())));
+        }
+        let mut old: Vec<Option<Value>> = std::mem::take(items).into_iter().map(Some).collect();
+        *items = order.into_iter().map(|i| old[i].take().expect("a permutation")).collect();
+        Ok(Value::Unit)
     }
 }
 

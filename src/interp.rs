@@ -106,6 +106,8 @@ pub enum Callee {
     Named(Rc<FnDef>),
     /// その場で作った関数 `(a, b) -> ...`
     Lambda(Rc<Lambda>),
+    /// IR の関数（番号）。IR インタプリタ（`ir::exec`）だけが作る
+    Ir(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -140,7 +142,7 @@ impl Value {
     }
 
     /// 中に（フィールドも含めて）own を持っているか
-    fn has_own(&self) -> bool {
+    pub(crate) fn has_own(&self) -> bool {
         match self {
             Value::Own(_) => true,
             Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
@@ -2055,6 +2057,7 @@ impl Interp {
         let l = match callee {
             Callee::Named(def) => return self.call_fn(def, args, span),
             Callee::Lambda(l) => l.clone(),
+            Callee::Ir(_) => unreachable!("IR functions run only in ir::exec"),
         };
         if self.depth >= MAX_DEPTH {
             return Err(Diagnostic::new("関数呼び出しが深すぎます")

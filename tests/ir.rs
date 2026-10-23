@@ -68,6 +68,6 @@ fn main() {
 
 #[test]
 fn unsupported_programs_say_why() {
-    let e = ir_text("fn main() {\n    let v = (i64 x) -> x + 1;\n    print(v(1));\n}", &no_modules).unwrap_err();
-    assert!(e.contains("クロージャ"), "{}", e);
+    let e = ir_text("fn main() {\n    print(read_line());\n}", &no_modules).unwrap_err();
+    assert!(e.contains("入力"), "{}", e);
 }

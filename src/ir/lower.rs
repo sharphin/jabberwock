@@ -38,8 +38,12 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
     let mut calls = Calls { defs, by_name: HashMap::new(), queue: VecDeque::new() };
     calls.index("main", &HashMap::new())?;
     let mut fns: Vec<Option<Func>> = Vec::new();
-    while let Some((name, def, map, i)) = calls.queue.pop_front() {
-        let f = FnLower::new(info, &structs, &mut calls, map).lower(def, name)?;
+    while let Some((name, body, map, i)) = calls.queue.pop_front() {
+        let fl = FnLower::new(info, &structs, &mut calls, map, name);
+        let f = match body {
+            Body::Fn(def) => fl.lower(def)?,
+            Body::Lambda { lambda, caps, ret, span } => fl.lower_lambda(&lambda, caps, ret, span)?,
+        };
         if fns.len() <= i {
             fns.resize_with(i + 1, || None);
         }
@@ -49,12 +53,19 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
     Ok(Program { fns, by_name: calls.by_name, structs })
 }
 
+/// 書き出す関数の本体
+enum Body<'p> {
+    Fn(&'p FnDef),
+    /// クロージャ。取り込む変数（名前, 外での型）と戻り値の型
+    Lambda { lambda: Rc<ast::Lambda>, caps: Vec<(String, Ty)>, ret: Ty, span: Span },
+}
+
 /// 呼ばれた関数に番号をつけ、書き出す順に並べる。ジェネリックな関数は型の引数ごとに作り分ける（`pick<i64>`）
 struct Calls<'p> {
     defs: HashMap<&'p str, &'p FnDef>,
     by_name: HashMap<String, usize>,
-    /// (作り分けた名前, 定義, 型の引数, 番号)
-    queue: VecDeque<(String, &'p FnDef, HashMap<String, Ty>, usize)>,
+    /// (作り分けた名前, 本体, 型の引数, 番号)
+    queue: VecDeque<(String, Body<'p>, HashMap<String, Ty>, usize)>,
 }
 
 impl<'p> Calls<'p> {
@@ -74,14 +85,18 @@ impl<'p> Calls<'p> {
         } else {
             format!("{}<{}>", name, args.iter().map(Ty::show).collect::<Vec<_>>().join(", "))
         };
+        let map = def.tparams.iter().cloned().zip(args).collect();
+        Ok(self.push(inst, Body::Fn(def), map))
+    }
+
+    fn push(&mut self, inst: String, body: Body<'p>, map: HashMap<String, Ty>) -> usize {
         if let Some(&i) = self.by_name.get(&inst) {
-            return Ok(i);
+            return i;
         }
         let i = self.by_name.len();
         self.by_name.insert(inst.clone(), i);
-        let map = def.tparams.iter().cloned().zip(args).collect();
-        self.queue.push_back((inst, def, map, i));
-        Ok(i)
+        self.queue.push_back((inst, body, map, i));
+        i
     }
 }
 
@@ -111,6 +126,10 @@ struct FnLower<'a, 'p> {
     calls: &'a mut Calls<'p>,
     /// 作り分けている関数の型の引数（`T` → 具体的な型）
     subst: HashMap<String, Ty>,
+    /// 書き出している関数の（作り分けた）名前
+    name: String,
+    /// クロージャが取り込んだ値の変数
+    captures: Vec<Local>,
     locals: Vec<LocalDecl>,
     blocks: Vec<Block>,
     cur: Bb,
@@ -125,12 +144,15 @@ impl<'a, 'p> FnLower<'a, 'p> {
         structs: &'a HashMap<String, Rc<ast::StructDef>>,
         calls: &'a mut Calls<'p>,
         subst: HashMap<String, Ty>,
+        name: String,
     ) -> Self {
         FnLower {
             info,
             structs,
             calls,
             subst,
+            name,
+            captures: Vec::new(),
             locals: Vec::new(),
             blocks: vec![Block { insts: Vec::new(), term: Term::Unreachable }],
             cur: 0,
@@ -139,7 +161,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
         }
     }
 
-    fn lower(mut self, f: &FnDef, name: String) -> L<Func> {
+    fn lower(mut self, f: &FnDef) -> L<Func> {
         self.scopes.push(Vec::new());
         for p in &f.params {
             let ty = self.var_ty(p.span)?;
@@ -157,12 +179,62 @@ impl<'a, 'p> FnLower<'a, 'p> {
         self.leave(0, f.body.end, "スコープを抜けた");
         self.terminate(Term::Return(ret));
         Ok(Func {
-            name,
+            name: self.name,
             params: f.params.len(),
+            captures: 0,
             ret: ret_ty,
             locals: self.locals,
             blocks: reachable(self.blocks),
             span: f.span,
+        })
+    }
+
+    /// クロージャの本体。引数のあとに、取り込んだ値（読むだけの写し）を受け取る
+    fn lower_lambda(mut self, l: &ast::Lambda, caps: Vec<(String, Ty)>, ret_ty: Ty, span: Span) -> L<Func> {
+        self.scopes.push(Vec::new());
+        for p in &l.params {
+            let ty = self.var_ty(p.span)?;
+            self.declare(&p.name, ty, false, p.span);
+        }
+        let ncaps = caps.len();
+        for (n, t) in caps {
+            let t = match t {
+                Ty::Own(x) => Ty::Ref(x, false),
+                t => t,
+            };
+            let v = self.declare(&n, t, false, span);
+            self.captures.push(v);
+        }
+        let ret = if l.returns.get() {
+            let r = self.temp(ret_ty.clone(), l.body.end);
+            self.block(&l.body, Some(r))?;
+            Operand::Move(r, l.body.end)
+        } else {
+            self.block(&l.body, None)?;
+            Operand::Const(Const::Unit)
+        };
+        self.leave(0, l.body.end, "スコープを抜けた");
+        self.terminate(Term::Return(ret));
+        Ok(Func {
+            name: self.name,
+            params: l.params.len() + ncaps,
+            captures: ncaps,
+            ret: ret_ty,
+            locals: self.locals,
+            blocks: reachable(self.blocks),
+            span,
+        })
+    }
+
+    /// 変数を値として読む（interp の `read_var`）。関数の値と取り込んだ変数は、値しだいで決める
+    fn read_var(&self, l: Local, span: Span) -> L<Operand> {
+        let t = &self.locals[l].ty;
+        Ok(if self.captures.contains(&l) || matches!(t, Ty::Fn(..)) {
+            Operand::Read(l, span)
+        } else if self.moves(t)? {
+            Operand::Move(l, span)
+        } else {
+            Operand::Copy(Place::local(l, span))
         })
     }
 
@@ -804,7 +876,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
     fn moves(&self, t: &Ty) -> L<bool> {
         Ok(match t {
             Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..) => false,
-            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) => true,
+            // 関数の値は取り込んだものしだい（変数を読むときは `Operand::Read` で値を見て決める）
+            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) => true,
             Ty::Array(x, _) => self.moves(x)?,
             Ty::Enum(n, args) => {
                 let (tparams, vs) = self.info.enums.get(n).ok_or("enum の記録がない")?;
@@ -869,11 +942,17 @@ impl<'a, 'p> FnLower<'a, 'p> {
             ExprKind::Float(x) => Operand::Const(Const::Float(*x)),
             ExprKind::Bool(b) => Operand::Const(Const::Bool(*b)),
             ExprKind::Str(s) => Operand::Const(Const::Str(Rc::from(s.as_str()))),
-            ExprKind::Var(name) => {
-                let l = self.lookup(name).ok_or_else(|| format!("関数を値として使う `{}`", name))?;
-                let read = if self.moves(&self.locals[l].ty)? { Operand::Move(l, sp) } else { Operand::Copy(Place::local(l, sp)) };
-                self.temp_of(ty, Rvalue::Use(read), sp)
-            }
+            ExprKind::Var(name) => match self.lookup(name) {
+                Some(l) => {
+                    let read = self.read_var(l, sp)?;
+                    self.temp_of(ty, Rvalue::Use(read), sp)
+                }
+                // 名前のある関数を値にする
+                None => {
+                    let f = self.calls.index(name, &HashMap::new())?;
+                    self.temp_of(ty, Rvalue::Closure(f, Vec::new()), sp)
+                }
+            },
             ExprKind::Cast(inner, t) => {
                 let target = match &t.kind {
                     TypeKind::Name(n) => match IntTy::from_name(n) {
@@ -894,24 +973,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.temp_of(ty, Rvalue::Ref { place, mutable: *mutable, what: describe(inner), span: sp }, sp)
             }
             ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..) => {
-                // ポインタの先・フィールド・要素から取り出せるのはコピーできる値だけ。ムーブする値は、たどってから実行時エラー
-                if self.moves(&ty)? && !matches!(&e.kind, ExprKind::Deref(b, _) | ExprKind::Field(b, ..) | ExprKind::Index(b, ..) if !is_place(b)) {
-                    let place = self.place(e)?;
-                    let _ = self.temp_of(ty.clone(), Rvalue::Use(Operand::Copy(place)), sp);
-                    let title = match &e.kind {
-                        ExprKind::Deref(..) => "ポインタの先",
-                        ExprKind::Field(..) => "フィールド",
-                        _ => "配列の中",
-                    };
-                    let title = format!("{}にある {} は取り出せません", title, value_kind(&ty));
-                    self.terminate(Term::Fail(title, sp, "所有権をここから動かすことはできない".to_string()));
-                    return Ok(Operand::Const(Const::Unit));
-                }
-                if self.moves(&ty)? {
-                    return Err("一時的な値の中からムーブする値を読む".to_string());
-                }
+                // ポインタの先・フィールド・要素から取り出せるのはコピーできる値だけ（ムーブする値なら実行時エラー）
                 let (place, t) = self.read_place(e)?;
-                let r = self.temp_of(ty, Rvalue::Use(Operand::Copy(place)), sp);
+                let what = match &e.kind {
+                    ExprKind::Deref(..) => "ポインタの先",
+                    ExprKind::Field(..) => "フィールド",
+                    _ => "配列の中",
+                };
+                let r = self.temp_of(ty, Rvalue::CopyOut(place, what.to_string(), sp), sp);
                 self.drop_temp(&t.map(|t| Operand::Move(t, sp)), sp);
                 r
             }
@@ -1011,7 +1080,25 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.match_expr(scrut, arms, default.as_ref(), Some(d))?;
                 Operand::Move(d, sp)
             }
-            ExprKind::Lambda(_) => return Err("クロージャ".to_string()),
+            ExprKind::Lambda(l) => {
+                // 外の変数を、名前で読むのと同じように取り込む（own はムーブ、コピーできる値はコピー）
+                let names = l.captures.borrow().clone();
+                let mut ops = Vec::new();
+                let mut caps = Vec::new();
+                for n in &names {
+                    let lc = self.lookup(n).ok_or("取り込む変数がない")?;
+                    caps.push((n.clone(), self.locals[lc].ty.clone()));
+                    ops.push(self.read_var(lc, sp)?);
+                }
+                let ret = match &ty {
+                    Ty::Fn(_, r) => (**r).clone(),
+                    _ => Ty::Unit,
+                };
+                let inst = format!("{}::λ{}:{}", self.name, sp.line, sp.col);
+                let body = Body::Lambda { lambda: l.clone(), caps, ret, span: sp };
+                let f = self.calls.push(inst, body, self.subst.clone());
+                self.temp_of(ty, Rvalue::Closure(f, ops), sp)
+            }
         })
     }
 
@@ -1062,7 +1149,19 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 Ok(Operand::Const(Const::Unit))
             }
             "read_line" | "args" => Err("入力".to_string()),
-            _ if self.lookup(name).is_some() => Err("関数の値の呼び出し".to_string()),
+            _ if self.lookup(name).is_some() => {
+                // 引数を先に評価してから、変数を借りて読む（interp の `call_var`）
+                let mut vals = Vec::new();
+                for a in args {
+                    vals.push(self.expr(a)?);
+                }
+                let l = self.lookup(name).expect("checked above");
+                let mut f = Place::local(l, sp);
+                if matches!(self.locals[l].ty, Ty::Own(_) | Ty::Ref(..)) {
+                    f.proj.push(Proj::Deref(ast::Check::Required, sp));
+                }
+                Ok(self.temp_of(ty, Rvalue::CallValue(Operand::Copy(f), vals, sp), sp))
+            }
             _ => {
                 let mut vals = Vec::new();
                 for a in args {
@@ -1136,7 +1235,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.drop_temp(&temp, sp);
                 Ok(r)
             }
-            Ty::Array(..) | Ty::List(_) | Ty::Map(..) if name != "sort_by" => {
+            Ty::Array(..) | Ty::List(_) | Ty::Map(..) => {
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;
                 let arg_span = args.first().map_or(sp, |a| a.span);
                 let op = Rvalue::SeqOp { name: name.to_string(), place: pl, args: vals, span: sp, arg_span };
@@ -1292,20 +1391,6 @@ fn reachable(blocks: Vec<Block>) -> Vec<Block> {
             b
         })
         .collect()
-}
-
-/// interp の `Value::type_name`（値の種類の名前）を型から
-fn value_kind(t: &Ty) -> &'static str {
-    match t {
-        Ty::Own(_) => "own",
-        Ty::Struct(..) => "構造体",
-        Ty::Enum(..) => "enum",
-        Ty::Array(..) => "配列",
-        Ty::List(_) => "リスト",
-        Ty::Map(..) => "辞書",
-        Ty::Fn(..) => "関数",
-        _ => "値",
-    }
 }
 
 fn is_place(e: &Expr) -> bool {

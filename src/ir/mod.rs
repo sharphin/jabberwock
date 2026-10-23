@@ -33,10 +33,11 @@ pub struct Program {
 }
 
 pub struct Func {
-    /// 単相化した名前（`first<i64>`）
+    /// 単相化した名前（`first<i64>`）。クロージャは `作った関数::λ行:列`
     pub name: String,
-    /// `locals[0..params]` が引数
+    /// `locals[0..params]` が引数（クロージャなら、そのうち最後の `captures` 個が取り込んだ値）
     pub params: usize,
+    pub captures: usize,
     pub ret: Ty,
     pub locals: Vec<LocalDecl>,
     pub blocks: Vec<Block>,
@@ -110,6 +111,9 @@ pub enum Operand {
     Copy(Place),
     /// 読んで、変数は空になる（own・構造体・一時的な値）。空の変数を読めば「ムーブ済み」の実行時エラー
     Move(Local, Span),
+    /// 値によって決める読み方（interp の `read_var` と同じ）: ムーブする値ならムーブ、そうでなければコピー。
+    /// クロージャが取り込んだムーブする値なら実行時エラー。関数の値（取り込んだものしだい）と、取り込んだ変数に使う
+    Read(Local, Span),
     Const(Const),
 }
 
@@ -154,6 +158,12 @@ pub enum Rvalue {
     Keys(Place),
     /// 名前のある関数の呼び出し（関数の番号）
     Call(usize, Vec<Operand>, Span),
+    /// 関数の値を作る（関数の番号, 取り込む値）
+    Closure(usize, Vec<Operand>),
+    /// 関数の値の呼び出し（関数の値, 引数）。取り込んだ値は、読むだけの写しにして最後の引数として渡す
+    CallValue(Operand, Vec<Operand>, Span),
+    /// 場所の値を読む。ムーブする値なら実行時エラー（「〜にある X は取り出せません」の〜）
+    CopyOut(Place, String, Span),
     /// print と埋め込みで出す文字にする（own / ref は先をたどる）。bool が true なら、値は一時的なので見たあと捨てる
     Show(Operand, bool, Span),
     /// 組み込みの操作: `print`（文字を空白でつないで 1 行出す）・`concat`（文字をつなぐ）・`assert`
@@ -253,6 +263,7 @@ fn show_operand(o: &Operand) -> String {
     match o {
         Operand::Copy(p) => show_place(p),
         Operand::Move(l, _) => format!("move _{}", l),
+        Operand::Read(l, _) => format!("read _{}", l),
         Operand::Const(c) => match c {
             Const::Unit => "()".to_string(),
             Const::Int(n, t) => format!("{}{}", n, t.name()),
@@ -288,6 +299,9 @@ fn show_rvalue(r: &Rvalue, prog: &Program) -> String {
         Rvalue::Items { place, .. } => format!("items {}", show_place(place)),
         Rvalue::Keys(p) => format!("keys {}", show_place(p)),
         Rvalue::Call(i, args, _) => format!("{}({})", prog.fns[*i].name, ops(args)),
+        Rvalue::Closure(i, caps) => format!("closure {} [{}]", prog.fns[*i].name, ops(caps)),
+        Rvalue::CallValue(f, args, _) => format!("call {}({})", show_operand(f), ops(args)),
+        Rvalue::CopyOut(p, ..) => format!("copy_out {}", show_place(p)),
         Rvalue::Show(o, true, _) => format!("show!({}, 捨てる)", show_operand(o)),
         Rvalue::Show(o, false, _) => format!("show!({})", show_operand(o)),
         Rvalue::Builtin(n, args, _) => format!("{}!({})", n, ops(args)),
