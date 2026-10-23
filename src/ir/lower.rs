@@ -1144,13 +1144,27 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             ExprKind::Lambda(l) => {
                 // 外の変数を、名前で読むのと同じように取り込む（own はムーブ、コピーできる値はコピー）
+                // 引数に書いたクロージャは、ムーブする値を `ref 名前` で借りて取り込む
                 let names = l.captures.borrow().clone();
+                let borrowed = l.borrowed.borrow().clone();
                 let mut ops = Vec::new();
                 let mut caps = Vec::new();
-                for n in &names {
+                for (k, n) in names.iter().enumerate() {
                     let lc = self.lookup(n).ok_or("取り込む変数がない")?;
-                    caps.push((n.clone(), self.locals[lc].ty.clone()));
-                    ops.push(self.read_var(lc, sp)?);
+                    let vty = self.locals[lc].ty.clone();
+                    if borrowed.get(k).copied().unwrap_or(false) {
+                        let (follows, rty) = match vty {
+                            Ty::Own(x) => (true, Ty::Ref(x, false)),
+                            t => (false, Ty::Ref(Box::new(t), false)),
+                        };
+                        let what = describe(&Expr::new(ExprKind::Var(n.clone()), sp));
+                        let r = Rvalue::Ref { place: Place::local(lc, sp), mutable: false, follows, what, span: sp };
+                        caps.push((n.clone(), rty.clone()));
+                        ops.push(self.temp_of(rty, r, sp));
+                    } else {
+                        caps.push((n.clone(), vty));
+                        ops.push(self.read_var(lc, sp)?);
+                    }
                 }
                 let ret = match &ty {
                     Ty::Fn(_, r) => (**r).clone(),

@@ -1697,11 +1697,18 @@ impl Interp {
             ExprKind::Str(s) => Ok(Value::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => self.read_var(name, e.span),
             ExprKind::Lambda(l) => {
-                // 外の変数を、名前で読むのと同じように取り込む（own はムーブ、コピーできる値はコピー）
+                // 外の変数を、名前で読むのと同じように取り込む（own はムーブ、コピーできる値はコピー）。
+                // 引数に書いたクロージャは、ムーブする値を `ref 名前` で借りて取り込む
                 let names = l.captures.borrow().clone();
+                let borrowed = l.borrowed.borrow().clone();
                 let mut caps = Vec::new();
-                for n in &names {
-                    match self.read_var(n, e.span) {
+                for (k, n) in names.iter().enumerate() {
+                    let got = if borrowed.get(k).copied().unwrap_or(false) {
+                        self.make_ref(&Expr::new(ExprKind::Var(n.clone()), e.span), false, e.span)
+                    } else {
+                        self.read_var(n, e.span)
+                    };
+                    match got {
                         Ok(v) => caps.push(v),
                         Err(d) => {
                             self.discard(caps, e.span);

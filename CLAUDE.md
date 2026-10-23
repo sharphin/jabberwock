@@ -160,6 +160,9 @@
   interp の値は `Value::Func(Callee, 取り込んだ値)`。作るときに captures の順で `read_var`（own はムーブ）。
   呼ぶとき（`call_func`）は取り込んだ値を `view_of` の写し（own → 読むだけの ref）で新しいフレームに置き、ムーブする値だった変数は `Var.view` で取り出しを禁止する。
   `f(x)` は、`f` という変数があれば関数の値の呼び出し（`call_var`。引数が先、変数はあとで借りる）。変数に関数と同じ名前は禁止（`not_a_fn_name`）。
+  関数・メソッドの引数にその場で書いたクロージャはパーサが `Lambda.borrows` を立て（spawn は除く）、types の `use_var` がムーブする値
+  （`borrowable`）の取り込みを `Lambda.borrowed` に記録して、中では `ref T` に見せる。interp（`make_ref`）・analyze（事実を消さない）・lower（`Rvalue::Ref`）は
+  その取り込みを `ref 名前` として作る。
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 

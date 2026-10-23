@@ -132,3 +132,45 @@ fn closure_errors() {
     let d = err("fn f() {}\nfn main() {\nlet f = 1;\n}");
     assert!(d.title.contains("関数の名前"));
 }
+
+#[test]
+fn closures_written_as_arguments_borrow() {
+    // 引数にその場で書いたクロージャは、ムーブする外の変数を借りて取り込む（あとでも使える）
+    let src = "
+struct P { str name; i64 age; }
+fn i64 apply(fn i64(i64) f, i64 x) { f(x) }
+fn main() {
+    let m = [\"a\": 3, \"b\": 1, \"c\": 2];
+    let mut ks = m.keys();
+    ks.sort_by((x, y) -> m[x] < m[y]);
+    print(ks, m);
+    let base = own 10;
+    let p = P { name: \"x\", age: 5 };
+    print(apply((v) -> v + *base + p.age, 1));
+    print(*base, p.name);
+    let g = (i64 v) -> v + *base;
+    print(g(1));
+}";
+    assert_eq!(ok(src), "[b, c, a] [a: 3, b: 1, c: 2]\n16\n10 x\n11\n");
+    // 変数に入れたクロージャは今までどおりムーブする
+    let d = err("
+fn main() {
+    let base = own 10;
+    let g = (i64 v) -> v + *base;
+    print(*base);
+}");
+    assert_eq!(d.title, "ムーブ済みの値 `base` を使いました (use after move)");
+    // 借りたクロージャを、借りた変数より長く持っていると、呼んだときに止まる
+    let d = err("
+fn fn i64(i64) keep(fn i64(i64) f) { f }
+fn main() {
+    let mut f = keep((v) -> v);
+    if true {
+        let o = own 7;
+        f = keep((v) -> v + *o);
+        print(f(1));
+    }
+    print(f(1));
+}");
+    assert_eq!(d.title, "無効になった参照を使いました (dangling reference)");
+}

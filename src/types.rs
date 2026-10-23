@@ -277,6 +277,14 @@ struct FnSig {
     ret: Ty,
 }
 
+/// 調べているクロージャ: 本体が始まるスコープの位置と、取り込んだ変数の名前（と借りるか）
+struct LambdaScope {
+    base: usize,
+    caps: Vec<String>,
+    borrowed: Vec<bool>,
+    borrows: bool,
+}
+
 struct Checker<'a> {
     structs: HashMap<&'a str, (&'a StructDef, Vec<Ty>)>,
     /// enum ごとの定義と、種類ごとの中身の型
@@ -293,8 +301,8 @@ struct Checker<'a> {
     bounds: HashMap<String, Vec<String>>,
     /// 今調べているメソッドの構造体のフィールド名（シャドーイングの禁止に使う）
     fields: Vec<String>,
-    /// 今調べているクロージャ（外から順）。本体が始まるスコープの位置と、取り込んだ変数の名前
-    lambdas: Vec<(usize, Vec<String>)>,
+    /// 今調べているクロージャ（外から順）
+    lambdas: Vec<LambdaScope>,
     warnings: Vec<Diagnostic>,
     /// 読み込んだモジュールの名前（変数の名前にできない）
     modules: &'a [String],
@@ -981,21 +989,40 @@ impl<'a> Checker<'a> {
         self.scopes.iter().rposition(|s| s.contains_key(name))
     }
 
-    /// 式の中で変数を使う。クロージャの外の変数なら、そのクロージャが取り込むものとして覚える
+    /// 式の中で変数を使う。クロージャの外の変数なら、そのクロージャが取り込むものとして覚える。
+    /// 引数に書いたクロージャ（`borrows`）は、ムーブする値を借りて取り込むので、中では `ref T` に見える
     fn use_var(&mut self, name: &str) -> Option<VarInfo> {
         let i = self.var_index(name)?;
-        for (base, caps) in self.lambdas.iter_mut() {
-            if i < *base && !caps.iter().any(|c| c == name) {
-                caps.push(name.to_string());
+        let mut info = self.scopes[i].get(name).cloned()?;
+        for k in 0..self.lambdas.len() {
+            if i >= self.lambdas[k].base {
+                continue;
+            }
+            let borrow = self.lambdas[k].borrows && self.borrowable(&info.ty);
+            if borrow {
+                info.ty = match info.ty {
+                    Ty::Own(x) => Ty::Ref(x, false),
+                    t => Ty::Ref(Box::new(t), false),
+                };
+            }
+            let l = &mut self.lambdas[k];
+            if !l.caps.iter().any(|c| c == name) {
+                l.caps.push(name.to_string());
+                l.borrowed.push(borrow);
             }
         }
-        self.scopes[i].get(name).cloned()
+        Some(info)
+    }
+
+    /// 引数に書いたクロージャが、取り込むときに借りる型か（ムーブする値。関数の値と task は今までどおり）
+    fn borrowable(&self, t: &Ty) -> bool {
+        !self.copyable(t) && !matches!(t, Ty::Fn(..) | Ty::Task(_))
     }
 
     /// 今いるクロージャが取り込んだ（外の）変数か
     fn is_captured(&self, name: &str) -> bool {
         match (self.var_index(name), self.lambdas.last()) {
-            (Some(i), Some((base, _))) => i < *base,
+            (Some(i), Some(l)) => i < l.base,
             _ => false,
         }
     }
@@ -1019,14 +1046,15 @@ impl<'a> Checker<'a> {
             });
         }
         let base = self.scopes.len();
-        self.lambdas.push((base, Vec::new()));
+        self.lambdas.push(LambdaScope { base, caps: Vec::new(), borrowed: Vec::new(), borrows: l.borrows.get() });
         self.scopes.push(HashMap::new());
         let saved_ret = std::mem::replace(&mut self.ret, hret.clone().unwrap_or(Ty::Never));
         let r = self.lambda_body(l, &ptys, hret.as_ref());
         self.ret = saved_ret;
         self.scopes.truncate(base);
-        let (_, caps) = self.lambdas.pop().expect("pushed above");
-        *l.captures.borrow_mut() = caps;
+        let scope = self.lambdas.pop().expect("pushed above");
+        *l.captures.borrow_mut() = scope.caps;
+        *l.borrowed.borrow_mut() = scope.borrowed;
         let r = r?;
         l.returns.set(r != Ty::Unit);
         Ok(Ty::Fn(ptys, Box::new(r)))

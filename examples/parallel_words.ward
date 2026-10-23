@@ -41,8 +41,8 @@ fn main() {
     }
     for t in ts { t.join(); }
     let mut keys = total.keys();
-    let t = ref total;
-    keys.sort_by((a, b) -> t[a] > t[b] || (t[a] == t[b] && a < b));
+    // 引数に書いたクロージャは total を借りるだけ（ムーブしない）
+    keys.sort_by((a, b) -> total[a] > total[b] || (total[a] == total[b] && a < b));
     for k in keys {
         print("{k}: {total[k]}");
     }

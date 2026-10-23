@@ -494,7 +494,14 @@ impl Parser {
         self.in_value_if = saved.1;
         let body = body?;
         let span = start.join(body.end);
-        let lambda = Lambda { params, body, captures: RefCell::new(Vec::new()), returns: Cell::new(false) };
+        let lambda = Lambda {
+            params,
+            body,
+            captures: RefCell::new(Vec::new()),
+            borrowed: RefCell::new(Vec::new()),
+            borrows: Cell::new(false),
+            returns: Cell::new(false),
+        };
         Ok(Expr::new(ExprKind::Lambda(Rc::new(lambda)), span))
     }
 
@@ -1132,6 +1139,7 @@ impl Parser {
             if *self.peek() == Tok::LParen {
                 // `e.name(...)` はメソッド呼び出し
                 let (args, end) = self.parse_args()?;
+                lambdas_borrow(&args);
                 let span = e.span.join(end);
                 e = Expr::new(ExprKind::MethodCall(Box::new(e), name, args), span);
                 continue;
@@ -1254,6 +1262,7 @@ impl Parser {
                         .primary(start.join(self.prev_span()), "`Point.origin()` のように `(...)` が必要"));
                 }
                 let (args, end) = self.parse_args()?;
+                lambdas_borrow(&args);
                 Ok(Expr::new(ExprKind::Call(format!("{}.{}", name, f), args), start.join(end)))
             }
             Tok::Ident(name) if self.enum_names.contains(&name) && *self.peek2() == Tok::Dot => {
@@ -1282,6 +1291,10 @@ impl Parser {
                         }
                     }
                     let end = self.expect(Tok::RParen, "`)`")?;
+                    // spawn のクロージャは、取り込んだ値をほかのスレッドへ移すので借りない
+                    if name != "spawn" {
+                        lambdas_borrow(&args);
+                    }
                     Ok(Expr::new(ExprKind::Call(name, args), start.join(end)))
                 } else if *self.peek() == Tok::LBrace && !self.no_struct_lit {
                     self.parse_struct_lit(name, start)
@@ -1588,6 +1601,15 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
         ExprKind::Binary(_, l, r) => {
             bind_this(l, ctx, scopes);
             bind_this(r, ctx, scopes);
+        }
+    }
+}
+
+/// 関数・メソッドの引数にその場で書いたクロージャは、ムーブする外の変数を借りて取り込む
+fn lambdas_borrow(args: &[Expr]) {
+    for a in args {
+        if let ExprKind::Lambda(l) = &a.kind {
+            l.borrows.set(true);
         }
     }
 }

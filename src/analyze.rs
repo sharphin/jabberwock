@@ -360,7 +360,12 @@ impl<'a> FnAnalyzer<'a> {
             }
             ExprKind::Lambda(l) => {
                 // 作るときに外の変数を値として読む（インタプリタと同じ順。own ならムーブ）
-                for n in l.captures.borrow().iter() {
+                // 借りて取り込む変数（`ref 名前`）は、事実を変えない
+                let borrowed = l.borrowed.borrow().clone();
+                for (k, n) in l.captures.borrow().iter().enumerate() {
+                    if borrowed.get(k).copied().unwrap_or(false) {
+                        continue;
+                    }
                     if let Some(id) = self.lookup(n) {
                         if !matches!(self.facts.get(&id), Some(Fact::RefTo(_) | Fact::Pinned)) {
                             self.kill(id);

@@ -422,6 +422,10 @@ pub struct Lambda {
     pub body: Block,
     /// 取り込む外の変数の名前（型検査が本体を調べて決める）。作るときにこの順で値として読む
     pub captures: RefCell<Vec<String>>,
+    /// 取り込みごとに、借りるか（true なら作るときに `ref 名前` を取る。型検査が書く）
+    pub borrowed: RefCell<Vec<bool>>,
+    /// 関数・メソッドの引数にその場で書いたクロージャか（パーサが書く）。ムーブする外の変数を借りて取り込む
+    pub borrows: Cell<bool>,
     /// 値を返すか（戻り値の型が () でない。型検査が書く）
     pub returns: Cell<bool>,
 }
