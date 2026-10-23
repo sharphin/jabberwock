@@ -30,7 +30,31 @@ fn main() {
 - `own x` を読むと **ムーブ**。元の変数はそれ以降使えない。
 - `ref p` は **世代付き参照**。所有者が解放されると、使った瞬間に確実に検出される。
 - スコープを抜ける・`drop(x)`・再代入で `own` は解放される。中の `own` も連鎖して解放。
-- 値は整数・真偽値・文字列・構造体。`let` / `=` / `if` / `else` / `while` / `return` / `fn` / `struct`。組み込みは `print` `drop` `assert`。
+- 値は整数・真偽値・文字列・構造体。`let` / `=` / `if` / `else` / `loop` / `while` / `for` / `break` / `continue` / `return` / `fn` / `struct`。組み込みは `print` `drop` `assert`。
+
+## ループと if 式
+
+```
+for i in range(1, 10, 2) {            // range(終わり) / range(始め, 終わり) / range(始め, 終わり, 刻み)
+    let kind = if i % 3 == 0 { "3の倍数" } else { "ふつう" }   // if は値にもなる
+    print(i, kind)
+}
+
+for i in range(0) {
+} else {
+    print("1 回も回らなかったときだけ実行")   // Python の for-else とは意味が違う
+}
+
+loop {                                // 無限ループ。break / continue が使える
+    break
+}
+```
+
+- 条件は `( )` で囲まない。`{ }` は必須。
+- 値として使う if には else が必要。値はブロックの最後の行。
+- do-while と三項演算子 `? :` はない。
+
+言語仕様の決めごとは [docs/design-decisions.md](docs/design-decisions.md) にまとめている。
 
 ## 構造体
 

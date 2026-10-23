@@ -11,11 +11,15 @@ pub struct Parser {
     pos: usize,
     /// `if` / `while` の条件の中では `Name {` を構造体リテラルと読まない（ブロックの `{` と区別するため）
     no_struct_lit: bool,
+    /// いくつのループの中にいるか（break / continue を許すか）。値として使う if に入ると 0 に戻す
+    loop_depth: usize,
+    /// 値として使う if の中か（return / 外への break を禁止する）
+    in_value_if: bool,
 }
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0, no_struct_lit: false }
+        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false }
     }
 
     fn peek(&self) -> &Tok {
@@ -169,15 +173,42 @@ impl Parser {
                 let init = self.parse_expr()?;
                 Ok(Stmt::Let { name, init })
             }
-            Tok::If => self.parse_if(),
+            Tok::If => Ok(Stmt::Expr(self.parse_if(false)?)),
             Tok::While => {
                 self.bump();
                 let cond = self.parse_cond()?;
-                let body = self.parse_block()?;
+                let body = self.parse_loop_body()?;
                 Ok(Stmt::While { cond, body })
+            }
+            Tok::Loop => {
+                self.bump();
+                let body = self.parse_loop_body()?;
+                Ok(Stmt::Loop { body })
+            }
+            Tok::For => self.parse_for(),
+            Tok::Break | Tok::Continue => {
+                let t = self.bump();
+                let word = if t.tok == Tok::Break { "break" } else { "continue" };
+                if self.loop_depth == 0 {
+                    let d = if self.in_value_if {
+                        Diagnostic::new(format!("値として使う if の中から、外のループへ {} できません", word))
+                            .primary(t.span, "ここ")
+                            .note("if を文として使うか、ループの中で値を決めてから使ってください")
+                    } else {
+                        Diagnostic::new(format!("ループの外では {} は使えません", word))
+                            .primary(t.span, "囲んでいる loop / while / for がない")
+                    };
+                    return Err(d);
+                }
+                Ok(if t.tok == Tok::Break { Stmt::Break(t.span) } else { Stmt::Continue(t.span) })
             }
             Tok::Return => {
                 let start = self.bump().span;
+                if self.in_value_if {
+                    return Err(Diagnostic::new("値として使う if の中では return できません")
+                        .primary(start, "ここ")
+                        .note("if を文として使ってください"));
+                }
                 let value = match self.peek().clone() {
                     Tok::Newline | Tok::Semi | Tok::RBrace | Tok::Eof => None,
                     _ => Some(self.parse_expr()?),
@@ -204,8 +235,21 @@ impl Parser {
         }
     }
 
-    fn parse_if(&mut self) -> R<Stmt> {
-        self.expect(Tok::If, "`if`")?;
+    /// `if`。`as_value` なら値として使う位置なので else が必須で、中から return / 外への break はできない。
+    fn parse_if(&mut self, as_value: bool) -> R<Expr> {
+        let start = self.expect(Tok::If, "`if`")?;
+        let saved = (self.loop_depth, self.in_value_if);
+        if as_value {
+            self.loop_depth = 0;
+            self.in_value_if = true;
+        }
+        let r = self.parse_if_rest(as_value, start);
+        self.loop_depth = saved.0;
+        self.in_value_if = saved.1;
+        r
+    }
+
+    fn parse_if_rest(&mut self, as_value: bool, start: Span) -> R<Expr> {
         let cond = self.parse_cond()?;
         let then = self.parse_block()?;
 
@@ -215,17 +259,66 @@ impl Parser {
         let els = if *self.peek() == Tok::Else {
             self.bump();
             if *self.peek() == Tok::If {
-                let nested = self.parse_if()?;
+                let nested = self.parse_if(as_value)?;
                 let end = self.prev_span();
-                Some(Block { stmts: vec![nested], end })
+                Some(Block { stmts: vec![Stmt::Expr(nested)], end })
             } else {
                 Some(self.parse_block()?)
             }
         } else {
             self.pos = save;
+            if as_value {
+                return Err(Diagnostic::new("値として使う if には else が必要です")
+                    .primary(start.join(cond.span), "条件が false のときの値がない")
+                    .note("`if 条件 { 値 } else { 値 }` のように書いてください"));
+            }
             None
         };
-        Ok(Stmt::If { cond, then, els })
+        Ok(Expr { kind: ExprKind::If { cond: Box::new(cond), then, els }, span: start })
+    }
+
+    fn parse_loop_body(&mut self) -> R<Block> {
+        self.loop_depth += 1;
+        let r = self.parse_block();
+        self.loop_depth -= 1;
+        r
+    }
+
+    /// `for i in range(...) { ... } else { ... }`
+    fn parse_for(&mut self) -> R<Stmt> {
+        self.expect(Tok::For, "`for`")?;
+        let var = self.expect_ident("ループ変数の名前")?;
+        self.expect(Tok::In, "`in`")?;
+        let range_start = self.span();
+        match self.peek() {
+            Tok::Ident(n) if n == "range" => {}
+            _ => {
+                return Err(Diagnostic::new("今のところ for で回せるのは range(...) だけです")
+                    .primary(range_start, "ここに range(...) を書いてください")
+                    .note("例: `for i in range(10)`、`for i in range(1, 10, 2)`"));
+            }
+        }
+        let call = self.parse_postfix()?;
+        let range = match call.kind {
+            ExprKind::Call(_, args) => args,
+            _ => return Err(self.unexpected("`(`")),
+        };
+        if range.is_empty() || range.len() > 3 {
+            return Err(Diagnostic::new("range の引数は 1〜3 個です")
+                .primary(call.span, format!("{} 個渡されました", range.len()))
+                .note("range(終わり) / range(始め, 終わり) / range(始め, 終わり, 刻み)"));
+        }
+        let body = self.parse_loop_body()?;
+        let save = self.pos;
+        self.skip_newlines();
+        let els = if *self.peek() == Tok::Else {
+            self.bump();
+            Some(self.parse_block()?)
+        } else {
+            self.pos = save;
+            None
+        };
+        Ok(Stmt::For { var, range, range_span: call.span, body, els })
     }
 
     pub fn parse_expr(&mut self) -> R<Expr> {
@@ -317,6 +410,7 @@ impl Parser {
 
     fn parse_primary(&mut self) -> R<Expr> {
         match self.peek().clone() {
+            Tok::If => self.parse_if(true),
             Tok::Int(n) => {
                 let span = self.bump().span;
                 Ok(Expr { kind: ExprKind::Int(n), span })

@@ -24,6 +24,7 @@
 | `tests/examples.rs` | 言語の基本動作 |
 | `tests/analyze.rs` | 検査を消す解析。消せる例と、消してはいけない例 |
 | `tests/structs.rs` | 構造体 |
+| `tests/control.rs` | loop / while / for / break / continue / if 式 |
 
 ## 大事な不変条件
 
@@ -32,6 +33,9 @@
 - 静的解析の根拠: own 変数 `a` のスロットを解放できるのは `a` という名前を使う操作（再代入・ムーブ・`drop`・スコープ終了）だけ。呼び出された関数は呼び出し元の変数に触れない。
 - 解析は安全側。分からないものは `Check::Required`（実行時検査）。デバッグビルドでは消した検査も `debug_assert!` で確かめる。
 - 解析とインタプリタの「評価順」と「ムーブする／しない（`eval` と `eval_borrow`）」は必ず一致させる。
+- `break` / `continue` で抜けるときは、抜けるスコープの変数の事実を消してから合流させる（`facts_leaving`）。
+- `if` は `ExprKind::If`。文として使う if は `Stmt::Expr` に入り、中の return / break を `Flow` で外へ伝える（`eval_flow`）。
+  値として使う if の中の return / 外への break はパーサが禁止しているので、`eval` では `Flow` を気にしなくてよい。
 
 ## 設計の決めごと
 

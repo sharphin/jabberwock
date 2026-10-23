@@ -58,6 +58,9 @@ pub enum ExprKind {
     Field(Box<Expr>, String, Cell<Check>),
     /// `Name { f: e, ... }` : 構造体リテラル。フィールドはソースに書いた順
     StructLit(String, Vec<FieldInit>),
+    /// `if c { ... } else { ... }`。文としても値としても使える。値はブロックの最後の行。
+    /// 値として使う位置では else が必須（パーサが確かめる）。
+    If { cond: Box<Expr>, then: Block, els: Option<Block> },
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
@@ -81,9 +84,14 @@ pub struct Block {
 pub enum Stmt {
     Let { name: String, init: Expr },
     Assign { target: Expr, value: Expr, span: Span },
+    /// 式文。`if` もここに入る（文として使う if）
     Expr(Expr),
-    If { cond: Expr, then: Block, els: Option<Block> },
     While { cond: Expr, body: Block },
+    Loop { body: Block },
+    /// `for i in range(a, b, step) { ... } else { ... }`。else は 1 回も回らなかったときに実行
+    For { var: String, range: Vec<Expr>, range_span: Span, body: Block, els: Option<Block> },
+    Break(Span),
+    Continue(Span),
     Return { value: Option<Expr>, span: Span },
 }
 

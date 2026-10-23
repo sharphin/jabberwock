@@ -161,6 +161,8 @@ enum Root {
 enum Flow {
     Normal,
     Return(Value, Span),
+    Break(Span),
+    Continue(Span),
 }
 
 pub struct Interp {
@@ -322,24 +324,61 @@ impl Interp {
     // ------------------------------------------------------------ 文
 
     fn exec_block(&mut self, block: &Block) -> R<Flow> {
+        Ok(self.exec_block_value(block, false)?.0)
+    }
+
+    /// ブロックを実行する。`want_value` なら最後の行の式の値を返す（if 式の値）。
+    fn exec_block_value(&mut self, block: &Block, want_value: bool) -> R<(Flow, Value)> {
         self.frames.last_mut().expect("frame").scopes.push(Vec::new());
         let mut result = Flow::Normal;
-        for s in &block.stmts {
-            match self.exec_stmt(s)? {
-                Flow::Normal => {}
-                r => {
-                    result = r;
-                    break;
+        let mut value = Value::Unit;
+        for (i, s) in block.stmts.iter().enumerate() {
+            let flow = match s {
+                Stmt::Expr(e) if want_value && i + 1 == block.stmts.len() => {
+                    let (flow, v) = self.eval_flow(e, true)?;
+                    value = v;
+                    flow
                 }
+                _ => self.exec_stmt(s)?,
+            };
+            if !matches!(flow, Flow::Normal) {
+                result = flow;
+                break;
             }
         }
         let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
         let (span, how) = match &result {
             Flow::Return(_, sp) => (*sp, "関数から return した"),
+            Flow::Break(sp) => (*sp, "break でループを抜けた"),
+            Flow::Continue(sp) => (*sp, "continue で次の周回へ進んだ"),
             Flow::Normal => (block.end, "スコープを抜けた"),
         };
         self.drop_scope(scope, span, how);
-        Ok(result)
+        Ok((result, value))
+    }
+
+    /// 式を評価する。文として使う if は中の return / break / continue を外へ伝える。
+    fn eval_flow(&mut self, e: &Expr, want_value: bool) -> R<(Flow, Value)> {
+        match &e.kind {
+            ExprKind::If { cond, then, els } => {
+                let c = self.eval(cond)?;
+                let blk = if as_bool(c, cond.span)? { Some(then) } else { els.as_ref() };
+                match blk {
+                    Some(blk) => self.exec_block_value(blk, want_value),
+                    None => Ok((Flow::Normal, Value::Unit)),
+                }
+            }
+            _ => Ok((Flow::Normal, self.eval(e)?)),
+        }
+    }
+
+    /// ループ本体を1周実行し、ループを続けるかどうかを返す
+    fn loop_iteration(&mut self, body: &Block) -> R<Option<Flow>> {
+        match self.exec_block(body)? {
+            Flow::Normal | Flow::Continue(_) => Ok(None),
+            Flow::Break(_) => Ok(Some(Flow::Normal)),
+            r @ Flow::Return(..) => Ok(Some(r)),
+        }
     }
 
     fn exec_stmt(&mut self, s: &Stmt) -> R<Flow> {
@@ -354,32 +393,69 @@ impl Interp {
                 Ok(Flow::Normal)
             }
             Stmt::Expr(e) => {
-                let v = self.eval(e)?;
+                let (flow, v) = self.eval_flow(e, false)?;
                 self.release(v, e.span, "どこにも束縛されず、そのまま捨てられた");
-                Ok(Flow::Normal)
+                Ok(flow)
             }
-            Stmt::If { cond, then, els } => {
+            Stmt::While { cond, body } => loop {
                 let c = self.eval(cond)?;
-                let b = as_bool(c, cond.span)?;
-                let blk = if b { Some(then) } else { els.as_ref() };
-                match blk {
-                    Some(blk) => self.exec_block(blk),
-                    None => Ok(Flow::Normal),
+                if !as_bool(c, cond.span)? {
+                    return Ok(Flow::Normal);
+                }
+                if let Some(f) = self.loop_iteration(body)? {
+                    return Ok(f);
+                }
+            },
+            Stmt::Loop { body } => loop {
+                if let Some(f) = self.loop_iteration(body)? {
+                    return Ok(f);
+                }
+            },
+            Stmt::For { var, range, range_span, body, els } => {
+                let mut nums = Vec::new();
+                for a in range {
+                    match self.eval(a)? {
+                        Value::Int(n) => nums.push(n),
+                        other => {
+                            return Err(Diagnostic::new("range の引数は整数です")
+                                .primary(a.span, format!("ここは {} です", other.type_name())))
+                        }
+                    }
+                }
+                let (start, end, step) = match nums[..] {
+                    [e] => (0, e, 1),
+                    [s, e] => (s, e, 1),
+                    [s, e, st] => (s, e, st),
+                    _ => unreachable!("parser checks the range arity"),
+                };
+                if step == 0 {
+                    return Err(Diagnostic::new("range の刻みが 0 です")
+                        .primary(*range_span, "これだと永遠に終わりません"));
+                }
+                let mut i = start;
+                let mut ran = false;
+                while (step > 0 && i < end) || (step < 0 && i > end) {
+                    ran = true;
+                    // ループ変数は周回ごとの新しいスコープに置く
+                    self.frames.last_mut().expect("frame").scopes.push(Vec::new());
+                    self.declare(var, Value::Int(i));
+                    let r = self.loop_iteration(body);
+                    self.frames.last_mut().expect("frame").scopes.pop();
+                    if let Some(f) = r? {
+                        return Ok(f);
+                    }
+                    match i.checked_add(step) {
+                        Some(n) => i = n,
+                        None => break,
+                    }
+                }
+                match els {
+                    Some(els) if !ran => self.exec_block(els),
+                    _ => Ok(Flow::Normal),
                 }
             }
-            Stmt::While { cond, body } => {
-                loop {
-                    let c = self.eval(cond)?;
-                    if !as_bool(c, cond.span)? {
-                        break;
-                    }
-                    match self.exec_block(body)? {
-                        Flow::Normal => {}
-                        r => return Ok(r),
-                    }
-                }
-                Ok(Flow::Normal)
-            }
+            Stmt::Break(sp) => Ok(Flow::Break(*sp)),
+            Stmt::Continue(sp) => Ok(Flow::Continue(*sp)),
             Stmt::Return { value, span } => {
                 let v = match value {
                     Some(e) => self.eval(e)?,
@@ -677,6 +753,12 @@ impl Interp {
                 binary(*op, lv, rv, e.span)
             }
             ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
+            ExprKind::If { .. } => {
+                let (flow, v) = self.eval_flow(e, true)?;
+                // 値として使う if の中では return / break / continue をパーサが禁止している
+                debug_assert!(matches!(flow, Flow::Normal));
+                Ok(v)
+            }
         }
     }
 
@@ -766,6 +848,7 @@ impl Interp {
         let (value, span, how) = match flow {
             Flow::Return(v, sp) => (v, sp, "関数から return した"),
             Flow::Normal => (Value::Unit, f.body.end, "スコープを抜けた"),
+            Flow::Break(_) | Flow::Continue(_) => unreachable!("parser rejects break/continue outside loops"),
         };
         for scope in frame.scopes {
             self.drop_scope(scope, span, how);

@@ -54,7 +54,16 @@ let y = 5                           // 普段は省略して推論（i64）
 - **条件は `( )` で囲まない**（if・while・for・match 共通）。`{ }` は必須。
   - そのため条件の中に構造体リテラルを直接は書けない（`{` があいまいになる）。括弧で囲めば書ける。
 
-保留:
+- **while は残す。** ループは `loop`（無限）・`while`（条件つき）・`for`（範囲）の 3 つ。
+- **break / continue を入れる。**
+  - 値として使う if の中からは、return と外のループへの break / continue はできない（今のところ）。
+- **match は switch 式のように値を返す式。** 矢印の記号は仮（`=>`）で、差し替えるかもしれない。
+  ```
+  let name = match n {
+      0 => "zero"
+      1 | 2 => "small"
+      _ => "many"
+  }
+  ```
 
-- match の細かい形
-- break / continue
+実装状況: loop・while・for in range・for-else・break / continue・if 式は実装済み。match と型は未着手。

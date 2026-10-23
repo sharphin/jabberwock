@@ -12,7 +12,8 @@
 //!   * 関数の引数 `r` は、すべての呼び出し元が「その時点で生きている ref」を渡しているなら、
 //!     関数の実行中ずっと安全（Pinned）。これは関数をまたいで繰り返し計算して決める。
 //!
-//! 解析はフロー依存（文の順に事実を更新）で、`if` の合流や `while` では両方で成り立つ事実だけ残す。
+//! 解析はフロー依存（文の順に事実を更新）で、`if` の合流やループでは両方で成り立つ事実だけ残す。
+//! `break` / `continue` で抜ける道も合流に含める（抜けるときに消える変数の事実は消してから）。
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -34,6 +35,28 @@ enum Fact {
 }
 
 type Facts = HashMap<VarId, Fact>;
+
+/// 変数 `id` の中身が解放された・移動したかもしれない。それを借りた ref の事実も消す。
+fn kill_in(facts: &mut Facts, id: VarId) {
+    facts.remove(&id);
+    facts.retain(|_, f| *f != Fact::RefTo(id));
+}
+
+/// 片方がまだない合流（break や continue が 1 つも出てこない場合）
+fn meet_opt(acc: Option<Facts>, f: &Facts) -> Option<Facts> {
+    Some(match acc {
+        Some(a) => meet(&a, f),
+        None => f.clone(),
+    })
+}
+
+/// 解析中のループ。`break` / `continue` の地点の事実を集める。
+struct LoopCtx {
+    /// ループ本体に入る前のスコープの深さ。抜けるときはこれより深い変数が消える
+    depth: usize,
+    breaks: Option<Facts>,
+    continues: Option<Facts>,
+}
 
 /// 両方の道で成り立つ事実だけを残す（合流点）
 fn meet(a: &Facts, b: &Facts) -> Facts {
@@ -96,11 +119,12 @@ struct FnAnalyzer<'a> {
     scopes: Vec<Vec<(String, VarId)>>,
     next_id: VarId,
     facts: Facts,
+    loops: Vec<LoopCtx>,
 }
 
 impl<'a> FnAnalyzer<'a> {
     fn new(pinned: &'a HashMap<&'a str, Vec<bool>>, calls: &'a mut HashMap<String, Vec<bool>>) -> Self {
-        FnAnalyzer { pinned, calls, scopes: Vec::new(), next_id: 0, facts: Facts::new() }
+        FnAnalyzer { pinned, calls, scopes: Vec::new(), next_id: 0, facts: Facts::new(), loops: Vec::new() }
     }
 
     fn run(&mut self, f: &FnDef) {
@@ -128,10 +152,56 @@ impl<'a> FnAnalyzer<'a> {
         }
     }
 
-    /// 変数 `id` の中身が解放された・移動したかもしれない。それを借りた ref の事実も消す。
     fn kill(&mut self, id: VarId) {
-        self.facts.remove(&id);
-        self.facts.retain(|_, f| *f != Fact::RefTo(id));
+        kill_in(&mut self.facts, id);
+    }
+
+    /// `depth` より深いスコープを抜けたあとの事実（break / continue で飛ぶ先で成り立つこと）
+    fn facts_leaving(&self, depth: usize) -> Facts {
+        let mut f = self.facts.clone();
+        for (_, id) in self.scopes[depth..].iter().flatten() {
+            kill_in(&mut f, *id);
+        }
+        f
+    }
+
+    /// ループを不動点まで解析する。
+    /// `cond` は while の条件、`var` は for のループ変数、`exits_at_head` は先頭で抜けうるか。
+    fn loop_body(&mut self, cond: Option<&Expr>, var: Option<&str>, body: &Block, exits_at_head: bool) {
+        loop {
+            let entry = self.facts.clone();
+            if let Some(c) = cond {
+                self.expr(c, false);
+            }
+            let head_exit = self.facts.clone();
+            self.loops.push(LoopCtx { depth: self.scopes.len(), breaks: None, continues: None });
+            if let Some(v) = var {
+                self.scopes.push(Vec::new());
+                self.declare(v, None);
+            }
+            self.block(body);
+            if var.is_some() {
+                for (_, id) in self.scopes.pop().expect("scope") {
+                    self.kill(id);
+                }
+            }
+            let ctx = self.loops.pop().expect("loop");
+            let end = match &ctx.continues {
+                Some(c) => meet(&self.facts, c),
+                None => self.facts.clone(),
+            };
+            let next = meet(&entry, &end);
+            if next == entry {
+                self.facts = match (exits_at_head, ctx.breaks) {
+                    (true, Some(b)) => meet(&head_exit, &b),
+                    (_, Some(b)) => b,
+                    // break のない loop は抜けない。後ろは到達しないので何でもよい
+                    (_, None) => head_exit,
+                };
+                return;
+            }
+            self.facts = next;
+        }
     }
 
     fn fact_of(&self, name: &str) -> Option<Fact> {
@@ -184,28 +254,33 @@ impl<'a> FnAnalyzer<'a> {
             Stmt::Expr(e) => {
                 self.expr(e, false);
             }
-            Stmt::If { cond, then, els } => {
-                self.expr(cond, false);
+            Stmt::While { cond, body } => self.loop_body(Some(cond), None, body, true),
+            Stmt::Loop { body } => self.loop_body(None, None, body, false),
+            Stmt::For { var, range, body, els, .. } => {
+                for a in range {
+                    self.expr(a, false);
+                }
                 let before = self.facts.clone();
-                self.block(then);
-                let after_then = std::mem::replace(&mut self.facts, before);
+                self.loop_body(None, Some(var), body, true);
                 if let Some(els) = els {
+                    // else は 1 回も回らなかったとき、つまりループに入る前の状態から実行される
+                    let after_loop = std::mem::replace(&mut self.facts, before);
                     self.block(els);
+                    self.facts = meet(&after_loop, &self.facts);
                 }
-                self.facts = meet(&after_then, &self.facts);
             }
-            Stmt::While { cond, body } => loop {
-                let entry = self.facts.clone();
-                self.expr(cond, false);
-                let exit = self.facts.clone();
-                self.block(body);
-                let next = meet(&entry, &self.facts);
-                if next == entry {
-                    self.facts = exit;
-                    break;
-                }
-                self.facts = next;
-            },
+            Stmt::Break(_) => {
+                let depth = self.loops.last().expect("parser checks break is in a loop").depth;
+                let f = self.facts_leaving(depth);
+                let ctx = self.loops.last_mut().expect("loop");
+                ctx.breaks = meet_opt(ctx.breaks.take(), &f);
+            }
+            Stmt::Continue(_) => {
+                let depth = self.loops.last().expect("parser checks continue is in a loop").depth;
+                let f = self.facts_leaving(depth);
+                let ctx = self.loops.last_mut().expect("loop");
+                ctx.continues = meet_opt(ctx.continues.take(), &f);
+            }
             Stmt::Return { value, .. } => {
                 if let Some(e) = value {
                     self.expr(e, false);
@@ -257,6 +332,17 @@ impl<'a> FnAnalyzer<'a> {
                 for init in inits {
                     self.expr(&init.value, false);
                 }
+                None
+            }
+            ExprKind::If { cond, then, els } => {
+                self.expr(cond, false);
+                let before = self.facts.clone();
+                self.block(then);
+                let after_then = std::mem::replace(&mut self.facts, before);
+                if let Some(els) = els {
+                    self.block(els);
+                }
+                self.facts = meet(&after_then, &self.facts);
                 None
             }
             ExprKind::Unary(_, inner) => {
@@ -336,17 +422,21 @@ fn for_each_check(b: &Block, f: &mut impl FnMut(&Cell<Check>)) {
                 expr_checks(target, f);
             }
             Stmt::Expr(e) => expr_checks(e, f),
-            Stmt::If { cond, then, els } => {
-                expr_checks(cond, f);
-                for_each_check(then, f);
-                if let Some(els) = els {
-                    for_each_check(els, f);
-                }
-            }
             Stmt::While { cond, body } => {
                 expr_checks(cond, f);
                 for_each_check(body, f);
             }
+            Stmt::Loop { body } => for_each_check(body, f),
+            Stmt::For { range, body, els, .. } => {
+                for a in range {
+                    expr_checks(a, f);
+                }
+                for_each_check(body, f);
+                if let Some(els) = els {
+                    for_each_check(els, f);
+                }
+            }
+            Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return { value, .. } => {
                 if let Some(e) = value {
                     expr_checks(e, f);
@@ -367,6 +457,13 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
         ExprKind::StructLit(_, inits) => {
             for init in inits {
                 expr_checks(&init.value, f);
+            }
+        }
+        ExprKind::If { cond, then, els } => {
+            expr_checks(cond, f);
+            for_each_check(then, f);
+            if let Some(els) = els {
+                for_each_check(els, f);
             }
         }
         ExprKind::Binary(_, l, r) => {
