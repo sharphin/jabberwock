@@ -214,7 +214,7 @@ fn range_errors() {
     assert!(err_in_main("for i in range() { }").title.contains("1〜3"));
     assert!(err_in_main("for i in range(1, 2, 3, 4) { }").title.contains("1〜3"));
     let d = err_in_main("let x = 3;\nfor i in x { }");
-    assert!(d.title.contains("配列とリスト") && d.note.as_deref().unwrap_or("").contains("range"), "{}", d.title);
+    assert!(d.title.contains("配列・リスト・辞書") && d.note.as_deref().unwrap_or("").contains("range"), "{}", d.title);
 }
 
 // ---------------------------------------------------------------- 静的解析が安全側を保つこと

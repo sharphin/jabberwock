@@ -166,8 +166,8 @@ impl<'a> FnAnalyzer<'a> {
     }
 
     /// ループを不動点まで解析する。
-    /// `cond` は while の条件、`var` は for のループ変数、`exits_at_head` は先頭で抜けうるか。
-    fn loop_body(&mut self, cond: Option<&Expr>, var: Option<&str>, body: &Block, exits_at_head: bool) {
+    /// `cond` は while の条件、`vars` は for のループ変数、`exits_at_head` は先頭で抜けうるか。
+    fn loop_body(&mut self, cond: Option<&Expr>, vars: &[&str], body: &Block, exits_at_head: bool) {
         loop {
             let entry = self.facts.clone();
             if let Some(c) = cond {
@@ -175,12 +175,14 @@ impl<'a> FnAnalyzer<'a> {
             }
             let head_exit = self.facts.clone();
             self.loops.push(LoopCtx { depth: self.scopes.len(), breaks: None, continues: None });
-            if let Some(v) = var {
+            if !vars.is_empty() {
                 self.scopes.push(Vec::new());
-                self.declare(v, None);
+                for v in vars {
+                    self.declare(v, None);
+                }
             }
             self.block(body);
-            if var.is_some() {
+            if !vars.is_empty() {
                 for (_, id) in self.scopes.pop().expect("scope") {
                     self.kill(id);
                 }
@@ -258,13 +260,15 @@ impl<'a> FnAnalyzer<'a> {
             Stmt::Expr(e) => {
                 self.expr(e, false);
             }
-            Stmt::While { cond, body } => self.loop_body(Some(cond), None, body, true),
-            Stmt::Loop { body } => self.loop_body(None, None, body, false),
-            Stmt::ForEach { var, iter, body, els, .. } => {
+            Stmt::While { cond, body } => self.loop_body(Some(cond), &[], body, true),
+            Stmt::Loop { body } => self.loop_body(None, &[], body, false),
+            Stmt::ForEach { key, var, iter, body, els, .. } => {
                 // インタプリタは eval_borrow で読む（変数ならムーブしない）
                 self.expr(iter, true);
                 let before = self.facts.clone();
-                self.loop_body(None, Some(var), body, true);
+                let mut vars: Vec<&str> = key.iter().map(|(k, _)| k.as_str()).collect();
+                vars.push(var);
+                self.loop_body(None, &vars, body, true);
                 if let Some(els) = els {
                     let after_loop = std::mem::replace(&mut self.facts, before);
                     self.block(els);
@@ -276,7 +280,7 @@ impl<'a> FnAnalyzer<'a> {
                     self.expr(a, false);
                 }
                 let before = self.facts.clone();
-                self.loop_body(None, Some(var), body, true);
+                self.loop_body(None, &[var.as_str()], body, true);
                 if let Some(els) = els {
                     // else は 1 回も回らなかったとき、つまりループに入る前の状態から実行される
                     let after_loop = std::mem::replace(&mut self.facts, before);
@@ -497,6 +501,13 @@ impl<'a> FnAnalyzer<'a> {
                 self.expr(x, false);
                 None
             }
+            ExprKind::MapLit(pairs) => {
+                for (k, v) in pairs {
+                    self.expr(k, false);
+                    self.expr(v, false);
+                }
+                None
+            }
             ExprKind::Interp(parts) => {
                 // print と同じく借りて読む
                 for p in parts {
@@ -692,6 +703,12 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
         }
         ExprKind::ArrayRepeat(x, _, _) => expr_checks(x, f),
         ExprKind::Lambda(l) => for_each_check(&l.body, f),
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                expr_checks(k, f);
+                expr_checks(v, f);
+            }
+        }
     }
 }
 

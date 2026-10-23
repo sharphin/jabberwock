@@ -40,6 +40,7 @@
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
+| `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -123,6 +124,12 @@
   `for x in a`（`Stmt::ForEach`）は `eval_borrow` で借り、始めた時点の要素を回す。own の要素は `RefVal` にして渡す。
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
 
+- 辞書: `Value::Map(MapVal)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。
+  `["a": 1]` は `ExprKind::MapLit`、空の `[]` は型検査が `ArrayLit` の `Cell<Seq>` を `Seq::Map` にする。
+  `Place.path` の要素は辞書なら `entries` の位置（`at` / `at_mut`）。辞書の中も `through_list` / `inside_list` で借りるのを弾く。
+  `a[k]` は interp の `index_place`（`locate` で位置を求める）。代入 `m[k] = v` だけ `create` でないキーを入れる（仮の Unit を置いてから置き換える）。
+  型検査は `a[k]` の base を先に調べる（キーの型を入れる先として使う）。interp / analyze は添字が先のまま。
+  `for (k, v) in m` / `for (i, x) in a` は `Stmt::ForEach.key`。
 - クロージャ: `ExprKind::Lambda(Rc<Lambda>)`、型は `Ty::Fn(引数, 戻り値)`。types の `lambda` が引数の型を書いた型か入れる先の型（hint）から決め、
   本体で使った外の変数を `use_var` で集めて `Lambda.captures` に書く（`lambdas` に (外のスコープの数, 名前) を積む）。取り込んだ変数への代入は `access` で弾く。
   interp の値は `Value::Func(Callee, 取り込んだ値)`。作るときに captures の順で `read_var`（own はムーブ）。

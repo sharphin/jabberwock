@@ -42,6 +42,8 @@ pub enum Ty {
     List(Box<Ty>),
     /// `fn bool(i64, i64)`: 関数（名前のある関数とクロージャ）。戻り値がなければ Unit
     Fn(Vec<Ty>, Box<Ty>),
+    /// `i64[str]`: 辞書（キーの型, 値の型）
+    Map(Box<Ty>, Box<Ty>),
 }
 
 impl Ty {
@@ -64,6 +66,7 @@ impl Ty {
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
             Ty::Array(t, n) => format!("{}[{}]", t.show(), n),
             Ty::List(t) => format!("{}[]", t.show()),
+            Ty::Map(k, v) => format!("{}[{}]", v.show(), k.show()),
             Ty::Fn(ps, r) => {
                 let ps: Vec<String> = ps.iter().map(Ty::show).collect();
                 match &**r {
@@ -119,6 +122,7 @@ fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
         Ty::Ref(x, m) => Ty::Ref(Box::new(subst(x, map)), *m),
         Ty::Array(x, n) => Ty::Array(Box::new(subst(x, map)), *n),
         Ty::List(x) => Ty::List(Box::new(subst(x, map))),
+        Ty::Map(k, v) => Ty::Map(Box::new(subst(k, map)), Box::new(subst(v, map))),
         Ty::Fn(ps, r) => Ty::Fn(ps.iter().map(|p| subst(p, map)).collect(), Box::new(subst(r, map))),
         _ => t.clone(),
     }
@@ -130,6 +134,7 @@ fn contains_iface(t: &Ty) -> bool {
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_iface),
         Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_iface(x),
         Ty::Fn(ps, r) => ps.iter().any(contains_iface) || contains_iface(r),
+        Ty::Map(k, v) => contains_iface(k) || contains_iface(v),
         _ => false,
     }
 }
@@ -140,6 +145,7 @@ fn contains_param(t: &Ty) -> bool {
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_param),
         Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_param(x),
         Ty::Fn(ps, r) => ps.iter().any(contains_param) || contains_param(r),
+        Ty::Map(k, v) => contains_param(k) || contains_param(v),
         _ => false,
     }
 }
@@ -151,6 +157,7 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|a| has_unbound(a, tparams, map)),
         Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => has_unbound(x, tparams, map),
         Ty::Fn(ps, r) => ps.iter().any(|p| has_unbound(p, tparams, map)) || has_unbound(r, tparams, map),
+        Ty::Map(k, v) => has_unbound(k, tparams, map) || has_unbound(v, tparams, map),
         _ => false,
     }
 }
@@ -182,6 +189,10 @@ fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String
         (Ty::Own(x), Ty::Own(y)) | (Ty::Ref(x, _), Ty::Ref(y, _)) => unify(x, y, tparams, map),
         (Ty::Array(x, n), Ty::Array(y, m)) if n == m => unify(x, y, tparams, map),
         (Ty::List(x), Ty::List(y)) => unify(x, y, tparams, map),
+        (Ty::Map(k, x), Ty::Map(j, y)) => {
+            unify(k, j, tparams, map);
+            unify(x, y, tparams, map);
+        }
         (Ty::Fn(xs, a), Ty::Fn(ys, b)) if xs.len() == ys.len() => {
             for (x, y) in xs.iter().zip(ys) {
                 unify(x, y, tparams, map);
@@ -437,6 +448,14 @@ impl<'a> Checker<'a> {
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),
             TypeKind::Array(inner, n) => Ty::Array(Box::new(self.resolve(inner)?), *n),
             TypeKind::List(inner) => Ty::List(Box::new(self.resolve(inner)?)),
+            TypeKind::Map(v, k) => {
+                let kt = self.resolve(k)?;
+                if !matches!(kt, Ty::Int(_) | Ty::Str | Ty::Bool) {
+                    return Err(Diagnostic::new(format!("`{}` は辞書のキーにできません", kt.show()))
+                        .primary(k.span, "キーにできるのは整数・str・bool だけ"));
+                }
+                Ty::Map(Box::new(kt), Box::new(self.resolve(v)?))
+            }
             TypeKind::Fn(ps, r) => {
                 let ps = ps.iter().map(|p| self.resolve(p)).collect::<R<Vec<_>>>()?;
                 let r = match r {
@@ -528,7 +547,7 @@ impl<'a> Checker<'a> {
             // 要素がコピーできる配列はコピー（Rust と同じ）
             Ty::Array(x, _) => self.copyable(x),
             // リストはいつもムーブ（中身はヒープにあり、複製は重いので）
-            Ty::List(_) => false,
+            Ty::List(_) | Ty::Map(..) => false,
             // 関数の値は取り込んだ own を持ちうるのでムーブ
             Ty::Fn(..) => false,
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
@@ -1053,15 +1072,30 @@ impl<'a> Checker<'a> {
                 }
                 Ok(false)
             }
-            Stmt::ForEach { var, var_span, iter, body, els } => {
+            Stmt::ForEach { key, var, var_span, iter, body, els } => {
                 let t = self.expr(iter)?;
-                let Some((elem, _)) = seq_of(&t) else {
-                    return Err(Diagnostic::new("for で回せるのは配列とリストです")
-                        .primary(iter.span, format!("ここは `{}` です", t.show()))
-                        .note("数を回すなら `for i in range(10)` と書きます"));
+                // 前の名前の型（リストなら添字、辞書ならキー）と、要素の型
+                let (kt, elem) = match (seq_of(&t), map_of(&t)) {
+                    (Some((elem, _)), _) => (I64, elem),
+                    (_, Some((k, v))) => {
+                        if key.is_none() {
+                            return Err(Diagnostic::new("辞書は `for (k, v) in m` で回します")
+                                .primary(*var_span, "キーと値の 2 つの名前を書く")
+                                .note("キーだけなら `for k in m.keys()`"));
+                        }
+                        (k, v)
+                    }
+                    _ => {
+                        return Err(Diagnostic::new("for で回せるのは配列・リスト・辞書です")
+                            .primary(iter.span, format!("ここは `{}` です", t.show()))
+                            .note("数を回すなら `for i in range(10)` と書きます"))
+                    }
                 };
                 let vt = self.view_ty(elem);
                 self.scopes.push(HashMap::new());
+                if let Some((k, ks)) = key {
+                    self.declare(k, VarInfo { ty: kt, mutable: false, decl: *ks })?;
+                }
                 self.declare(var, VarInfo { ty: vt, mutable: false, decl: *var_span })?;
                 let r = self.block(body, false, None);
                 self.scopes.pop();
@@ -1138,9 +1172,12 @@ impl<'a> Checker<'a> {
             ExprKind::Float(_) => Ok(Ty::Float),
             ExprKind::Try(inner) => self.try_expr(inner, e.span, hint),
             ExprKind::Index(base, idx, _) => {
-                // インタプリタと同じく、添字を先に調べる
-                self.index_value(idx)?;
                 let t = self.expr(base)?;
+                if let Some((k, v)) = map_of(&t) {
+                    self.expect(idx, &k)?;
+                    return Ok(v);
+                }
+                self.index_value(idx)?;
                 let (elem, len) = match seq_of(&t) {
                     Some(x) => x,
                     None => return Err(not_an_array(&t, base.span)),
@@ -1157,10 +1194,15 @@ impl<'a> Checker<'a> {
                 }
                 Ok(elem)
             }
-            ExprKind::ArrayLit(items, list) => {
+            ExprKind::ArrayLit(items, seq) => {
+                if let (Some(Ty::Map(..)), true) = (hint, items.is_empty()) {
+                    // 入れる先が辞書なら、空の `[]` は空の辞書
+                    seq.set(Seq::Map);
+                    return Ok(hint.expect("matched").clone());
+                }
                 if let Some(Ty::List(w)) = hint {
                     // 入れる先がリストなら、リストとして作る
-                    list.set(true);
+                    seq.set(Seq::List);
                     for x in items {
                         self.expect(x, w)?;
                     }
@@ -1210,6 +1252,27 @@ impl<'a> Checker<'a> {
                     }
                 }
                 Ok(Ty::Array(Box::new(elem), items.len() as u64))
+            }
+            ExprKind::MapLit(pairs) => {
+                let (kt, vt) = match hint {
+                    Some(Ty::Map(k, v)) => ((**k).clone(), (**v).clone()),
+                    // 入れる先の型がなければ、最初の組から決める
+                    _ => {
+                        let (k, v) = &pairs[0];
+                        let kt = self.value(k)?;
+                        let vt = self.value(v)?;
+                        if !matches!(kt, Ty::Int(_) | Ty::Str | Ty::Bool) {
+                            return Err(Diagnostic::new(format!("`{}` は辞書のキーにできません", kt.show()))
+                                .primary(k.span, "キーにできるのは整数・str・bool だけ"));
+                        }
+                        (kt, vt)
+                    }
+                };
+                for (k, v) in pairs {
+                    self.expect(k, &kt)?;
+                    self.expect(v, &vt)?;
+                }
+                Ok(Ty::Map(Box::new(kt), Box::new(vt)))
             }
             ExprKind::ArrayRepeat(x, n, list) => {
                 let h = match hint {
@@ -1297,8 +1360,8 @@ impl<'a> Checker<'a> {
                     Some(x) => x.clone(),
                     None => {
                         if let Some(at) = self.inside_list(inner)? {
-                            return Err(Diagnostic::new("リストの中の値は借りられません")
-                                .primary(at, "リストは伸び縮みするので、中の場所が変わる")
+                            return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
+                                .primary(at, "リストや辞書は伸び縮みするので、中の場所が変わる")
                                 .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
                         }
                         t.clone()
@@ -1655,6 +1718,42 @@ impl<'a> Checker<'a> {
         Ok(ret)
     }
 
+    /// 辞書のメソッド
+    #[allow(clippy::too_many_arguments)]
+    fn map_method(&mut self, recv: &Expr, rt: &Ty, k: &Ty, v: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        let opt = Ty::Enum("Option".to_string(), vec![v.clone()]);
+        let (params, ret, mutable) = match name {
+            "len" => (vec![], I64, false),
+            "contains" => (vec![k.clone()], Ty::Bool, false),
+            "get" => (vec![k.clone()], opt, false),
+            "remove" => (vec![k.clone()], opt, true),
+            "keys" => (vec![], Ty::List(Box::new(k.clone())), false),
+            _ => {
+                return Err(Diagnostic::new(format!("辞書にメソッド `{}` はありません", name)).primary(
+                    span,
+                    "辞書のメソッドは `len()`・`contains(k)`・`get(k)`・`remove(k)`・`keys()` です",
+                ))
+            }
+        };
+        if args.len() != params.len() {
+            return Err(arity_error(name, params.len(), args.len(), span));
+        }
+        if name == "get" && !self.copyable(v) {
+            return Err(Diagnostic::new(format!("`{}` はコピーできないので get で取り出せません", v.show()))
+                .primary(span, "辞書の中の値はそのまま残るので、写しを作れない値は取り出せない")
+                .note("`m[k].x` のように場所として読むか、`remove(k)` で取り出してください"));
+        }
+        if mutable {
+            let a = if is_place(recv) { self.access(recv)? } else { Access::Write };
+            a.through(rt, self.origin(recv), describe(recv))
+                .require(span, format!("辞書を `{}` で書き換えようとした", name).as_str())?;
+        }
+        for (a, t) in args.iter().zip(&params) {
+            self.expect(a, t)?;
+        }
+        Ok(ret)
+    }
+
     /// 文字列のメソッド。位置と長さは文字単位
     fn str_method(&mut self, name: &str, args: &[Expr], span: Span) -> R<Ty> {
         let list = Ty::List(Box::new(Ty::Str));
@@ -1911,6 +2010,7 @@ impl<'a> Checker<'a> {
                 return Ok(I64);
             }
             Ty::List(elem) => return self.list_method(recv, &rt, elem, name, args, span),
+            Ty::Map(k, v) => return self.map_method(recv, &rt, k, v, name, args, span),
             Ty::Str => return self.str_method(name, args, span),
             Ty::Param(p) => {
                 let ifaces: Vec<String> =
@@ -2036,8 +2136,8 @@ impl<'a> Checker<'a> {
             Some(x) => x.clone(),
             None => {
                 if let Some(at) = self.inside_list(a)? {
-                    return Err(Diagnostic::new("リストの中の値は借りられません")
-                        .primary(at, "`ref` の引数なので借りて渡そうとしたが、リストは伸び縮みするので中の場所が変わる")
+                    return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
+                        .primary(at, "`ref` の引数なので借りて渡そうとしたが、リストや辞書は伸び縮みするので中の場所が変わる")
                         .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
                 }
                 t
@@ -2061,10 +2161,10 @@ impl<'a> Checker<'a> {
         match bt? {
             // own / ref の先は別のスロットなので、ここで道筋が切れる
             Ty::Own(x) | Ty::Ref(x, _) => Ok(match &*x {
-                Ty::List(_) if is_index => Some(e.span),
+                Ty::List(_) | Ty::Map(..) if is_index => Some(e.span),
                 _ => None,
             }),
-            Ty::List(_) if is_index => Ok(Some(e.span)),
+            Ty::List(_) | Ty::Map(..) if is_index => Ok(Some(e.span)),
             _ => self.inside_list(base),
         }
     }
@@ -2235,6 +2335,18 @@ fn seq_of(t: &Ty) -> Option<(Ty, Option<u64>)> {
         Ty::Own(p) | Ty::Ref(p, _) => match &**p {
             Ty::Array(x, n) => Some(((**x).clone(), Some(*n))),
             Ty::List(x) => Some(((**x).clone(), None)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 辞書（own / ref を 1 段たどる）のキーと値の型
+fn map_of(t: &Ty) -> Option<(Ty, Ty)> {
+    match t {
+        Ty::Map(k, v) => Some(((**k).clone(), (**v).clone())),
+        Ty::Own(p) | Ty::Ref(p, _) => match &**p {
+            Ty::Map(k, v) => Some(((**k).clone(), (**v).clone())),
             _ => None,
         },
         _ => None,

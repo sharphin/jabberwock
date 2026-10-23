@@ -150,7 +150,7 @@ fn main() {
 #[test]
 fn borrow_errors() {
     let d = err("struct S { i64 a; }\nfn main() {\n    let S[] mut v = [S { a: 1 }];\n    let r = ref v[0];\n}");
-    assert!(d.title.contains("リストの中の値は借りられません"), "{}", d.title);
+    assert!(d.title.contains("リスト・辞書の中の値は借りられません"), "{}", d.title);
     let d = err("fn main() {\n    let x = 1;\n    let r = ref mut x;\n}");
     assert!(d.title.contains("mut ではない"), "{}", d.title);
     let d = err("fn main() {\n    let r = ref 5;\n}");

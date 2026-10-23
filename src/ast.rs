@@ -22,6 +22,8 @@ pub enum TypeKind {
     Array(Box<TypeExpr>, u64),
     /// `i64[]`: 伸び縮みするリスト
     List(Box<TypeExpr>),
+    /// `i64[str]`: 辞書（値の型, キーの型）
+    Map(Box<TypeExpr>, Box<TypeExpr>),
     /// `fn bool(i64, i64)`: 関数の型。戻り値がなければ None
     Fn(Vec<TypeExpr>, Option<Box<TypeExpr>>),
 }
@@ -236,8 +238,10 @@ pub enum ExprKind {
     /// `a[i]`: 配列の要素。`a` が own / ref なら自動で先をたどる（そのときの検査が `Check`）
     Index(Box<Expr>, Box<Expr>, Cell<Check>),
     /// `[1, 2, 3]`
-    /// bool は「リストとして作るか」（入れる先の型が `T[]` なら型検査が true にする）
-    ArrayLit(Vec<Expr>, Cell<bool>),
+    /// 何として作るか（入れる先の型が `T[]` ならリスト、空の `[]` で入れる先が辞書なら辞書。型検査が書く）
+    ArrayLit(Vec<Expr>, Cell<Seq>),
+    /// `["a": 1, "b": 2]`: 辞書（キー, 値）
+    MapLit(Vec<(Expr, Expr)>),
     /// `[0; 5]`: 同じ値を並べた配列（値はコピーできる型だけ）
     ArrayRepeat(Box<Expr>, u64, Cell<bool>),
     /// `"x = {x}"`: 埋め込みのある文字列。式は print と同じく借りて読む（ムーブしない）
@@ -310,7 +314,8 @@ pub enum Stmt {
     /// `for i in range(a, b, step) { ... } else { ... }`。else は 1 回も回らなかったときに実行
     For { var: String, range: Vec<Expr>, range_span: Span, body: Block, els: Option<Block> },
     /// `for x in a { ... } else { ... }`: 配列・リストの要素を回す（a は借りるだけ。ループを始めた時点の要素を回す）
-    ForEach { var: String, var_span: Span, iter: Expr, body: Block, els: Option<Block> },
+    /// `for x in a` / `for (k, v) in m`（`key` は組の前の名前。リストなら添字、辞書ならキー）
+    ForEach { key: Option<(String, Span)>, var: String, var_span: Span, iter: Expr, body: Block, els: Option<Block> },
     Break(Span),
     Continue(Span),
     Return { value: Option<Expr>, span: Span },
@@ -393,6 +398,14 @@ pub struct Program {
     pub enums: Vec<EnumDef>,
     pub interfaces: Vec<InterfaceDef>,
     pub fns: Vec<FnDef>,
+}
+
+/// `[...]` を何として作るか
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seq {
+    Array,
+    List,
+    Map,
 }
 
 /// その場で作る関数 `(a, b) -> 式` / `(i64 a) -> { ... }`

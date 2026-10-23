@@ -818,16 +818,32 @@ impl Parser {
     /// `for i in range(...) { ... } else { ... }`
     fn parse_for(&mut self) -> R<Stmt> {
         self.expect(Tok::For, "`for`")?;
+        // `for (k, v) in m`: リストなら (添字, 要素)、辞書なら (キー, 値)
+        let key = if self.eat(Tok::LParen) {
+            let s = self.span();
+            let k = self.expect_ident("ループ変数の名前")?;
+            self.expect(Tok::Comma, "`,`")?;
+            Some((k, s))
+        } else {
+            None
+        };
         let var_span = self.span();
         let var = self.expect_ident("ループ変数の名前")?;
+        if key.is_some() {
+            self.expect(Tok::RParen, "`)`")?;
+        }
         self.expect(Tok::In, "`in`")?;
         let is_range = matches!(self.peek(), Tok::Ident(n) if n == "range") && *self.peek2() == Tok::LParen;
+        if is_range && key.is_some() {
+            return Err(Diagnostic::new("range の for では名前を 1 つだけ書きます")
+                .primary(var_span, "`for (i, x) in a` は配列・リスト・辞書を回すときの書き方"));
+        }
         if !is_range {
             // `for x in a`: 配列・リストの要素
             let iter = self.parse_cond()?;
             let body = self.parse_loop_body()?;
             let els = if self.eat(Tok::Else) { Some(self.parse_block()?) } else { None };
-            return Ok(Stmt::ForEach { var, var_span, iter, body, els });
+            return Ok(Stmt::ForEach { key, var, var_span, iter, body, els });
         }
         let call = self.parse_postfix()?;
         let range = match call.kind {
@@ -905,10 +921,14 @@ impl Parser {
             _ => return Err(self.unexpected("型")),
         };
         let mut t = TypeExpr { kind, span: start.join(self.prev_span()) };
-        // `i64[3]`、`i64[3][2]`（長さ 3 の配列が 2 つ）
+        // `i64[3]`、`i64[3][2]`（長さ 3 の配列が 2 つ）、`i64[]`（リスト）、`i64[str]`（辞書）
         while self.eat(Tok::LBrack) {
             let kind = if self.eat(Tok::RBrack) {
                 TypeKind::List(Box::new(t))
+            } else if matches!(self.peek(), Tok::Ident(_)) {
+                let key = self.parse_type()?;
+                self.expect(Tok::RBrack, "`]`")?;
+                TypeKind::Map(Box::new(t), Box::new(key))
             } else {
                 let n = self.array_len()?;
                 self.expect(Tok::RBrack, "`]`")?;
@@ -1077,6 +1097,20 @@ impl Parser {
                         let end = self.expect(Tok::RBrack, "`]`")?;
                         return Ok(Expr::new(ExprKind::ArrayRepeat(Box::new(first), n, Cell::new(false)), start.join(end)));
                     }
+                    if self.eat(Tok::Colon) {
+                        // `["a": 1, "b": 2]`: 辞書
+                        let mut pairs = vec![(first, self.with_struct_lit(true, |p| p.parse_expr())?)];
+                        while self.eat(Tok::Comma) {
+                            if *self.peek() == Tok::RBrack {
+                                break;
+                            }
+                            let k = self.with_struct_lit(true, |p| p.parse_expr())?;
+                            self.expect(Tok::Colon, "`:`")?;
+                            pairs.push((k, self.with_struct_lit(true, |p| p.parse_expr())?));
+                        }
+                        let end = self.expect(Tok::RBrack, "`]`")?;
+                        return Ok(Expr::new(ExprKind::MapLit(pairs), start.join(end)));
+                    }
                     items.push(first);
                     while self.eat(Tok::Comma) {
                         if *self.peek() == Tok::RBrack {
@@ -1086,7 +1120,7 @@ impl Parser {
                     }
                 }
                 let end = self.expect(Tok::RBrack, "`]`")?;
-                Ok(Expr::new(ExprKind::ArrayLit(items, Cell::new(false)), start.join(end)))
+                Ok(Expr::new(ExprKind::ArrayLit(items, Cell::new(Seq::Array)), start.join(end)))
             }
             Tok::Interp(parts) => {
                 let span = self.bump().span;
@@ -1314,9 +1348,9 @@ fn bind_this_block(b: &mut Block, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) 
                     bind_this_block(els, ctx, scopes);
                 }
             }
-            Stmt::ForEach { var, iter, body, els, .. } => {
+            Stmt::ForEach { key, var, iter, body, els, .. } => {
                 bind_this(iter, ctx, scopes);
-                scopes.push(vec![var.clone()]);
+                scopes.push(key.iter().map(|(k, _)| k.clone()).chain(std::iter::once(var.clone())).collect());
                 bind_this_block(body, ctx, scopes);
                 scopes.pop();
                 if let Some(els) = els {
@@ -1385,6 +1419,12 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             }
         }
         ExprKind::ArrayRepeat(x, _, _) => bind_this(x, ctx, scopes),
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                bind_this(k, ctx, scopes);
+                bind_this(v, ctx, scopes);
+            }
+        }
         ExprKind::Lambda(l) => {
             // メソッドの中のクロージャでも、フィールド名は this.名前 になる（this を取り込む）
             let l = Rc::get_mut(l).expect("lambdas are not shared while parsing");

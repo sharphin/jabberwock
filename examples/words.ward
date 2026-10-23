@@ -1,23 +1,12 @@
-// 単語の数え上げ（試しに書いたプログラム）。辞書がないので、リストを先頭から探す
+// 単語の数え上げ（試しに書いたプログラム）。辞書は入れた順に回る
 // ファイル名のあとに文章を渡すと、それを数える（ward words.ward "a b a"）
-struct Count {
-    str word;
-    i64 n;
-}
-
-fn Count[] count_words(ref str[] words) {
-    let Count[] mut out = [];
+fn i64[str] count_words(ref str[] words) {
+    let i64[str] mut out = [];
     for w in words {
-        let mut found = false;
-        for i in range(out.len()) {
-            if out[i].word == w {
-                out[i].n += 1;
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            out.push(Count { word: w, n: 1 });
+        if out.contains(w) {
+            out[w] += 1;
+        } else {
+            out[w] = 1;
         }
     }
     out
@@ -31,7 +20,7 @@ fn main() {
     }
     let words = text.split(" ");
     let counts = count_words(words);
-    for c in counts {
-        print("{c.word}: {c.n}");
+    for (w, n) in counts {
+        print("{w}: {n}");
     }
 }

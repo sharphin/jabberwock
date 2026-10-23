@@ -43,6 +43,60 @@ pub enum Value {
     Array(Vec<Value>, bool),
     /// 関数の値。クロージャは作ったときに取り込んだ外の変数の値を持つ（`Lambda.captures` の順）
     Func(Callee, Vec<Value>),
+    /// 辞書。入れた順に並ぶ（表示と for の順）。いつもムーブ
+    Map(MapVal),
+}
+
+/// 辞書の中身。`entries` が入れた順の (キー, 値)、`index` がキーから位置を引く表
+#[derive(Debug, Clone, Default)]
+pub struct MapVal {
+    entries: Vec<(Value, Value)>,
+    index: HashMap<Key, usize>,
+}
+
+/// 辞書のキー（整数・文字列・真偽値）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Key {
+    Int(i128),
+    Str(Rc<str>),
+    Bool(bool),
+}
+
+fn key_of(v: &Value) -> Key {
+    match v {
+        Value::Int(n, _) => Key::Int(*n),
+        Value::Str(s) => Key::Str(s.clone()),
+        Value::Bool(b) => Key::Bool(*b),
+        _ => unreachable!("type checked: map keys are ints, strings or bools"),
+    }
+}
+
+impl MapVal {
+    fn find(&self, k: &Value) -> Option<usize> {
+        self.index.get(&key_of(k)).copied()
+    }
+
+    /// 入れる。同じキーがあれば値を置き換えて、古い値を返す
+    fn insert(&mut self, k: Value, v: Value) -> Option<Value> {
+        match self.find(&k) {
+            Some(i) => Some(std::mem::replace(&mut self.entries[i].1, v)),
+            None => {
+                self.index.insert(key_of(&k), self.entries.len());
+                self.entries.push((k, v));
+                None
+            }
+        }
+    }
+
+    /// 取り出す。後ろの組は前に詰める（入れた順を保つ）
+    fn remove(&mut self, k: &Value) -> Option<Value> {
+        let i = self.index.remove(&key_of(k))?;
+        let (_, v) = self.entries.remove(i);
+        for (j, (k, _)) in self.entries.iter().enumerate().skip(i) {
+            self.index.insert(key_of(k), j);
+        }
+        Some(v)
+    }
 }
 
 /// 関数の値の中身
@@ -81,6 +135,7 @@ impl Value {
             Value::Array(_, false) => "配列",
             Value::Array(_, true) => "リスト",
             Value::Func(..) => "関数",
+            Value::Map(_) => "辞書",
         }
     }
 
@@ -91,6 +146,7 @@ impl Value {
             Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
                 fields.iter().any(Value::has_own)
             }
+            Value::Map(m) => m.entries.iter().any(|(_, v)| v.has_own()),
             _ => false,
         }
     }
@@ -101,6 +157,7 @@ impl Value {
             Value::Array(items, list) => *list || items.iter().any(Value::moves),
             // 取り込んだ値にムーブするものがあればムーブ（なければコピー）
             Value::Func(_, caps) => caps.iter().any(Value::moves),
+            Value::Map(_) => true,
             _ => matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. }),
         }
     }
@@ -112,6 +169,7 @@ impl Value {
             Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
                 fields.iter().for_each(|f| f.collect_owns(out))
             }
+            Value::Map(m) => m.entries.iter().for_each(|(_, v)| v.collect_owns(out)),
             _ => {}
         }
     }
@@ -441,6 +499,13 @@ impl Interp {
                 format!("{}({})", variant, parts.join(", "))
             }
             Value::Func(..) => "<関数>".to_string(),
+            Value::Map(m) => {
+                let mut parts = Vec::new();
+                for (k, v) in &m.entries {
+                    parts.push(format!("{}: {}", self.show(k, span, depth + 1)?, self.show(v, span, depth + 1)?));
+                }
+                format!("[{}]", parts.join(", "))
+            }
         })
     }
 
@@ -467,6 +532,13 @@ impl Interp {
                 copy,
             },
             Value::Func(c, caps) => Value::Func(c, caps.into_iter().map(|f| self.view_of(f, span, what)).collect()),
+            Value::Map(mut m) => {
+                for e in m.entries.iter_mut() {
+                    let v = std::mem::replace(&mut e.1, Value::Unit);
+                    e.1 = self.view_of(v, span, what);
+                }
+                Value::Map(m)
+            }
             other => other,
         }
     }
@@ -477,7 +549,8 @@ impl Interp {
         for &i in path {
             v = match v {
                 Value::Struct(_, fields) | Value::Array(fields, _) => &fields[i],
-                _ => unreachable!("paths go through structs and arrays"),
+                Value::Map(m) => &m.entries[i].1,
+                _ => unreachable!("paths go through structs, arrays and maps"),
             };
         }
         v
@@ -488,7 +561,7 @@ impl Interp {
         let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
         for &i in path {
             v = match v {
-                Value::Array(_, true) => return true,
+                Value::Array(_, true) | Value::Map(_) => return true,
                 Value::Struct(_, fields) | Value::Array(fields, _) => &fields[i],
                 _ => unreachable!("paths go through structs and arrays"),
             };
@@ -501,7 +574,8 @@ impl Interp {
         for &i in path {
             v = match v {
                 Value::Struct(_, fields) | Value::Array(fields, _) => &mut fields[i],
-                _ => unreachable!("paths go through structs and arrays"),
+                Value::Map(m) => &mut m.entries[i].1,
+                _ => unreachable!("paths go through structs, arrays and maps"),
             };
         }
         v
@@ -847,19 +921,24 @@ impl Interp {
                     _ => Ok(Flow::Normal),
                 }
             }
-            Stmt::ForEach { var, var_span, iter, body, els } => {
+            Stmt::ForEach { key, var, var_span, iter, body, els } => {
                 let (src, temp) = self.eval_borrow(iter)?;
-                let items = match &src {
-                    Value::Array(items, _) => items.clone(),
+                let target = match &src {
                     Value::Own(_) | Value::Ref(_) => {
                         let (slot, path) = self.check_ptr(&src, iter.span, Check::Required)?;
-                        match self.at(slot, &path) {
-                            Value::Array(items, _) => items.clone(),
-                            other => return Err(not_an_array(other, iter.span)),
-                        }
+                        self.at(slot, &path)
                     }
+                    v => v,
+                };
+                // (前の名前の値, 要素)。リストなら添字、辞書ならキー
+                let (keys, items): (Vec<Value>, Vec<Value>) = match target {
+                    Value::Array(items, _) => {
+                        (0..items.len()).map(|i| Value::Int(i as i128, IntTy::I64)).zip(items.iter().cloned()).unzip()
+                    }
+                    Value::Map(m) => m.entries.iter().cloned().unzip(),
                     other => return Err(not_an_array(other, iter.span)),
                 };
+                let mut keys = keys.into_iter();
                 // ループを始めた時点の要素を回す。own の要素は借りた ref にする
                 // （ループの中で置き換えられたり取り出されたりすれば、その ref は無効になる）
                 let what = format!("{} の要素", describe(iter));
@@ -898,6 +977,10 @@ impl Interp {
                         (v, None)
                     };
                     self.frames.last_mut().expect("frame").scopes.push(Vec::new());
+                    let k = keys.next().expect("one key per item");
+                    if let Some((kn, ks)) = key {
+                        self.declare(kn, k, false, *ks);
+                    }
                     self.declare(var, v, false, *var_span);
                     let r = self.loop_iteration(body);
                     let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
@@ -969,7 +1052,14 @@ impl Interp {
                 Ok(())
             }
             ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..) => {
-                let place = self.place(target)?;
+                let place = match &target.kind {
+                    // `m[k] = v` は、辞書になければ入れる
+                    ExprKind::Index(base, idx, check) => {
+                        let key = self.eval(idx)?;
+                        self.index_place(target, base, &key, idx.span, check.get(), true)?
+                    }
+                    _ => self.place(target)?,
+                };
                 place.access.require(target.span, "書き換えようとした")?;
                 let old = std::mem::replace(self.place_mut(&place), newv);
                 self.release(old, span, &format!("`{}` が上書きされて、古い値が解放された", describe(target)));
@@ -1043,20 +1133,17 @@ impl Interp {
                     let place = self.place(e)?;
                     return Ok((self.place_mut(&place).clone(), false));
                 }
-                // 一時的な配列の要素（`make()[0]` など）。添字を先に評価する
-                let i = self.eval_index(idx)?;
+                // 一時的な配列・辞書の要素（`make()[0]` など）。添字を先に評価する
+                let key = self.eval(idx)?;
                 let tmp = self.eval(base)?;
                 let (v, holder) = match &tmp {
-                    Value::Array(items, _) => (items[bounds(i, items.len(), idx.span)?].clone(), None),
                     Value::Own(_) | Value::Ref(_) => {
                         let (slot, path) = self.check_ptr(&tmp, e.span, check.get())?;
-                        let v = match self.at(slot, &path) {
-                            Value::Array(items, _) => items[bounds(i, items.len(), idx.span)?].clone(),
-                            other => return Err(not_an_array(other, base.span)),
-                        };
+                        let c = self.at(slot, &path);
+                        let v = entry(c, locate(c, &key, idx.span, base.span)?).clone();
                         (v, matches!(tmp, Value::Own(_)).then_some(slot))
                     }
-                    other => return Err(not_an_array(other, base.span)),
+                    c => (entry(c, locate(c, &key, idx.span, base.span)?).clone(), None),
                 };
                 if v.has_own() && !matches!(tmp, Value::Ref(_)) {
                     return Err(Diagnostic::new("一時的な配列の中から own を取り出せません")
@@ -1069,14 +1156,6 @@ impl Interp {
                 Ok((v, false))
             }
             _ => Ok((self.eval(e)?, true)),
-        }
-    }
-
-    /// 添字を評価する
-    fn eval_index(&mut self, idx: &Expr) -> R<i128> {
-        match self.eval(idx)? {
-            Value::Int(n, _) => Ok(n),
-            other => Err(Diagnostic::new("添字は整数です").primary(idx.span, format!("ここは {} です", other.type_name()))),
         }
     }
 
@@ -1141,36 +1220,44 @@ impl Interp {
             }
             ExprKind::Index(base, idx, check) => {
                 // 添字を先に評価する（そのあとで配列の場所を求める。analyze も同じ順）
-                let i = self.eval_index(idx)?;
-                if !is_place(base) {
-                    return Err(Diagnostic::new("一時的な配列の中は場所として使えません")
-                        .primary(base.span, "先に変数に入れてください"));
-                }
-                let mut place = self.place(base)?;
-                let here = match self.place_mut(&place) {
-                    Value::Array(items, _) => Ok(items.len()),
-                    v => Err(v.clone()),
-                };
-                match here {
-                    Ok(len) => {
-                        place.path.push(bounds(i, len, idx.span)?);
-                        Ok(place)
-                    }
-                    Err(p @ (Value::Own(_) | Value::Ref(_))) => {
-                        let (slot, mut path) = self.check_ptr(&p, e.span, check.get())?;
-                        let len = match self.at(slot, &path) {
-                            Value::Array(items, _) => items.len(),
-                            other => return Err(not_an_array(other, base.span)),
-                        };
-                        path.push(bounds(i, len, idx.span)?);
-                        let access = place.access.through(&p);
-                        Ok(Place { slot, path, access })
-                    }
-                    Err(other) => Err(not_an_array(&other, base.span)),
-                }
+                let key = self.eval(idx)?;
+                self.index_place(e, base, &key, idx.span, check.get(), false)
             }
             _ => Err(Diagnostic::new("一時的な値の中は場所として使えません").primary(e.span, "先に変数に入れてください")),
         }
+    }
+
+    /// `base[key]` の場所。`create` なら、辞書にないキーは入れてから場所を返す（`m[k] = v` の代入）
+    fn index_place(&mut self, e: &Expr, base: &Expr, key: &Value, key_span: Span, check: Check, create: bool) -> R<Place> {
+        if !is_place(base) {
+            return Err(Diagnostic::new("一時的な配列の中は場所として使えません")
+                .primary(base.span, "先に変数に入れてください"));
+        }
+        let place = self.place(base)?;
+        let here = match self.place_mut(&place) {
+            Value::Array(..) | Value::Map(_) => None,
+            v => Some(v.clone()),
+        };
+        let (slot, mut path, access) = match here {
+            None => (place.slot, place.path, place.access),
+            Some(p @ (Value::Own(_) | Value::Ref(_))) => {
+                let (slot, path) = self.check_ptr(&p, e.span, check)?;
+                (slot, path, place.access.through(&p))
+            }
+            Some(other) => return Err(not_an_array(&other, base.span)),
+        };
+        let missing = matches!(self.at(slot, &path), Value::Map(m) if m.find(key).is_none());
+        let i = if create && missing {
+            access.require(e.span, "書き換えようとした")?;
+            let Value::Map(m) = self.at_mut(slot, &path) else { unreachable!("checked above") };
+            // 入れる値は呼び出し元が置く（それまでの仮の値）
+            m.insert(key.clone(), Value::Unit);
+            m.entries.len() - 1
+        } else {
+            locate(self.at(slot, &path), key, key_span, base.span)?
+        };
+        path.push(i);
+        Ok(Place { slot, path, access })
     }
 
     fn place_mut(&mut self, place: &Place) -> &mut Value {
@@ -1225,8 +1312,8 @@ impl Interp {
             Some(Value::Ref(r)) => Ok(Value::Ref(RefVal { mutable, ..r })),
             _ => {
                 if self.through_list(pl.slot, &pl.path) {
-                    return Err(Diagnostic::new("リストの中の値は借りられません")
-                        .primary(inner.span, "リストは伸び縮みするので、中の場所が変わる")
+                    return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
+                        .primary(inner.span, "リストや辞書は伸び縮みするので、中の場所が変わる")
                         .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
                 }
                 Ok(Value::Ref(RefVal {
@@ -1399,7 +1486,32 @@ impl Interp {
                 }
                 Ok(v)
             }
-            ExprKind::ArrayLit(items, list) => Ok(Value::Array(self.eval_all(items)?, list.get())),
+            ExprKind::ArrayLit(_, seq) if seq.get() == Seq::Map => Ok(Value::Map(MapVal::default())),
+            ExprKind::ArrayLit(items, seq) => Ok(Value::Array(self.eval_all(items)?, seq.get() == Seq::List)),
+            ExprKind::MapLit(pairs) => {
+                // キー・値の順に評価する。同じキーが二度あれば後のものが残る
+                let mut m = MapVal::default();
+                for (k, v) in pairs {
+                    let kv = match self.eval(k) {
+                        Ok(x) => x,
+                        Err(d) => {
+                            self.discard(vec![Value::Map(m)], k.span);
+                            return Err(d);
+                        }
+                    };
+                    let vv = match self.eval(v) {
+                        Ok(x) => x,
+                        Err(d) => {
+                            self.discard(vec![Value::Map(m)], v.span);
+                            return Err(d);
+                        }
+                    };
+                    if let Some(old) = m.insert(kv, vv) {
+                        self.release(old, v.span, "辞書の同じキーに後から入れた値で置き換えられた");
+                    }
+                }
+                Ok(Value::Map(m))
+            }
             ExprKind::ArrayRepeat(x, n, list) => {
                 let v = self.eval(x)?;
                 if v.moves() {
@@ -1665,6 +1777,54 @@ impl Interp {
                     items.insert(i as usize, vals.remove(1));
                     Value::Unit
                 }
+                _ => {
+                    return Err(Diagnostic::new(format!("メソッド `{}` はありません", name)).primary(span, "ここ"))
+                }
+            };
+            if place.is_none() {
+                self.release(rv, span, "使い終わった一時的な値");
+            }
+            return Ok(result);
+        }
+        // 辞書のメソッド
+        let map_slot = match &rv {
+            Value::Map(_) => Some(None),
+            Value::Own(_) | Value::Ref(_) => {
+                let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.at(slot, &path) {
+                    Value::Map(_) => Some(Some((slot, path))),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(slot) = map_slot {
+            if name == "remove" {
+                let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
+                access.through(&rv).require(span, "辞書を `remove` で書き換えようとした")?;
+            }
+            let m = match (slot, &place) {
+                (Some((s, path)), _) => self.at_mut(s, &path),
+                (None, Some(pl)) => self.place_mut(pl),
+                (None, None) => &mut rv,
+            };
+            let Value::Map(m) = m else { unreachable!("checked above") };
+            let result = match name {
+                "len" => Value::Int(m.entries.len() as i128, IntTy::I64),
+                "contains" => Value::Bool(m.find(&vals[0]).is_some()),
+                // get は値がコピーできるときだけ（型検査が確かめる）
+                "get" => match m.find(&vals[0]) {
+                    Some(i) => some(m.entries[i].1.clone()),
+                    None => none(),
+                },
+                "remove" => match m.remove(&vals[0]) {
+                    Some(v) => {
+                        let copy = !v.moves();
+                        Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy }
+                    }
+                    None => none(),
+                },
+                "keys" => Value::Array(m.entries.iter().map(|(k, _)| k.clone()).collect(), true),
                 _ => {
                     return Err(Diagnostic::new(format!("メソッド `{}` はありません", name)).primary(span, "ここ"))
                 }
@@ -2003,6 +2163,37 @@ fn bounds(i: i128, len: usize, span: Span) -> R<usize> {
             .primary(span, format!("長さは {} なので、添字は 0〜{} です", len, len as i128 - 1)));
     }
     Ok(i as usize)
+}
+
+/// 配列・辞書 `c` の中で、添字・キー `key` の要素がどこにあるか
+fn locate(c: &Value, key: &Value, key_span: Span, base_span: Span) -> R<usize> {
+    match (c, key) {
+        (Value::Array(items, _), Value::Int(i, _)) => bounds(*i, items.len(), key_span),
+        (Value::Array(..), other) => {
+            Err(Diagnostic::new("添字は整数です").primary(key_span, format!("ここは {} です", other.type_name())))
+        }
+        (Value::Map(m), k) => m.find(k).ok_or_else(|| {
+            let shown = match k {
+                Value::Str(s) => format!("\"{}\"", s),
+                Value::Int(n, _) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => "?".to_string(),
+            };
+            Diagnostic::new(format!("辞書にキー {} がありません", shown))
+                .primary(key_span, "このキーの値は入っていない")
+                .note("ないかもしれないなら `m.get(k)`（Option）か `m.contains(k)` を使ってください")
+        }),
+        (other, _) => Err(not_an_array(other, base_span)),
+    }
+}
+
+/// 配列・辞書の i 番目の要素（辞書なら値）
+fn entry(c: &Value, i: usize) -> &Value {
+    match c {
+        Value::Array(items, _) => &items[i],
+        Value::Map(m) => &m.entries[i].1,
+        _ => unreachable!("located above"),
+    }
 }
 
 fn not_an_array(v: &Value, span: Span) -> Diagnostic {
