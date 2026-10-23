@@ -44,7 +44,7 @@ pub enum Value {
     /// 関数の値。クロージャは作ったときに取り込んだ外の変数の値を持つ（`Lambda.captures` の順）
     Func(Callee, Vec<Value>),
     /// 辞書。入れた順に並ぶ（表示と for の順）。いつもムーブ
-    Map(MapVal),
+    Map(Box<MapVal>),
 }
 
 /// 辞書の中身。`entries` が入れた順の (キー, 値)、`index` がキーから位置を引く表
@@ -840,6 +840,108 @@ impl Interp {
         }
     }
 
+    /// `for x in a` / `for (k, v) in m`。深い再帰で exec_stmt の枠が大きくならないよう、別の関数にしている
+    #[inline(never)]
+    fn exec_for_each(
+        &mut self,
+        key: Option<&(String, Span)>,
+        var: &str,
+        var_span: Span,
+        iter: &Expr,
+        body: &Block,
+        els: Option<&Block>,
+    ) -> R<Flow> {
+        let (src, temp) = self.eval_borrow(iter)?;
+        let target = match &src {
+            Value::Own(_) | Value::Ref(_) => {
+                let (slot, path) = self.check_ptr(&src, iter.span, Check::Required)?;
+                self.at(slot, &path)
+            }
+            v => v,
+        };
+        // (前の名前の値, 要素)。リストなら添字、辞書ならキー
+        let (keys, items): (Vec<Value>, Vec<Value>) = match target {
+            Value::Array(items, _) => {
+                (0..items.len()).map(|i| Value::Int(i as i128, IntTy::I64)).zip(items.iter().cloned()).unzip()
+            }
+            Value::Map(m) => m.entries.iter().cloned().unzip(),
+            other => return Err(not_an_array(other, iter.span)),
+        };
+        let mut keys = keys.into_iter();
+        // ループを始めた時点の要素を回す。own の要素は借りた ref にする
+        // （ループの中で置き換えられたり取り出されたりすれば、その ref は無効になる）
+        let what = format!("{} の要素", describe(iter));
+        let views: Vec<Value> = items
+            .into_iter()
+            .map(|v| match v {
+                Value::Own(slot) => Value::Ref(RefVal {
+                    slot,
+                    generation: self.heap.slots[slot].generation,
+                    path: Vec::new(),
+                    borrowed_at: var_span,
+                    what: what.clone(),
+                    mutable: false,
+                }),
+                other => other,
+            })
+            .collect();
+        let ran = !views.is_empty();
+        let mut out = Ok(Flow::Normal);
+        for v in views {
+            // 構造体などムーブする要素は、その時点の写しを一時的なスロットに置き、読むだけの ref で渡す。
+            // 写しの中の own は、元の要素の own を借りた ref にする（元が解放されれば、たどったときに検出される）
+            let (v, copy) = if v.moves() {
+                let v = self.view_of(v, var_span, &what);
+                let slot = self.heap.alloc(v);
+                let r = RefVal {
+                    slot,
+                    generation: self.heap.slots[slot].generation,
+                    path: Vec::new(),
+                    borrowed_at: var_span,
+                    what: what.clone(),
+                    mutable: false,
+                };
+                (Value::Ref(r), Some(slot))
+            } else {
+                (v, None)
+            };
+            self.frames.last_mut().expect("frame").scopes.push(Vec::new());
+            let k = keys.next().expect("one key per item");
+            if let Some((kn, ks)) = key {
+                self.declare(kn, k, false, *ks);
+            }
+            self.declare(var, v, false, var_span);
+            let r = self.loop_iteration(body);
+            let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
+            self.drop_scope(scope, var_span, "次の周回へ進んだ");
+            if let Some(slot) = copy {
+                // 写しは捨てる（中は ref だけなので、解放するものはない）
+                self.vacate(slot, var_span, "for の次の周回へ進んだ");
+            }
+            match r {
+                Ok(None) => {}
+                Ok(Some(f)) => {
+                    out = Ok(f);
+                    break;
+                }
+                Err(d) => {
+                    out = Err(d);
+                    break;
+                }
+            }
+        }
+        if temp {
+            match &out {
+                Err(_) => self.discard(vec![src], iter.span),
+                Ok(_) => self.release(src, iter.span, "for で回し終わった一時的な値"),
+            }
+        }
+        match (out?, els) {
+            (Flow::Normal, Some(els)) if !ran => self.exec_block(els),
+            (f, _) => Ok(f),
+        }
+    }
+
     fn exec_stmt(&mut self, s: &Stmt) -> R<Flow> {
         match s {
             Stmt::Let { name, mutable, span, init, .. } => {
@@ -922,95 +1024,7 @@ impl Interp {
                 }
             }
             Stmt::ForEach { key, var, var_span, iter, body, els } => {
-                let (src, temp) = self.eval_borrow(iter)?;
-                let target = match &src {
-                    Value::Own(_) | Value::Ref(_) => {
-                        let (slot, path) = self.check_ptr(&src, iter.span, Check::Required)?;
-                        self.at(slot, &path)
-                    }
-                    v => v,
-                };
-                // (前の名前の値, 要素)。リストなら添字、辞書ならキー
-                let (keys, items): (Vec<Value>, Vec<Value>) = match target {
-                    Value::Array(items, _) => {
-                        (0..items.len()).map(|i| Value::Int(i as i128, IntTy::I64)).zip(items.iter().cloned()).unzip()
-                    }
-                    Value::Map(m) => m.entries.iter().cloned().unzip(),
-                    other => return Err(not_an_array(other, iter.span)),
-                };
-                let mut keys = keys.into_iter();
-                // ループを始めた時点の要素を回す。own の要素は借りた ref にする
-                // （ループの中で置き換えられたり取り出されたりすれば、その ref は無効になる）
-                let what = format!("{} の要素", describe(iter));
-                let views: Vec<Value> = items
-                    .into_iter()
-                    .map(|v| match v {
-                        Value::Own(slot) => Value::Ref(RefVal {
-                            slot,
-                            generation: self.heap.slots[slot].generation,
-                            path: Vec::new(),
-                            borrowed_at: *var_span,
-                            what: what.clone(),
-                            mutable: false,
-                        }),
-                        other => other,
-                    })
-                    .collect();
-                let ran = !views.is_empty();
-                let mut out = Ok(Flow::Normal);
-                for v in views {
-                    // 構造体などムーブする要素は、その時点の写しを一時的なスロットに置き、読むだけの ref で渡す。
-                    // 写しの中の own は、元の要素の own を借りた ref にする（元が解放されれば、たどったときに検出される）
-                    let (v, copy) = if v.moves() {
-                        let v = self.view_of(v, *var_span, &what);
-                        let slot = self.heap.alloc(v);
-                        let r = RefVal {
-                            slot,
-                            generation: self.heap.slots[slot].generation,
-                            path: Vec::new(),
-                            borrowed_at: *var_span,
-                            what: what.clone(),
-                            mutable: false,
-                        };
-                        (Value::Ref(r), Some(slot))
-                    } else {
-                        (v, None)
-                    };
-                    self.frames.last_mut().expect("frame").scopes.push(Vec::new());
-                    let k = keys.next().expect("one key per item");
-                    if let Some((kn, ks)) = key {
-                        self.declare(kn, k, false, *ks);
-                    }
-                    self.declare(var, v, false, *var_span);
-                    let r = self.loop_iteration(body);
-                    let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
-                    self.drop_scope(scope, *var_span, "次の周回へ進んだ");
-                    if let Some(slot) = copy {
-                        // 写しは捨てる（中は ref だけなので、解放するものはない）
-                        self.vacate(slot, *var_span, "for の次の周回へ進んだ");
-                    }
-                    match r {
-                        Ok(None) => {}
-                        Ok(Some(f)) => {
-                            out = Ok(f);
-                            break;
-                        }
-                        Err(d) => {
-                            out = Err(d);
-                            break;
-                        }
-                    }
-                }
-                if temp {
-                    match &out {
-                        Err(_) => self.discard(vec![src], iter.span),
-                        Ok(_) => self.release(src, iter.span, "for で回し終わった一時的な値"),
-                    }
-                }
-                match (out?, els) {
-                    (Flow::Normal, Some(els)) if !ran => self.exec_block(els),
-                    (f, _) => Ok(f),
-                }
+                self.exec_for_each(key.as_ref(), var, *var_span, iter, body, els.as_ref())
             }
             Stmt::Break(sp) => Ok(Flow::Break(*sp)),
             Stmt::Continue(sp) => Ok(Flow::Continue(*sp)),
@@ -1486,11 +1500,11 @@ impl Interp {
                 }
                 Ok(v)
             }
-            ExprKind::ArrayLit(_, seq) if seq.get() == Seq::Map => Ok(Value::Map(MapVal::default())),
+            ExprKind::ArrayLit(_, seq) if seq.get() == Seq::Map => Ok(Value::Map(Box::default())),
             ExprKind::ArrayLit(items, seq) => Ok(Value::Array(self.eval_all(items)?, seq.get() == Seq::List)),
             ExprKind::MapLit(pairs) => {
                 // キー・値の順に評価する。同じキーが二度あれば後のものが残る
-                let mut m = MapVal::default();
+                let mut m = Box::<MapVal>::default();
                 for (k, v) in pairs {
                     let kv = match self.eval(k) {
                         Ok(x) => x,

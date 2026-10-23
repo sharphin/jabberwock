@@ -25,9 +25,35 @@ fn main() {
 }
 ```
 
-- トップレベルに書けるのは `struct`・`enum`・`fn` の定義だけ。順番は自由（後ろで定義したものも使える）。
+- トップレベルに書けるのは `struct`・`enum`・`interface`・`fn` の定義と `use` だけ。順番は自由（後ろで定義したものも使える）。
 - 実行は `fn main()` から始まる。`main` は引数も戻り値も持たない。
 - 文の終わりには `;` をつける。改行はただの空白（式を途中で改行してよい）。
+
+### 1.1 モジュール
+
+```
+// geom.ward
+pub struct Point { i64 x; i64 y; }
+pub fn i64 dist2(ref Point p) { sq(p.x) + sq(p.y) }
+fn i64 sq(i64 x) { x * x }          // pub がないので geom の中だけで使える
+
+// main.ward
+use geom;                           // 同じフォルダの geom.ward を使う
+fn main() {
+    let p = geom.Point { x: 3, y: 4 };
+    print(geom.dist2(p));           // 25
+}
+```
+
+- 1 ファイルが 1 モジュール。`use 名前;` で、最初のファイルと同じフォルダの `名前.ward` を使う。
+- ほかのモジュールの名前は、いつも `モジュール名.名前` と書く（関数・構造体・enum・interface・静的メソッド `geom.Point.at(1, 2)`・enum の値 `geom.Shape.Box(1, 2)`・型 `geom.Point[]`）。
+- ほかのファイルから使えるのは `pub` をつけた定義だけ。構造体のメソッド・フィールド、enum の種類は、型が `pub` なら使える。
+- モジュールの中では、自分の定義は名前だけで書ける。`use` は書いたファイルの中でだけ効く（使うモジュールが使っているモジュールは見えない）。
+- 違うモジュールに同じ名前の定義があってよい。
+- `use` が輪になる（a が b を使い、b が a を使う）のはエラー。
+- 変数や引数に、モジュールと同じ名前はつけられない。
+- 構造体の値を print すると、型の名前はモジュール名つきで出る（`geom.Point { x: 3, y: 4 }`）。
+- エラーの位置は、そのモジュールのファイルの中で示す。
 
 ## 2. 字句
 
@@ -40,7 +66,7 @@ fn main() {
 | 文字列 | `"..."`。使えるエスケープは `\n` `\t` `\"` `\\`。途中で改行はできない。`{式}` で値を埋め込める（`{{` `}}` は `{` `}` そのもの） |
 | 真偽値 | `true` `false` |
 
-予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false`
+予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false` `use` `pub`
 
 特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert` `read_line` `args`（組み込み関数）
 
@@ -668,7 +694,8 @@ let (own Node)[i64] mut nodes = [];  // own を値に持つ辞書
 | enum のメソッド | これから |
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | interface の値から元の構造体を取り出す（型で分岐） | これから |
-| `f32`・文字型・モジュール・`const` | これから |
+| `f32`・文字型・`const` | これから |
+| フォルダを分けたモジュール（`use a.b;`）・メソッドやフィールドごとの `pub` | これから |
 | 辞書のキーに構造体を使う | これから |
 | 構造体のフィールドに関数の値を置く・メソッドを値にする | これから |
 | ファイルの読み書き | これから（今は標準入力の `read_line()` だけ） |

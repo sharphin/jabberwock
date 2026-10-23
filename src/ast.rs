@@ -398,6 +398,12 @@ pub struct Program {
     pub enums: Vec<EnumDef>,
     pub interfaces: Vec<InterfaceDef>,
     pub fns: Vec<FnDef>,
+    /// `use geom;` で使うモジュールの名前と位置（このファイルのもの）
+    pub uses: Vec<(String, Span)>,
+    /// `pub` をつけた名前（このファイルのトップレベルの、モジュール名をつける前の名前）
+    pub public: Vec<String>,
+    /// 読み込んだすべてのモジュールの名前（全体をまとめたプログラムだけが持つ）
+    pub modules: Vec<String>,
 }
 
 /// `[...]` を何として作るか

@@ -6,6 +6,8 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
+    /// どのファイルか（0 が最初に渡したファイル。モジュールは読んだ順に 1, 2, ...）
+    pub file: usize,
     pub line: usize, // 1始まり
     pub col: usize,  // 1始まり（文字単位）
     pub len: usize,
@@ -14,8 +16,9 @@ pub struct Span {
 impl Span {
     /// 同じ行にある2つの範囲をつなぐ。別の行なら self をそのまま返す。
     pub fn join(self, other: Span) -> Span {
-        if self.line == other.line && other.col + other.len > self.col {
+        if self.file == other.file && self.line == other.line && other.col + other.len > self.col {
             Span {
+                file: self.file,
                 line: self.line,
                 col: self.col,
                 len: other.col + other.len - self.col,
@@ -83,12 +86,19 @@ impl Diagnostic {
     }
 
     pub fn render(&self, file: &str, src: &str) -> String {
-        let lines: Vec<&str> = src.lines().collect();
+        self.render_in(&[(file, src)])
+    }
+
+    /// 複数のファイル（`Span.file` の番号の順）にまたがる診断を出す
+    pub fn render_in(&self, files: &[(&str, &str)]) -> String {
+        let file_of = |i: usize| files.get(i).or(files.first()).copied().unwrap_or(("?", ""));
         let kind = if self.warning { "warning" } else { "error" };
         let mut out = format!("{}: {}\n", kind, self.title);
 
         let mut labels: Vec<&Label> = self.labels.iter().collect();
-        labels.sort_by_key(|l| (l.span.line, l.span.col));
+        // 主な位置のファイルを先に、あとはファイルごとに行の順
+        let main_file = self.labels.iter().find(|l| l.primary).or(self.labels.first()).map_or(0, |l| l.span.file);
+        labels.sort_by_key(|l| (l.span.file != main_file, l.span.file, l.span.line, l.span.col));
 
         let width = labels
             .iter()
@@ -99,12 +109,21 @@ impl Diagnostic {
         let pad = " ".repeat(width);
 
         if let Some(p) = self.labels.iter().find(|l| l.primary).or(self.labels.first()) {
-            out.push_str(&format!("{pad}--> {}:{}:{}\n", file, p.span.line, p.span.col));
+            out.push_str(&format!("{pad}--> {}:{}:{}\n", file_of(p.span.file).0, p.span.line, p.span.col));
             out.push_str(&format!("{pad} |\n"));
         }
 
         let mut last_line = 0usize;
+        let mut cur_file = main_file;
         for l in &labels {
+            if l.span.file != cur_file {
+                // 別のファイルの位置
+                cur_file = l.span.file;
+                last_line = 0;
+                out.push_str(&format!("{pad}--> {}:{}:{}\n", file_of(cur_file).0, l.span.line, l.span.col));
+                out.push_str(&format!("{pad} |\n"));
+            }
+            let lines: Vec<&str> = file_of(cur_file).1.lines().collect();
             let ln = l.span.line;
             let text_line: Vec<char> = lines
                 .get(ln.saturating_sub(1))

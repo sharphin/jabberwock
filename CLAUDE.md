@@ -21,7 +21,8 @@
 | `src/analyze.rs` | 静的解析。証明できた `*p` / `p.f` の ref 世代チェックを消す |
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
-| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる） |
+| `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
+| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示） |
 | `tests/examples.rs` | 言語の基本動作 |
 | `tests/analyze.rs` | 検査を消す解析。消せる例と、消してはいけない例 |
 | `tests/structs.rs` | 構造体 |
@@ -40,6 +41,7 @@
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
+| `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
@@ -124,7 +126,14 @@
   `for x in a`（`Stmt::ForEach`）は `eval_borrow` で借り、始めた時点の要素を回す。own の要素は `RefVal` にして渡す。
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
 
-- 辞書: `Value::Map(MapVal)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。
+- モジュール: `modules::Loader` が `use` をたどってファイルを読み（使われる側が先。輪はエラー）、各ファイルを
+  `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー）、
+  モジュールの中の定義と参照は `qualify` が `geom.名前` に書き換える。全部を 1 つの `Program` にまとめるので、types / analyze / interp は
+  モジュールを知らない（types だけ、モジュールの中で関数と同じ名前の変数を弾くために `Checker.module` を見る。メソッド名は `rsplit_once('.')` で分ける）。
+  `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `ward::render`。
+- 深い再帰（呼び出しの深さ 5000）で Rust のスタックがあふれないよう、`exec_stmt` / `eval_kind` の枠を大きくしない（大きな処理は `#[inline(never)]` の別関数へ。`exec_for_each` など）。
+  テストは `cargo test --no-fail-fast` で全部のファイルを走らせて確かめる（スタックあふれは途中で止まり、後ろのテストが走らない）。
+- 辞書: `Value::Map(Box<MapVal>)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。
   `["a": 1]` は `ExprKind::MapLit`、空の `[]` は型検査が `ArrayLit` の `Cell<Seq>` を `Seq::Map` にする。
   `Place.path` の要素は辞書なら `entries` の位置（`at` / `at_mut`）。辞書の中も `through_list` / `inside_list` で借りるのを弾く。
   `a[k]` は interp の `index_place`（`locate` で位置を求める）。代入 `m[k] = v` だけ `create` でないキーを入れる（仮の Unit を置いてから置き換える）。

@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::*;
@@ -6,6 +7,21 @@ use crate::diag::{Diagnostic, Span};
 use crate::lexer::{StrPart, Tok, Token};
 
 type R<T> = Result<T, Diagnostic>;
+
+/// モジュールのトップレベルの名前の種類
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameKind {
+    Fn,
+    Struct,
+    Enum,
+    Interface,
+}
+
+/// 使う側から見たモジュール: トップレベルの名前ごとに、種類と `pub` か
+#[derive(Debug, Clone, Default)]
+pub struct ModuleInfo {
+    pub names: HashMap<String, (NameKind, bool)>,
+}
 
 pub struct Parser {
     toks: Vec<Token>,
@@ -42,6 +58,25 @@ impl Parser {
         enum_names.push("Option".to_string());
         enum_names.push("Result".to_string());
         Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names }
+    }
+
+    /// `use` したモジュールのあるファイルを読む。`geom.area` は 1 つの名前 `geom.area` にまとめる
+    pub fn with_modules(toks: Vec<Token>, deps: &HashMap<String, ModuleInfo>) -> R<Self> {
+        let toks = merge_paths(toks, deps)?;
+        let mut p = Parser::new(toks);
+        for (m, info) in deps {
+            for (n, (kind, public)) in &info.names {
+                if !public {
+                    continue;
+                }
+                match kind {
+                    NameKind::Struct => p.struct_names.push(format!("{}.{}", m, n)),
+                    NameKind::Enum => p.enum_names.push(format!("{}.{}", m, n)),
+                    _ => {}
+                }
+            }
+        }
+        Ok(p)
     }
 
     fn peek(&self) -> &Tok {
@@ -113,21 +148,59 @@ impl Parser {
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut interfaces = Vec::new();
+        let mut uses: Vec<(String, Span)> = Vec::new();
+        let mut public = Vec::new();
         loop {
             self.skip_semis();
+            if *self.peek() == Tok::Use {
+                // `use geom;`: 同じフォルダの geom.ward を使う
+                self.bump();
+                let span = self.span();
+                let name = self.expect_ident("モジュールの名前")?;
+                self.expect(Tok::Semi, "`;`")?;
+                if uses.iter().any(|(n, _)| *n == name) {
+                    return Err(Diagnostic::new(format!("`use {}` が二回あります", name)).primary(span, "ここが二回目"));
+                }
+                uses.push((name, span));
+                continue;
+            }
+            // `pub` は、ほかのファイルから使えるようにする印
+            let is_pub = self.eat(Tok::Pub);
             match self.peek() {
+                Tok::Eof if is_pub => return Err(self.unexpected("`fn`・`struct`・`enum`・`interface`")),
                 Tok::Eof => break,
-                Tok::Interface => interfaces.push(self.parse_interface()?),
+                Tok::Interface => {
+                    let i = self.parse_interface()?;
+                    if is_pub {
+                        public.push(i.name.clone());
+                    }
+                    interfaces.push(i);
+                }
                 Tok::Struct => {
                     let (st, methods) = self.parse_struct()?;
+                    if is_pub {
+                        public.push(st.name.clone());
+                    }
                     structs.push(st);
                     fns.extend(methods);
                 }
-                Tok::Enum => enums.push(self.parse_enum()?),
-                _ => fns.push(self.parse_fn()?),
+                Tok::Enum => {
+                    let e = self.parse_enum()?;
+                    if is_pub {
+                        public.push(e.name.clone());
+                    }
+                    enums.push(e);
+                }
+                _ => {
+                    let f = self.parse_fn()?;
+                    if is_pub {
+                        public.push(f.name.clone());
+                    }
+                    fns.push(f);
+                }
             }
         }
-        Ok(Program { structs, enums, interfaces, fns })
+        Ok(Program { structs, enums, interfaces, fns, uses, public, modules: Vec::new() })
     }
 
     /// `interface Shape { fn i64 area(); fn mut grow(i64 n); }`
@@ -1269,6 +1342,49 @@ impl Parser {
         let end = self.expect(Tok::RBrace, "`}`")?;
         Ok(Expr::new(ExprKind::StructLit(name, fields), start.join(end)))
     }
+}
+
+/// `モジュール名 . 名前` の 3 つのトークンを、1 つの名前 `モジュール名.名前` にする（文字列の埋め込みの中も）。
+/// その名前がモジュールにない・`pub` でないならエラー
+fn merge_paths(toks: Vec<Token>, deps: &HashMap<String, ModuleInfo>) -> R<Vec<Token>> {
+    let mut out: Vec<Token> = Vec::with_capacity(toks.len());
+    let mut it = toks.into_iter().peekable();
+    while let Some(mut t) = it.next() {
+        if let Tok::Interp(parts) = &mut t.tok {
+            for p in parts.iter_mut() {
+                if let StrPart::Code(inner) = p {
+                    *inner = merge_paths(std::mem::take(inner), deps)?;
+                }
+            }
+        }
+        let module = match &t.tok {
+            Tok::Ident(m) if deps.contains_key(m) && matches!(it.peek(), Some(d) if d.tok == Tok::Dot) => m.clone(),
+            _ => {
+                out.push(t);
+                continue;
+            }
+        };
+        let dot = it.next().expect("peeked");
+        let Some(Token { tok: Tok::Ident(name), span }) = it.next() else {
+            return Err(Diagnostic::new(format!("`{}.` のあとに名前がありません", module))
+                .primary(dot.span, format!("`{}.名前` と書いてください", module)));
+        };
+        let full = t.span.join(span);
+        match deps[&module].names.get(&name) {
+            None => {
+                return Err(Diagnostic::new(format!("モジュール `{}` に `{}` はありません", module, name))
+                    .primary(full, "この名前は定義されていない"))
+            }
+            Some((_, false)) => {
+                return Err(Diagnostic::new(format!("`{}.{}` は pub ではありません", module, name))
+                    .primary(full, "ほかのファイルからは使えない")
+                    .note(format!("使えるようにするなら、{}.ward の定義の前に `pub` をつけてください", module)))
+            }
+            Some(_) => {}
+        }
+        out.push(Token { tok: Tok::Ident(format!("{}.{}", module, name)), span: full });
+    }
+    Ok(out)
 }
 
 /// `{ }` で終わる文か（後ろに `;` が要らない）

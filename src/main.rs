@@ -36,12 +36,17 @@ fn main() {
         }
     };
 
+    // `use geom;` は、このファイルと同じフォルダの geom.ward を読む
+    let dir = std::path::Path::new(&path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.ward", name))).ok();
+
     // 警告は実行の前に出す（Rust と同じ）
-    for w in ward::warnings(&src) {
-        eprint!("{}", w.render(&path, &src));
+    let (warnings, files) = ward::warnings(&src, &read);
+    for w in warnings {
+        eprint!("{}", ward::render(&w, &path, &files));
     }
     let input = Box::new(std::io::BufReader::new(std::io::stdin()));
-    let outcome = ward::run_program(&src, true, elide, input, prog_args);
+    let outcome = ward::run_program(&src, &read, true, elide, input, prog_args);
     if stats {
         let a = outcome.analysis;
         eprintln!("[stats] `*p` と `p.f` の箇所: 検査を消せた {} / 実行時に残る {}", a.elided, a.required);
@@ -50,8 +55,8 @@ fn main() {
             outcome.ref_checks, outcome.ref_checks_elided
         );
     }
-    if let Some(d) = outcome.error {
-        eprint!("{}", d.render(&path, &src));
+    if let Some(d) = &outcome.error {
+        eprint!("{}", ward::render(d, &path, &outcome.files));
         process::exit(1);
     }
 }

@@ -5,6 +5,7 @@ pub mod ast;
 pub mod diag;
 pub mod interp;
 pub mod lexer;
+pub mod modules;
 pub mod parser;
 pub mod types;
 
@@ -26,28 +27,56 @@ pub struct Outcome {
     pub ref_checks: usize,
     /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
     pub ref_checks_elided: usize,
+    /// 読んだファイル（モジュール名、ソース）。診断の位置の `Span.file` がこの番号。0 番は最初のファイル
+    pub files: Vec<(String, String)>,
+}
+
+/// モジュール名からソースを返す（見つからなければ None）
+pub type Reader<'a> = &'a (dyn Fn(&str) -> Option<String> + Sync);
+
+/// モジュールを読まない（`use` はエラーになる）
+pub fn no_modules(_: &str) -> Option<String> {
+    None
+}
+
+/// 診断を、読んだファイルの中の位置で出す。`main` は最初のファイルの名前、モジュールは `名前.ward`
+pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String {
+    let names: Vec<String> =
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.ward", m) }).collect();
+    let fs: Vec<(&str, &str)> = names.iter().zip(files).map(|(n, (_, s))| (n.as_str(), s.as_str())).collect();
+    if fs.is_empty() {
+        return d.render(main, "");
+    }
+    d.render_in(&fs)
 }
 
 /// どのプログラムにも最初からある定義。`Some(x)` / `None` / `Ok(x)` / `Err(e)` は
 /// `Option.Some(x)` などの短い書き方
 const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\nenum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n}\n";
 
-/// 字句解析と構文解析をして、最初からある定義（`Option`）を前に足す
-fn parse(src: &str) -> Result<ast::Program, Diagnostic> {
-    let mut prog = parser::Parser::new(lexer::lex(src)?).parse_program()?;
+/// 字句解析と構文解析をして（`use` したモジュールも読む）、最初からある定義（`Option`）を前に足す。
+/// 読んだファイルも返す（エラーの表示に使う）
+fn parse(src: &str, read: Reader) -> (Result<ast::Program, Diagnostic>, Vec<(String, String)>) {
+    let mut loader = modules::Loader::new(read);
+    let r = loader.load(src).map(add_prelude);
+    (r, loader.files)
+}
+
+fn add_prelude(mut prog: ast::Program) -> ast::Program {
     let prelude = parser::Parser::new(lexer::lex(PRELUDE).expect("prelude lexes"))
         .parse_program()
         .expect("prelude parses");
     let mut enums = prelude.enums;
     enums.append(&mut prog.enums);
     prog.enums = enums;
-    Ok(prog)
+    prog
 }
 
-/// 実行せずに型検査だけして、警告を返す（エラーがあれば空。エラーは実行時に返る）
-pub fn warnings(src: &str) -> Vec<Diagnostic> {
-    let Ok(prog) = parse(src) else { return Vec::new() };
-    types::check(&prog).unwrap_or_default()
+/// 実行せずに型検査だけして、警告と読んだファイルを返す（エラーがあれば警告は空。エラーは実行時に返る）
+pub fn warnings(src: &str, read: Reader) -> (Vec<Diagnostic>, Vec<(String, String)>) {
+    let (prog, files) = parse(src, read);
+    let Ok(prog) = prog else { return (Vec::new(), files) };
+    (types::check(&prog).unwrap_or_default(), files)
 }
 
 /// ソースを実行する。静的解析で証明できた箇所の検査は消す。
@@ -57,19 +86,27 @@ pub fn run_source(src: &str, echo: bool) -> Outcome {
 
 /// `elide` が false なら静的解析をせず、すべての ref を実行時に検査する（比較用）。
 pub fn run_source_with(src: &str, echo: bool, elide: bool) -> Outcome {
-    run_program(src, echo, elide, Box::new(std::io::empty()), Vec::new())
+    run_program(src, &no_modules, echo, elide, Box::new(std::io::empty()), Vec::new())
+}
+
+/// モジュール（名前とソース）を渡して実行する（テスト用）
+pub fn run_with_modules(src: &str, mods: &[(&str, &str)]) -> Outcome {
+    let mods: Vec<(String, String)> = mods.iter().map(|(n, s)| (n.to_string(), s.to_string())).collect();
+    let read = move |name: &str| mods.iter().find(|(n, _)| n == name).map(|(_, s)| s.clone());
+    run_program(src, &read, false, true, Box::new(std::io::empty()), Vec::new())
 }
 
 /// 入力（`read_line()` が読む）を文字列で渡して実行する（テスト用）
 pub fn run_source_with_input(src: &str, input: &str, args: &[&str]) -> Outcome {
     let input = std::io::Cursor::new(input.as_bytes().to_vec());
-    run_program(src, false, true, Box::new(input), args.iter().map(|a| a.to_string()).collect())
+    run_program(src, &no_modules, false, true, Box::new(input), args.iter().map(|a| a.to_string()).collect())
 }
 
 /// `input` は `read_line()` が読む入力、`args` は `args()` が返す引数。
 /// 深い再帰でも落ちないよう、大きなスタックのスレッドで動かす。
 pub fn run_program(
     src: &str,
+    read: Reader,
     echo: bool,
     elide: bool,
     input: Box<dyn std::io::BufRead + Send>,
@@ -77,15 +114,23 @@ pub fn run_program(
 ) -> Outcome {
     std::thread::scope(|s| {
         std::thread::Builder::new()
-            .stack_size(256 << 20)
-            .spawn_scoped(s, || run_inner(src, echo, elide, input, args))
+            .stack_size(1 << 30)
+            .spawn_scoped(s, || run_inner(src, read, echo, elide, input, args))
             .expect("failed to spawn interpreter thread")
             .join()
             .expect("interpreter thread panicked")
     })
 }
 
-fn run_inner(src: &str, echo: bool, elide: bool, input: Box<dyn std::io::BufRead + Send>, args: Vec<String>) -> Outcome {
+fn run_inner(
+    src: &str,
+    read: Reader,
+    echo: bool,
+    elide: bool,
+    input: Box<dyn std::io::BufRead + Send>,
+    args: Vec<String>,
+) -> Outcome {
+    let (prog, files) = parse(src, read);
     let fail = |d: Diagnostic| Outcome {
         output: String::new(),
         error: Some(d),
@@ -94,9 +139,10 @@ fn run_inner(src: &str, echo: bool, elide: bool, input: Box<dyn std::io::BufRead
         analysis: analyze::Stats::default(),
         ref_checks: 0,
         ref_checks_elided: 0,
+        files: files.clone(),
     };
 
-    let prog = match parse(src) {
+    let prog = match prog {
         Ok(p) => p,
         Err(d) => return fail(d),
     };
@@ -116,5 +162,6 @@ fn run_inner(src: &str, echo: bool, elide: bool, input: Box<dyn std::io::BufRead
         analysis,
         ref_checks: it.ref_checks,
         ref_checks_elided: it.ref_checks_elided,
+        files,
     }
 }

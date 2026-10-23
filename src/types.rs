@@ -286,6 +286,10 @@ struct Checker<'a> {
     /// 今調べているクロージャ（外から順）。本体が始まるスコープの位置と、取り込んだ変数の名前
     lambdas: Vec<(usize, Vec<String>)>,
     warnings: Vec<Diagnostic>,
+    /// 読み込んだモジュールの名前（変数の名前にできない）
+    modules: &'a [String],
+    /// 今調べている関数のモジュール（最初のファイルなら None）
+    module: Option<&'a str>,
 }
 
 /// interface のメソッドの形（`this` を除いた引数）
@@ -316,6 +320,8 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         interfaces: HashMap::new(),
         bounds: HashMap::new(),
         warnings: Vec::new(),
+        modules: &prog.modules,
+        module: None,
     };
     for s in &prog.structs {
         if c.structs.contains_key(s.name.as_str()) {
@@ -783,10 +789,14 @@ impl<'a> Checker<'a> {
 
     fn check_fn(&mut self, f: &FnDef) -> R<()> {
         let sig = &self.fns[f.name.as_str()];
+        // `geom.area` / `geom.Point.len` は geom の中の関数
+        self.module = self.modules.iter().map(String::as_str).find(|m| {
+            f.name.len() > m.len() && f.name.starts_with(m) && f.name.as_bytes()[m.len()] == b'.'
+        });
         self.ret = sig.ret.clone();
         self.tparams = f.tparams.clone();
         self.bounds = f.tparams.iter().cloned().zip(f.bounds.iter().cloned()).collect();
-        self.fields = match (sig.method, f.name.split_once('.')) {
+        self.fields = match (sig.method, f.name.rsplit_once('.')) {
             (true, Some((owner, _))) => self.structs.get(owner).map(|(d, _)| d.fields.clone()).unwrap_or_default(),
             _ => Vec::new(),
         };
@@ -842,7 +852,14 @@ impl<'a> Checker<'a> {
 
     /// 変数に関数と同じ名前はつけられない（`f(x)` がどちらの呼び出しか分からなくなるため）
     fn not_a_fn_name(&self, name: &str, span: Span) -> R<()> {
-        if self.fns.contains_key(name) || BUILTINS.contains(&name) {
+        if self.modules.iter().any(|m| m == name) {
+            return Err(Diagnostic::new(format!("`{}` はモジュールの名前です", name))
+                .primary(span, "変数や引数に、モジュールと同じ名前はつけられない")
+                .note("別の名前をつけてください"));
+        }
+        // モジュールの中では、モジュール名をつける前の関数の名前も同じ（`area(x)` は `geom.area(x)` のこと）
+        let in_module = matches!(self.module, Some(m) if self.fns.contains_key(format!("{}.{}", m, name).as_str()));
+        if self.fns.contains_key(name) || in_module || BUILTINS.contains(&name) {
             return Err(Diagnostic::new(format!("`{}` は関数の名前です", name))
                 .primary(span, "変数や引数に、関数と同じ名前はつけられない")
                 .note("別の名前をつけてください"));
@@ -1969,7 +1986,7 @@ impl<'a> Checker<'a> {
             return Err(if name == "range" { d.note("range(...) は `for i in range(...)` の中でだけ使えます") } else { d });
         };
         if sig.method {
-            let (s, m) = name.split_once('.').expect("method name");
+            let (s, m) = name.rsplit_once('.').expect("method name");
             return Err(Diagnostic::new(format!("`{}` は this のあるメソッドです", name))
                 .primary(span, "構造体名からは呼べない")
                 .note(format!("`{}` の値 p に対して `p.{}()` と呼んでください", s, m)));

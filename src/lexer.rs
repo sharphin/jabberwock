@@ -28,6 +28,8 @@ pub enum Tok {
     Enum,
     Static,
     Interface,
+    Use,
+    Pub,
     Own,
     As,
     Ref,
@@ -105,6 +107,8 @@ impl Tok {
             Tok::Enum => "enum",
             Tok::Static => "static",
             Tok::Interface => "interface",
+            Tok::Use => "use",
+            Tok::Pub => "pub",
             Tok::Own => "own",
             Tok::As => "as",
             Tok::Ref => "ref",
@@ -164,6 +168,34 @@ pub struct Token {
     pub span: Span,
 }
 
+/// `file` 番目のファイルとして字句解析する（位置にファイルの番号をつける）
+pub fn lex_file(src: &str, file: usize) -> Result<Vec<Token>, Diagnostic> {
+    fn mark(toks: &mut [Token], file: usize) {
+        for t in toks {
+            t.span.file = file;
+            if let Tok::Interp(parts) = &mut t.tok {
+                for p in parts {
+                    if let StrPart::Code(inner) = p {
+                        mark(inner, file);
+                    }
+                }
+            }
+        }
+    }
+    match lex(src) {
+        Ok(mut toks) => {
+            mark(&mut toks, file);
+            Ok(toks)
+        }
+        Err(mut d) => {
+            for l in &mut d.labels {
+                l.span.file = file;
+            }
+            Err(d)
+        }
+    }
+}
+
 pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
     let chars: Vec<char> = src.chars().collect();
     let mut out: Vec<Token> = Vec::new();
@@ -207,12 +239,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         col += 1;
                     }
                     let text: String = chars[s..i].iter().collect();
-                    let span = Span { line, col: start_col, len: i - s };
+                    let span = Span { file: 0, line, col: start_col, len: i - s };
                     out.push(Token { tok: Tok::Float(text), span });
                     continue;
                 }
                 let text: String = chars[s..i].iter().collect();
-                let span = Span { line, col: start_col, len: i - s };
+                let span = Span { file: 0, line, col: start_col, len: i - s };
                 // 型は型検査が決める（相手の型に合わせる）。ここでは u64 に収まるかだけ見る
                 let n = text
                     .parse::<u64>()
@@ -246,6 +278,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     "enum" => Tok::Enum,
                     "static" => Tok::Static,
                     "interface" => Tok::Interface,
+                    "use" => Tok::Use,
+                    "pub" => Tok::Pub,
                     "own" => Tok::Own,
                     "as" => Tok::As,
                     "ref" => Tok::Ref,
@@ -256,7 +290,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 };
                 out.push(Token {
                     tok,
-                    span: Span { line, col: start_col, len: i - s },
+                    span: Span { file: 0, line, col: start_col, len: i - s },
                 });
             }
             '"' => {
@@ -267,7 +301,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 loop {
                     if i >= chars.len() || chars[i] == '\n' {
                         return Err(Diagnostic::new("文字列が閉じていません").primary(
-                            Span { line, col: start_col, len: 1 },
+                            Span { file: 0, line, col: start_col, len: 1 },
                             "この `\"` に対応する閉じ `\"` が同じ行にありません",
                         ));
                     }
@@ -286,7 +320,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     }
                     if ch == '}' {
                         return Err(Diagnostic::new("文字列の中の `}` に対応する `{` がありません")
-                            .primary(Span { line, col, len: 1 }, "`}` そのものを書くなら `}}` と書いてください"));
+                            .primary(Span { file: 0, line, col, len: 1 }, "`}` そのものを書くなら `}}` と書いてください"));
                     }
                     if ch == '{' {
                         // 埋め込み: 対応する `}` までを式として字句解析する
@@ -304,7 +338,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                                 }
                                 '"' => {
                                     return Err(Diagnostic::new("埋め込みの `{` が閉じていません")
-                                        .primary(Span { line, col: open_col, len: 1 }, "この `{` の `}` より先に `\"` がある")
+                                        .primary(Span { file: 0, line, col: open_col, len: 1 }, "この `{` の `}` より先に `\"` がある")
                                         .note("`{` そのものは `{{` と書きます。`{ }` の中には文字列を書けないので、先に変数に入れてください"))
                                 }
                                 _ => {}
@@ -313,19 +347,19 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                         }
                         if j >= chars.len() || chars[j] != '}' {
                             return Err(Diagnostic::new("埋め込みの `{` が閉じていません").primary(
-                                Span { line, col: open_col, len: 1 },
+                                Span { file: 0, line, col: open_col, len: 1 },
                                 "`{` そのものを書くなら `{{` と書いてください",
                             ));
                         }
                         let code: String = chars[i + 1..j].iter().collect();
                         if code.trim().is_empty() {
                             return Err(Diagnostic::new("埋め込みの `{ }` が空です")
-                                .primary(Span { line, col: open_col, len: j - i + 1 }, "中に式を書いてください"));
+                                .primary(Span { file: 0, line, col: open_col, len: j - i + 1 }, "中に式を書いてください"));
                         }
                         let mut toks = lex(&code)?;
                         for t in &mut toks {
                             // 部分の字句解析の位置を、元のファイルでの位置に直す
-                            t.span = Span { line, col: t.span.col + open_col, len: t.span.len };
+                            t.span = Span { file: 0, line, col: t.span.col + open_col, len: t.span.len };
                         }
                         if !text.is_empty() {
                             parts.push(StrPart::Lit(std::mem::take(&mut text)));
@@ -344,7 +378,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                             Some('\\') => '\\',
                             _ => {
                                 return Err(Diagnostic::new("未知のエスケープです").primary(
-                                    Span { line, col, len: 2 },
+                                    Span { file: 0, line, col, len: 2 },
                                     "使えるのは \\n \\t \\\" \\\\ です",
                                 ));
                             }
@@ -368,7 +402,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 };
                 out.push(Token {
                     tok,
-                    span: Span { line, col: start_col, len: col - start_col },
+                    span: Span { file: 0, line, col: start_col, len: col - start_col },
                 });
             }
             _ => {
@@ -410,14 +444,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ('?', _) => (Tok::Question, 1),
                     _ => {
                         return Err(Diagnostic::new("使えない文字です").primary(
-                            Span { line, col, len: 1 },
+                            Span { file: 0, line, col, len: 1 },
                             format!("`{}` はこの言語にありません", c),
                         ));
                     }
                 };
                 out.push(Token {
                     tok,
-                    span: Span { line, col: start_col, len: n },
+                    span: Span { file: 0, line, col: start_col, len: n },
                 });
                 i += n;
                 col += n;
@@ -427,7 +461,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
 
     out.push(Token {
         tok: Tok::Eof,
-        span: Span { line, col, len: 1 },
+        span: Span { file: 0, line, col, len: 1 },
     });
     Ok(out)
 }
