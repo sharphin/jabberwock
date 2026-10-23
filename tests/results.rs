@@ -226,3 +226,18 @@ fn main() {
 }");
     assert!(d.title.contains("Err の場合が書かれていません"), "{}", d.title);
 }
+
+#[test]
+fn question_mark_changes_the_ok_type() {
+    // `?` で返す Err は関数の戻り値の型になる（Result<i64, str> はコピーできるので 2 回読める）
+    let src = "
+fn Result<i64[], str> a() { Err(\"x\") }
+fn Result<i64, str> b() { let v = a()?; Ok(v.len()) }
+fn Option<str> c() { let i64[] v = None?; Some(\"no\") }
+fn main() {
+    let r = b();
+    let s = r;
+    print(r, s, c());
+}";
+    assert_eq!(ok(src), "Err(x) Err(x) None\n");
+}

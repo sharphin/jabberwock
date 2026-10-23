@@ -300,3 +300,18 @@ fn main() {{
 }}", SHAPES));
     assert!(d.title.contains("フィールド"), "{}", d.title);
 }
+
+#[test]
+fn for_over_a_list_of_owned_interfaces() {
+    let src = "
+interface Named { fn str name(); }
+struct A { fn str name() { \"a\" } }
+struct B { i64 n; fn str name() { \"b{n}\" } }
+fn main() {
+    let (own Named)[] mut xs = [];
+    xs.push(own A {});
+    xs.push(own B { n: 2 });
+    for x in xs { print(x.name()); }
+}";
+    assert_eq!(ok(src), "a\nb2\n");
+}

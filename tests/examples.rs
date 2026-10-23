@@ -258,3 +258,25 @@ fn battle_example() {
     assert!(out.starts_with("1: スライム の残り 3\n"), "{}", out);
     assert!(out.ends_with("ドラゴン を倒した\n"), "{}", out);
 }
+
+#[test]
+fn parallel_words_example() {
+    let out = ok(&example("parallel_words"));
+    assert!(out.starts_with("the: 3\ndog: 2\nfox: 2\nquick: 2\na: 1\n"), "{}", out);
+}
+
+#[test]
+fn calc_example() {
+    assert_eq!(
+        ok(&example("calc")),
+        "1 + 2 * 3 = 7\n(1 + 2) * 3 = 9\n-4 + 10 / 2 = 1\n2 * (3 + : エラー: 式が途中で終わっています\n\
+         8 / (4 - 4): エラー: 0 で割りました\n7 % 2: エラー: 知らない文字 '%'（2 文字目）\n"
+    );
+}
+
+#[test]
+fn shop_example() {
+    let out = ok(&example("shop"));
+    assert!(out.contains("売上 708 円\n"), "{}", out);
+    assert!(out.ends_with("在庫が少ない: [りんご, みかん]\n"), "{}", out);
+}

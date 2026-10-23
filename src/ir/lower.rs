@@ -139,6 +139,8 @@ struct FnLower<'a, 'p> {
     /// スコープごとの変数（名前, 番号）。名前が空なのは書き出しのために置いた隠れた変数
     scopes: Vec<Vec<(String, Local)>>,
     loops: Vec<Loop>,
+    /// 書き出している関数の戻り値の型（`?` で返す Err / None を作り直す）
+    ret: Ty,
 }
 
 impl<'a, 'p> FnLower<'a, 'p> {
@@ -162,6 +164,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             cur: 0,
             scopes: Vec::new(),
             loops: Vec::new(),
+            ret: Ty::Unit,
         }
     }
 
@@ -172,6 +175,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             self.declare(&p.name, ty, p.mutable, p.span);
         }
         let ret_ty = types::subst(&self.info.fn_ret.get(&f.name).cloned().unwrap_or(Ty::Unit), &self.subst);
+        self.ret = ret_ty.clone();
         let ret = if f.ret.is_some() {
             let r = self.temp(ret_ty.clone(), f.body.end);
             self.block(&f.body, Some(r))?;
@@ -202,6 +206,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             let ty = self.var_ty(p.span)?;
             self.declare(&p.name, ty, false, p.span);
         }
+        self.ret = ret_ty.clone();
         let ncaps = caps.len();
         let cap_tys = caps.iter().map(|(_, t)| t.clone()).collect();
         for (n, t) in caps {
@@ -883,8 +888,29 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.emit(Inst::Drop { local: l, span: sp, why });
             }
         }
+        // 戻り値の型が違えば（`Result<i64[], str>` → `Result<i64, str>`）、Err / None を作り直す
+        let back = if it == self.ret {
+            t
+        } else {
+            let ret = self.ret.clone();
+            let bad = if ok == "Ok" { "Err" } else { "None" };
+            let mut ops = Vec::new();
+            if ok == "Ok" {
+                let ety = self.variant_fields(&it, bad)?.pop().unwrap_or(Ty::Unit);
+                let mut ep = Place::local(t, sp);
+                ep.proj.push(Proj::Variant(Rc::from(bad), 0));
+                let e = self.temp_of(ety, Rvalue::Take(ep), sp);
+                ops.push(e);
+            }
+            self.emit(Inst::Drop { local: t, span: sp, why: "`?` で中身を取り出した".to_string() });
+            let copy = !self.moves(&ret)?;
+            match self.temp_of(ret, Rvalue::Enum(Rc::from(bad), ops, copy), sp) {
+                Operand::Move(r, _) => r,
+                _ => return Err("? の作り直し".to_string()),
+            }
+        };
         self.leave(0, sp, "`?` で関数を抜けた");
-        self.terminate(Term::Return(Operand::Move(t, sp)));
+        self.terminate(Term::Return(Operand::Move(back, sp)));
         self.cur = ok_bb;
         let fty = self.variant_fields(&it, ok)?.pop().unwrap_or(Ty::Unit);
         let mut fp = Place::local(t, sp);

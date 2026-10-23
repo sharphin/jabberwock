@@ -1667,9 +1667,11 @@ impl Interp {
                 Value::Enum { variant, mut fields, .. } if &*variant == "Ok" || &*variant == "Some" => {
                     Ok(fields.pop().expect("Ok / Some has one field"))
                 }
-                v @ Value::Enum { .. } => {
-                    // Err(x) / None をそのまま関数から返す（型検査が、戻り値の型と合うことを確かめている）
-                    self.unwinding = Some((v, e.span));
+                Value::Enum { variant, fields, .. } => {
+                    // Err(x) / None をそのまま関数から返す（型検査が、戻り値の型と合うことを確かめている）。
+                    // 型は関数の戻り値の型に変わる（`Result<i64[], str>` → `Result<i64, str>`）ので、コピーかは中身で決め直す
+                    let copy = !fields.iter().any(Value::moves);
+                    self.unwinding = Some((Value::Enum { variant, fields, copy }, e.span));
                     Err(Diagnostic::new("`?` で関数を抜けています").primary(e.span, "ここ"))
                 }
                 other => Err(Diagnostic::new("`?` は Result か Option に使います")

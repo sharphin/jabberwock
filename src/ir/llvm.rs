@@ -2491,6 +2491,20 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.op(format!("call void @ward_view_free(ptr {})", v));
                 return Ok(self.make_ref(&t, &t, &g, &s));
             }
+            // interface の own の写し（for の要素）を ref にする: 中の写しを ref にして、構造体の番号をつける
+            (Ty::Own(x), Ty::Ref(y, m)) if x == y && is_iface_ptr(from) => {
+                let p = self.b.val(format!("extractvalue %iown {}, 0", v));
+                let tid = self.b.val(format!("extractvalue %iown {}, 1", v));
+                let unit = Ty::Struct(String::new(), Vec::new());
+                let r = self.coerce(&p, &Ty::Own(Box::new(unit.clone())), &Ty::Ref(Box::new(unit), *m))?;
+                let mut acc = "undef".to_string();
+                for k in 0..4 {
+                    let f = self.b.val(format!("extractvalue %ref {}, {}", r, k));
+                    let ft = ["ptr", "ptr", "i64", "ptr"][k];
+                    acc = self.b.val(format!("insertvalue %iref {}, {} {}, {}", acc, ft, f, k));
+                }
+                return Ok(self.b.val(format!("insertvalue %iref {}, i64 {}, 4", acc, tid)));
+            }
             (Ty::Int(a), Ty::Int(b)) => {
                 return Ok(if a.bits() == b.bits() {
                     v.to_string()
