@@ -124,7 +124,7 @@ fn main() {
     print(run(false));
     print(run(true));
 }";
-    assert_eq!(ok(src), "4\n<own #6> 1\nOk(12)\nErr(だめ)\n");
+    assert_eq!(ok(src), "4\n5 1\nOk(12)\nErr(だめ)\n");
 }
 
 #[test]

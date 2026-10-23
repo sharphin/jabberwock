@@ -57,8 +57,7 @@ fn main() {
     print(*a);
     let t = \"{own 1}\";
 }";
-    let out = ok(src);
-    assert!(out.starts_with("a = 7, <own"), "{}", out);
+    assert_eq!(ok(src), "a = 7, 7\n7\n");
 }
 
 #[test]
@@ -74,4 +73,39 @@ fn embedding_errors() {
     // エラーの位置は元のファイルの中の位置
     let d = e("let a = 1;\nprint(\"value: {a + nope}\");");
     assert!(d.render("t.ward", "fn main() {\nlet a = 1;\nprint(\"value: {a + nope}\");\n}").contains("^^^^"));
+}
+
+#[test]
+fn own_and_ref_show_what_they_point_to() {
+    let src = "
+struct Box2 {
+    own i64 a;
+    i64 b;
+}
+
+fn main() {
+    let o = own 5;
+    let i64[] v = [1, 2];
+    let r = ref v;
+    let x = Box2 { a: own 7, b: 8 };
+    print(o, r, x);
+    print(\"{o} {r} {x}\");
+}";
+    assert_eq!(ok(src), "5 [1, 2] Box2 { a: 7, b: 8 }\n5 [1, 2] Box2 { a: 7, b: 8 }\n");
+}
+
+#[test]
+fn printing_a_dangling_ref_is_an_error() {
+    let o = run_source("
+fn main() {
+    let z = 0;
+    let mut r = ref z;
+    if true {
+        let x = 1;
+        r = ref x;
+    }
+    print(\"r = {r}\");
+}", false);
+    assert!(o.error.unwrap().title.contains("dangling"));
+    assert_eq!(o.output, "");
 }

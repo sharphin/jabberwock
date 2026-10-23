@@ -96,31 +96,6 @@ impl Value {
             _ => {}
         }
     }
-
-    fn show(&self) -> String {
-        match self {
-            Value::Unit => "()".to_string(),
-            Value::Int(n, _) => n.to_string(),
-            Value::Bool(b) => b.to_string(),
-            Value::Str(s) => s.to_string(),
-            Value::Own(s) => format!("<own #{}>", s),
-            Value::Ref(r) => format!("<ref #{}>", r.slot),
-            Value::Struct(def, fields) => {
-                let parts: Vec<String> =
-                    def.fields.iter().zip(fields).map(|(n, v)| format!("{}: {}", n, v.show())).collect();
-                format!("{} {{ {} }}", def.name, parts.join(", "))
-            }
-            Value::Array(items, _) => {
-                let parts: Vec<String> = items.iter().map(Value::show).collect();
-                format!("[{}]", parts.join(", "))
-            }
-            Value::Enum { variant, fields, .. } if fields.is_empty() => variant.to_string(),
-            Value::Enum { variant, fields, .. } => {
-                let parts: Vec<String> = fields.iter().map(Value::show).collect();
-                format!("{}({})", variant, parts.join(", "))
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------- ヒープ
@@ -402,6 +377,47 @@ impl Interp {
         self.heap.history.insert((slot, g), Freed { span, why: why.to_string() });
         self.heap.free_list.push(slot);
         v
+    }
+
+    /// print と埋め込みで出す文字。own と ref は先の中身を出す（ref が無効なら実行時エラー）
+    fn show(&mut self, v: &Value, span: Span, depth: usize) -> R<String> {
+        // ref は輪になりうるので、深くなりすぎたら打ち切る
+        if depth > 32 {
+            return Ok("...".to_string());
+        }
+        Ok(match v {
+            Value::Unit => "()".to_string(),
+            Value::Int(n, _) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Str(s) => s.to_string(),
+            Value::Own(_) | Value::Ref(_) => {
+                let (slot, path) = self.check_ptr(v, span, Check::Required)?;
+                let inner = self.at(slot, &path).clone();
+                self.show(&inner, span, depth + 1)?
+            }
+            Value::Struct(def, fields) => {
+                let mut parts = Vec::new();
+                for (n, f) in def.fields.iter().zip(fields) {
+                    parts.push(format!("{}: {}", n, self.show(f, span, depth + 1)?));
+                }
+                format!("{} {{ {} }}", def.name, parts.join(", "))
+            }
+            Value::Array(items, _) => {
+                let mut parts = Vec::new();
+                for x in items {
+                    parts.push(self.show(x, span, depth + 1)?);
+                }
+                format!("[{}]", parts.join(", "))
+            }
+            Value::Enum { variant, fields, .. } if fields.is_empty() => variant.to_string(),
+            Value::Enum { variant, fields, .. } => {
+                let mut parts = Vec::new();
+                for x in fields {
+                    parts.push(self.show(x, span, depth + 1)?);
+                }
+                format!("{}({})", variant, parts.join(", "))
+            }
+        })
     }
 
     /// 値の写し。中の own はすべて、それを借りた読むだけの ref にする（own は唯一の持ち主なので写せない）
@@ -1342,9 +1358,18 @@ impl Interp {
                                     return Err(d);
                                 }
                             };
-                            out.push_str(&v.show());
+                            let shown = self.show(&v, x.span, 0);
                             if temp {
                                 temps.push(v);
+                            }
+                            match shown {
+                                Ok(t) => out.push_str(&t),
+                                Err(d) => {
+                                    for v in temps {
+                                        self.release(v, x.span, "埋め込みに使えなかった一時的な値");
+                                    }
+                                    return Err(d);
+                                }
                             }
                         }
                     }
@@ -1378,9 +1403,18 @@ impl Interp {
                             return Err(d);
                         }
                     };
-                    parts.push(v.show());
+                    let shown = self.show(&v, a.span, 0);
                     if temp {
                         temps.push((v, a.span));
+                    }
+                    match shown {
+                        Ok(t) => parts.push(t),
+                        Err(d) => {
+                            for (v, sp) in temps {
+                                self.release(v, sp, "print に使えなかった一時的な値");
+                            }
+                            return Err(d);
+                        }
                     }
                 }
                 let line = parts.join(" ");

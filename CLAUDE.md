@@ -108,6 +108,7 @@
   パーサが同じ enum / 構造体の名前で式に読む（`ExprKind::Interp`）。値は print と同じく `eval_borrow` で借りて読む（analyze も borrow）。
 
 - 文字列のメソッドは types.rs の `str_method`（型）と interp の `str_method`（動き）。長さと位置は文字単位。
+  print と埋め込みの表示は `Interp::show`（own / ref は中身を出す。ref は世代チェックする）。
   入力は `Interp::set_io` で渡す（CLI は標準入力、テストは `run_source_with_input`）。`read_line` / `args` は組み込み関数（`BUILTINS`）。
 
 - 配列: `Value::Array`（要素にムーブする値があればムーブ）。`Place.path` は構造体のフィールドと配列の添字の両方をたどる。
