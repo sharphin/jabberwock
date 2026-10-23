@@ -1351,6 +1351,12 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             };
             Ok(Value::Int(t.wrap(res), *t))
         }
+        (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Str(a), Value::Str(b)) => Ok(Value::Bool(match op {
+            BinOp::Lt => a < b,
+            BinOp::Le => a <= b,
+            BinOp::Gt => a > b,
+            _ => a >= b,
+        })),
         (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Int(a, _), Value::Int(b, _)) => {
             Ok(Value::Bool(match op {
                 BinOp::Lt => a < b,

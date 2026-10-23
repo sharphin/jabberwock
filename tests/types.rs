@@ -131,7 +131,7 @@ fn mismatches_are_found_before_running() {
 
     assert!(main_err("    let mut x = 1;\n    x = true;").title.contains("型が合いません"));
     assert!(main_err("    print(1 + \"a\");").title.contains("型が合わない演算"));
-    assert!(main_err("    print(\"a\" < \"b\");").title.contains("型が合わない演算"));
+    assert!(main_err("    print(true < false);").title.contains("型が合わない演算"));
     assert!(main_err("    print(1 == true);").title.contains("比較"));
     assert!(main_err("    if 1 { }").title.contains("型が合いません"));
     assert!(main_err("    while \"x\" { }").title.contains("型が合いません"));

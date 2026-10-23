@@ -39,7 +39,7 @@ fn main() {
 | 文字列 | `"..."`。使えるエスケープは `\n` `\t` `\"` `\\`。途中で改行はできない |
 | 真偽値 | `true` `false` |
 
-予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `static` `own` `ref` `as` `true` `false`
+予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false`
 
 特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
 
@@ -151,7 +151,7 @@ fn inc(i64 mut n) { ... }    // 書き換える引数は「型 mut 名前」
 | 3 | `x as T` | 整数 → 整数 |
 | 4 | `*` `/` `%` | 整数 |
 | 5 | `+` `-` | 整数。`+` は str どうしの連結にも使える |
-| 6 | `<` `<=` `>` `>=` | 整数 |
+| 6 | `<` `<=` `>` `>=` | 整数・str（辞書順）・`<T: ordered>` の T |
 | 7 | `==` `!=` | 整数・bool・str（同じ型どうし） |
 | 8 | `&&` | bool（左が false なら右は評価しない） |
 | 9 | `\|\|` | bool（左が true なら右は評価しない） |
@@ -204,7 +204,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.6](#86-match-で中身を受け取る)）。
+- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -303,7 +303,7 @@ let Pair<u8> q = Pair { a: 1, b: 2 };  // 入れる先の型からも決まる
   - 数どうしなら、欠けずにそろう広い方の型になる（`pick(true, a_u8, b_i64)` の T は i64）。
   - 数の書き方や `None` は、ほかの引数で決まった型に合わせる（`or_else(None, 5)` は T = i64）。
 - 型の名前として書くときは型の引数が必要（`Pair` ではなく `Pair<i64>`）。
-- 関数の中では `T` が何か分からないので、`T` の値どうしの計算や比較はできない（渡す・返す・しまう・print はできる）。
+- 関数の中では `T` が何か分からないので、条件をつけないと `T` の値は渡す・返す・しまう・print しかできない。比べたりメソッドを呼んだりするには条件をつける（[8.6](#86-interface-と型の引数の条件)）。
 - `T` が own や構造体なら値として読むとムーブ、数ならコピー（中身しだい）。
 - `Option<T>` は最初から `enum Option<T> { Some(T value); None; }` として定義されている。
   `Some(x)` / `None` は `Option.Some(x)` / `Option.None` の短い書き方。
@@ -376,7 +376,34 @@ print(p.len2());
   - 同じ構造体のメソッドの中からは `at(1, 2)` と `構造体名.` なしで呼べる。静的メソッドの中にはフィールドも this もない。
   - 静的メソッドを値から（`p.at()`）、this のあるメソッドを構造体名から（`Point.len2()`）は呼べない。
 
-### 8.6 match で中身を受け取る
+### 8.6 interface と型の引数の条件
+
+```
+interface Shape {
+    fn i64 area();
+    fn mut grow(i64 n);          // 書き換えるメソッドは fn mut
+}
+
+fn describe<T: Shape>(ref T s) {
+    print(s.area());             // 条件の interface にあるメソッドは呼べる
+}
+
+fn T max<T: ordered>(T a, T b) { // ordered: 大小を比べられる（整数と str）
+    if a > b { a } else { b }
+}
+```
+
+- interface はメソッドの形だけを並べる（本体は書かず `;`）。
+- **構造体は何も宣言しなくても、メソッドがそろっていれば interface に当てはまる**（Go と同じ）。
+  - 引数と戻り値の型が同じであること。interface で書き換えないメソッドを、構造体が `fn mut` で持っているときは当てはまらない。
+- 条件は型の引数のあとに `: 名前` で書く。いくつもつけるなら `<T: Shape + ordered>`。
+- 組み込みの条件 `ordered`: 整数と str。`<` `<=` `>` `>=` `==` `!=` が使える。
+- 条件は呼び出しの場所で確かめる。満たさなければ、足りないメソッドを示してエラー。
+  型の引数のまま別のジェネリックな関数へ渡すときは、こちらにも同じ条件が要る。
+- 条件は関数とメソッドの型の引数にだけつけられる（構造体・enum の型の引数にはつけられない）。
+- interface を型として使う（`ref Shape` のような値）のはまだできない。
+
+### 8.7 match で中身を受け取る
 
 ```
 match s {
@@ -417,5 +444,5 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 | enum のメソッド | これから |
 | 文字列の埋め込み | `"x = {x}"` |
 | あふれの確認 | `checked_add` のような明示的な関数 |
-| 型の引数にできることを決める仕組み（比較できる T など） | これから |
+| interface を型として使う（`ref Shape`） | これから |
 | 小数・配列・文字型・モジュール・`const` | これから |

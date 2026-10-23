@@ -143,6 +143,14 @@ p.move_by(1);
 print(p.len2());
 ```
 
+## interface（Go 風）
+
+```
+interface Shape { fn i64 area(); }
+fn describe<T: Shape>(ref T s) { print(s.area()); }   // area() を持つ構造体なら何でも渡せる
+fn T max<T: ordered>(T a, T b) { if a > b { a } else { b } }
+```
+
 ## Result と `?`
 
 ```

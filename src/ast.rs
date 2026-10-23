@@ -297,6 +297,8 @@ pub struct FnDef {
     pub name: String,
     /// 型の引数（`fn T max<T>(...)` の `T`）
     pub tparams: Vec<String>,
+    /// 型の引数ごとの条件（`<T: Shape + ordered>` の `Shape`, `ordered`）。`tparams` と同じ順
+    pub bounds: Vec<Vec<String>>,
     /// 戻り値の型。なければ値を返さない関数
     pub ret: Option<TypeExpr>,
     pub params: Vec<Param>,
@@ -344,9 +346,19 @@ impl EnumDef {
     }
 }
 
+/// `interface Shape { fn i64 area(); fn mut grow(i64 n); }`（Go 風: 構造体は宣言なしで当てはまる）
+#[derive(Debug, Clone)]
+pub struct InterfaceDef {
+    pub name: String,
+    /// メソッドの形（本体は空）と、`fn mut` か
+    pub methods: Vec<(FnDef, bool)>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
+    pub interfaces: Vec<InterfaceDef>,
     pub fns: Vec<FnDef>,
 }

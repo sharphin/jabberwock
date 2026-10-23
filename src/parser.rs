@@ -111,10 +111,12 @@ impl Parser {
         let mut fns = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
+        let mut interfaces = Vec::new();
         loop {
             self.skip_semis();
             match self.peek() {
                 Tok::Eof => break,
+                Tok::Interface => interfaces.push(self.parse_interface()?),
                 Tok::Struct => {
                     let (st, methods) = self.parse_struct()?;
                     structs.push(st);
@@ -124,7 +126,38 @@ impl Parser {
                 _ => fns.push(self.parse_fn()?),
             }
         }
-        Ok(Program { structs, enums, fns })
+        Ok(Program { structs, enums, interfaces, fns })
+    }
+
+    /// `interface Shape { fn i64 area(); fn mut grow(i64 n); }`
+    fn parse_interface(&mut self) -> R<InterfaceDef> {
+        let start = self.expect(Tok::Interface, "`interface`")?;
+        let name = self.expect_ident("interface の名前")?;
+        let span = start.join(self.prev_span());
+        if *self.peek() == Tok::Lt {
+            return Err(Diagnostic::new("interface には型の引数をつけられません").primary(self.span(), "ここ"));
+        }
+        self.expect(Tok::LBrace, "`{`")?;
+        let mut methods: Vec<(FnDef, bool)> = Vec::new();
+        loop {
+            self.skip_semis();
+            if self.eat(Tok::RBrace) {
+                break;
+            }
+            let mspan = self.span();
+            let fstart = self.expect(Tok::Fn, "`fn`（interface にはメソッドの形だけ書けます）")?;
+            let mutable = self.eat(Tok::Mut);
+            let m = self.parse_fn_rest(fstart, false)?;
+            if !m.tparams.is_empty() {
+                return Err(Diagnostic::new("interface のメソッドには型の引数をつけられません").primary(m.span, "ここ"));
+            }
+            if methods.iter().any(|(x, _)| x.name == m.name) {
+                return Err(Diagnostic::new(format!("メソッド `{}` が二重に書かれています", m.name))
+                    .primary(mspan, "同じ名前のメソッドがすでにある"));
+            }
+            methods.push((m, mutable));
+        }
+        Ok(InterfaceDef { name, methods, span })
     }
 
     /// `enum Shape { Circle(i64 r); Rect(i64 w, i64 h); Empty; }`
@@ -202,7 +235,7 @@ impl Parser {
                 let is_static = self.eat(Tok::Static);
                 let start = self.expect(Tok::Fn, "`fn`")?;
                 let mutable = !is_static && self.eat(Tok::Mut);
-                let mut m = self.parse_fn_rest(start)?;
+                let mut m = self.parse_fn_rest(start, true)?;
                 if methods.iter().chain(&statics).any(|(x, _)| x.name == m.name) {
                     return Err(Diagnostic::new(format!("メソッド `{}` が二重に定義されています", m.name))
                         .primary(mspan, "同じ名前のメソッドがすでにある"));
@@ -214,6 +247,7 @@ impl Parser {
                 if is_static {
                     // 静的メソッドは this のない関数。構造体の型の引数は使える
                     m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
+                    m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
                     statics.push((m, mspan));
                     continue;
                 }
@@ -232,6 +266,7 @@ impl Parser {
                 let this_ty = TypeExpr { kind: TypeKind::Ref(Box::new(sty), mutable), span: m.span };
                 m.params.insert(0, Param { ty: this_ty, name: "this".to_string(), mutable: false, span: m.span });
                 m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
+                m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
                 methods.push((m, mspan));
                 continue;
             }
@@ -290,15 +325,15 @@ impl Parser {
 
     fn parse_fn(&mut self) -> R<FnDef> {
         let start = self.expect(Tok::Fn, "`fn` か `struct`（トップレベルには関数と構造体の定義だけ書けます）")?;
-        self.parse_fn_rest(start)
+        self.parse_fn_rest(start, true)
     }
 
-    /// `fn` のあと（関数とメソッドで共通）
-    fn parse_fn_rest(&mut self, start: Span) -> R<FnDef> {
+    /// `fn` のあと（関数とメソッドで共通）。`body` が false なら本体の代わりに `;`（interface のメソッド）
+    fn parse_fn_rest(&mut self, start: Span, body: bool) -> R<FnDef> {
         // `fn 名前(` / `fn 名前<T>(` なら戻り値なし、`fn 型 名前(` なら戻り値あり
         let ret = if self.at_fn_name() { None } else { Some(self.parse_type()?) };
         let name = self.expect_ident("関数名")?;
-        let tparams = self.parse_tparams()?;
+        let (tparams, bounds) = self.parse_tparams_bounded()?;
         self.expect(Tok::LParen, "`(`")?;
         let mut params = Vec::new();
         while *self.peek() != Tok::RParen {
@@ -322,8 +357,13 @@ impl Parser {
         }
         self.expect(Tok::RParen, "`)`")?;
         let header = start.join(self.prev_span());
-        let body = self.parse_block()?;
-        Ok(FnDef { name, tparams, ret, params, body, span: header })
+        let body = if body {
+            self.parse_block()?
+        } else {
+            let end = self.expect(Tok::Semi, "`;`（interface のメソッドには本体を書きません）")?;
+            Block { stmts: Vec::new(), tail: false, end }
+        };
+        Ok(FnDef { name, tparams, bounds, ret, params, body, span: header })
     }
 
     /// 今の位置が関数名か（`名前(` か `名前<...>(`）。そうでなければ戻り値の型
@@ -357,10 +397,23 @@ impl Parser {
     }
 
     /// 型の引数の宣言 `<T, U>`（なければ空）
+    /// 構造体・enum の型の引数（条件はつけられない）
     fn parse_tparams(&mut self) -> R<Vec<String>> {
+        let sp = self.span();
+        let (ps, bounds) = self.parse_tparams_bounded()?;
+        if bounds.iter().any(|b| !b.is_empty()) {
+            return Err(Diagnostic::new("構造体と enum の型の引数には条件をつけられません")
+                .primary(sp, "`<T: ...>` の条件は関数とメソッドにだけ書けます"));
+        }
+        Ok(ps)
+    }
+
+    /// `<T, U: Shape + ordered>`。型の引数の名前と、それぞれの条件
+    fn parse_tparams_bounded(&mut self) -> R<(Vec<String>, Vec<Vec<String>>)> {
         let mut ps: Vec<String> = Vec::new();
+        let mut bounds = Vec::new();
         if !self.eat(Tok::Lt) {
-            return Ok(ps);
+            return Ok((ps, bounds));
         }
         loop {
             let sp = self.span();
@@ -369,12 +422,22 @@ impl Parser {
                 return Err(Diagnostic::new(format!("型の引数 `{}` が二回あります", p)).primary(sp, "ここ"));
             }
             ps.push(p);
+            let mut bs = Vec::new();
+            if self.eat(Tok::Colon) {
+                loop {
+                    bs.push(self.expect_ident("条件（interface の名前か ordered）")?);
+                    if !self.eat(Tok::Plus) {
+                        break;
+                    }
+                }
+            }
+            bounds.push(bs);
             if !self.eat(Tok::Comma) {
                 break;
             }
         }
         self.expect(Tok::Gt, "`>`")?;
-        Ok(ps)
+        Ok((ps, bounds))
     }
 
     /// `{ 文; 文; 式 }`。文の終わりには `;` が要る（`{ }` で終わる if / while などは不要）。

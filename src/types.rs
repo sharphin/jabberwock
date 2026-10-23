@@ -203,6 +203,8 @@ struct FnSig {
     /// 最初の引数が `this` のメソッドか（`p.m()` でだけ呼べる）
     method: bool,
     tparams: Vec<String>,
+    /// 型の引数ごとの条件（`tparams` と同じ順）
+    bounds: Vec<Vec<String>>,
     params: Vec<Ty>,
     ret: Ty,
 }
@@ -217,8 +219,24 @@ struct Checker<'a> {
     ret: Ty,
     /// 今いる定義（関数・構造体・enum）の型の引数
     tparams: Vec<String>,
+    /// interface ごとのメソッドの形
+    interfaces: HashMap<&'a str, Vec<IMethod>>,
+    /// 今調べている関数の、型の引数ごとの条件
+    bounds: HashMap<String, Vec<String>>,
     warnings: Vec<Diagnostic>,
 }
+
+/// interface のメソッドの形（`this` を除いた引数）
+#[derive(Clone)]
+struct IMethod {
+    name: String,
+    mutable: bool,
+    params: Vec<Ty>,
+    ret: Ty,
+}
+
+/// 組み込みの条件: 大小を比べられる型（整数と str）
+const ORDERED: &str = "ordered";
 
 /// プログラム全体の型を調べる。よければ警告（実行は止めない）を返す
 pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
@@ -229,6 +247,8 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         scopes: Vec::new(),
         ret: Ty::Unit,
         tparams: Vec::new(),
+        interfaces: HashMap::new(),
+        bounds: HashMap::new(),
         warnings: Vec::new(),
     };
     for s in &prog.structs {
@@ -244,6 +264,27 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
                 .primary(en.span, "同じ名前の型がすでにある"));
         }
         c.enums.insert(&en.name, (en, Vec::new()));
+    }
+    for i in &prog.interfaces {
+        let n = i.name.as_str();
+        if c.structs.contains_key(n) || c.enums.contains_key(n) || c.interfaces.contains_key(n) || n == ORDERED {
+            return Err(Diagnostic::new(format!("型 `{}` が二重に定義されています", n))
+                .primary(i.span, "同じ名前の型がすでにある"));
+        }
+        c.interfaces.insert(n, Vec::new());
+    }
+    for i in &prog.interfaces {
+        c.tparams = Vec::new();
+        let mut ms = Vec::new();
+        for (m, mutable) in &i.methods {
+            let params = m.params.iter().map(|p| c.resolve(&p.ty)).collect::<R<Vec<_>>>()?;
+            let ret = match &m.ret {
+                Some(t) => c.resolve(t)?,
+                None => Ty::Unit,
+            };
+            ms.push(IMethod { name: m.name.clone(), mutable: *mutable, params, ret });
+        }
+        c.interfaces.insert(&i.name, ms);
     }
     for s in &prog.structs {
         c.tparams = s.tparams.clone();
@@ -278,6 +319,12 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
                 .primary(f.span, "ここ")
                 .note("`fn main() { ... }` と書いてください"));
         }
+        for b in f.bounds.iter().flatten() {
+            if b != ORDERED && !c.interfaces.contains_key(b.as_str()) {
+                return Err(Diagnostic::new(format!("条件 `{}` は定義されていません", b))
+                    .primary(f.span, "型の引数の条件には interface の名前か `ordered` を書きます"));
+            }
+        }
         c.tparams = f.tparams.clone();
         let params = f.params.iter().map(|p| c.resolve(&p.ty)).collect::<R<Vec<_>>>()?;
         let ret = match &f.ret {
@@ -287,6 +334,7 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         c.fns.insert(&f.name, FnSig {
             method: f.name.contains('.') && matches!(f.params.first(), Some(p) if p.name == "this"),
             tparams: f.tparams.clone(),
+            bounds: f.bounds.clone(),
             params,
             ret,
         });
@@ -628,6 +676,8 @@ impl<'a> Checker<'a> {
     fn check_fn(&mut self, f: &FnDef) -> R<()> {
         let sig = &self.fns[f.name.as_str()];
         self.ret = sig.ret.clone();
+        self.tparams = f.tparams.clone();
+        self.bounds = f.tparams.iter().cloned().zip(f.bounds.iter().cloned()).collect();
         let mut params = HashMap::new();
         for (p, t) in f.params.iter().zip(sig.params.clone()) {
             if params.contains_key(&p.name) {
@@ -1100,11 +1150,17 @@ impl<'a> Checker<'a> {
                     self.common(l, &lt, r, &rt, span)?;
                     Ok(Ty::Bool)
                 }
+                (Ty::Str, Ty::Str) => Ok(Ty::Bool),
+                _ if lt == rt && self.is_ordered_param(&lt) => Ok(Ty::Bool),
+                (Ty::Param(_), _) | (_, Ty::Param(_)) => Err(bad().note("型の引数どうしを比べるには `<T: ordered>` と条件をつけてください")),
                 _ => Err(bad()),
             },
             BinOp::Eq | BinOp::Ne => {
                 if let (Ty::Int(_), Ty::Int(_)) = (&lt, &rt) {
                     self.common(l, &lt, r, &rt, span)?;
+                    return Ok(Ty::Bool);
+                }
+                if lt == rt && self.is_ordered_param(&lt) {
                     return Ok(Ty::Bool);
                 }
                 if lt == rt && matches!(lt, Ty::Bool | Ty::Str) {
@@ -1115,6 +1171,88 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+
+    /// `<T: ordered>` の T か
+    fn is_ordered_param(&self, t: &Ty) -> bool {
+        matches!(t, Ty::Param(p) if matches!(self.bounds.get(p), Some(b) if b.iter().any(|x| x == ORDERED)))
+    }
+
+    /// 型 `t` が条件 `bound` を満たすか。満たさなければその理由
+    fn satisfies(&self, t: &Ty, bound: &str) -> Result<(), String> {
+        if let Ty::Param(p) = t {
+            // 型の引数のまま渡すなら、こちらの関数にも同じ条件が要る
+            let ok = matches!(self.bounds.get(p), Some(b) if b.iter().any(|x| x == bound));
+            return if ok { Ok(()) } else { Err(format!("`{}` に条件 `{}` がついていません", p, bound)) };
+        }
+        if bound == ORDERED {
+            return if matches!(t, Ty::Int(_) | Ty::Str) {
+                Ok(())
+            } else {
+                Err(format!("`{}` は大小を比べられません（ordered は整数と str だけ）", t.show()))
+            };
+        }
+        let Ty::Struct(sname, targs) = t else {
+            return Err(format!("`{}` は構造体ではないのでメソッドを持ちません", t.show()));
+        };
+        let map = Self::targs(&self.structs[sname.as_str()].0.tparams, targs);
+        for im in &self.interfaces[bound] {
+            let full = format!("{}.{}", sname, im.name);
+            let Some(sig) = self.fns.get(full.as_str()).filter(|s| s.method) else {
+                return Err(format!("`{}` にメソッド `{}` がありません", sname, im.name));
+            };
+            let Ty::Ref(_, smut) = &sig.params[0] else { unreachable!("this is a ref") };
+            let params: Vec<Ty> = sig.params[1..].iter().map(|p| subst(p, &map)).collect();
+            let shape_ok = sig.tparams.len() == self.structs[sname.as_str()].0.tparams.len()
+                && params == im.params
+                && subst(&sig.ret, &map) == im.ret;
+            if !shape_ok {
+                return Err(format!("`{}.{}` の引数か戻り値の型が `{}` の形と違います", sname, im.name, bound));
+            }
+            if *smut && !im.mutable {
+                return Err(format!("`{}.{}` は fn mut ですが、`{}` では書き換えないメソッドです", sname, im.name, bound));
+            }
+        }
+        Ok(())
+    }
+
+    /// 呼び出しで決まった型の引数が、それぞれの条件を満たすか
+    fn check_bounds(&self, tparams: &[String], bounds: &[Vec<String>], map: &HashMap<String, Ty>, span: Span) -> R<()> {
+        for (p, bs) in tparams.iter().zip(bounds) {
+            let Some(t) = map.get(p) else { continue };
+            for b in bs {
+                if let Err(why) = self.satisfies(t, b) {
+                    return Err(Diagnostic::new(format!("`{}` は条件 `{}` を満たしません", t.show(), b))
+                        .primary(span, format!("ここで `{}` は `{}` になる", p, t.show()))
+                        .note(why));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 型の引数（`T`）の値に対するメソッド呼び出し。条件の interface から探す
+    fn param_method_call(&mut self, recv: &Expr, rt: &Ty, p: &str, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        let found = self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).find_map(|b| {
+            self.interfaces[b.as_str()].iter().find(|m| m.name == name).cloned()
+        });
+        let Some(m) = found else {
+            return Err(Diagnostic::new(format!("`{}` にメソッド `{}` があるか分かりません", p, name))
+                .primary(span, "型の引数のメソッドは、条件の interface に書いたものだけ呼べます")
+                .note(format!("`<{}: 名前>` のように、`{}` を持つ interface を条件にしてください", p, name)));
+        };
+        if args.len() != m.params.len() {
+            return Err(arity_error(name, m.params.len(), args.len(), span));
+        }
+        if m.mutable {
+            let a = if is_place(recv) { self.access(recv)? } else { Access::Write };
+            a.through(rt, self.origin(recv), describe(recv))
+                .require(span, format!("書き換えるメソッド `{}` を呼ぼうとした", name).as_str())?;
+        }
+        for (a, t) in args.iter().zip(&m.params) {
+            self.expect(a, t)?;
+        }
+        Ok(m.ret)
     }
 
     /// `e?`。e が `Result<T, E>` なら関数の戻り値も `Result<_, E>`、`Option<T>` なら `Option<_>` でなければならない。
@@ -1191,18 +1329,31 @@ impl<'a> Checker<'a> {
             return Err(arity_error(name, sig.params.len(), args.len(), span));
         }
         let (tparams, params, ret) = (sig.tparams.clone(), sig.params.clone(), sig.ret.clone());
+        let bounds = sig.bounds.clone();
         let pre = hint.map(|h| (&ret, h));
         let args: Vec<&Expr> = args.iter().collect();
         let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>())?;
         if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
             self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
         }
+        self.check_bounds(&tparams, &bounds, &map, span)?;
         Ok(subst(&ret, &map))
     }
 
     /// `p.name(args)`。メソッドは `構造体名.name` という関数で、最初の引数が `this`（`ref 構造体`）
     fn method_call(&mut self, recv: &Expr, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
         let rt = self.expr(recv)?;
+        let param = match &rt {
+            Ty::Param(p) => Some(p.clone()),
+            Ty::Own(x) | Ty::Ref(x, _) => match &**x {
+                Ty::Param(p) => Some(p.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(p) = param {
+            return self.param_method_call(recv, &rt, &p, name, args, span);
+        }
         let st = match &rt {
             Ty::Struct(..) => rt.clone(),
             Ty::Own(x) | Ty::Ref(x, _) if matches!(**x, Ty::Struct(..)) => (**x).clone(),
@@ -1250,6 +1401,8 @@ impl<'a> Checker<'a> {
         if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
             self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
         }
+        let bounds = self.fns[full.as_str()].bounds.clone();
+        self.check_bounds(&tparams, &bounds, &map, span)?;
         Ok(subst(&ret, &map))
     }
 

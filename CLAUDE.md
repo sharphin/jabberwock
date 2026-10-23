@@ -31,7 +31,8 @@
 | `tests/enums.rs` | enum と Option・match での取り出し・`match ref` |
 | `tests/generics.rs` | ジェネリクス（関数・構造体・enum の型の引数） |
 | `tests/results.rs` | Result と `?`（途中で抜けたときの解放も） |
-| `tests/methods.rs` | メソッド（`this`・`fn mut`・構造体の値への呼び出し） |
+| `tests/methods.rs` | メソッド（`this`・`fn mut`・構造体の値への呼び出し・静的メソッド） |
+| `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>` |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -83,6 +84,10 @@
   analyze は receiver の型を知らないので、同じ名前のメソッドすべての呼び出しとして記録する（安全側）。
   静的メソッド（`static fn`）は this のない `構造体名.名前` の関数。パーサが `struct 名前` を先に集め（`struct_names`）、
   `Point.at(...)` を `ExprKind::Call("Point.at")` にする。型検査の `FnSig.method` で呼び方の取り違えを弾く。
+
+- interface と条件: 型検査だけの話（interp は値の構造体名でメソッドを探すので何もしない）。`FnDef.bounds` が型の引数ごとの条件。
+  `types.rs` の `satisfies` が「構造体のメソッドが interface の形とそろうか」を調べ、`check_bounds` で呼び出しの場所で確かめる。
+  関数の中では `Checker.bounds` を見て、`T` のメソッド呼び出し（`param_method_call`）と比較（`is_ordered_param`）を許す。
 
 ## 設計の決めごと
 
