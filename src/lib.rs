@@ -173,6 +173,18 @@ fn reloader(files: &[(String, String)], elide: bool) -> Box<dyn Fn() -> ast::Pro
     })
 }
 
+/// IR で動かすときの、新しいスレッドのための IR の作り直し
+fn ir_reloader(files: &[(String, String)]) -> Box<dyn Fn() -> ir::Program + Send + Sync> {
+    let load = reloader(files, false);
+    Box::new(move || {
+        let prog = load();
+        let (_, info) = types::check_with_info(&prog).expect("checked before");
+        let mut irp = ir::lower::lower(&prog, &info).expect("lowered before");
+        ir::analyze::analyze(&mut irp);
+        irp
+    })
+}
+
 fn in_big_stack(f: impl FnOnce() -> Outcome + Send) -> Outcome {
     std::thread::scope(|s| {
         std::thread::Builder::new()
@@ -230,7 +242,7 @@ fn run_inner(
     let lowered = lowered.filter(|p| io.0.is_some() || !p.uses_input());
     if let Some(irp) = lowered {
         let input = io.0.clone().unwrap_or_default();
-        if let Some(diff) = ir_mismatch(&irp, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
+        if let Some(diff) = ir_mismatch(&irp, &files, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
         // WARD_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
@@ -255,6 +267,7 @@ fn run_inner(
 /// IR を実行して、インタプリタの結果（出力・エラーの題と位置・残ったヒープの数）と違えばその説明を返す
 fn ir_mismatch(
     irp: &ir::Program,
+    files: &[(String, String)],
     output: &str,
     error: Option<&Diagnostic>,
     live: usize,
@@ -262,6 +275,7 @@ fn ir_mismatch(
     args: &[String],
 ) -> Option<String> {
     let mut it = interp::Interp::new(false);
+    it.set_world(threads::World::new_ir(ir_reloader(files)));
     it.set_io(Box::new(std::io::Cursor::new(input.to_vec())), args.to_vec());
     let res = ir::exec::run(irp, &mut it);
     if it.output() != output {

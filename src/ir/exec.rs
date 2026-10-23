@@ -5,6 +5,7 @@
 //! （`ref x` で変数そのものを借りられるように）。
 
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 
 use super::*;
 use crate::ast::UnOp;
@@ -14,6 +15,8 @@ use crate::interp::{
     as_bool, binary, bounds, float_to_int, locate, merge_sort, moved_error, none, some, str_method, Interp, MapVal, RefVal,
     Value, MAX_DEPTH,
 };
+
+use crate::threads::{aborted_marker, Portable};
 
 type R<T> = Result<T, Diagnostic>;
 
@@ -30,8 +33,11 @@ enum Loc {
 /// `main` を実行する。出力・ヒープは `it` に残る
 pub fn run(prog: &Program, it: &mut Interp) -> R<()> {
     let main = prog.by_name["main"];
+    it.set_structs(prog.structs.clone());
+    let span = prog.fns[main].span;
     let mut m = Machine { prog, it, depth: 0, views: Vec::new() };
-    m.call(main, Vec::new(), Vec::new(), prog.fns[main].span).map(|_| ())
+    let r = m.call(main, Vec::new(), Vec::new(), span).map(|_| ());
+    it.finish_main(r, span)
 }
 
 struct Machine<'a> {
@@ -44,6 +50,9 @@ struct Machine<'a> {
 
 impl<'a> Machine<'a> {
     fn call(&mut self, fi: usize, args: Vec<Value>, views: Vec<Local>, span: Span) -> R<Value> {
+        if self.it.world.aborted.load(Ordering::Relaxed) {
+            return Err(aborted_marker());
+        }
         if self.depth >= MAX_DEPTH {
             return Err(Diagnostic::new("関数呼び出しが深すぎます")
                 .primary(span, format!("呼び出しの深さが {} を超えました", MAX_DEPTH)));
@@ -65,6 +74,9 @@ impl<'a> Machine<'a> {
             bb = match &block.term {
                 Term::Goto(b) => *b,
                 Term::Branch(c, t, e) => {
+                    if self.it.world.aborted.load(Ordering::Relaxed) {
+                        return Err(aborted_marker());
+                    }
                     let v = self.operand(f, &mut locs, c)?;
                     if as_bool(v, f.span)? {
                         *t
@@ -389,6 +401,25 @@ impl<'a> Machine<'a> {
                 let Value::Str(text) = vals.remove(0) else { unreachable!("string method on a string") };
                 str_method(&text, &name[4..], vals, *span)
             }
+            Rvalue::Builtin(name, ops, span) if name.starts_with("task.") || name.starts_with("chan.") => {
+                let mut vals = self.operands(f, locs, ops)?;
+                let h = vals.remove(0);
+                self.it.thread_method(&h, &name[5..], vals, *span)
+            }
+            Rvalue::Builtin(name, ops, span) if name == "spawn" => {
+                let mut vals = self.operands(f, locs, ops)?;
+                let Value::Func(Callee::Ir(fi), caps) = vals.remove(0) else { unreachable!("spawn takes a function") };
+                let span = *span;
+                let caps: Vec<Portable> = caps.into_iter().map(|c| self.it.export(c, span)).collect();
+                Ok(self.it.start_thread(span, Box::new(move |it: &mut Interp| {
+                    let prog = (it.world.load_ir.as_ref().expect("IR world"))();
+                    it.set_structs(prog.structs.clone());
+                    let args: Vec<Value> = caps.into_iter().map(|c| it.import(c)).collect();
+                    // 1 回だけ呼ぶので、取り込んだ値は写しにせずそのまま渡す
+                    let mut m = Machine { prog: &prog, it, depth: 0, views: Vec::new() };
+                    m.call(fi, args, Vec::new(), span)
+                })))
+            }
             Rvalue::Builtin(name, ops, span) => {
                 let vals = self.operands(f, locs, ops)?;
                 let strs = || -> Vec<String> {
@@ -407,6 +438,7 @@ impl<'a> Machine<'a> {
                     }
                     "concat" => Ok(Value::Str(Rc::from(strs().concat().as_str()))),
                     "read_line" => self.it.read_line(*span),
+                    "chan" => Ok(Value::Chan(std::sync::Arc::new(crate::threads::Chan::default()))),
                     "args" => Ok(self.it.args_value()),
                     "assert" => {
                         if !as_bool(vals[0].clone(), *span)? {

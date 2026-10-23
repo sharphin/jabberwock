@@ -21,6 +21,9 @@ use crate::threads::{aborted_marker, Chan, Entry, Portable, Task, World};
 
 type R<T> = Result<T, Diagnostic>;
 
+/// 新しいスレッドで動かすもの（新しい `Interp` を受け取る）
+pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
+
 pub(crate) const MAX_DEPTH: usize = 5000;
 pub(crate) const BUILTINS: [&str; 7] = ["print", "drop", "assert", "read_line", "args", "spawn", "chan"];
 
@@ -420,22 +423,7 @@ impl Interp {
                 }
             }
         }
-        let r = match r {
-            // ほかのスレッドが終わるのを待つ
-            Ok(_) => self.world.wait_all(main.span),
-            Err(d) => {
-                self.world.fail(d.clone());
-                Err(d)
-            }
-        };
-        if r.is_err() {
-            self.world.wait_stopped();
-        }
-        let abort = self.world.lock().abort.clone();
-        match abort {
-            Some(d) => Err(d),
-            None => r,
-        }
+        self.finish_main(r.map(|_| ()), main.span)
     }
 
     /// 構造体と関数を登録する
@@ -539,6 +527,14 @@ impl Interp {
             Callee::Ir(_) => unreachable!("IR functions run only in ir::exec"),
         };
         let caps: Vec<Portable> = caps.into_iter().map(|c| self.export(c, span)).collect();
+        Ok(self.start_thread(span, Box::new(move |it: &mut Interp| {
+            let prog = (it.world.load)();
+            it.run_entry(prog, entry, caps, span)
+        })))
+    }
+
+    /// 新しいスレッドを始めて、その task を返す。`run` は新しい `Interp`（同じ world・入力）で動く
+    pub(crate) fn start_thread(&mut self, span: Span, run: ThreadBody) -> Value {
         let task = Arc::new(Task::default());
         let world = self.world.clone();
         world.started();
@@ -546,12 +542,11 @@ impl Interp {
         std::thread::Builder::new()
             .stack_size(1 << 30)
             .spawn(move || {
-                let prog = (world.load)();
                 let mut it = Interp::new(false);
                 it.world = world.clone();
                 it.input = input;
                 it.args = args;
-                match it.run_entry(prog, entry, caps, span) {
+                match run(&mut it) {
                     Ok(v) => {
                         let p = it.export(v, span);
                         let leaked = it.heap.live();
@@ -565,7 +560,30 @@ impl Interp {
                 }
             })
             .expect("failed to spawn a thread");
-        Ok(Value::Task(task))
+        Value::Task(task)
+    }
+
+    /// main が終わったあと: ほかのスレッドを待ち、どれかのエラーがあればそれを返す
+    pub(crate) fn finish_main(&mut self, r: R<()>, span: Span) -> R<()> {
+        let r = match r {
+            Ok(_) => self.world.wait_all(span),
+            Err(d) => {
+                self.world.fail(d.clone());
+                Err(d)
+            }
+        };
+        if r.is_err() {
+            self.world.wait_stopped();
+        }
+        let abort = self.world.lock().abort.clone();
+        match abort {
+            Some(d) => Err(d),
+            None => r,
+        }
+    }
+
+    pub(crate) fn set_structs(&mut self, structs: HashMap<String, Rc<StructDef>>) {
+        self.structs = structs;
     }
 
     /// 新しいスレッドの中: プログラムを登録して、spawn に渡された関数を 1 回だけ呼ぶ
@@ -611,7 +629,7 @@ impl Interp {
     }
 
     /// task と chan のメソッド
-    fn thread_method(&mut self, h: &Value, name: &str, mut vals: Vec<Value>, span: Span) -> R<Value> {
+    pub(crate) fn thread_method(&mut self, h: &Value, name: &str, mut vals: Vec<Value>, span: Span) -> R<Value> {
         match (h, name) {
             (Value::Task(t), "join") => {
                 let p = self.world.join(t, span)?;

@@ -897,9 +897,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
     /// 値として読むとムーブになる型か（interp の `Value::moves` を型で決めたもの）
     fn moves(&self, t: &Ty) -> L<bool> {
         Ok(match t {
-            Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..) => false,
+            Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..) | Ty::Chan(_) => false,
             // 関数の値は取り込んだものしだい（変数を読むときは `Operand::Read` で値を見て決める）
-            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) => true,
+            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) | Ty::Task(_) => true,
             Ty::Array(x, _) => self.moves(x)?,
             Ty::Enum(n, args) => {
                 let (tparams, vs) = self.info.enums.get(n).ok_or("enum の記録がない")?;
@@ -1176,7 +1176,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 Ok(Operand::Const(Const::Unit))
             }
             "read_line" | "args" => Ok(self.temp_of(ty, Rvalue::Builtin(name.to_string(), Vec::new(), sp), sp)),
-            "spawn" | "chan" => Err("スレッド（spawn / chan）".to_string()),
+            "spawn" => {
+                let f = self.expr(&args[0])?;
+                Ok(self.temp_of(ty, Rvalue::Builtin("spawn".to_string(), vec![f], sp), sp))
+            }
+            "chan" => Ok(self.temp_of(ty, Rvalue::Builtin("chan".to_string(), Vec::new(), sp), sp)),
             _ if self.lookup(name).is_some() => {
                 // 引数を先に評価してから、変数を借りて読む（interp の `call_var`）
                 let mut vals = Vec::new();
@@ -1296,6 +1300,19 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     span: sp,
                 };
                 let r = self.temp_of(ty, op, sp);
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
+            Ty::Task(_) | Ty::Chan(_) => {
+                // 場所の task / chan は読むだけ（join は印をつけるだけで、値は場所に残る）
+                let h = match recv_place(self)? {
+                    Some(pl) => Operand::Copy(pl),
+                    None => temp.clone().expect("a handle"),
+                };
+                let kind = if matches!(inner, Ty::Task(_)) { "task" } else { "chan" };
+                let mut ops = vec![h];
+                ops.append(&mut vals);
+                let r = self.temp_of(ty, Rvalue::Builtin(format!("{}.{}", kind, name), ops, sp), sp);
                 self.drop_temp(&temp, sp);
                 Ok(r)
             }

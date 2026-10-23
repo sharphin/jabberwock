@@ -192,7 +192,9 @@
   `Portable` → `import` で運ぶ。spawn の関数は 1 回だけ呼ぶので、取り込んだ値は写しにせずそのまま置く（`run_entry`）。
   待つ操作はすべて `World` の 1 つの錠と条件変数（`wait`）。状態が変わるたびに `epoch` を進めて `blocked` を 0 にするので、
   `blocked >= alive` がデッドロック。エラーは `World.fail` → `aborted` を見て、ほかのスレッドは関数呼び出し・ループ・待ちで抜ける（`aborted_marker`）。
-  print の出力は `World` に行ごとに足す（`Interp::output()`）。捨てる task は `settle_tasks` で終わりを待つ。IR / LLVM はまだ（lower が Err）。
+  print の出力は `World` に行ごとに足す（`Interp::output()`）。捨てる task は `settle_tasks` で終わりを待つ。
+  IR では `spawn`・`chan`・`task.join`・`chan.send` などは `Rvalue::Builtin`。exec は `start_thread` を共有し、新しいスレッドは `World.load_ir`（lib.rs の `ir_reloader`）で IR を作り直して、
+  関数の番号で 1 回だけ呼ぶ（取り込んだ値は写しにしない）。
 
 ## 設計の決めごと
 

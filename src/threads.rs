@@ -80,6 +80,8 @@ pub struct World {
     pub echo: bool,
     /// 新しいスレッドのためにプログラムを読み直す
     pub load: Box<dyn Fn() -> Program + Send + Sync>,
+    /// IR で動かしているとき: 新しいスレッドのために IR を作り直す
+    pub load_ir: Option<Box<dyn Fn() -> crate::ir::Program + Send + Sync>>,
 }
 
 impl std::fmt::Debug for World {
@@ -101,7 +103,14 @@ impl World {
             aborted: AtomicBool::new(false),
             echo,
             load,
+            load_ir: None,
         })
+    }
+
+    pub fn new_ir(load_ir: Box<dyn Fn() -> crate::ir::Program + Send + Sync>) -> Arc<World> {
+        let mut w = World::new(false, Box::new(|| unreachable!("IR threads load IR")));
+        Arc::get_mut(&mut w).expect("new").load_ir = Some(load_ir);
+        w
     }
 
     pub fn lock(&self) -> MutexGuard<'_, State> {
