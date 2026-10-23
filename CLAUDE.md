@@ -95,6 +95,9 @@
 - enum の match は interp の `match_enum`。値の match は中身を受け取る名前へ移し、借りた match（scrut が ref）は
   中身の own を ref にして渡す。全部の種類を書いたかは `types.rs` の `match_enum` が調べる。
   case で受け取る名前は、analyze でも新しい変数として宣言する（外の同名の変数の事実を使わない）。
+  形を重ねられる（`Pat::Variant` の 3 つめ。重ねた位置の名前は `_`、全部の名前は `Pat::names`）。interp は `subs_match` で値を動かさずに調べてから
+  `bind_fields` で受け取る。types は `variant_pat` / `sub_pat`、全部書いたかは `variant_covered`。lower は case ごとに `test_pat`（外れたら次の case へ）→
+  `bind_pat` → 入れ物の drop を **同じブロック** に置く（llvm.rs はそのブロックで take した入れ物の中身を解放しないため）。
 - パーサはファイル中の `enum 名前` を先に集め、`名前.種類` を enum の値として読む（`enum_names`）。
 - ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
 

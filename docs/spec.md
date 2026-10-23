@@ -305,7 +305,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)）。
+- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)。形を重ねてもよい）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -538,6 +538,27 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 - `match ref x` / `match ref mut x` は借りるだけ。中身の own は `ref T` / `ref mut T` として受け取り、数などはコピーで受け取る。
   own を通さずに持つ構造体などの中身は受け取れない（`_` にする）。
 - 種類をまとめた case（`case Circle(_), Rect(_, _) ->`）では中身を受け取れない。
+
+**形を重ねる**: 中身の位置に、種類・数・文字列・真偽値を書ける。
+
+```
+match peek() {                          // Option<Tok>
+    case Some(Op("-")) -> ...;          // Some で、中身が Op で、その中身が "-"
+    case Some(Op(op)) -> ...;           // それ以外の Op
+    case Some(Num(n)) -> ...;
+    case Some(End), None -> ...;
+}
+match ref e {                           // 借りた match なら own の先にも重ねられる
+    case Add(Lit(0), r) -> ...;         // e が Add で、左が own E.Lit(0)
+    default -> ...;
+}
+```
+
+- 上から順に調べ、形が全部当たった最初の case を選ぶ。調べるだけでは値は動かない（当たった case だけ中身を受け取る）。
+- 中身の位置の名前は、小文字で始まれば受け取る名前、大文字で始まれば種類の名前（`Some(End)`）。`名前(...)` は種類。
+- 値の match では、own の中には重ねられない（`match ref x` で借りれば重ねられる）。ref の中にも重ねられない。
+- 全部の場合を書いたかは、重ねた形もたどって調べる（`Some(Some(x))` と `Some(None)` と `None` で全部）。足りなければ default が要る。
+- 先に重ねていない `case Some(x)` があると、あとの `case Some(1)` は決して選ばれないのでエラー。
 
 ### 6.6 文字列の埋め込み
 

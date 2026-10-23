@@ -272,17 +272,41 @@ pub enum Pat {
     Int(i128),
     Bool(bool),
     Str(String),
-    /// `Circle(r, _)` / `None`。enum の種類と、中身を受け取る名前（`_` は受け取らない）
-    Variant(String, Vec<(String, Span)>),
+    /// `Circle(r, _)` / `None`。enum の種類と、中身を受け取る名前（`_` は受け取らない）。
+    /// 3 つめは中身ごとの重ねた形（`Some(Op(op))` の `Op(op)`・`Some(0)` の `0`）。重ねた中身の名前は `_`
+    Variant(String, Vec<(String, Span)>, Vec<Option<Pat>>),
 }
 
 impl Pat {
-    /// 同じ場合を指すか（受け取る名前は問わない）
-    pub fn same_case(&self, other: &Pat) -> bool {
-        match (self, other) {
-            (Pat::Variant(a, _), Pat::Variant(b, _)) => a == b,
-            _ => self == other,
+    /// 先に書いた case `self` があると、`later` が決して選ばれないか（受け取る名前は問わない）
+    pub fn same_case(&self, later: &Pat) -> bool {
+        match (self, later) {
+            (Pat::Variant(a, _, subs), Pat::Variant(b, ..)) => a == b && subs.iter().all(Option::is_none),
+            _ => self == later,
         }
+    }
+
+    /// 重ねた形がない（種類が合えば必ず当たる）
+    pub fn is_flat(&self) -> bool {
+        match self {
+            Pat::Variant(_, _, subs) => subs.iter().all(Option::is_none),
+            _ => true,
+        }
+    }
+
+    /// 受け取る名前すべて（重ねた形の中も。`_` は除く）
+    pub fn names(&self) -> Vec<(String, Span)> {
+        let mut out = Vec::new();
+        if let Pat::Variant(_, binds, subs) = self {
+            for (b, s) in binds.iter().zip(subs) {
+                match s {
+                    Some(p) => out.extend(p.names()),
+                    None if b.0 != "_" => out.push(b.clone()),
+                    None => {}
+                }
+            }
+        }
+        out
     }
 }
 

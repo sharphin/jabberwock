@@ -16,7 +16,7 @@
 |---|---|---|---|---|
 | 1 | **（解決）** クロージャが外の辞書・構造体をムーブする（`keys.sort_by((a, b) -> total[a] > total[b])` のあと `total` が使えない） | parallel_words・shop | 先に `let t = ref total;` を取り、`t` を取り込む | 大 |
 | 2 | リストの要素を取り出しながら回せない（`for p in parts` の p は `ref`。スレッドへ渡せない） | parallel_words・shop | `loop { match parts.pop() { ... } }`（逆順になる） | 中 |
-| 3 | match の形を重ねられない（`case Some(Op(op))`） | calc | 「終わり」を表す種類を enum に足すか、match を 2 段にする | 中 |
+| 3 | **（解決）** match の形を重ねられない（`case Some(Op(op))`） | calc | 「終わり」を表す種類を enum に足すか、match を 2 段にする | 中 |
 | 4 | リストに `filter` / `map` がない | shop | for で新しいリストに push | 小 |
 | 5 | Option を Result の関数で `?` できない（`s.to_int()?`）。Option → Result に変える関数がない | calc | match で受けて `return Err(...)` | 小 |
 | 6 | 値を返さない task の型が書けない（`task<???>[]`） | parallel_words | クロージャから `0` を返して `task<i64>` にする | 小 |
@@ -35,7 +35,7 @@
 
 1. **#1 クロージャの取り込み**。→ 引数にその場で書いたクロージャは外の変数を借りるようにした（オーナーがカードで A を選択）。
 2. #2 取り出しながら回す `for`（書き方の案: `for x in take a`。a はムーブされ、要素を値で受け取る）。
-3. #3 match の重ねた形。
+3. #3 match の重ねた形。→ 実装済み（`calc.ward` も書き直した）。
 4. #4〜#7 の小さいもの（`filter` / `map`、`ok_or`、値なしの型名、複数行の文字列）。
 
 ## 1 回目

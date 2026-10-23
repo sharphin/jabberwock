@@ -802,17 +802,33 @@ impl Parser {
                 // `Circle(r, _)` / `Empty` / `Some(x)` / `None`
                 self.bump();
                 let mut binds = Vec::new();
+                let mut subs = Vec::new();
                 if self.eat(Tok::LParen) {
                     while *self.peek() != Tok::RParen {
                         let sp = self.span();
-                        binds.push((self.expect_ident("中身を受け取る名前")?, sp));
+                        // 中身の位置: 名前（小文字で始まる）か `_` なら受け取る名前。
+                        // 大文字で始まる名前・`名前(...)`・数や文字列なら、重ねた形
+                        let nested = match self.peek().clone() {
+                            Tok::Ident(n) => {
+                                *self.peek2() == Tok::LParen || n.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+                            }
+                            _ => true,
+                        };
+                        if nested {
+                            let (p, psp) = self.parse_pat()?;
+                            binds.push(("_".to_string(), psp));
+                            subs.push(Some(p));
+                        } else {
+                            binds.push((self.expect_ident("中身を受け取る名前")?, sp));
+                            subs.push(None);
+                        }
                         if !self.eat(Tok::Comma) {
                             break;
                         }
                     }
                     self.expect(Tok::RParen, "`)`")?;
                 }
-                return Ok((Pat::Variant(name, binds), start.join(self.prev_span())));
+                return Ok((Pat::Variant(name, binds, subs), start.join(self.prev_span())));
             }
             Tok::Minus => {
                 self.bump();
@@ -1585,10 +1601,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
                 let binds = a
                     .pats
                     .iter()
-                    .flat_map(|(p, _)| match p {
-                        Pat::Variant(_, bs) => bs.iter().map(|(b, _)| b.clone()).collect(),
-                        _ => Vec::new(),
-                    })
+                    .flat_map(|(p, _)| p.names().into_iter().map(|(b, _)| b))
                     .collect();
                 scopes.push(binds);
                 bind_this_block(&mut a.body, ctx, scopes);

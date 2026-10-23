@@ -415,10 +415,8 @@ impl<'a> FnAnalyzer<'a> {
                     self.facts = before.clone();
                     self.scopes.push(Vec::new());
                     for (p, _) in &a.pats {
-                        if let Pat::Variant(_, binds) = p {
-                            for (b, _) in binds {
-                                self.declare(b, None);
-                            }
+                        for (b, _) in p.names() {
+                            self.declare(&b, None);
                         }
                     }
                     self.block(&a.body);

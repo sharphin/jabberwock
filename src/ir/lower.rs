@@ -765,60 +765,31 @@ impl<'a, 'p> FnLower<'a, 'p> {
             _ => (None, None, Place::local(s, scrut.span)),
         };
         if let Some(ety) = ety {
-            // 種類ごとに、最初に書いた case へ
-            let mut table: Vec<(Rc<str>, Bb)> = Vec::new();
-            let mut todo = Vec::new();
+            // 上から順に形を調べ、当たった case へ（重ねた形 `Some(Op(op))` は中まで調べる。値は動かさない）
+            let base = match &scrut.kind {
+                ExprKind::Ref(x, _) => describe(x),
+                _ => describe(scrut),
+            };
             for arm in arms {
-                for (p, _) in &arm.pats {
-                    let ast::Pat::Variant(v, binds) = p else { return Err("enum の match に値の case".to_string()) };
-                    if table.iter().any(|(n, _)| **n == **v) {
-                        continue;
-                    }
-                    let bb = self.new_block();
-                    table.push((Rc::from(v.as_str()), bb));
-                    todo.push((bb, v, binds, &arm.body));
-                }
-            }
-            let other = self.new_block();
-            self.blocks[self.cur].term = Term::Switch(place.clone(), table, other);
-            for (bb, v, binds, body) in todo {
-                self.cur = bb;
-                let ftys = self.variant_fields(&ety, v)?;
+                let body_bb = self.new_block();
                 self.scopes.push(Vec::new());
-                for (i, (b, bspan)) in binds.iter().enumerate() {
-                    let mut fp = place.clone();
-                    fp.proj.push(Proj::Variant(Rc::from(v.as_str()), i));
-                    let value = match by_ref {
-                        // 値の match: 中身を受け取る名前へ移す
-                        None => Rvalue::Take(fp),
-                        Some(_) if b == "_" => continue,
-                        // 借りた match: 中身の own は借りた ref として受け取る
-                        Some(m) if matches!(ftys.get(i), Some(Ty::Own(_))) => {
-                            // interp は借りた ref の説明を使う（`match ref s` なら `s`）
-                            let base = match &scrut.kind {
-                                ExprKind::Ref(x, _) => describe(x),
-                                _ => describe(scrut),
-                            };
-                            let what = format!("{} の中身 {}", base, b);
-                            Rvalue::Ref { place: fp, mutable: m, follows: true, what, span: *bspan }
-                        }
-                        Some(_) => Rvalue::Use(Operand::Copy(fp)),
-                    };
-                    if b == "_" {
-                        let t = self.temp_of(ftys.get(i).cloned().unwrap_or(Ty::Unit), value, *bspan);
-                        self.emit(Inst::Discard { value: t, span: *bspan, why: "match で受け取られずに捨てられた".to_string() });
-                        continue;
-                    }
-                    let ty = self.var_ty(*bspan)?;
-                    let l = self.declare(b, ty, false, *bspan);
-                    self.assign(l, value, *bspan);
+                for (p, _) in &arm.pats {
+                    let fail = self.new_block();
+                    self.test_pat(&place, &ety, p, fail)?;
+                    self.bind_pat(&place, &ety, p, by_ref, &base)?;
+                    // llvm.rs は、同じブロックで take した入れ物の drop では中身を解放しない
+                    drop_s(self, "match で中身を取り出したので、入れ物が解放された");
+                    self.blocks[self.cur].term = Term::Goto(body_bb);
+                    self.cur = fail;
                 }
-                drop_s(self, "match で中身を取り出したので、入れ物が解放された");
-                self.block(body, dest)?;
-                self.pop_scope(body.end, "スコープを抜けた");
+                let next = self.cur;
+                self.cur = body_bb;
+                self.block(&arm.body, dest)?;
+                self.pop_scope(arm.body.end, "スコープを抜けた");
                 self.blocks[self.cur].term = Term::Goto(join);
+                self.cur = next;
             }
-            self.cur = other;
+            // どの case にも当たらなかった（default へ）
             if by_ref.is_none() {
                 let why = "match の default で使われずに捨てられた".to_string();
                 self.emit(Inst::Discard { value: Operand::Move(s, scrut.span), span: scrut.span, why });
@@ -861,6 +832,87 @@ impl<'a, 'p> FnLower<'a, 'p> {
             None => set_unit(self, scrut.span),
         }
         self.goto_and_switch(join);
+        Ok(())
+    }
+
+    /// 形 `pat` に当たらなければ `fail` へ飛ぶ。当たれば、今のブロックがその続き
+    fn test_pat(&mut self, place: &Place, ety: &Ty, pat: &ast::Pat, fail: Bb) -> L<()> {
+        let ast::Pat::Variant(v, _, subs) = pat else { return Err("enum の match に値の case".to_string()) };
+        let hit = self.new_block();
+        self.blocks[self.cur].term = Term::Switch(place.clone(), vec![(Rc::from(v.as_str()), hit)], fail);
+        self.cur = hit;
+        let ftys = self.variant_fields(ety, v)?;
+        for (i, sub) in subs.iter().enumerate() {
+            let Some(sub) = sub else { continue };
+            let ft = ftys.get(i).cloned().unwrap_or(Ty::Unit);
+            let (fp, inner) = self.field_place(place, v, i, &ft, place.span);
+            match sub {
+                ast::Pat::Variant(..) => self.test_pat(&fp, &inner, sub, fail)?,
+                lit => {
+                    let c = match lit {
+                        ast::Pat::Int(n) => Const::Int(*n, IntTy::I64),
+                        ast::Pat::Bool(b) => Const::Bool(*b),
+                        ast::Pat::Str(t) => Const::Str(Rc::from(t.as_str())),
+                        ast::Pat::Variant(..) => unreachable!(),
+                    };
+                    let sp = place.span;
+                    let eq = Rvalue::Bin(BinOp::Eq, Operand::Copy(fp), Operand::Const(c), sp);
+                    let c = self.temp_of(Ty::Bool, eq, sp);
+                    let next = self.new_block();
+                    self.blocks[self.cur].term = Term::Branch(c, next, fail);
+                    self.cur = next;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 種類 `v` の i 番目の中身の場所。中身が own なら先へたどる（借りた match で重ねた形を調べるとき）
+    fn field_place(&self, place: &Place, v: &str, i: usize, ft: &Ty, sp: Span) -> (Place, Ty) {
+        let mut fp = place.clone();
+        fp.proj.push(Proj::Variant(Rc::from(v), i));
+        match ft {
+            Ty::Own(x) => {
+                fp.proj.push(Proj::Deref(ast::Check::Required, sp));
+                (fp, (**x).clone())
+            }
+            t => (fp, t.clone()),
+        }
+    }
+
+    /// 当たった形の中身を、受け取る名前へ置く（interp の `bind_fields`）
+    fn bind_pat(&mut self, place: &Place, ety: &Ty, pat: &ast::Pat, by_ref: Option<bool>, base: &str) -> L<()> {
+        let ast::Pat::Variant(v, binds, subs) = pat else { return Err("enum の match に値の case".to_string()) };
+        let ftys = self.variant_fields(ety, v)?;
+        for (i, ((b, bspan), sub)) in binds.iter().zip(subs).enumerate() {
+            let ft = ftys.get(i).cloned().unwrap_or(Ty::Unit);
+            if let Some(sub @ ast::Pat::Variant(..)) = sub {
+                let (fp, inner) = self.field_place(place, v, i, &ft, *bspan);
+                self.bind_pat(&fp, &inner, sub, by_ref, base)?;
+                continue;
+            }
+            let mut fp = place.clone();
+            fp.proj.push(Proj::Variant(Rc::from(v.as_str()), i));
+            let value = match by_ref {
+                // 値の match: 中身を受け取る名前へ移す
+                None => Rvalue::Take(fp),
+                Some(_) if b == "_" => continue,
+                // 借りた match: 中身の own は借りた ref として受け取る（interp は借りた ref の説明を使う）
+                Some(m) if matches!(ft, Ty::Own(_)) => {
+                    let what = format!("{} の中身 {}", base, b);
+                    Rvalue::Ref { place: fp, mutable: m, follows: true, what, span: *bspan }
+                }
+                Some(_) => Rvalue::Use(Operand::Copy(fp)),
+            };
+            if b == "_" {
+                let t = self.temp_of(ft, value, *bspan);
+                self.emit(Inst::Discard { value: t, span: *bspan, why: "match で受け取られずに捨てられた".to_string() });
+                continue;
+            }
+            let ty = self.var_ty(*bspan)?;
+            let l = self.declare(b, ty, false, *bspan);
+            self.assign(l, value, *bspan);
+        }
         Ok(())
     }
 

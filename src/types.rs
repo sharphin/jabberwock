@@ -818,12 +818,11 @@ impl<'a> Checker<'a> {
             t => (t.clone(), None),
         };
         let variants = self.variants_of(&ety).expect("caller checked");
-        let mut covered: Vec<String> = Vec::new();
         let mut tys = Vec::new();
         let mut hint = hint.cloned();
         for arm in arms {
             self.scopes.push(HashMap::new());
-            let r = self.match_arm(&ety, &variants, by_ref, arm, &mut covered);
+            let r = self.match_arm(&ety, by_ref, arm);
             let r = r.and_then(|_| self.block(&arm.body, want_value, hint.as_ref()));
             self.scopes.pop();
             let t = r?;
@@ -836,69 +835,163 @@ impl<'a> Checker<'a> {
         if let Some(d) = default {
             tys.push((self.block(d, want_value, hint.as_ref())?, d));
         } else {
+            let pats: Vec<&Pat> = arms.iter().flat_map(|a| a.pats.iter().map(|(p, _)| p)).collect();
             let missing: Vec<&str> =
-                variants.iter().map(|(n, _)| n.as_str()).filter(|n| !covered.iter().any(|c| c == n)).collect();
+                variants.iter().map(|(n, _)| n.as_str()).filter(|n| !self.variant_covered(&ety, n, &pats)).collect();
             if !missing.is_empty() {
+                let partly = missing.iter().any(|m| pats.iter().any(|p| matches!(p, Pat::Variant(n, ..) if n == m)));
+                let note = if partly {
+                    "重ねた形で一部だけ書いた種類があります。`case Some(x) -> ...` のように残りを受ける case か、`default -> ...` を足してください"
+                } else {
+                    "case を足すか、`default -> ...` でまとめてください"
+                };
                 return Err(Diagnostic::new(format!("match で {} の場合が書かれていません", missing.join("・")))
                     .primary(e.span, format!("`{}` の種類をすべて書く必要がある", ety.show()))
-                    .note("case を足すか、`default -> ...` でまとめてください"));
+                    .note(note));
             }
         }
         self.join(tys, None, want_value, "match", hint.as_ref())
     }
 
     /// enum の case 1 つ分。受け取る名前を今のスコープに置く
-    fn match_arm(
-        &mut self,
-        ety: &Ty,
-        variants: &[(String, Vec<Ty>)],
-        by_ref: Option<bool>,
-        arm: &MatchArm,
-        covered: &mut Vec<String>,
-    ) -> R<()> {
+    fn match_arm(&mut self, ety: &Ty, by_ref: Option<bool>, arm: &MatchArm) -> R<()> {
         let several = arm.pats.len() > 1;
         for (pat, span) in &arm.pats {
-            let Pat::Variant(name, binds) = pat else {
-                return Err(Diagnostic::new("enum の match の case には種類の名前を書きます")
-                    .primary(*span, format!("`{}` の種類ではない", ety.show())));
-            };
-            let Some((_, fields)) = variants.iter().find(|(n, _)| n == name) else {
-                let names: Vec<&str> = variants.iter().map(|(n, _)| n.as_str()).collect();
-                return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", ety.show(), name))
-                    .primary(*span, "この種類はない")
-                    .note(format!("種類: {}", names.join(", "))));
-            };
-            if binds.len() != fields.len() {
-                return Err(Diagnostic::new(format!("`{}` の中身の数が違います", name))
-                    .primary(*span, format!("中身は {} 個ですが、{} 個の名前が書かれています", fields.len(), binds.len()))
-                    .note("受け取らない中身には `_` と書いてください"));
-            }
-            covered.push(name.clone());
-            for ((b, bspan), ft) in binds.iter().zip(fields) {
-                if b == "_" {
-                    continue;
-                }
-                if several {
+            if several {
+                if let Some((_, bspan)) = pat.names().first() {
                     return Err(Diagnostic::new("種類をまとめた case では中身を受け取れません")
                         .primary(*bspan, "ここ")
                         .note("case を分けるか、`_` にしてください"));
                 }
-                let t = match by_ref {
-                    None => ft.clone(),
-                    Some(_) if self.copyable(ft) => ft.clone(),
-                    Some(m) => match ft {
-                        Ty::Own(inner) => Ty::Ref(inner.clone(), m),
-                        _ => {
-                            return Err(Diagnostic::new("借りて match するとき、この中身は受け取れません")
-                                .primary(*bspan, format!("中身は `{}`（own を通さずに持つ値）", ft.show()))
-                                .note("中身を `own` で持たせるか、`_` で受け取らないでください"))
-                        }
-                    },
-                };
-                self.declare(b, VarInfo { ty: t, mutable: false, decl: *bspan })?;
             }
+            self.variant_pat(ety, by_ref, pat, *span)?;
         }
         Ok(())
+    }
+
+    /// enum の種類の形 1 つ（重ねた形の中も）。受け取る名前を今のスコープに置く
+    fn variant_pat(&mut self, ety: &Ty, by_ref: Option<bool>, pat: &Pat, span: Span) -> R<()> {
+        let Pat::Variant(name, binds, subs) = pat else {
+            return Err(Diagnostic::new("enum の match の case には種類の名前を書きます")
+                .primary(span, format!("`{}` の種類ではない", ety.show())));
+        };
+        let variants = self.variants_of(ety).expect("caller checked");
+        let Some((_, fields)) = variants.iter().find(|(n, _)| n == name) else {
+            let names: Vec<&str> = variants.iter().map(|(n, _)| n.as_str()).collect();
+            return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", ety.show(), name))
+                .primary(span, "この種類はない")
+                .note(format!("種類: {}", names.join(", "))));
+        };
+        if binds.len() != fields.len() {
+            return Err(Diagnostic::new(format!("`{}` の中身の数が違います", name))
+                .primary(span, format!("中身は {} 個ですが、{} 個の名前が書かれています", fields.len(), binds.len()))
+                .note("受け取らない中身には `_` と書いてください"));
+        }
+        for (((b, bspan), sub), ft) in binds.iter().zip(subs).zip(fields) {
+            if let Some(sub) = sub {
+                self.sub_pat(ft, by_ref, sub, *bspan)?;
+                continue;
+            }
+            if b == "_" {
+                continue;
+            }
+            let t = match by_ref {
+                None => ft.clone(),
+                Some(_) if self.copyable(ft) => ft.clone(),
+                Some(m) => match ft {
+                    Ty::Own(inner) => Ty::Ref(inner.clone(), m),
+                    _ => {
+                        return Err(Diagnostic::new("借りて match するとき、この中身は受け取れません")
+                            .primary(*bspan, format!("中身は `{}`（own を通さずに持つ値）", ft.show()))
+                            .note("中身を `own` で持たせるか、`_` で受け取らないでください"))
+                    }
+                },
+            };
+            self.declare(b, VarInfo { ty: t, mutable: false, decl: *bspan })?;
+        }
+        Ok(())
+    }
+
+    /// 中身の位置に重ねて書いた形（`Some(Op(op))` の `Op(op)`、`Some(0)` の `0`）
+    fn sub_pat(&mut self, ft: &Ty, by_ref: Option<bool>, sub: &Pat, span: Span) -> R<()> {
+        let lit = match sub {
+            Pat::Int(v) => match ft {
+                Ty::Int(t) if t.contains(*v) => Some(ft.clone()),
+                Ty::Int(t) => return Err(out_of_range(*v, *t, span)),
+                _ => Some(I64),
+            },
+            Pat::Bool(_) => Some(Ty::Bool),
+            Pat::Str(_) => Some(Ty::Str),
+            Pat::Variant(..) => None,
+        };
+        if let Some(lt) = lit {
+            if lt != *ft {
+                return Err(Diagnostic::new("case の値と中身の型が合いません")
+                    .primary(span, format!("中身は `{}`、この形は `{}`", ft.show(), lt.show())));
+            }
+            return Ok(());
+        }
+        let inner = match ft {
+            Ty::Enum(..) => ft.clone(),
+            // 借りた match なら own の先も重ねて書ける（中身はやはり借りて受け取る）
+            Ty::Own(x) if matches!(**x, Ty::Enum(..)) && by_ref.is_some() => (**x).clone(),
+            Ty::Own(x) if matches!(**x, Ty::Enum(..)) => {
+                return Err(Diagnostic::new("値の match では、own の中に形を重ねられません")
+                    .primary(span, format!("中身は `{}`", ft.show()))
+                    .note("`match ref x` で借りて match すれば重ねて書けます"))
+            }
+            _ => {
+                return Err(Diagnostic::new("この中身には形を重ねられません")
+                    .primary(span, format!("中身は `{}`（enum でも数・真偽値・文字列でもない）", ft.show())))
+            }
+        };
+        self.variant_pat(&inner, by_ref, sub, span)
+    }
+
+    /// 種類 `variant` が、case の形 `pats` のどれかに必ず当たるか（重ねた形は、1 か所だけ重ねたものを中まで調べる）
+    fn variant_covered(&self, ety: &Ty, variant: &str, pats: &[&Pat]) -> bool {
+        let mine: Vec<&Pat> = pats.iter().copied().filter(|p| matches!(p, Pat::Variant(n, ..) if n == variant)).collect();
+        if mine.iter().any(|p| p.is_flat()) {
+            return true;
+        }
+        let Some((_, fields)) = self.variants_of(ety).and_then(|vs| vs.into_iter().find(|(n, _)| n == variant)) else {
+            return false;
+        };
+        // どの形も同じ 1 か所だけ重ねているなら、その位置の形をまとめて調べる
+        for (k, ft) in fields.iter().enumerate() {
+            let only_k = mine.iter().all(|p| match p {
+                Pat::Variant(_, _, subs) => subs.iter().enumerate().all(|(i, s)| s.is_none() || i == k),
+                _ => false,
+            });
+            if !only_k {
+                continue;
+            }
+            let at_k: Vec<&Pat> = mine
+                .iter()
+                .filter_map(|p| match p {
+                    Pat::Variant(_, _, subs) => subs.get(k).and_then(Option::as_ref),
+                    _ => None,
+                })
+                .collect();
+            return self.pats_cover(ft, &at_k);
+        }
+        false
+    }
+
+    /// 型 `t` の値が、形 `pats` のどれかに必ず当たるか
+    fn pats_cover(&self, t: &Ty, pats: &[&Pat]) -> bool {
+        let t = match t {
+            Ty::Own(x) => &**x,
+            t => t,
+        };
+        match t {
+            Ty::Bool => pats.contains(&&Pat::Bool(true)) && pats.contains(&&Pat::Bool(false)),
+            Ty::Enum(..) => match self.variants_of(t) {
+                Some(vs) => vs.iter().all(|(n, _)| self.variant_covered(t, n, pats)),
+                None => false,
+            },
+            _ => false,
+        }
     }
 
     fn check_fn(&mut self, f: &FnDef) -> R<()> {
@@ -1648,7 +1741,7 @@ impl<'a> Checker<'a> {
                             (Pat::Int(_), _) => I64,
                             (Pat::Bool(_), _) => Ty::Bool,
                             (Pat::Str(_), _) => Ty::Str,
-                            (Pat::Variant(n, _), _) => {
+                            (Pat::Variant(n, ..), _) => {
                                 return Err(Diagnostic::new("enum ではない値に、種類の case は使えません")
                                     .label(scrut.span, format!("これは `{}`", st.show()))
                                     .primary(*span, format!("`{}` は種類の名前として読まれた", n)))

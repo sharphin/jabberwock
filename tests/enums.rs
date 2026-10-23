@@ -255,3 +255,86 @@ fn main() {
 }";
     assert_eq!(ok(src), "4\n0\n");
 }
+
+#[test]
+fn nested_patterns() {
+    // `Some(Op(op))` のように形を重ねる。数・文字列・真偽値も書ける。借りた match では own の先にも重ねられる
+    let src = "enum Tok { Num(i64 n); Op(str op); End; }
+enum E { Lit(i64 n); Add(own E l, own E r); Neg(own E e); }
+struct Box2 { own i64 v; }
+
+fn str show(Option<Tok> t) {
+    match t {
+        case Some(Num(0)) -> \"zero\";
+        case Some(Num(n)) -> \"num {n}\";
+        case Some(Op(\"+\")) -> \"plus\";
+        case Some(Op(o)) -> \"op {o}\";
+        case Some(End), None -> \"end\";
+    }
+}
+
+fn i64 simp(ref E e) {
+    match e {
+        case Add(Lit(0), r) -> simp(r);
+        case Add(l, Lit(0)) -> simp(l);
+        case Add(l, r) -> simp(l) + simp(r);
+        case Neg(Neg(x)) -> simp(x);
+        case Neg(x) -> -simp(x);
+        case Lit(n) -> n;
+    }
+}
+
+fn main() {
+    print(show(Some(Tok.Num(0))), show(Some(Tok.Num(5))), show(Some(Tok.Op(\"+\"))), show(Some(Tok.Op(\"*\"))), show(None), show(Some(Tok.End)));
+    let e = own E.Add(own E.Lit(0), own E.Neg(own E.Neg(own E.Add(own E.Lit(3), own E.Lit(0)))));
+    print(simp(e));
+    let Option<Option<own i64>> x = Some(Some(own 4));
+    match x {
+        case Some(Some(v)) -> print(*v);
+        case Some(None) -> print(\"inner none\");
+        case None -> print(\"none\");
+    }
+    let Result<Option<Box2>, str> y = Ok(Some(Box2 { v: own 9 }));
+    match ref y {
+        case Ok(Some(_)) -> print(\"ref\");
+        default -> print(\"other\");
+    }
+    match y {
+        case Ok(Some(b)) -> print(*b.v);
+        case Ok(None) -> {}
+        case Err(_) -> {}
+    }
+    let Option<bool> z = Some(true);
+    match z { case Some(true) -> print(\"t\"); case Some(false) -> print(\"f\"); case None -> {} }
+}
+";
+    assert_eq!(ok(src), "zero num 5 plus op * end end\n3\n4\nref\n9\nt\n");
+}
+
+#[test]
+fn nested_pattern_errors() {
+    let d = err("
+fn main() {
+    let Option<Option<i64>> x = None;
+    match x { case Some(Some(v)) -> print(v); case None -> {} }
+}");
+    assert_eq!(d.title, "match で Some の場合が書かれていません");
+    let d = err("
+fn main() {
+    let Option<own Option<i64>> x = None;
+    match x { case Some(Some(v)) -> print(v); default -> {} }
+}");
+    assert_eq!(d.title, "値の match では、own の中に形を重ねられません");
+    let d = err("
+fn main() {
+    let Option<i64> x = None;
+    match x { case Some(y) -> {} case Some(1) -> {} case None -> {} }
+}");
+    assert_eq!(d.title, "同じ値の case が二回あります");
+    let d = err("
+fn main() {
+    let Option<i64> x = None;
+    match x { case Some(\"a\") -> {} default -> {} }
+}");
+    assert_eq!(d.title, "case の値と中身の型が合いません");
+}

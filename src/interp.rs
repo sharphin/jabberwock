@@ -1076,11 +1076,11 @@ impl Interp {
         let Value::Enum { variant, fields, .. } = subject else { unreachable!() };
         let hit = arms.iter().find_map(|a| {
             a.pats.iter().find_map(|(p, _)| match p {
-                Pat::Variant(n, binds) if **n == *variant => Some((a, binds)),
+                Pat::Variant(n, binds, subs) if **n == *variant && self.subs_match(&fields, subs) => Some((a, binds, subs)),
                 _ => None,
             })
         });
-        let Some((arm, binds)) = hit else {
+        let Some((arm, binds, subs)) = hit else {
             // default（型検査が、全部の種類を書いたか default があることを確かめている）
             if by_ref.is_none() {
                 self.release(Value::Enum { variant, fields, copy: false }, scrut.span, "match の default で使われずに捨てられた");
@@ -1091,8 +1091,59 @@ impl Interp {
             });
         };
         self.frames.last_mut().expect("frame").scopes.push(Vec::new());
-        for (f, (b, bspan)) in fields.into_iter().zip(binds) {
-            let val = match &by_ref {
+        self.bind_fields(fields, binds, subs, &by_ref);
+        let r = self.exec_block_value(&arm.body, want_value);
+        let flow = match &r {
+            Ok((f, _)) => f,
+            Err(_) => &Flow::Normal,
+        };
+        let flow = match flow {
+            Flow::Return(_, sp) => Flow::Return(Value::Unit, *sp),
+            Flow::Break(sp) => Flow::Break(*sp),
+            Flow::Continue(sp) => Flow::Continue(*sp),
+            Flow::Normal => Flow::Normal,
+        };
+        self.leave_scope(&flow, arm.body.end);
+        Some(r)
+    }
+
+    /// 重ねた形（`Some(Op(op))` の `Op(op)`）がすべて当たるか。値は動かさずに見るだけ
+    fn subs_match(&self, fields: &[Value], subs: &[Option<Pat>]) -> bool {
+        fields.iter().zip(subs).all(|(f, s)| match s {
+            Some(p) => self.pat_matches(f, p),
+            None => true,
+        })
+    }
+
+    fn pat_matches(&self, v: &Value, p: &Pat) -> bool {
+        match (v, p) {
+            (Value::Own(slot), _) => match &self.heap.slots[*slot].value {
+                Some(inner) => self.pat_matches(inner, p),
+                None => false,
+            },
+            (Value::Enum { variant, fields, .. }, Pat::Variant(n, _, subs)) => **n == **variant && self.subs_match(fields, subs),
+            (Value::Int(a, _), Pat::Int(b)) => a == b,
+            (Value::Bool(a), Pat::Bool(b)) => a == b,
+            (Value::Str(a), Pat::Str(b)) => **a == **b,
+            _ => false,
+        }
+    }
+
+    /// match で当たった種類の中身を、受け取る名前へ置く（重ねた形の中も）。
+    /// 値の match は中身を移し、借りた match（`by_ref`）は中身の own を ref にして渡す
+    fn bind_fields(&mut self, fields: Vec<Value>, binds: &[(String, Span)], subs: &[Option<Pat>], by_ref: &Option<RefVal>) {
+        for ((f, (b, bspan)), sub) in fields.into_iter().zip(binds).zip(subs) {
+            if let Some(Pat::Variant(_, ibinds, isubs)) = sub {
+                let inner = match f {
+                    // 借りた match では own の先も見る（型検査が、値の match では own の先に重ねないことを確かめている）
+                    Value::Own(s) => self.heap.slots[s].value.clone().expect("live slot"),
+                    other => other,
+                };
+                let Value::Enum { fields, .. } = inner else { unreachable!("type checked") };
+                self.bind_fields(fields, ibinds, isubs, by_ref);
+                continue;
+            }
+            let val = match by_ref {
                 None => f,
                 Some(r) => match f {
                     // 中身の own は、借りた ref として受け取る
@@ -1115,19 +1166,6 @@ impl Interp {
             }
             self.declare(b, val, false, *bspan);
         }
-        let r = self.exec_block_value(&arm.body, want_value);
-        let flow = match &r {
-            Ok((f, _)) => f,
-            Err(_) => &Flow::Normal,
-        };
-        let flow = match flow {
-            Flow::Return(_, sp) => Flow::Return(Value::Unit, *sp),
-            Flow::Break(sp) => Flow::Break(*sp),
-            Flow::Continue(sp) => Flow::Continue(*sp),
-            Flow::Normal => Flow::Normal,
-        };
-        self.leave_scope(&flow, arm.body.end);
-        Some(r)
     }
 
     /// ループ本体を1周実行し、ループを続けるかどうかを返す
