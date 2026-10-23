@@ -35,8 +35,9 @@ pub enum Value {
     Struct(Rc<StructDef>, Vec<Value>),
     /// enum の値（Option も）。`copy` は型検査が決めた「値として読むとコピーか」（false ならムーブ）
     Enum { variant: Rc<str>, fields: Vec<Value>, copy: bool },
-    /// 配列。要素にムーブする値があれば、値として読むとムーブ（なければコピー）
-    Array(Vec<Value>),
+    /// 配列（bool が false）とリスト（true）。配列は要素にムーブする値があればムーブ（なければコピー）、
+    /// リストはいつもムーブ
+    Array(Vec<Value>, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +61,8 @@ impl Value {
             Value::Ref(_) => "ref",
             Value::Struct(..) => "構造体",
             Value::Enum { .. } => "enum",
-            Value::Array(_) => "配列",
+            Value::Array(_, false) => "配列",
+            Value::Array(_, true) => "リスト",
         }
     }
 
@@ -68,7 +70,7 @@ impl Value {
     fn has_own(&self) -> bool {
         match self {
             Value::Own(_) => true,
-            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields) => fields.iter().any(Value::has_own),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) => fields.iter().any(Value::has_own),
             _ => false,
         }
     }
@@ -76,7 +78,7 @@ impl Value {
     /// 値として読むとムーブになるか（own・構造体・コピーできない enum）
     fn moves(&self) -> bool {
         match self {
-            Value::Array(items) => items.iter().any(Value::moves),
+            Value::Array(items, list) => *list || items.iter().any(Value::moves),
             _ => matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. }),
         }
     }
@@ -85,7 +87,7 @@ impl Value {
     fn collect_owns(&self, out: &mut Vec<usize>) {
         match self {
             Value::Own(s) => out.push(*s),
-            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields) => {
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) => {
                 fields.iter().for_each(|f| f.collect_owns(out))
             }
             _ => {}
@@ -105,7 +107,7 @@ impl Value {
                     def.fields.iter().zip(fields).map(|(n, v)| format!("{}: {}", n, v.show())).collect();
                 format!("{} {{ {} }}", def.name, parts.join(", "))
             }
-            Value::Array(items) => {
+            Value::Array(items, _) => {
                 let parts: Vec<String> = items.iter().map(Value::show).collect();
                 format!("[{}]", parts.join(", "))
             }
@@ -679,6 +681,65 @@ impl Interp {
                     _ => Ok(Flow::Normal),
                 }
             }
+            Stmt::ForEach { var, var_span, iter, body, els } => {
+                let (src, temp) = self.eval_borrow(iter)?;
+                let items = match &src {
+                    Value::Array(items, _) => items.clone(),
+                    Value::Own(_) | Value::Ref(_) => {
+                        let slot = self.check_ptr(&src, iter.span, Check::Required)?;
+                        match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                            Value::Array(items, _) => items.clone(),
+                            other => return Err(not_an_array(other, iter.span)),
+                        }
+                    }
+                    other => return Err(not_an_array(other, iter.span)),
+                };
+                // ループを始めた時点の要素を回す。own の要素は借りた ref にする
+                // （ループの中で置き換えられたり取り出されたりすれば、その ref は無効になる）
+                let what = format!("{} の要素", describe(iter));
+                let views: Vec<Value> = items
+                    .into_iter()
+                    .map(|v| match v {
+                        Value::Own(slot) => Value::Ref(RefVal {
+                            slot,
+                            generation: self.heap.slots[slot].generation,
+                            borrowed_at: *var_span,
+                            what: what.clone(),
+                            mutable: false,
+                        }),
+                        other => other,
+                    })
+                    .collect();
+                let ran = !views.is_empty();
+                let mut out = Ok(Flow::Normal);
+                for v in views {
+                    self.frames.last_mut().expect("frame").scopes.push(Vec::new());
+                    self.declare(var, v, false, *var_span);
+                    let r = self.loop_iteration(body);
+                    self.frames.last_mut().expect("frame").scopes.pop();
+                    match r {
+                        Ok(None) => {}
+                        Ok(Some(f)) => {
+                            out = Ok(f);
+                            break;
+                        }
+                        Err(d) => {
+                            out = Err(d);
+                            break;
+                        }
+                    }
+                }
+                if temp {
+                    match &out {
+                        Err(_) => self.discard(vec![src], iter.span),
+                        Ok(_) => self.release(src, iter.span, "for で回し終わった一時的な値"),
+                    }
+                }
+                match (out?, els) {
+                    (Flow::Normal, Some(els)) if !ran => self.exec_block(els),
+                    (f, _) => Ok(f),
+                }
+            }
             Stmt::Break(sp) => Ok(Flow::Break(*sp)),
             Stmt::Continue(sp) => Ok(Flow::Continue(*sp)),
             Stmt::Return { value, span } => {
@@ -784,11 +845,11 @@ impl Interp {
                 let i = self.eval_index(idx)?;
                 let tmp = self.eval(base)?;
                 let (v, holder) = match &tmp {
-                    Value::Array(items) => (items[bounds(i, items.len(), idx.span)?].clone(), None),
+                    Value::Array(items, _) => (items[bounds(i, items.len(), idx.span)?].clone(), None),
                     Value::Own(_) | Value::Ref(_) => {
                         let slot = self.check_ptr(&tmp, e.span, check.get())?;
                         let v = match self.heap.slots[slot].value.as_ref().expect("live slot") {
-                            Value::Array(items) => items[bounds(i, items.len(), idx.span)?].clone(),
+                            Value::Array(items, _) => items[bounds(i, items.len(), idx.span)?].clone(),
                             other => return Err(not_an_array(other, base.span)),
                         };
                         (v, matches!(tmp, Value::Own(_)).then_some(slot))
@@ -884,7 +945,7 @@ impl Interp {
                 }
                 let mut place = self.place(base)?;
                 let here = match self.place_mut(&place) {
-                    Value::Array(items) => Ok(items.len()),
+                    Value::Array(items, _) => Ok(items.len()),
                     v => Err(v.clone()),
                 };
                 match here {
@@ -895,7 +956,7 @@ impl Interp {
                     Err(p @ (Value::Own(_) | Value::Ref(_))) => {
                         let slot = self.check_ptr(&p, e.span, check.get())?;
                         let len = match &self.heap.slots[slot].value {
-                            Some(Value::Array(items)) => items.len(),
+                            Some(Value::Array(items, _)) => items.len(),
                             Some(other) => return Err(not_an_array(other, base.span)),
                             None => unreachable!("check_ptr returns live slots"),
                         };
@@ -919,7 +980,7 @@ impl Interp {
         };
         for &i in &place.path {
             v = match v {
-                Value::Struct(_, fields) | Value::Array(fields) => &mut fields[i],
+                Value::Struct(_, fields) | Value::Array(fields, _) => &mut fields[i],
                 _ => unreachable!("place path goes through structs and arrays"),
             };
         }
@@ -1115,13 +1176,13 @@ impl Interp {
                 }
                 Ok(v)
             }
-            ExprKind::ArrayLit(items) => Ok(Value::Array(self.eval_all(items)?)),
-            ExprKind::ArrayRepeat(x, n) => {
+            ExprKind::ArrayLit(items, list) => Ok(Value::Array(self.eval_all(items)?, list.get())),
+            ExprKind::ArrayRepeat(x, n, list) => {
                 let v = self.eval(x)?;
                 if v.moves() {
                     return Err(Diagnostic::new("複製できない値は並べられません").primary(x.span, "ここ"));
                 }
-                Ok(Value::Array(vec![v; *n as usize]))
+                Ok(Value::Array(vec![v; *n as usize], list.get()))
             }
             ExprKind::Interp(parts) => {
                 // print と同じく借りて読み、作った一時的な値は使い終わったら解放する
@@ -1240,30 +1301,63 @@ impl Interp {
                 return Err(d);
             }
         };
-        let (rv, place) = match temp {
+        let (mut rv, place) = match temp {
             Some(v) => (v, None),
             None => {
                 let pl = self.place(recv)?;
-                (self.place_mut(&pl).clone(), Some(pl))
+                // 配列・リストは丸ごと複製しない（種類が分かれば十分。中身はあとで場所から触る）
+                let v = match self.place_mut(&pl) {
+                    Value::Array(..) => Value::Array(Vec::new(), false),
+                    v => v.clone(),
+                };
+                (v, Some(pl))
             }
         };
-        // 配列の `len()`
-        let arr_len = match &rv {
-            Value::Array(items) => Some(items.len()),
+        // 配列・リストのメソッド（`len()`・`push(x)`・`pop()`）
+        let seq_slot = match &rv {
+            Value::Array(..) => Some(None),
             Value::Own(_) | Value::Ref(_) => {
                 let slot = self.check_ptr(&rv, recv.span, Check::Required)?;
                 match self.heap.slots[slot].value.as_ref().expect("live slot") {
-                    Value::Array(items) => Some(items.len()),
+                    Value::Array(..) => Some(Some(slot)),
                     _ => None,
                 }
             }
             _ => None,
         };
-        if let Some(n) = arr_len {
+        if let Some(slot) = seq_slot {
+            if name != "len" {
+                let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
+                access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
+            }
+            let mut vals = vals;
+            let items = match (slot, &place) {
+                (Some(s), _) => self.heap.slots[s].value.as_mut().expect("live slot"),
+                (None, Some(pl)) => self.place_mut(pl),
+                (None, None) => &mut rv,
+            };
+            let Value::Array(items, _) = items else { unreachable!("checked above") };
+            let result = match name {
+                "len" => Value::Int(items.len() as i128, IntTy::I64),
+                "push" => {
+                    items.push(vals.remove(0));
+                    Value::Unit
+                }
+                "pop" => match items.pop() {
+                    Some(v) => {
+                        let copy = !v.moves();
+                        Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy }
+                    }
+                    None => Value::Enum { variant: Rc::from("None"), fields: Vec::new(), copy: true },
+                },
+                _ => {
+                    return Err(Diagnostic::new(format!("メソッド `{}` はありません", name)).primary(span, "ここ"))
+                }
+            };
             if place.is_none() {
                 self.release(rv, span, "使い終わった一時的な値");
             }
-            return Ok(Value::Int(n as i128, IntTy::I64));
+            return Ok(result);
         }
         let sname = match &rv {
             Value::Struct(def, _) => def.name.clone(),

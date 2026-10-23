@@ -759,16 +759,16 @@ impl Parser {
     /// `for i in range(...) { ... } else { ... }`
     fn parse_for(&mut self) -> R<Stmt> {
         self.expect(Tok::For, "`for`")?;
+        let var_span = self.span();
         let var = self.expect_ident("ループ変数の名前")?;
         self.expect(Tok::In, "`in`")?;
-        let range_start = self.span();
-        match self.peek() {
-            Tok::Ident(n) if n == "range" => {}
-            _ => {
-                return Err(Diagnostic::new("今のところ for で回せるのは range(...) だけです")
-                    .primary(range_start, "ここに range(...) を書いてください")
-                    .note("例: `for i in range(10)`、`for i in range(1, 10, 2)`"));
-            }
+        let is_range = matches!(self.peek(), Tok::Ident(n) if n == "range") && *self.peek2() == Tok::LParen;
+        if !is_range {
+            // `for x in a`: 配列・リストの要素
+            let iter = self.parse_cond()?;
+            let body = self.parse_loop_body()?;
+            let els = if self.eat(Tok::Else) { Some(self.parse_block()?) } else { None };
+            return Ok(Stmt::ForEach { var, var_span, iter, body, els });
         }
         let call = self.parse_postfix()?;
         let range = match call.kind {
@@ -821,14 +821,26 @@ impl Parser {
                     TypeKind::Name(name)
                 }
             }
+            Tok::LParen => {
+                // `(own i64)[]`: かっこでまとめる（`own i64[]` は「own のリスト」ではなく「リストの own」）
+                self.bump();
+                let inner = self.parse_type()?;
+                self.expect(Tok::RParen, "`)`")?;
+                inner.kind
+            }
             _ => return Err(self.unexpected("型")),
         };
         let mut t = TypeExpr { kind, span: start.join(self.prev_span()) };
         // `i64[3]`、`i64[3][2]`（長さ 3 の配列が 2 つ）
         while self.eat(Tok::LBrack) {
-            let n = self.array_len()?;
-            self.expect(Tok::RBrack, "`]`")?;
-            t = TypeExpr { kind: TypeKind::Array(Box::new(t), n), span: start.join(self.prev_span()) };
+            let kind = if self.eat(Tok::RBrack) {
+                TypeKind::List(Box::new(t))
+            } else {
+                let n = self.array_len()?;
+                self.expect(Tok::RBrack, "`]`")?;
+                TypeKind::Array(Box::new(t), n)
+            };
+            t = TypeExpr { kind, span: start.join(self.prev_span()) };
         }
         Ok(t)
     }
@@ -984,7 +996,7 @@ impl Parser {
                     if self.eat(Tok::Semi) {
                         let n = self.array_len()?;
                         let end = self.expect(Tok::RBrack, "`]`")?;
-                        return Ok(Expr::new(ExprKind::ArrayRepeat(Box::new(first), n), start.join(end)));
+                        return Ok(Expr::new(ExprKind::ArrayRepeat(Box::new(first), n, Cell::new(false)), start.join(end)));
                     }
                     items.push(first);
                     while self.eat(Tok::Comma) {
@@ -995,7 +1007,7 @@ impl Parser {
                     }
                 }
                 let end = self.expect(Tok::RBrack, "`]`")?;
-                Ok(Expr::new(ExprKind::ArrayLit(items), start.join(end)))
+                Ok(Expr::new(ExprKind::ArrayLit(items, Cell::new(false)), start.join(end)))
             }
             Tok::Interp(parts) => {
                 let span = self.bump().span;
@@ -1148,7 +1160,7 @@ impl Parser {
 /// `{ }` で終わる文か（後ろに `;` が要らない）
 fn is_block_like(s: &Stmt) -> bool {
     match s {
-        Stmt::While { .. } | Stmt::Loop { .. } | Stmt::For { .. } => true,
+        Stmt::While { .. } | Stmt::Loop { .. } | Stmt::For { .. } | Stmt::ForEach { .. } => true,
         Stmt::Expr(e) => matches!(e.kind, ExprKind::If { .. } | ExprKind::Match { .. }),
         _ => false,
     }
@@ -1222,6 +1234,15 @@ fn bind_this_block(b: &mut Block, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) 
                     bind_this_block(els, ctx, scopes);
                 }
             }
+            Stmt::ForEach { var, iter, body, els, .. } => {
+                bind_this(iter, ctx, scopes);
+                scopes.push(vec![var.clone()]);
+                bind_this_block(body, ctx, scopes);
+                scopes.pop();
+                if let Some(els) = els {
+                    bind_this_block(els, ctx, scopes);
+                }
+            }
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return { value, .. } => {
                 if let Some(e) = value {
@@ -1278,12 +1299,12 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             bind_this(b, ctx, scopes);
             bind_this(i, ctx, scopes);
         }
-        ExprKind::ArrayLit(items) => {
+        ExprKind::ArrayLit(items, _) => {
             for x in items {
                 bind_this(x, ctx, scopes);
             }
         }
-        ExprKind::ArrayRepeat(x, _) => bind_this(x, ctx, scopes),
+        ExprKind::ArrayRepeat(x, _, _) => bind_this(x, ctx, scopes),
         ExprKind::MethodCall(recv, _, args) => {
             bind_this(recv, ctx, scopes);
             for a in args {

@@ -35,6 +35,7 @@
 | `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>`・interface を型として使う |
 | `tests/strings.rs` | 文字列の埋め込み `"x = {x}"` |
 | `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
+| `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a` |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -100,6 +101,9 @@
 - 配列: `Value::Array`（要素にムーブする値があればムーブ）。`Place.path` は構造体のフィールドと配列の添字の両方をたどる。
   `a[i]`（`ExprKind::Index`）は **添字を先に評価してから** 配列の場所を求める（interp の `place` / `eval_borrow`、analyze も同じ順）。
   定数の添字の範囲チェックは `types.rs`、実行時は `bounds`。`len()` は `eval_method` / `method_call` の特別扱い。
+  リストは `Value::Array(_, true)`（いつもムーブ）・`Ty::List`。`[...]` がリストかは型検査が `ArrayLit` の `Cell<bool>` に書く。
+  `push` / `pop` は `eval_method` が場所の中のリストをじかに書き換える（丸ごと複製しない）。
+  `for x in a`（`Stmt::ForEach`）は `eval_borrow` で借り、始めた時点の要素を回す。own の要素は `RefVal` にして渡す。
 
 ## 設計の決めごと
 

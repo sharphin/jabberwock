@@ -19,6 +19,8 @@ pub enum TypeKind {
     Ref(Box<TypeExpr>, bool),
     /// `i64[3]`: 長さが決まった配列
     Array(Box<TypeExpr>, u64),
+    /// `i64[]`: 伸び縮みするリスト
+    List(Box<TypeExpr>),
 }
 
 /// 整数の型
@@ -225,9 +227,10 @@ pub enum ExprKind {
     /// `a[i]`: 配列の要素。`a` が own / ref なら自動で先をたどる（そのときの検査が `Check`）
     Index(Box<Expr>, Box<Expr>, Cell<Check>),
     /// `[1, 2, 3]`
-    ArrayLit(Vec<Expr>),
+    /// bool は「リストとして作るか」（入れる先の型が `T[]` なら型検査が true にする）
+    ArrayLit(Vec<Expr>, Cell<bool>),
     /// `[0; 5]`: 同じ値を並べた配列（値はコピーできる型だけ）
-    ArrayRepeat(Box<Expr>, u64),
+    ArrayRepeat(Box<Expr>, u64, Cell<bool>),
     /// `"x = {x}"`: 埋め込みのある文字列。式は print と同じく借りて読む（ムーブしない）
     Interp(Vec<InterpPart>),
     /// `p.name(args)` : メソッド呼び出し。メソッドは `構造体名.name` という名前の関数で、
@@ -295,6 +298,8 @@ pub enum Stmt {
     Loop { body: Block },
     /// `for i in range(a, b, step) { ... } else { ... }`。else は 1 回も回らなかったときに実行
     For { var: String, range: Vec<Expr>, range_span: Span, body: Block, els: Option<Block> },
+    /// `for x in a { ... } else { ... }`: 配列・リストの要素を回す（a は借りるだけ。ループを始めた時点の要素を回す）
+    ForEach { var: String, var_span: Span, iter: Expr, body: Block, els: Option<Block> },
     Break(Span),
     Continue(Span),
     Return { value: Option<Expr>, span: Span },

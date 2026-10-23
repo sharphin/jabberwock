@@ -260,6 +260,17 @@ impl<'a> FnAnalyzer<'a> {
             }
             Stmt::While { cond, body } => self.loop_body(Some(cond), None, body, true),
             Stmt::Loop { body } => self.loop_body(None, None, body, false),
+            Stmt::ForEach { var, iter, body, els, .. } => {
+                // インタプリタは eval_borrow で読む（変数ならムーブしない）
+                self.expr(iter, true);
+                let before = self.facts.clone();
+                self.loop_body(None, Some(var), body, true);
+                if let Some(els) = els {
+                    let after_loop = std::mem::replace(&mut self.facts, before);
+                    self.block(els);
+                    self.facts = meet(&after_loop, &self.facts);
+                }
+            }
             Stmt::For { var, range, body, els, .. } => {
                 for a in range {
                     self.expr(a, false);
@@ -432,13 +443,13 @@ impl<'a> FnAnalyzer<'a> {
                 }
                 None
             }
-            ExprKind::ArrayLit(items) => {
+            ExprKind::ArrayLit(items, _) => {
                 for x in items {
                     self.expr(x, false);
                 }
                 None
             }
-            ExprKind::ArrayRepeat(x, _) => {
+            ExprKind::ArrayRepeat(x, _, _) => {
                 self.expr(x, false);
                 None
             }
@@ -546,6 +557,13 @@ fn for_each_check(b: &Block, f: &mut impl FnMut(&Cell<Check>)) {
                 for_each_check(body, f);
             }
             Stmt::Loop { body } => for_each_check(body, f),
+            Stmt::ForEach { iter, body, els, .. } => {
+                expr_checks(iter, f);
+                for_each_check(body, f);
+                if let Some(els) = els {
+                    for_each_check(els, f);
+                }
+            }
             Stmt::For { range, body, els, .. } => {
                 for a in range {
                     expr_checks(a, f);
@@ -623,12 +641,12 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
             expr_checks(i, f);
             expr_checks(b, f);
         }
-        ExprKind::ArrayLit(items) => {
+        ExprKind::ArrayLit(items, _) => {
             for x in items {
                 expr_checks(x, f);
             }
         }
-        ExprKind::ArrayRepeat(x, _) => expr_checks(x, f),
+        ExprKind::ArrayRepeat(x, _, _) => expr_checks(x, f),
     }
 }
 

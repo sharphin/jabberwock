@@ -36,6 +36,8 @@ pub enum Ty {
     Ref(Box<Ty>, bool),
     /// `i64[3]`
     Array(Box<Ty>, u64),
+    /// `i64[]`（伸び縮みするリスト）
+    List(Box<Ty>),
 }
 
 impl Ty {
@@ -56,6 +58,7 @@ impl Ty {
             Ty::Ref(t, false) => format!("ref {}", t.show()),
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
             Ty::Array(t, n) => format!("{}[{}]", t.show(), n),
+            Ty::List(t) => format!("{}[]", t.show()),
         }
     }
 
@@ -100,6 +103,7 @@ fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
         Ty::Own(x) => Ty::Own(Box::new(subst(x, map))),
         Ty::Ref(x, m) => Ty::Ref(Box::new(subst(x, map)), *m),
         Ty::Array(x, n) => Ty::Array(Box::new(subst(x, map)), *n),
+        Ty::List(x) => Ty::List(Box::new(subst(x, map))),
         _ => t.clone(),
     }
 }
@@ -108,7 +112,7 @@ fn contains_iface(t: &Ty) -> bool {
     match t {
         Ty::Iface(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_iface),
-        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) => contains_iface(x),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_iface(x),
         _ => false,
     }
 }
@@ -117,7 +121,7 @@ fn contains_param(t: &Ty) -> bool {
     match t {
         Ty::Param(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_param),
-        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) => contains_param(x),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => contains_param(x),
         _ => false,
     }
 }
@@ -127,7 +131,7 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
     match pattern {
         Ty::Param(p) => tparams.contains(p) && !map.contains_key(p),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|a| has_unbound(a, tparams, map)),
-        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) => has_unbound(x, tparams, map),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) | Ty::List(x) => has_unbound(x, tparams, map),
         _ => false,
     }
 }
@@ -158,6 +162,7 @@ fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String
         }
         (Ty::Own(x), Ty::Own(y)) | (Ty::Ref(x, _), Ty::Ref(y, _)) => unify(x, y, tparams, map),
         (Ty::Array(x, n), Ty::Array(y, m)) if n == m => unify(x, y, tparams, map),
+        (Ty::List(x), Ty::List(y)) => unify(x, y, tparams, map),
         _ => {}
     }
 }
@@ -397,6 +402,7 @@ impl<'a> Checker<'a> {
             }
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),
             TypeKind::Array(inner, n) => Ty::Array(Box::new(self.resolve(inner)?), *n),
+            TypeKind::List(inner) => Ty::List(Box::new(self.resolve(inner)?)),
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
                 "str" => Ty::Str,
@@ -478,6 +484,8 @@ impl<'a> Checker<'a> {
             Ty::Own(_) | Ty::Struct(..) | Ty::Param(_) | Ty::Iface(_) => false,
             // 要素がコピーできる配列はコピー（Rust と同じ）
             Ty::Array(x, _) => self.copyable(x),
+            // リストはいつもムーブ（中身はヒープにあり、複製は重いので）
+            Ty::List(_) => false,
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
             Ty::Enum(..) => self.variants_of(t).expect("enum").iter().flat_map(|(_, f)| f).all(|t| self.copyable(t)),
         }
@@ -854,6 +862,33 @@ impl<'a> Checker<'a> {
                 }
                 Ok(false)
             }
+            Stmt::ForEach { var, var_span, iter, body, els } => {
+                let t = self.expr(iter)?;
+                let Some((elem, _)) = seq_of(&t) else {
+                    return Err(Diagnostic::new("for で回せるのは配列とリストです")
+                        .primary(iter.span, format!("ここは `{}` です", t.show()))
+                        .note("数を回すなら `for i in range(10)` と書きます"));
+                };
+                // 要素はコピーできればコピー、own なら借りた ref で受け取る（配列は借りるだけ）
+                let vt = if self.copyable(&elem) {
+                    elem
+                } else if let Ty::Own(u) = &elem {
+                    Ty::Ref(u.clone(), false)
+                } else {
+                    return Err(Diagnostic::new(format!("`{}` の要素は借りられないので、for で回せません", elem.show()))
+                        .primary(iter.span, "要素がコピーできる型か own のときだけ回せる")
+                        .note("`for i in range(a.len())` と添字で回してください"));
+                };
+                self.scopes.push(HashMap::new());
+                self.declare(var, VarInfo { ty: vt, mutable: false, decl: *var_span });
+                let r = self.block(body, false, None);
+                self.scopes.pop();
+                r?;
+                if let Some(els) = els {
+                    self.block(els, false, None)?;
+                }
+                Ok(false)
+            }
             Stmt::Break(_) | Stmt::Continue(_) => Ok(true),
             Stmt::Return { value, span } => {
                 let ret = self.ret.clone();
@@ -912,14 +947,12 @@ impl<'a> Checker<'a> {
                 // インタプリタと同じく、添字を先に調べる
                 self.index_value(idx)?;
                 let t = self.expr(base)?;
-                let (elem, len) = match &t {
-                    Ty::Array(x, n) => ((**x).clone(), *n),
-                    Ty::Own(p) | Ty::Ref(p, _) => match &**p {
-                        Ty::Array(x, n) => ((**x).clone(), *n),
-                        _ => return Err(not_an_array(&t, base.span)),
-                    },
-                    _ => return Err(not_an_array(&t, base.span)),
+                let (elem, len) = match seq_of(&t) {
+                    Some(x) => x,
+                    None => return Err(not_an_array(&t, base.span)),
                 };
+                // リストの長さは実行するまで分からないので、定数の添字を調べるのは配列だけ
+                let Some(len) = len else { return Ok(elem) };
                 if is_const_tree(idx) {
                     if let Ok(v) = const_val(idx) {
                         if v < 0 || v >= len as i128 {
@@ -930,7 +963,15 @@ impl<'a> Checker<'a> {
                 }
                 Ok(elem)
             }
-            ExprKind::ArrayLit(items) => {
+            ExprKind::ArrayLit(items, list) => {
+                if let Some(Ty::List(w)) = hint {
+                    // 入れる先がリストなら、リストとして作る
+                    list.set(true);
+                    for x in items {
+                        self.expect(x, w)?;
+                    }
+                    return Ok(Ty::List(w.clone()));
+                }
                 let want = match hint {
                     Some(Ty::Array(x, n)) if *n == items.len() as u64 => Some((**x).clone()),
                     _ => None,
@@ -976,9 +1017,13 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Ty::Array(Box::new(elem), items.len() as u64))
             }
-            ExprKind::ArrayRepeat(x, n) => {
+            ExprKind::ArrayRepeat(x, n, list) => {
                 let h = match hint {
                     Some(Ty::Array(x, _)) => Some((**x).clone()),
+                    Some(Ty::List(x)) => {
+                        list.set(true);
+                        Some((**x).clone())
+                    }
                     _ => None,
                 };
                 let t = match &h {
@@ -993,7 +1038,7 @@ impl<'a> Checker<'a> {
                         .primary(x.span, "own や構造体は 1 つしかない")
                         .note("`[a, b, c]` のように 1 つずつ書いてください"));
                 }
-                Ok(Ty::Array(Box::new(t), *n))
+                Ok(if list.get() { Ty::List(Box::new(t)) } else { Ty::Array(Box::new(t), *n) })
             }
             ExprKind::Interp(parts) => {
                 // print と同じく、どんな値でも文字にできる
@@ -1329,6 +1374,31 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// リストのメソッド: `len()`、`push(x)`、`pop()`
+    fn list_method(&mut self, recv: &Expr, rt: &Ty, elem: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        let (want, ret, mutable) = match name {
+            "len" => (0, I64, false),
+            "push" => (1, Ty::Unit, true),
+            "pop" => (0, Ty::Enum("Option".to_string(), vec![elem.clone()]), true),
+            _ => {
+                return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name))
+                    .primary(span, "リストのメソッドは `len()`・`push(x)`・`pop()` です"))
+            }
+        };
+        if args.len() != want {
+            return Err(arity_error(name, want, args.len(), span));
+        }
+        if mutable {
+            let a = if is_place(recv) { self.access(recv)? } else { Access::Write };
+            a.through(rt, self.origin(recv), describe(recv))
+                .require(span, format!("リストを `{}` で書き換えようとした", name).as_str())?;
+        }
+        if let Some(a) = args.first() {
+            self.expect(a, elem)?;
+        }
+        Ok(ret)
+    }
+
     /// 添字の式。整数ならどの型でもよい（数の書き方は i64）
     fn index_value(&mut self, idx: &Expr) -> R<()> {
         match self.expr_h(idx, Some(&I64))? {
@@ -1527,10 +1597,12 @@ impl<'a> Checker<'a> {
             Ty::Array(..) => {
                 if name != "len" || !args.is_empty() {
                     return Err(Diagnostic::new(format!("配列にメソッド `{}` はありません", name))
-                        .primary(span, "配列のメソッドは `len()`（長さ）だけです"));
+                        .primary(span, "配列のメソッドは `len()`（長さ）だけです")
+                        .note("伸び縮みさせたいなら、リスト `i64[]` を使ってください"));
                 }
                 return Ok(I64);
             }
+            Ty::List(elem) => return self.list_method(recv, &rt, elem, name, args, span),
             Ty::Param(p) => {
                 let ifaces: Vec<String> =
                     self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).cloned().collect();
@@ -1745,7 +1817,7 @@ fn has_break(b: &Block) -> bool {
             }
             _ => false,
         },
-        Stmt::For { els: Some(els), .. } => has_break(els),
+        Stmt::For { els: Some(els), .. } | Stmt::ForEach { els: Some(els), .. } => has_break(els),
         _ => false,
     })
 }
@@ -1785,8 +1857,22 @@ fn is_place(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..))
 }
 
+/// 配列・リスト（own / ref を 1 段たどる）の要素の型と、配列なら長さ
+fn seq_of(t: &Ty) -> Option<(Ty, Option<u64>)> {
+    match t {
+        Ty::Array(x, n) => Some(((**x).clone(), Some(*n))),
+        Ty::List(x) => Some(((**x).clone(), None)),
+        Ty::Own(p) | Ty::Ref(p, _) => match &**p {
+            Ty::Array(x, n) => Some(((**x).clone(), Some(*n))),
+            Ty::List(x) => Some(((**x).clone(), None)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn not_an_array(t: &Ty, span: Span) -> Diagnostic {
-    Diagnostic::new("添字が使えるのは配列だけです").primary(span, format!("ここは `{}` です", t.show()))
+    Diagnostic::new("添字が使えるのは配列とリストだけです").primary(span, format!("ここは `{}` です", t.show()))
 }
 
 fn describe(e: &Expr) -> String {

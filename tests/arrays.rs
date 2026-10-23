@@ -133,7 +133,7 @@ fn array_errors() {
     assert!(e("let i64[2] a = [1, 2, 3];").title.contains("型が合いません"));
     assert!(e("let a = [own 1; 3];").title.contains("複製できない"));
     assert!(e("let a = [1, 2];\nlet b = a[true];").title.contains("添字は整数"));
-    assert!(e("let x = 1;\nprint(x[0]);").title.contains("配列だけ"));
+    assert!(e("let x = 1;\nprint(x[0]);").title.contains("配列とリストだけ"));
     assert!(e("let a = [1, 2];\na[0] = 5;").title.contains("mut ではない"));
     assert!(e("let a = [own 1];\nlet b = a[0];").title.contains("取り出せません"));
     assert!(e("let a = [1];\nprint(a.push(2));").title.contains("メソッド `push` はありません"));
