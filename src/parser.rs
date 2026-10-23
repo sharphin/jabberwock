@@ -294,16 +294,13 @@ impl Parser {
                 let t = self.bump();
                 // `x += e` は `x = x + e`、`x++` は `x = x + 1` として扱う（文としてだけ書ける）
                 let rhs = match t.tok {
-                    Tok::PlusPlus | Tok::MinusMinus => Expr { kind: ExprKind::Int(1), span: t.span },
+                    Tok::PlusPlus | Tok::MinusMinus => Expr::new(ExprKind::Int(1), t.span),
                     _ => self.parse_expr()?,
                 };
                 let span = e.span.join(self.prev_span());
                 let value = match op {
                     None => rhs,
-                    Some(op) => Expr {
-                        kind: ExprKind::Binary(op, Box::new(e.clone()), Box::new(rhs)),
-                        span,
-                    },
+                    Some(op) => Expr::new(ExprKind::Binary(op, Box::new(e.clone()), Box::new(rhs)), span),
                 };
                 Ok(Stmt::Assign { target: e, value, span })
             }
@@ -382,7 +379,7 @@ impl Parser {
                 .primary(start.join(scrut.span), "どの case にも当てはまらないときの値がない")
                 .note("`default -> 値` を足してください"));
         }
-        Ok(Expr { kind: ExprKind::Match { scrut: Box::new(scrut), arms, default }, span: start })
+        Ok(Expr::new(ExprKind::Match { scrut: Box::new(scrut), arms, default }, start))
     }
 
     /// `case` に書く値。今のところリテラルだけ。
@@ -453,7 +450,7 @@ impl Parser {
             }
             None
         };
-        Ok(Expr { kind: ExprKind::If { cond: Box::new(cond), then, els }, span: start })
+        Ok(Expr::new(ExprKind::If { cond: Box::new(cond), then, els }, start))
     }
 
     /// 値として使う if / match のブロック。最後に `;` のない式（値）が必要
@@ -549,7 +546,7 @@ impl Parser {
     }
 
     fn parse_binary(&mut self, min_prec: u8) -> R<Expr> {
-        let mut lhs = self.parse_unary()?;
+        let mut lhs = self.parse_cast()?;
         loop {
             let (op, prec) = match binop_info(self.peek()) {
                 Some(x) if x.1 >= min_prec => x,
@@ -558,12 +555,20 @@ impl Parser {
             self.bump();
             let rhs = self.parse_binary(prec + 1)?;
             let span = lhs.span.join(rhs.span);
-            lhs = Expr {
-                kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
-                span,
-            };
+            lhs = Expr::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span);
         }
         Ok(lhs)
+    }
+
+    /// `e as T`。前置演算子より弱く、`*` や `+` より強い（Rust と同じ。`-x as u8` は `(-x) as u8`）
+    fn parse_cast(&mut self) -> R<Expr> {
+        let mut e = self.parse_unary()?;
+        while self.eat(Tok::As) {
+            let ty = self.parse_type()?;
+            let span = e.span.join(ty.span);
+            e = Expr::new(ExprKind::Cast(Box::new(e), ty), span);
+        }
+        Ok(e)
     }
 
     /// 前置演算子。
@@ -576,32 +581,32 @@ impl Parser {
                 let start = self.bump().span;
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Unary(UnOp::Neg, Box::new(e)), span })
+                Ok(Expr::new(ExprKind::Unary(UnOp::Neg, Box::new(e)), span))
             }
             Tok::Bang => {
                 let start = self.bump().span;
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(e)), span })
+                Ok(Expr::new(ExprKind::Unary(UnOp::Not, Box::new(e)), span))
             }
             Tok::Star => {
                 let start = self.bump().span;
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Deref(Box::new(e), Cell::new(Check::Unvisited)), span })
+                Ok(Expr::new(ExprKind::Deref(Box::new(e), Cell::new(Check::Unvisited)), span))
             }
             Tok::Ref => {
                 let start = self.bump().span;
                 let mutable = self.eat(Tok::Mut);
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Ref(Box::new(e), mutable), span })
+                Ok(Expr::new(ExprKind::Ref(Box::new(e), mutable), span))
             }
             Tok::Own => {
                 let start = self.bump().span;
                 let e = self.parse_expr()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Own(Box::new(e)), span })
+                Ok(Expr::new(ExprKind::Own(Box::new(e)), span))
             }
             _ => self.parse_postfix(),
         }
@@ -614,7 +619,7 @@ impl Parser {
             let fspan = self.span();
             let name = self.expect_ident("フィールド名")?;
             let span = e.span.join(fspan);
-            e = Expr { kind: ExprKind::Field(Box::new(e), name, Cell::new(Check::Unvisited)), span };
+            e = Expr::new(ExprKind::Field(Box::new(e), name, Cell::new(Check::Unvisited)), span);
         }
         Ok(e)
     }
@@ -625,19 +630,19 @@ impl Parser {
             Tok::Match => self.parse_match(true),
             Tok::Int(n) => {
                 let span = self.bump().span;
-                Ok(Expr { kind: ExprKind::Int(n), span })
+                Ok(Expr::new(ExprKind::Int(n), span))
             }
             Tok::Str(s) => {
                 let span = self.bump().span;
-                Ok(Expr { kind: ExprKind::Str(s), span })
+                Ok(Expr::new(ExprKind::Str(s), span))
             }
             Tok::True => {
                 let span = self.bump().span;
-                Ok(Expr { kind: ExprKind::Bool(true), span })
+                Ok(Expr::new(ExprKind::Bool(true), span))
             }
             Tok::False => {
                 let span = self.bump().span;
-                Ok(Expr { kind: ExprKind::Bool(false), span })
+                Ok(Expr::new(ExprKind::Bool(false), span))
             }
             Tok::Ident(name) => {
                 let start = self.bump().span;
@@ -653,21 +658,18 @@ impl Parser {
                         }
                     }
                     let end = self.expect(Tok::RParen, "`)`")?;
-                    Ok(Expr {
-                        kind: ExprKind::Call(name, args),
-                        span: start.join(end),
-                    })
+                    Ok(Expr::new(ExprKind::Call(name, args), start.join(end)))
                 } else if *self.peek() == Tok::LBrace && !self.no_struct_lit {
                     self.parse_struct_lit(name, start)
                 } else {
-                    Ok(Expr { kind: ExprKind::Var(name), span: start })
+                    Ok(Expr::new(ExprKind::Var(name), start))
                 }
             }
             Tok::LParen => {
                 let start = self.bump().span;
                 let inner = self.with_struct_lit(true, |p| p.parse_expr())?;
                 let end = self.expect(Tok::RParen, "`)`")?;
-                Ok(Expr { kind: inner.kind, span: start.join(end) })
+                Ok(Expr::new(inner.kind, start.join(end)))
             }
             _ => Err(self.unexpected("式")),
         }
@@ -689,7 +691,7 @@ impl Parser {
             }
         }
         let end = self.expect(Tok::RBrace, "`}`")?;
-        Ok(Expr { kind: ExprKind::StructLit(name, fields), span: start.join(end) })
+        Ok(Expr::new(ExprKind::StructLit(name, fields), start.join(end)))
     }
 }
 

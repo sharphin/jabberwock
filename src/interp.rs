@@ -23,7 +23,8 @@ const BUILTINS: [&str; 3] = ["print", "drop", "assert"];
 #[derive(Debug, Clone)]
 pub enum Value {
     Unit,
-    Int(i64),
+    /// 整数。値は i128 で持ち、型 `IntTy` の範囲に入れておく
+    Int(i128, IntTy),
     Bool(bool),
     Str(Rc<str>),
     /// 唯一の所有者（ヒープのスロット番号）
@@ -48,7 +49,7 @@ impl Value {
     fn type_name(&self) -> &'static str {
         match self {
             Value::Unit => "()",
-            Value::Int(_) => "整数",
+            Value::Int(..) => "整数",
             Value::Bool(_) => "真偽値",
             Value::Str(_) => "文字列",
             Value::Own(_) => "own",
@@ -78,7 +79,7 @@ impl Value {
     fn show(&self) -> String {
         match self {
             Value::Unit => "()".to_string(),
-            Value::Int(n) => n.to_string(),
+            Value::Int(n, _) => n.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Str(s) => s.to_string(),
             Value::Own(s) => format!("<own #{}>", s),
@@ -405,6 +406,11 @@ impl Interp {
 
     /// 式を評価する。文として使う if は中の return / break / continue を外へ伝える。
     fn eval_flow(&mut self, e: &Expr, want_value: bool) -> R<(Flow, Value)> {
+        let (flow, v) = self.eval_flow_kind(e, want_value)?;
+        Ok((flow, convert(e, v)))
+    }
+
+    fn eval_flow_kind(&mut self, e: &Expr, want_value: bool) -> R<(Flow, Value)> {
         match &e.kind {
             ExprKind::If { cond, then, els } => {
                 let c = self.eval(cond)?;
@@ -466,9 +472,16 @@ impl Interp {
             },
             Stmt::For { var, range, range_span, body, els } => {
                 let mut nums = Vec::new();
-                for a in range {
+                // ループ変数の型は始めと終わりの型（刻みはいつも i64。型検査がそろえている）
+                let mut ty = IntTy::I64;
+                for (k, a) in range.iter().enumerate() {
                     match self.eval(a)? {
-                        Value::Int(n) => nums.push(n),
+                        Value::Int(n, t) => {
+                            if k < 2 {
+                                ty = t;
+                            }
+                            nums.push(n)
+                        }
                         other => {
                             return Err(Diagnostic::new("range の引数は整数です")
                                 .primary(a.span, format!("ここは {} です", other.type_name())))
@@ -491,15 +504,15 @@ impl Interp {
                     ran = true;
                     // ループ変数は周回ごとの新しいスコープに置く
                     self.frames.last_mut().expect("frame").scopes.push(Vec::new());
-                    self.declare(var, Value::Int(i), false, *range_span);
+                    self.declare(var, Value::Int(i, ty), false, *range_span);
                     let r = self.loop_iteration(body);
                     self.frames.last_mut().expect("frame").scopes.pop();
                     if let Some(f) = r? {
                         return Ok(f);
                     }
-                    match i.checked_add(step) {
-                        Some(n) => i = n,
-                        None => break,
+                    i += step;
+                    if !ty.contains(i) {
+                        break;
                     }
                 }
                 match els {
@@ -701,9 +714,27 @@ impl Interp {
         }
     }
 
+    /// 式を評価する。整数なら、型検査が決めた型（`Expr.int`）に変換して返す
     fn eval(&mut self, e: &Expr) -> R<Value> {
+        let v = self.eval_kind(e)?;
+        Ok(convert(e, v))
+    }
+
+    fn eval_kind(&mut self, e: &Expr) -> R<Value> {
         match &e.kind {
-            ExprKind::Int(n) => Ok(Value::Int(*n)),
+            ExprKind::Int(n) => Ok(Value::Int(*n, IntTy::I64)),
+            ExprKind::Cast(inner, ty) => match self.eval(inner)? {
+                Value::Int(n, _) => {
+                    let t = match &ty.kind {
+                        TypeKind::Name(name) => IntTy::from_name(name),
+                        _ => None,
+                    }
+                    .expect("the type checker allows only integer casts");
+                    Ok(Value::Int(t.wrap(n), t))
+                }
+                other => Err(Diagnostic::new("as で変換できるのは整数だけです")
+                    .primary(inner.span, format!("ここは {} です", other.type_name()))),
+            },
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Str(s) => Ok(Value::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => {
@@ -802,7 +833,7 @@ impl Interp {
                 let v = self.eval(inner)?;
                 match (op, v) {
                     // あふれたら一周する（決まった結果になる。定数なら型検査が警告を出す）
-                    (UnOp::Neg, Value::Int(n)) => Ok(Value::Int(n.wrapping_neg())),
+                    (UnOp::Neg, Value::Int(n, t)) => Ok(Value::Int(t.wrap(-n), t)),
                     (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
                     (_, other) => Err(Diagnostic::new("型が合わない演算です")
                         .primary(e.span, format!("{} にはこの演算を使えません", other.type_name()))),
@@ -930,6 +961,14 @@ impl Interp {
 
 // ---------------------------------------------------------------- ヘルパ
 
+/// 整数を、型検査が決めた型（`Expr.int`）に変換する
+fn convert(e: &Expr, v: Value) -> Value {
+    match (v, e.int.get()) {
+        (Value::Int(n, _), Some(t)) => Value::Int(t.wrap(n), t),
+        (v, _) => v,
+    }
+}
+
 fn describe(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
@@ -951,14 +990,14 @@ fn not_a_struct(v: &Value, span: Span) -> Diagnostic {
 
 /// match で当てはまる case のブロックを探す（なければ None）
 fn select_arm<'a>(v: &Value, scrut_span: Span, arms: &'a [MatchArm]) -> R<Option<&'a Block>> {
-    if !matches!(v, Value::Int(_) | Value::Bool(_) | Value::Str(_)) {
+    if !matches!(v, Value::Int(..) | Value::Bool(_) | Value::Str(_)) {
         return Err(Diagnostic::new("match できるのは、今のところ整数・真偽値・文字列だけです")
             .primary(scrut_span, format!("ここは {} です", v.type_name())));
     }
     for arm in arms {
         for (pat, span) in &arm.pats {
             let hit = match (pat, v) {
-                (Pat::Int(a), Value::Int(b)) => a == b,
+                (Pat::Int(a), Value::Int(b, _)) => a == b,
                 (Pat::Bool(a), Value::Bool(b)) => a == b,
                 (Pat::Str(a), Value::Str(b)) => a.as_str() == &**b,
                 _ => {
@@ -1013,11 +1052,12 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             let s = format!("{}{}", a, b);
             Ok(Value::Str(Rc::from(s.as_str())))
         }
-        (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem, Value::Int(a), Value::Int(b)) => {
-            // あふれたら一周する（決まった結果になる。定数なら型検査が警告を出す）
+        (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem, Value::Int(a, t), Value::Int(b, _)) => {
+            // 両辺は型検査が同じ型にそろえている。i128 で計算して、型の幅で一周させる
+            // （決まった結果になる。定数なら型検査が警告を出す）
             let res = match op {
-                BinOp::Add => a.wrapping_add(*b),
-                BinOp::Sub => a.wrapping_sub(*b),
+                BinOp::Add => a + b,
+                BinOp::Sub => a - b,
                 BinOp::Mul => a.wrapping_mul(*b),
                 BinOp::Div | BinOp::Rem => {
                     if *b == 0 {
@@ -1025,16 +1065,16 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
                             .primary(span, "右辺が 0 です"));
                     }
                     if op == BinOp::Div {
-                        a.wrapping_div(*b)
+                        a / b
                     } else {
-                        a.wrapping_rem(*b)
+                        a % b
                     }
                 }
                 _ => unreachable!(),
             };
-            Ok(Value::Int(res))
+            Ok(Value::Int(t.wrap(res), *t))
         }
-        (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Int(a), Value::Int(b)) => {
+        (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Int(a, _), Value::Int(b, _)) => {
             Ok(Value::Bool(match op {
                 BinOp::Lt => a < b,
                 BinOp::Le => a <= b,
@@ -1044,7 +1084,7 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
         }
         (BinOp::Eq | BinOp::Ne, _, _) => {
             let eq = match (&l, &r) {
-                (Value::Int(a), Value::Int(b)) => a == b,
+                (Value::Int(a, _), Value::Int(b, _)) => a == b,
                 (Value::Bool(a), Value::Bool(b)) => a == b,
                 (Value::Str(a), Value::Str(b)) => a == b,
                 (Value::Unit, Value::Unit) => true,

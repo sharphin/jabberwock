@@ -17,10 +17,136 @@ pub enum TypeKind {
     Ref(Box<TypeExpr>, bool),
 }
 
+/// 整数の型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntTy {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    /// 配列の添字などに使う符号なし。幅は 64 ビットだが、u64 とは別の型
+    Usize,
+}
+
+impl IntTy {
+    pub fn from_name(n: &str) -> Option<IntTy> {
+        Some(match n {
+            "i8" => IntTy::I8,
+            "i16" => IntTy::I16,
+            "i32" => IntTy::I32,
+            "i64" => IntTy::I64,
+            "u8" => IntTy::U8,
+            "u16" => IntTy::U16,
+            "u32" => IntTy::U32,
+            "u64" => IntTy::U64,
+            "usize" => IntTy::Usize,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            IntTy::I8 => "i8",
+            IntTy::I16 => "i16",
+            IntTy::I32 => "i32",
+            IntTy::I64 => "i64",
+            IntTy::U8 => "u8",
+            IntTy::U16 => "u16",
+            IntTy::U32 => "u32",
+            IntTy::U64 => "u64",
+            IntTy::Usize => "usize",
+        }
+    }
+
+    pub fn bits(self) -> u32 {
+        match self {
+            IntTy::I8 | IntTy::U8 => 8,
+            IntTy::I16 | IntTy::U16 => 16,
+            IntTy::I32 | IntTy::U32 => 32,
+            IntTy::I64 | IntTy::U64 | IntTy::Usize => 64,
+        }
+    }
+
+    pub fn signed(self) -> bool {
+        matches!(self, IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64)
+    }
+
+    pub fn min(self) -> i128 {
+        if self.signed() {
+            -(1i128 << (self.bits() - 1))
+        } else {
+            0
+        }
+    }
+
+    pub fn max(self) -> i128 {
+        if self.signed() {
+            (1i128 << (self.bits() - 1)) - 1
+        } else {
+            (1i128 << self.bits()) - 1
+        }
+    }
+
+    pub fn contains(self, v: i128) -> bool {
+        self.min() <= v && v <= self.max()
+    }
+
+    /// 範囲の外の値を一周させて範囲に入れる（あふれ・`as` での変換）
+    pub fn wrap(self, v: i128) -> i128 {
+        let m = 1i128 << self.bits();
+        let u = v.rem_euclid(m);
+        if self.signed() && u > self.max() {
+            u - m
+        } else {
+            u
+        }
+    }
+
+    /// 値が欠けずに `to` へ変換できるか（自動で変換してよいか）。
+    /// usize は環境で幅が変わりうる型として扱い、u8 / u16 / u32 からだけ受け取る
+    pub fn widens_to(self, to: IntTy) -> bool {
+        if self == to {
+            return true;
+        }
+        if self == IntTy::Usize || to == IntTy::Usize {
+            return to == IntTy::Usize && matches!(self, IntTy::U8 | IntTy::U16 | IntTy::U32);
+        }
+        match (self.signed(), to.signed()) {
+            (false, false) | (true, true) => self.bits() <= to.bits(),
+            (false, true) => self.bits() < to.bits(),
+            (true, false) => false,
+        }
+    }
+
+    /// 二つの整数の演算をどの型でするか（片方へ欠けずに変換できるなら広い方）
+    pub fn common(a: IntTy, b: IntTy) -> Option<IntTy> {
+        if a.widens_to(b) {
+            Some(b)
+        } else if b.widens_to(a) {
+            Some(a)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+    /// 整数の式なら、型検査が決めた「この式の値を使う型」。実行時はこの型に変換してから使う
+    /// （数の書き方を相手の型に合わせる・欠けない変換を自動でする、のため）
+    pub int: Cell<Option<IntTy>>,
+}
+
+impl Expr {
+    pub fn new(kind: ExprKind, span: Span) -> Expr {
+        Expr { kind, span, int: Cell::new(None) }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,10 +185,12 @@ pub enum Check {
 
 #[derive(Debug, Clone)]
 pub enum ExprKind {
-    Int(i64),
+    Int(i128),
     Bool(bool),
     Str(String),
     Var(String),
+    /// `e as T`。整数の型を明示的に変える（範囲の外は一周する）
+    Cast(Box<Expr>, TypeExpr),
     /// `own e` : ヒープに値を置き、唯一の所有者を返す
     Own(Box<Expr>),
     /// `ref p` / `ref mut p` : 所有者（変数か `*p` か `p.f`）を世代付き参照として借りる。
@@ -95,7 +223,7 @@ pub struct FieldInit {
 /// `case` に書ける値（今のところリテラルだけ）
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pat {
-    Int(i64),
+    Int(i128),
     Bool(bool),
     Str(String),
 }

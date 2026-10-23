@@ -344,7 +344,7 @@ impl<'a> FnAnalyzer<'a> {
                 self.branches(arms.iter().map(|a| &a.body), default.as_ref());
                 None
             }
-            ExprKind::Unary(_, inner) => {
+            ExprKind::Unary(_, inner) | ExprKind::Cast(inner, _) => {
                 self.expr(inner, false);
                 None
             }
@@ -463,7 +463,7 @@ fn for_each_check(b: &Block, f: &mut impl FnMut(&Cell<Check>)) {
 fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
     match &e.kind {
         ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
-        ExprKind::Own(i) | ExprKind::Ref(i, _) | ExprKind::Unary(_, i) => expr_checks(i, f),
+        ExprKind::Own(i) | ExprKind::Ref(i, _) | ExprKind::Unary(_, i) | ExprKind::Cast(i, _) => expr_checks(i, f),
         ExprKind::Deref(i, c) | ExprKind::Field(i, _, c) => {
             f(c);
             expr_checks(i, f);

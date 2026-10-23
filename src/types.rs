@@ -17,7 +17,7 @@ const BUILTINS: [&str; 3] = ["print", "drop", "assert"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
-    I64,
+    Int(IntTy),
     Bool,
     Str,
     /// 値なし（戻り値のない関数の呼び出しなど）
@@ -33,7 +33,7 @@ pub enum Ty {
 impl Ty {
     pub fn show(&self) -> String {
         match self {
-            Ty::I64 => "i64".to_string(),
+            Ty::Int(t) => t.name().to_string(),
             Ty::Bool => "bool".to_string(),
             Ty::Str => "str".to_string(),
             Ty::Unit => "値なし".to_string(),
@@ -54,18 +54,36 @@ impl Ty {
     }
 }
 
-/// `from` の値を `to` の場所に入れられるか。`ref mut T` は `ref T` としても使える
+const I64: Ty = Ty::Int(IntTy::I64);
+
+/// `from` の値を `to` の場所に入れられるか。`ref mut T` は `ref T` としても使える。
+/// 整数は値が欠けない変換（u8 → i64 など）なら自動で変換する
 fn assignable(from: &Ty, to: &Ty) -> bool {
     match (from, to) {
         (Ty::Never, _) => true,
+        (Ty::Int(a), Ty::Int(b)) => a.widens_to(*b),
         (Ty::Ref(a, true), Ty::Ref(b, false)) => a == b,
         _ => from == to,
     }
 }
 
 fn mismatch(want: &Ty, got: &Ty, span: Span) -> Diagnostic {
-    Diagnostic::new("型が合いません")
-        .primary(span, format!("ここは `{}` ですが、`{}` が必要です", got.show(), want.show()))
+    let d = Diagnostic::new("型が合いません")
+        .primary(span, format!("ここは `{}` ですが、`{}` が必要です", got.show(), want.show()));
+    if let (Ty::Int(_), Ty::Int(w)) = (got, want) {
+        // 値が欠けうる変換は自動ではしない
+        return d.note(format!("値が欠けるかもしれない変換は `as` で明示してください（例: `x as {}`）", w.name()));
+    }
+    d
+}
+
+/// 整数の値を、型 `want` の場所で使えるようにする（実行時に変換する印をつける）
+fn convert(e: &Expr, got: &Ty, want: &Ty) {
+    if let (Ty::Int(a), Ty::Int(b)) = (got, want) {
+        if a != b {
+            e.int.set(Some(*b));
+        }
+    }
 }
 
 struct VarInfo {
@@ -179,18 +197,18 @@ impl<'a> Checker<'a> {
             TypeKind::Own(inner) => Ty::Own(Box::new(self.resolve(inner)?)),
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve(inner)?), *m),
             TypeKind::Name(n) => match n.as_str() {
-                "i64" => Ty::I64,
                 "bool" => Ty::Bool,
                 "str" => Ty::Str,
-                "i8" | "i16" | "i32" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize" | "f32" | "f64" => {
+                _ if IntTy::from_name(n).is_some() => Ty::Int(IntTy::from_name(n).expect("checked")),
+                "isize" | "f32" | "f64" => {
                     return Err(Diagnostic::new(format!("型 `{}` はまだ使えません", n))
-                        .primary(t.span, "今使える数の型は i64 だけです"))
+                        .primary(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）だけです"))
                 }
                 _ if self.structs.contains_key(n.as_str()) => Ty::Struct(n.clone()),
                 _ => {
                     return Err(Diagnostic::new(format!("未定義の型 `{}`", n))
                         .primary(t.span, "この型は定義されていません")
-                        .note("使える型: i64、bool、str、構造体の名前、own 型、ref 型、ref mut 型"))
+                        .note("使える型: i8〜i64、u8〜u64、usize、bool、str、構造体の名前、own 型、ref 型、ref mut 型"))
                 }
             },
         })
@@ -232,7 +250,7 @@ impl<'a> Checker<'a> {
         self.scopes = vec![params];
         let ret = self.ret.clone();
         let wants = ret != Ty::Unit;
-        let got = self.block(&f.body, wants)?;
+        let got = self.block(&f.body, wants, Some(&ret))?;
         if wants && !assignable(&got, &ret) {
             if got == Ty::Unit {
                 return Err(Diagnostic::new("値を返さないまま関数が終わる道があります")
@@ -244,6 +262,9 @@ impl<'a> Checker<'a> {
                 _ => f.body.end,
             };
             return Err(mismatch(&ret, &got, span));
+        }
+        if let Some(t) = tail_expr(&f.body) {
+            convert(t, &got, &ret);
         }
         Ok(())
     }
@@ -258,19 +279,20 @@ impl<'a> Checker<'a> {
 
     /// ブロックの型。`want_value` なら最後の `;` のない式の型（なければ値なし）。
     /// 途中で必ず抜けるなら Never
-    fn block(&mut self, b: &Block, want_value: bool) -> R<Ty> {
+    /// `hint` は値を入れる先の型（数の書き方をそれに合わせる）
+    fn block(&mut self, b: &Block, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
         self.scopes.push(HashMap::new());
-        let r = self.block_inner(b, want_value);
+        let r = self.block_inner(b, want_value, hint);
         self.scopes.pop();
         r
     }
 
-    fn block_inner(&mut self, b: &Block, want_value: bool) -> R<Ty> {
+    fn block_inner(&mut self, b: &Block, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
         let mut diverges = false;
         for (i, s) in b.stmts.iter().enumerate() {
             match s {
                 Stmt::Expr(e) if want_value && b.tail && i + 1 == b.stmts.len() => {
-                    let t = self.expr_ctx(e, true)?;
+                    let t = self.expr_ctx(e, true, hint)?;
                     return Ok(if diverges { Ty::Never } else { t });
                 }
                 _ => diverges |= self.stmt(s)?,
@@ -283,20 +305,24 @@ impl<'a> Checker<'a> {
     fn stmt(&mut self, s: &Stmt) -> R<bool> {
         match s {
             Stmt::Let { name, ty, mutable, span, init } => {
-                let got = self.expr(init)?;
+                let want = match ty {
+                    Some(te) => Some(self.resolve(te)?),
+                    None => None,
+                };
+                let got = self.expr_h(init, want.as_ref())?;
                 if got == Ty::Unit {
                     return Err(Diagnostic::new("値のない式は変数に入れられません")
                         .primary(init.span, "これは値を返さない"));
                 }
-                let t = match ty {
-                    Some(te) => {
-                        let want = self.resolve(te)?;
+                let t = match (ty, want) {
+                    (Some(te), Some(want)) => {
                         if !assignable(&got, &want) {
                             return Err(mismatch(&want, &got, init.span).label(te.span, "ここで型を決めた"));
                         }
+                        convert(init, &got, &want);
                         want
                     }
-                    None => got,
+                    _ => got,
                 };
                 self.declare(name, VarInfo { ty: t, mutable: *mutable, decl: *span });
                 Ok(false)
@@ -304,33 +330,54 @@ impl<'a> Checker<'a> {
             Stmt::Assign { target, value, .. } => {
                 let want = self.expr(target)?;
                 self.access(target)?.require(target.span, "書き換えようとした")?;
-                let got = self.expr(value)?;
-                if !assignable(&got, &want) {
-                    return Err(mismatch(&want, &got, value.span));
-                }
+                self.expect(value, &want)?;
                 Ok(false)
             }
-            Stmt::Expr(e) => Ok(self.expr_ctx(e, false)? == Ty::Never),
+            Stmt::Expr(e) => Ok(self.expr_ctx(e, false, None)? == Ty::Never),
             Stmt::While { cond, body } => {
                 self.expect(cond, &Ty::Bool)?;
-                self.block(body, false)?;
+                self.block(body, false, None)?;
                 Ok(false)
             }
             Stmt::Loop { body } => {
-                self.block(body, false)?;
+                self.block(body, false, None)?;
                 Ok(!has_break(body))
             }
             Stmt::For { var, range, range_span, body, els } => {
-                for a in range {
-                    self.expect(a, &Ty::I64)?;
+                // 始めと終わりは同じ整数型にそろえる（それがループ変数の型）。刻みはいつも i64（負にもなるため）
+                let ends = &range[..range.len().min(2)];
+                let mut t: Option<IntTy> = None;
+                for a in ends.iter().filter(|a| !is_const_tree(a)) {
+                    let at = match self.expr(a)? {
+                        Ty::Int(at) => at,
+                        other => return Err(mismatch(&I64, &other, a.span)),
+                    };
+                    t = match t {
+                        None => Some(at),
+                        Some(prev) => match IntTy::common(prev, at) {
+                            Some(c) => Some(c),
+                            None => {
+                                return Err(Diagnostic::new("range の始めと終わりの型が違います")
+                                    .primary(*range_span, format!("`{}` と `{}`", prev.name(), at.name()))
+                                    .note("`as` で型をそろえてください"))
+                            }
+                        },
+                    };
+                }
+                let t = Ty::Int(t.unwrap_or(IntTy::I64));
+                for a in ends {
+                    self.expect(a, &t)?;
+                }
+                if let Some(step) = range.get(2) {
+                    self.expect(step, &I64)?;
                 }
                 self.scopes.push(HashMap::new());
-                self.declare(var, VarInfo { ty: Ty::I64, mutable: false, decl: *range_span });
-                let r = self.block(body, false);
+                self.declare(var, VarInfo { ty: t, mutable: false, decl: *range_span });
+                let r = self.block(body, false, None);
                 self.scopes.pop();
                 r?;
                 if let Some(els) = els {
-                    self.block(els, false)?;
+                    self.block(els, false, None)?;
                 }
                 Ok(false)
             }
@@ -348,21 +395,18 @@ impl<'a> Checker<'a> {
                             .primary(e.span, "この値の行き先がない")
                             .note("値を返すなら `fn i64 f()` のように戻り値の型を書いてください"))
                     }
-                    (Some(e), _) => {
-                        let got = self.expr(e)?;
-                        if !assignable(&got, &ret) {
-                            return Err(mismatch(&ret, &got, e.span));
-                        }
-                    }
+                    (Some(e), _) => self.expect(e, &ret)?,
                 }
                 Ok(true)
             }
         }
     }
 
+    /// 型 `want` の場所で使う式。整数は欠けない変換なら自動で変換する
     fn expect(&mut self, e: &Expr, want: &Ty) -> R<()> {
-        let got = self.expr(e)?;
+        let got = self.expr_h(e, Some(want))?;
         if assignable(&got, want) {
+            convert(e, &got, want);
             Ok(())
         } else {
             Err(mismatch(want, &got, e.span))
@@ -370,13 +414,39 @@ impl<'a> Checker<'a> {
     }
 
     fn expr(&mut self, e: &Expr) -> R<Ty> {
-        self.expr_ctx(e, true)
+        self.expr_ctx(e, true, None)
     }
 
-    /// 式の型。`want_value` が false なら、if / match は文として使われている（値を捨てる）
-    fn expr_ctx(&mut self, e: &Expr, want_value: bool) -> R<Ty> {
+    /// `hint` は値を入れる先の型（数の書き方をそれに合わせる）
+    fn expr_h(&mut self, e: &Expr, hint: Option<&Ty>) -> R<Ty> {
+        self.expr_ctx(e, true, hint)
+    }
+
+    /// 式の型。`want_value` が false なら、if / match は文として使われている（値を捨てる）。
+    /// `hint` は値を入れる先の型。整数の定数（`300` や `1 + 2`）はその型になる（なければ i64）
+    fn expr_ctx(&mut self, e: &Expr, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
+        if is_const_tree(e) {
+            let t = match hint {
+                Some(Ty::Int(t)) => *t,
+                _ => IntTy::I64,
+            };
+            return self.const_expr(e, t);
+        }
         match &e.kind {
-            ExprKind::Int(_) => Ok(Ty::I64),
+            ExprKind::Int(_) => unreachable!("integer literals are constant trees"),
+            ExprKind::Cast(inner, te) => {
+                let target = self.resolve(te)?;
+                let Ty::Int(t) = target else {
+                    return Err(Diagnostic::new("`as` で変換できるのは整数の型だけです")
+                        .primary(te.span, format!("`{}` は整数の型ではありません", target.show())));
+                };
+                let got = self.expr(inner)?;
+                if !matches!(got, Ty::Int(_)) {
+                    return Err(Diagnostic::new("`as` で変換できるのは整数だけです")
+                        .primary(inner.span, format!("ここは `{}` です", got.show())));
+                }
+                Ok(Ty::Int(t))
+            }
             ExprKind::Bool(_) => Ok(Ty::Bool),
             ExprKind::Str(_) => Ok(Ty::Str),
             ExprKind::Var(name) => match self.lookup(name) {
@@ -385,7 +455,14 @@ impl<'a> Checker<'a> {
                     .primary(e.span, "この名前は見つかりません")),
             },
             ExprKind::Own(inner) => {
-                let t = self.value(inner)?;
+                let inner_hint = match hint {
+                    Some(Ty::Own(t)) => Some(&**t),
+                    _ => None,
+                };
+                let t = self.expr_h(inner, inner_hint)?;
+                if t == Ty::Unit {
+                    return Err(Diagnostic::new("値のない式です").primary(inner.span, "これは値を返さない"));
+                }
                 Ok(Ty::Own(Box::new(t)))
             }
             ExprKind::Ref(inner, mutable) => {
@@ -460,26 +537,32 @@ impl<'a> Checker<'a> {
             }
             ExprKind::If { cond, then, els } => {
                 self.expect(cond, &Ty::Bool)?;
-                let mut tys = vec![(self.block(then, want_value)?, tail_span(then))];
-                match els {
-                    Some(els) => tys.push((self.block(els, want_value)?, tail_span(els))),
-                    None => tys.push((Ty::Unit, e.span)),
+                let mut tys = vec![(self.block(then, want_value, hint)?, then)];
+                if let Some(els) = els {
+                    tys.push((self.block(els, want_value, hint)?, els));
                 }
-                self.join(tys, want_value, "if")
+                let missing = if els.is_none() { Some(e.span) } else { None };
+                self.join(tys, missing, want_value, "if")
             }
             ExprKind::Match { scrut, arms, default } => {
                 let st = self.expr(scrut)?;
-                if !matches!(st, Ty::I64 | Ty::Bool | Ty::Str) {
+                if !matches!(st, Ty::Int(_) | Ty::Bool | Ty::Str) {
                     return Err(Diagnostic::new("match できるのは、今のところ整数・真偽値・文字列だけです")
                         .primary(scrut.span, format!("ここは `{}` です", st.show())));
                 }
                 let mut tys = Vec::new();
                 for arm in arms {
                     for (pat, span) in &arm.pats {
-                        let pt = match pat {
-                            Pat::Int(_) => Ty::I64,
-                            Pat::Bool(_) => Ty::Bool,
-                            Pat::Str(_) => Ty::Str,
+                        let pt = match (pat, &st) {
+                            (Pat::Int(v), Ty::Int(t)) => {
+                                if !t.contains(*v) {
+                                    return Err(out_of_range(*v, *t, *span));
+                                }
+                                st.clone()
+                            }
+                            (Pat::Int(_), _) => I64,
+                            (Pat::Bool(_), _) => Ty::Bool,
+                            (Pat::Str(_), _) => Ty::Str,
                         };
                         if pt != st {
                             return Err(Diagnostic::new("case の値と match する値の型が合いません")
@@ -487,25 +570,27 @@ impl<'a> Checker<'a> {
                                 .primary(*span, format!("この case は `{}`", pt.show())));
                         }
                     }
-                    tys.push((self.block(&arm.body, want_value)?, tail_span(&arm.body)));
+                    tys.push((self.block(&arm.body, want_value, hint)?, &arm.body));
                 }
-                match default {
-                    Some(d) => tys.push((self.block(d, want_value)?, tail_span(d))),
-                    None if covers_both_bools(arms) => {}
-                    // どの case にも当たらなければ何もせず抜ける
-                    None => tys.push((Ty::Unit, e.span)),
+                if let Some(d) = default {
+                    tys.push((self.block(d, want_value, hint)?, d));
                 }
-                self.join(tys, want_value, "match")
+                // default がなく、どの case にも当たらなければ何もせず抜ける
+                let missing = if default.is_none() && !covers_both_bools(arms) { Some(e.span) } else { None };
+                self.join(tys, missing, want_value, "match")
             }
-            ExprKind::Unary(op, inner) => {
-                let want = if *op == UnOp::Neg { Ty::I64 } else { Ty::Bool };
-                self.expect(inner, &want)?;
-                if *op == UnOp::Neg && const_int(inner).is_some() && const_int(e).is_none() {
-                    self.warn_overflow(e.span);
-                }
-                Ok(want)
+            ExprKind::Unary(UnOp::Not, inner) => {
+                self.expect(inner, &Ty::Bool)?;
+                Ok(Ty::Bool)
             }
-            ExprKind::Binary(op, l, r) => self.binary(*op, l, r, e.span),
+            ExprKind::Unary(UnOp::Neg, inner) => match self.expr_h(inner, hint)? {
+                Ty::Int(t) if t.signed() => Ok(Ty::Int(t)),
+                Ty::Int(t) => Err(Diagnostic::new(format!("符号なしの型 `{}` に `-` は使えません", t.name()))
+                    .primary(e.span, "ここ")
+                    .note("符号つきの型（i64 など）に `as` で変換してください")),
+                other => Err(mismatch(&I64, &other, inner.span)),
+            },
+            ExprKind::Binary(op, l, r) => self.binary(*op, l, r, e.span, hint),
             ExprKind::Call(name, args) => self.call(name, args, e.span),
         }
     }
@@ -519,16 +604,20 @@ impl<'a> Checker<'a> {
         Ok(t)
     }
 
-    /// if / match の枝の型をまとめる
-    fn join(&self, branches: Vec<(Ty, Span)>, want_value: bool, what: &str) -> R<Ty> {
+    /// if / match の枝の型をまとめる。`missing` は枝がない場合（else / default なし）の位置
+    fn join(&self, branches: Vec<(Ty, &Block)>, missing: Option<Span>, want_value: bool, what: &str) -> R<Ty> {
         if !want_value {
             // 文として使うときは値を捨てる。どの枝も必ず抜けるなら、ここで必ず抜ける
-            let all_never = branches.iter().all(|(t, _)| *t == Ty::Never);
+            let all_never = missing.is_none() && branches.iter().all(|(t, _)| *t == Ty::Never);
             return Ok(if all_never { Ty::Never } else { Ty::Unit });
+        }
+        let mut list: Vec<(Ty, Span)> = branches.iter().map(|(t, b)| (t.clone(), tail_span(b))).collect();
+        if let Some(sp) = missing {
+            list.push((Ty::Unit, sp));
         }
         let mut acc = Ty::Never;
         let mut first: Option<(Ty, Span)> = None;
-        for (t, span) in branches {
+        for (t, span) in list {
             if assignable(&t, &acc) {
                 continue;
             }
@@ -544,12 +633,29 @@ impl<'a> Checker<'a> {
                 first = Some((t, span));
             }
         }
+        // 整数の枝は広い方の型にそろえる
+        for (t, b) in &branches {
+            if let Some(e) = tail_expr(b) {
+                convert(e, t, &acc);
+            }
+        }
         Ok(acc)
     }
 
-    fn binary(&mut self, op: BinOp, l: &Expr, r: &Expr, span: Span) -> R<Ty> {
-        let lt = self.expr(l)?;
-        let rt = self.expr(r)?;
+    fn binary(&mut self, op: BinOp, l: &Expr, r: &Expr, span: Span, hint: Option<&Ty>) -> R<Ty> {
+        // 片方が定数（`x + 1` の `1`）なら、もう片方の型に合わせる。算術なら外の型も手がかりにする
+        let arith = matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem);
+        let outer = if arith { hint } else { None };
+        let (lt, rt) = if is_const_tree(l) {
+            let rt = self.expr_h(r, outer)?;
+            let h = if matches!(rt, Ty::Int(_)) { Some(&rt) } else { outer };
+            (self.expr_h(l, h)?, rt)
+        } else {
+            let lt = self.expr_h(l, outer)?;
+            let h = if matches!(lt, Ty::Int(_)) { Some(&lt) } else { outer };
+            let rt = self.expr_h(r, h)?;
+            (lt, rt)
+        };
         let bad = || {
             Diagnostic::new("型が合わない演算です")
                 .primary(span, format!("`{}` と `{}` にはこの演算を使えません", lt.show(), rt.show()))
@@ -565,32 +671,23 @@ impl<'a> Checker<'a> {
                 Ok(Ty::Bool)
             }
             BinOp::Add if lt == Ty::Str && rt == Ty::Str => Ok(Ty::Str),
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
-                if lt == Ty::I64 && rt == Ty::I64 {
-                    if let (Some(a), Some(b)) = (const_int(l), const_int(r)) {
-                        if matches!(op, BinOp::Div | BinOp::Rem) && b == 0 {
-                            self.warnings.push(
-                                Diagnostic::warning("0 で割っています")
-                                    .primary(span, "実行するとここでエラーになる"),
-                            );
-                        } else if const_op(op, a, b).is_none() {
-                            self.warn_overflow(span);
-                        }
-                    }
-                    Ok(Ty::I64)
-                } else {
-                    Err(bad())
-                }
-            }
-            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                if lt == Ty::I64 && rt == Ty::I64 {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => match (&lt, &rt) {
+                (Ty::Int(_), Ty::Int(_)) => Ok(Ty::Int(self.common(l, &lt, r, &rt, span)?)),
+                _ => Err(bad()),
+            },
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => match (&lt, &rt) {
+                (Ty::Int(_), Ty::Int(_)) => {
+                    self.common(l, &lt, r, &rt, span)?;
                     Ok(Ty::Bool)
-                } else {
-                    Err(bad())
                 }
-            }
+                _ => Err(bad()),
+            },
             BinOp::Eq | BinOp::Ne => {
-                if lt == rt && matches!(lt, Ty::I64 | Ty::Bool | Ty::Str) {
+                if let (Ty::Int(_), Ty::Int(_)) = (&lt, &rt) {
+                    self.common(l, &lt, r, &rt, span)?;
+                    return Ok(Ty::Bool);
+                }
+                if lt == rt && matches!(lt, Ty::Bool | Ty::Str) {
                     Ok(Ty::Bool)
                 } else {
                     Err(Diagnostic::new("型が合わない比較です")
@@ -635,11 +732,52 @@ impl<'a> Checker<'a> {
         Ok(ret)
     }
 
-    fn warn_overflow(&mut self, span: Span) {
+    /// 二つの整数を同じ型（広い方）にそろえる。欠けない変換でそろわなければエラー
+    fn common(&self, l: &Expr, lt: &Ty, r: &Expr, rt: &Ty, span: Span) -> R<IntTy> {
+        let (Ty::Int(a), Ty::Int(b)) = (lt, rt) else { unreachable!("both sides are integers") };
+        let Some(c) = IntTy::common(*a, *b) else {
+            return Err(Diagnostic::new("型の違う整数どうしの演算です")
+                .primary(span, format!("`{}` と `{}`", a.name(), b.name()))
+                .note("どちらかに値が欠けずにそろえられないので、`as` で型をそろえてください"));
+        };
+        convert(l, lt, &Ty::Int(c));
+        convert(r, rt, &Ty::Int(c));
+        Ok(c)
+    }
+
+    /// 整数の定数の式（`300`、`-1`、`60 * 60`）を型 `t` として調べる。
+    /// 数をそのまま書いて範囲を超えるならエラー、計算した結果が超えるなら警告（実行すると一周する）
+    fn const_expr(&mut self, e: &Expr, t: IntTy) -> R<Ty> {
+        set_tree(e, t);
+        match const_val(e) {
+            Err(ConstErr::DivZero(span)) => {
+                self.warnings
+                    .push(Diagnostic::warning("0 で割っています").primary(span, "実行するとここでエラーになる"));
+            }
+            Err(ConstErr::Overflow) => self.warn_overflow(e.span, t),
+            Ok(v) if !t.contains(v) => {
+                let bare = matches!(&e.kind, ExprKind::Int(_))
+                    || matches!(&e.kind, ExprKind::Unary(UnOp::Neg, i) if matches!(i.kind, ExprKind::Int(_)));
+                if bare {
+                    return Err(out_of_range(v, t, e.span));
+                }
+                self.warn_overflow(e.span, t);
+            }
+            Ok(_) => {}
+        }
+        Ok(Ty::Int(t))
+    }
+
+    fn warn_overflow(&mut self, span: Span, t: IntTy) {
         self.warnings.push(
             Diagnostic::warning("整数があふれます")
-                .primary(span, "この計算は i64 の範囲を超える")
-                .note("実行すると値は一周します（i64 の最大値 + 1 は最小値になる）"),
+                .primary(span, format!("この計算は {} の範囲を超える", t.name()))
+                .note(format!(
+                    "実行すると値は一周します（{} の範囲は {}〜{}。最大値 + 1 は最小値になる）",
+                    t.name(),
+                    t.min(),
+                    t.max()
+                )),
         );
     }
 
@@ -677,25 +815,60 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// コンパイルの時点で値が決まる整数の式なら、その値。途中であふれる・0 で割るなら None
-fn const_int(e: &Expr) -> Option<i64> {
+/// 整数の数だけでできた式か（`300`、`-1`、`60 * 60`）。値はコンパイルの時点で決まる
+fn is_const_tree(e: &Expr) -> bool {
     match &e.kind {
-        ExprKind::Int(n) => Some(*n),
-        ExprKind::Unary(UnOp::Neg, inner) => const_int(inner)?.checked_neg(),
-        ExprKind::Binary(op, l, r) => const_op(*op, const_int(l)?, const_int(r)?),
-        _ => None,
+        ExprKind::Int(_) => true,
+        ExprKind::Unary(UnOp::Neg, inner) => is_const_tree(inner),
+        ExprKind::Binary(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem, l, r) => {
+            is_const_tree(l) && is_const_tree(r)
+        }
+        _ => false,
     }
 }
 
-fn const_op(op: BinOp, a: i64, b: i64) -> Option<i64> {
-    match op {
-        BinOp::Add => a.checked_add(b),
-        BinOp::Sub => a.checked_sub(b),
-        BinOp::Mul => a.checked_mul(b),
-        BinOp::Div => a.checked_div(b),
-        BinOp::Rem => a.checked_rem(b),
-        _ => None,
+/// 定数の式の中の数をすべて型 `t` にする（実行時もその型で計算して一周する）
+fn set_tree(e: &Expr, t: IntTy) {
+    e.int.set(Some(t));
+    match &e.kind {
+        ExprKind::Unary(_, inner) => set_tree(inner, t),
+        ExprKind::Binary(_, l, r) => {
+            set_tree(l, t);
+            set_tree(r, t);
+        }
+        _ => {}
     }
+}
+
+enum ConstErr {
+    DivZero(Span),
+    Overflow,
+}
+
+/// 定数の式の本当の値（一周させない）
+fn const_val(e: &Expr) -> Result<i128, ConstErr> {
+    match &e.kind {
+        ExprKind::Int(n) => Ok(*n),
+        ExprKind::Unary(_, inner) => Ok(-const_val(inner)?),
+        ExprKind::Binary(op, l, r) => {
+            let (a, b) = (const_val(l)?, const_val(r)?);
+            match op {
+                BinOp::Add => a.checked_add(b),
+                BinOp::Sub => a.checked_sub(b),
+                BinOp::Mul => a.checked_mul(b),
+                BinOp::Div | BinOp::Rem if b == 0 => return Err(ConstErr::DivZero(e.span)),
+                BinOp::Div => a.checked_div(b),
+                _ => a.checked_rem(b),
+            }
+            .ok_or(ConstErr::Overflow)
+        }
+        _ => unreachable!("only constant trees"),
+    }
+}
+
+fn out_of_range(v: i128, t: IntTy, span: Span) -> Diagnostic {
+    Diagnostic::new(format!("`{}` は `{}` に入りません", v, t.name()))
+        .primary(span, format!("{} の範囲は {}〜{}", t.name(), t.min(), t.max()))
 }
 
 /// ループ本体に、このループを抜ける break があるか（内側のループの break は数えない）
@@ -712,6 +885,14 @@ fn has_break(b: &Block) -> bool {
         Stmt::For { els: Some(els), .. } => has_break(els),
         _ => false,
     })
+}
+
+/// ブロックの値になる最後の式
+fn tail_expr(b: &Block) -> Option<&Expr> {
+    match b.stmts.last() {
+        Some(Stmt::Expr(e)) if b.tail => Some(e),
+        _ => None,
+    }
 }
 
 fn tail_span(b: &Block) -> Span {

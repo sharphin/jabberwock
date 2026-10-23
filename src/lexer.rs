@@ -2,7 +2,7 @@ use crate::diag::{Diagnostic, Span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
-    Int(i64),
+    Int(i128),
     Str(String),
     Ident(String),
     // キーワード
@@ -22,6 +22,7 @@ pub enum Tok {
     Return,
     Struct,
     Own,
+    As,
     Ref,
     Mut,
     True,
@@ -91,6 +92,7 @@ impl Tok {
             Tok::Return => "return",
             Tok::Struct => "struct",
             Tok::Own => "own",
+            Tok::As => "as",
             Tok::Ref => "ref",
             Tok::Mut => "mut",
             Tok::True => "true",
@@ -173,9 +175,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
                 let text: String = chars[s..i].iter().collect();
                 let span = Span { line, col: start_col, len: i - s };
-                let n = text.parse::<i64>().map_err(|_| {
-                    Diagnostic::new("整数が大きすぎます").primary(span, "i64 に収まりません")
-                })?;
+                // 型は型検査が決める（相手の型に合わせる）。ここでは u64 に収まるかだけ見る
+                let n = text
+                    .parse::<u64>()
+                    .map(i128::from)
+                    .map_err(|_| Diagnostic::new("整数が大きすぎます").primary(span, "どの整数型にも収まりません"))?;
                 out.push(Token { tok: Tok::Int(n), span });
             }
             c if c.is_alphabetic() || c == '_' => {
@@ -202,6 +206,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     "return" => Tok::Return,
                     "struct" => Tok::Struct,
                     "own" => Tok::Own,
+                    "as" => Tok::As,
                     "ref" => Tok::Ref,
                     "mut" => Tok::Mut,
                     "true" => Tok::True,
