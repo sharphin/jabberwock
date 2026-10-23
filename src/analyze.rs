@@ -520,7 +520,7 @@ impl<'a> FnAnalyzer<'a> {
                 }
                 None
             }
-            ExprKind::MethodCall(recv, name, args) => {
+            ExprKind::MethodCall(recv, name, args, _) => {
                 // インタプリタと同じ順: 一時的な値の receiver は先に評価（ムーブ）、
                 // 変数などの場所なら引数のあとで借りる
                 let temp = if is_place(recv) { None } else { Some(self.expr(recv, false)) };
@@ -681,7 +681,7 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
                 expr_checks(a, f);
             }
         }
-        ExprKind::MethodCall(recv, _, args) => {
+        ExprKind::MethodCall(recv, _, args, _) => {
             expr_checks(recv, f);
             for a in args {
                 expr_checks(a, f);

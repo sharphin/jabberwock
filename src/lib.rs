@@ -55,7 +55,12 @@ pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String 
 
 /// どのプログラムにも最初からある定義。`Some(x)` / `None` / `Ok(x)` / `Err(e)` は
 /// `Option.Some(x)` などの短い書き方
-const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\nenum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n}\n\
+const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n\
+    fn bool is_some() { match this { case Some(_) -> true; case None -> false; } }\n\
+    fn bool is_none() { match this { case Some(_) -> false; case None -> true; } }\n}\n\
+enum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n\
+    fn bool is_ok() { match this { case Ok(_) -> true; case Err(_) -> false; } }\n\
+    fn bool is_err() { match this { case Ok(_) -> false; case Err(_) -> true; } }\n}\n\
 fn Result<T, E> ok_or<T, E>(Option<T> o, E e) {\n    match o {\n        case Some(v) -> Ok(v);\n        case None -> Err(e);\n    }\n}\n";
 
 /// 字句解析と構文解析をして（`use` したモジュールも読む）、最初からある定義（`Option`）を前に足す。

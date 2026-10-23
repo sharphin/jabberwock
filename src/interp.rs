@@ -9,6 +9,7 @@
 //! 静的解析（`analyze`）が「絶対安全」と証明できた `*p` は世代チェックを飛ばす（速さ）。
 //! 証明できない箇所だけ実行時検査が残る（安全）。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::rc::Rc;
@@ -1058,7 +1059,12 @@ impl Interp {
                 if !matches!(inner, Value::Enum { .. }) {
                     return None;
                 }
-                (inner, Some(r))
+                // 中身の説明は match に書いた名前から（`e の中身 x`。lower / 実行ファイルと同じ）
+                let what = match &scrut.kind {
+                    ExprKind::Ref(x, _) => describe(x),
+                    _ => describe(scrut),
+                };
+                (inner, Some(RefVal { what, ..r }))
             }
             Value::Own(slot) => {
                 let inner = self.heap.slots[slot].value.clone().expect("live slot");
@@ -1891,7 +1897,7 @@ impl Interp {
                 binary(*op, lv, rv, e.span)
             }
             ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
-            ExprKind::MethodCall(recv, name, args) => self.eval_method(recv, name, args, e.span),
+            ExprKind::MethodCall(recv, name, args, owner) => self.eval_method(recv, name, args, owner, e.span),
             ExprKind::Index(..) => {
                 let (v, _) = self.eval_borrow(e)?;
                 if v.has_own() || v.moves() {
@@ -2060,7 +2066,14 @@ impl Interp {
     /// `recv.name(args)`。`this` には recv を借りた ref を渡す。
     /// recv が構造体の値なら、呼び出しのあいだだけヒープへ移して借り、終わったら元の場所へ戻す
     /// （戻すときにそのスロットは解放されるので、`this` を借りた ref が残っていてもダングリングとして見つかる）
-    fn eval_method(&mut self, recv: &Expr, name: &str, args: &[Expr], span: Span) -> R<Value> {
+    fn eval_method(
+        &mut self,
+        recv: &Expr,
+        name: &str,
+        args: &[Expr],
+        owner: &RefCell<Option<String>>,
+        span: Span,
+    ) -> R<Value> {
         // 一時的な値は先に評価する（ムーブ）。変数などの場所は、引数を評価してから借りる
         let temp = if is_place(recv) { None } else { Some(self.eval(recv)?) };
         let vals = match self.eval_all(args) {
@@ -2270,7 +2283,15 @@ impl Interp {
             }
             return Ok(result);
         }
+        // enum の値は型の名前を持たないので、型検査が書いた名前を使う
+        let enum_name = owner.borrow().clone();
         let sname = match &rv {
+            _ if enum_name.is_some() => {
+                if matches!(rv, Value::Own(_) | Value::Ref(_)) {
+                    self.check_ptr(&rv, recv.span, Check::Required)?;
+                }
+                enum_name.expect("checked above")
+            }
             Value::Struct(def, _) => def.name.clone(),
             Value::Own(_) | Value::Ref(_) => {
                 let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;

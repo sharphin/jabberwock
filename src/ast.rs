@@ -250,7 +250,8 @@ pub enum ExprKind {
     Lambda(Rc<Lambda>),
     /// `p.name(args)` : メソッド呼び出し。メソッドは `構造体名.name` という名前の関数で、
     /// 最初の引数 `this` に p を借りて渡す（p が own / ref ならその先、構造体の値なら一時的にヒープへ移して借りる）
-    MethodCall(Box<Expr>, String, Vec<Expr>),
+    /// 4 つめ: receiver が enum なら、その enum の名前（型検査が書く。interp がメソッドを探すのに使う）
+    MethodCall(Box<Expr>, String, Vec<Expr>, RefCell<Option<String>>),
 }
 
 #[derive(Debug, Clone)]
@@ -560,7 +561,7 @@ pub fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> bool) {
             }
         }
         ExprKind::Lambda(l) => walk_block(&l.body, f),
-        ExprKind::MethodCall(recv, _, args) => {
+        ExprKind::MethodCall(recv, _, args, _) => {
             walk_expr(recv, f);
             args.iter().for_each(|a| walk_expr(a, f));
         }

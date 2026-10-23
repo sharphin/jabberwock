@@ -1311,7 +1311,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.temp_of(ty, Rvalue::Bin(*op, lv, rv, sp), sp)
             }
             ExprKind::Call(name, args) => return self.call(e, name, args, ty),
-            ExprKind::MethodCall(recv, name, args) => return self.method(e, recv, name, args, ty),
+            ExprKind::MethodCall(recv, name, args, _) => return self.method(e, recv, name, args, ty),
             ExprKind::Interp(parts) => {
                 let mut strs = Vec::new();
                 for p in parts {
@@ -1490,6 +1490,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             }
             Ok(Some(pl))
         };
+        let is_enum = matches!(inner, Ty::Enum(..));
         match inner {
             Ty::Str => {
                 let text = match recv_place(self)? {
@@ -1502,22 +1503,26 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.drop_temp(&temp, sp);
                 Ok(r)
             }
-            Ty::Struct(sname, sargs) => {
+            Ty::Struct(sname, sargs) | Ty::Enum(sname, sargs) => {
                 let full = format!("{}.{}", sname, name);
                 let def = *self.calls.defs.get(full.as_str()).ok_or("ないメソッド")?;
                 let mutable = matches!(def.params[0].ty.kind, TypeKind::Ref(_, true));
                 // 型の引数: 型検査が決めたもの。interface の条件で呼んだ（`T` の）ときは、構造体の型の引数から
                 let mut targs = self.targs(e);
-                if let Some(sd) = self.structs.get(&sname) {
-                    for (p, a) in sd.tparams.iter().zip(&sargs) {
-                        targs.entry(p.clone()).or_insert_with(|| a.clone());
-                    }
+                let tparams = if is_enum {
+                    self.info.enums.get(&sname).map(|(t, _)| t.clone())
+                } else {
+                    self.structs.get(&sname).map(|sd| sd.tparams.clone())
+                };
+                for (p, a) in tparams.unwrap_or_default().iter().zip(&sargs) {
+                    targs.entry(p.clone()).or_insert_with(|| a.clone());
                 }
                 if temp.is_none() && self.through_list(recv) {
                     return Err("リストの中の値のメソッド".to_string());
                 }
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;
-                let this_ty = Ty::Ref(Box::new(Ty::Struct(sname.clone(), sargs.clone())), mutable);
+                let owner = if is_enum { Ty::Enum(sname.clone(), sargs.clone()) } else { Ty::Struct(sname.clone(), sargs.clone()) };
+                let this_ty = Ty::Ref(Box::new(owner), mutable);
                 let r = Rvalue::Ref { place: pl, mutable, follows: false, what: describe(recv), span: recv.span };
                 let this = self.temp_of(this_ty, r, sp);
                 let f = self.calls.index(&full, &targs)?;

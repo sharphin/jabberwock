@@ -118,6 +118,11 @@
   analyze は receiver の型を知らないので、同じ名前のメソッドすべての呼び出しとして記録する（安全側）。
   静的メソッド（`static fn`）は this のない `構造体名.名前` の関数。パーサが `struct 名前` を先に集め（`struct_names`）、
   `Point.at(...)` を `ExprKind::Call("Point.at")` にする。型検査の `FnSig.method` で呼び方の取り違えを弾く。
+  enum のメソッドも同じ（`parse_enum` が種類のあとの `fn` を読み、`parse_method` / `finish_methods` を構造体と共有）。
+  enum の値は型の名前を持たないので、型検査が `MethodCall` の 4 つめ（`RefCell<Option<String>>`）に enum の名前を書き、
+  interp の `eval_method` はそれで `Enum.名前` を探す。`Shape.x(...)` は x が種類でなければ静的メソッド（パーサの `enum_variants`。
+  モジュールの enum は `ModuleInfo.variants`）。enum は interface に当てはめられない（`satisfies`）。
+  Option / Result の `is_some` などは `lib.rs` の `PRELUDE` に ward で書いたメソッド。
 
 - interface と条件: 型検査だけの話（interp は値の構造体名でメソッドを探すので何もしない）。`FnDef.bounds` が型の引数ごとの条件。
   `types.rs` の `satisfies` が「構造体のメソッドが interface の形とそろうか」を調べ、`check_bounds` で呼び出しの場所で確かめる。

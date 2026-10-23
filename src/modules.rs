@@ -107,13 +107,15 @@ fn info_of(p: &Program) -> ModuleInfo {
     for s in &p.structs {
         names.insert(s.name.clone(), (NameKind::Struct, public(&s.name)));
     }
+    let mut variants = HashMap::new();
     for e in &p.enums {
         names.insert(e.name.clone(), (NameKind::Enum, public(&e.name)));
+        variants.insert(e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect());
     }
     for i in &p.interfaces {
         names.insert(i.name.clone(), (NameKind::Interface, public(&i.name)));
     }
-    ModuleInfo { names }
+    ModuleInfo { names, variants }
 }
 
 /// モジュールの中の名前を、モジュール名をつけた名前に書き換える
@@ -343,7 +345,7 @@ impl<'a> Qualify<'a> {
                 }
                 self.block(&mut l.body, tps);
             }
-            ExprKind::MethodCall(recv, _, args) => {
+            ExprKind::MethodCall(recv, _, args, _) => {
                 self.expr(recv, tps);
                 args.iter_mut().for_each(|a| self.expr(a, tps));
             }

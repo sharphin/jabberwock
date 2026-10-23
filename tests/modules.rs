@@ -16,6 +16,14 @@ pub struct Point {
 pub enum Shape {
     Dot(Point p);
     Box(i64 w, i64 h);
+
+    fn i64 corners() {
+        match this {
+            case Dot(_) -> 1;
+            case Box(_, _) -> helper(2, 2);
+        }
+    }
+    static fn Shape square(i64 n) { Shape.Box(n, n) }
 }
 
 pub interface Sized {
@@ -81,8 +89,10 @@ fn main() {
     let mine = Mine { w: 9 };
     print(need(ref mine));
     print(\"{geom.twice(3)}\");
+    let sq = geom.Shape.square(3);
+    print(geom.area(sq), sq.corners(), geom.Shape.Dot(geom.Point.at(0, 0)).corners());
 }";
-    assert_eq!(ok(src), "25 2\n10\n2\n14 2\n9\n6\n");
+    assert_eq!(ok(src), "25 2\n10\n2\n14 2\n9\n6\n9 4 1\n");
 }
 
 #[test]

@@ -338,3 +338,109 @@ fn main() {
 }");
     assert_eq!(d.title, "case の値と中身の型が合いません");
 }
+
+// ---------------------------------------------------------------- enum のメソッド
+
+#[test]
+fn enum_methods() {
+    let src = "
+enum Shape {
+    Circle(f64 r);
+    Rect(f64 w, f64 h);
+
+    fn f64 area() {
+        match this {
+            case Circle(r) -> 3.0 * r * r;
+            case Rect(w, h) -> w * h;
+        }
+    }
+    fn mut grow() {
+        match this {
+            case Circle(r) -> *this = Shape.Circle(r * 2.0);
+            case Rect(w, h) -> *this = Shape.Rect(w * 2.0, h * 2.0);
+        }
+    }
+    static fn Shape square(f64 s) { Shape.Rect(s, s) }
+    fn bool big() { area() > 100.0 }
+}
+
+enum Tree<T> {
+    Leaf(T v);
+    Node(own Tree<T> l, own Tree<T> r);
+
+    fn i64 count() {
+        match this {
+            case Leaf(_) -> 1;
+            case Node(l, r) -> l.count() + r.count();
+        }
+    }
+}
+
+fn main() {
+    let mut s = Shape.square(3.0);
+    print(s.area());
+    s.grow();
+    print(s.area(), s.big());
+    let o = own Shape.Circle(10.0);
+    print(o.big(), Shape.Rect(1.0, 2.0).area());
+    let mut xs = [Shape.Circle(1.0), Shape.Circle(1.0)];
+    xs[1].grow();
+    print(xs[0].area(), xs[1].area());
+    let t = Tree.Node(own Tree.Leaf(\"a\"), own Tree.Node(own Tree.Leaf(\"b\"), own Tree.Leaf(\"c\")));
+    print(t.count());
+}";
+    assert_eq!(ok(src), "9.0\n36.0 false\ntrue 2.0\n3.0 12.0\n3\n");
+}
+
+#[test]
+fn option_and_result_methods() {
+    let src = "
+fn Result<i64, str> half(i64 n) {
+    if n % 2 == 0 { Ok(n / 2) } else { Err(\"odd\") }
+}
+fn main() {
+    let a = Some(3);
+    let Option<str> b = None;
+    print(a.is_some(), a.is_none(), b.is_some(), b.is_none());
+    print(half(4).is_ok(), half(3).is_err());
+    let s = Some(own 5);
+    if s.is_some() { print(\"yes\"); }
+    let Option<i64>[] xs = [Some(1), None, Some(3)];
+    let mut n = 0;
+    for x in xs { if x.is_some() { n += 1; } }
+    print(n);
+}";
+    assert_eq!(ok(src), "true false false true\ntrue true\nyes\n2\n");
+}
+
+#[test]
+fn enum_method_errors() {
+    let d = err("enum E { A; B; fn bool A() { true } } fn main() {}");
+    assert_eq!(d.title, "メソッド `A` が種類と同じ名前です");
+    let d = err("enum E { A; B; fn bool x() { true } } fn main() { print(E.x()); }");
+    assert_eq!(d.title, "`E.x` は this のあるメソッドです");
+    let d = err("enum E { A; B; static fn E mk() { E.A } } fn main() { let e = E.mk(); print(e.mk()); }");
+    assert_eq!(d.title, "`E.mk` は静的メソッドです");
+    let d = err("enum E { A; B; fn mut flip() { *this = E.B; } } fn main() { let e = E.A; e.flip(); }");
+    assert_eq!(d.title, "`e` は mut ではないので書き換えられません");
+    let d = err("enum E { A; B; fn mut flip() { this = E.B; } } fn main() {}");
+    assert_eq!(d.title, "`this` そのものは書き換えられません");
+    let d = err("enum E { A; B; fn flip() { *this = E.B; } } fn main() {}");
+    assert_eq!(d.title, "書き換えないメソッドの中で書き換えようとしました");
+    let d = err("enum E { A; fn x() {} B; } fn main() {}");
+    assert_eq!(d.title, "種類はメソッドより前に書いてください");
+    // 借りた match の中身は、this を上書きすると無効になる
+    let d = err("
+enum E {
+    A(own i64 x);
+    B;
+    fn mut f() {
+        match this {
+            case A(x) -> { *this = E.B; print(*x); }
+            case B -> {}
+        }
+    }
+}
+fn main() { let mut e = E.A(own 1); e.f(); }");
+    assert_eq!(d.title, "無効になった参照を使いました (dangling reference)");
+}

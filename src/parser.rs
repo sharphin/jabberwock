@@ -21,6 +21,8 @@ pub enum NameKind {
 #[derive(Debug, Clone, Default)]
 pub struct ModuleInfo {
     pub names: HashMap<String, (NameKind, bool)>,
+    /// enum ごとの種類の名前（`geom.Shape.make()` が種類か静的メソッドかを見分ける）
+    pub variants: HashMap<String, Vec<String>>,
 }
 
 pub struct Parser {
@@ -36,6 +38,8 @@ pub struct Parser {
     enum_names: Vec<String>,
     /// ファイル中で定義されている構造体の名前。`Name.f(...)` を静的メソッドの呼び出しとして読むため
     struct_names: Vec<String>,
+    /// ファイル中の enum ごとの種類の名前。`Shape.make()` が種類でなければ静的メソッドの呼び出し
+    enum_variants: HashMap<String, Vec<String>>,
 }
 
 impl Parser {
@@ -57,7 +61,8 @@ impl Parser {
         // 組み込みの enum（prelude で定義）
         enum_names.push("Option".to_string());
         enum_names.push("Result".to_string());
-        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names }
+        let enum_variants = scan_variants(&toks);
+        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names, enum_variants }
     }
 
     /// `use` したモジュールのあるファイルを読む。`geom.area` は 1 つの名前 `geom.area` にまとめる
@@ -71,7 +76,12 @@ impl Parser {
                 }
                 match kind {
                     NameKind::Struct => p.struct_names.push(format!("{}.{}", m, n)),
-                    NameKind::Enum => p.enum_names.push(format!("{}.{}", m, n)),
+                    NameKind::Enum => {
+                        p.enum_names.push(format!("{}.{}", m, n));
+                        if let Some(vs) = info.variants.get(n) {
+                            p.enum_variants.insert(format!("{}.{}", m, n), vs.clone());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -185,11 +195,12 @@ impl Parser {
                     fns.extend(methods);
                 }
                 Tok::Enum => {
-                    let e = self.parse_enum()?;
+                    let (e, methods) = self.parse_enum()?;
                     if is_pub {
                         public.push(e.name.clone());
                     }
                     enums.push(e);
+                    fns.extend(methods);
                 }
                 _ => {
                     let f = self.parse_fn()?;
@@ -234,18 +245,28 @@ impl Parser {
         Ok(InterfaceDef { name, methods, span })
     }
 
-    /// `enum Shape { Circle(i64 r); Rect(i64 w, i64 h); Empty; }`
-    fn parse_enum(&mut self) -> R<EnumDef> {
+    /// `enum Shape { Circle(i64 r); Rect(i64 w, i64 h); Empty; }`。種類のあとにメソッドを書ける（構造体と同じ）
+    fn parse_enum(&mut self) -> R<(EnumDef, Vec<FnDef>)> {
         let start = self.expect(Tok::Enum, "`enum`")?;
         let name = self.expect_ident("enum の名前")?;
         let span = start.join(self.prev_span());
         let tparams = self.parse_tparams()?;
         self.expect(Tok::LBrace, "`{`")?;
         let mut variants: Vec<VariantDef> = Vec::new();
+        let mut methods: Vec<(FnDef, Span)> = Vec::new();
+        let mut statics: Vec<(FnDef, Span)> = Vec::new();
         loop {
             self.skip_semis();
             if self.eat(Tok::RBrace) {
                 break;
+            }
+            if matches!(self.peek(), Tok::Fn | Tok::Static) {
+                self.parse_method(&name, &tparams, &mut methods, &mut statics)?;
+                continue;
+            }
+            if !methods.is_empty() || !statics.is_empty() {
+                return Err(Diagnostic::new("種類はメソッドより前に書いてください")
+                    .primary(self.span(), "メソッドのあとに種類がある"));
             }
             let vspan = self.span();
             let vname = self.expect_ident("種類の名前")?;
@@ -284,7 +305,57 @@ impl Parser {
                 self.expect(Tok::Semi, "`;`（種類の終わり）")?;
             }
         }
-        Ok(EnumDef { name, tparams, variants, span })
+        let vnames: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+        let fns = finish_methods(&name, &[], &vnames, methods, statics)?;
+        Ok((EnumDef { name, tparams, variants, span }, fns))
+    }
+
+    /// 構造体・enum の中の `fn` / `fn mut` / `static fn` 1 つ。`this`（`ref 型名<T..>`）を最初の引数に足す
+    fn parse_method(
+        &mut self,
+        name: &str,
+        tparams: &[String],
+        methods: &mut Vec<(FnDef, Span)>,
+        statics: &mut Vec<(FnDef, Span)>,
+    ) -> R<()> {
+        let mspan = self.span();
+        let is_static = self.eat(Tok::Static);
+        let start = self.expect(Tok::Fn, "`fn`")?;
+        let mutable = !is_static && self.eat(Tok::Mut);
+        let mut m = self.parse_fn_rest(start, true)?;
+        if methods.iter().chain(statics.iter()).any(|(x, _)| x.name == m.name) {
+            return Err(Diagnostic::new(format!("メソッド `{}` が二重に定義されています", m.name))
+                .primary(mspan, "同じ名前のメソッドがすでにある"));
+        }
+        if let Some(t) = m.tparams.iter().find(|t| tparams.contains(t)) {
+            return Err(Diagnostic::new(format!("型の引数 `{}` は型のものと同じ名前です", t))
+                .primary(m.span, "別の名前にしてください"));
+        }
+        if is_static {
+            // 静的メソッドは this のない関数。型の引数は使える
+            m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
+            m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
+            statics.push((m, mspan));
+            return Ok(());
+        }
+        // `this` は `ref 型`（`fn mut` なら `ref mut 型`）の引数
+        let sty = TypeExpr {
+            kind: if tparams.is_empty() {
+                TypeKind::Name(name.to_string())
+            } else {
+                TypeKind::App(
+                    name.to_string(),
+                    tparams.iter().map(|t| TypeExpr { kind: TypeKind::Name(t.clone()), span: m.span }).collect(),
+                )
+            },
+            span: m.span,
+        };
+        let this_ty = TypeExpr { kind: TypeKind::Ref(Box::new(sty), mutable), span: m.span };
+        m.params.insert(0, Param { ty: this_ty, name: "this".to_string(), mutable: false, span: m.span });
+        m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
+        m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
+        methods.push((m, mspan));
+        Ok(())
     }
 
     /// 構造体の定義。中に書いたメソッドは、`this` を最初の引数に足した
@@ -305,43 +376,7 @@ impl Parser {
                 break;
             }
             if matches!(self.peek(), Tok::Fn | Tok::Static) {
-                let mspan = self.span();
-                let is_static = self.eat(Tok::Static);
-                let start = self.expect(Tok::Fn, "`fn`")?;
-                let mutable = !is_static && self.eat(Tok::Mut);
-                let mut m = self.parse_fn_rest(start, true)?;
-                if methods.iter().chain(&statics).any(|(x, _)| x.name == m.name) {
-                    return Err(Diagnostic::new(format!("メソッド `{}` が二重に定義されています", m.name))
-                        .primary(mspan, "同じ名前のメソッドがすでにある"));
-                }
-                if let Some(t) = m.tparams.iter().find(|t| tparams.contains(t)) {
-                    return Err(Diagnostic::new(format!("型の引数 `{}` は構造体のものと同じ名前です", t))
-                        .primary(m.span, "別の名前にしてください"));
-                }
-                if is_static {
-                    // 静的メソッドは this のない関数。構造体の型の引数は使える
-                    m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
-                    m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
-                    statics.push((m, mspan));
-                    continue;
-                }
-                // `this` は `ref 構造体`（`fn mut` なら `ref mut 構造体`）の引数
-                let sty = TypeExpr {
-                    kind: if tparams.is_empty() {
-                        TypeKind::Name(name.clone())
-                    } else {
-                        TypeKind::App(
-                            name.clone(),
-                            tparams.iter().map(|t| TypeExpr { kind: TypeKind::Name(t.clone()), span: m.span }).collect(),
-                        )
-                    },
-                    span: m.span,
-                };
-                let this_ty = TypeExpr { kind: TypeKind::Ref(Box::new(sty), mutable), span: m.span };
-                m.params.insert(0, Param { ty: this_ty, name: "this".to_string(), mutable: false, span: m.span });
-                m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
-                m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
-                methods.push((m, mspan));
+                self.parse_method(&name, &tparams, &mut methods, &mut statics)?;
                 continue;
             }
             if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Semi | Tok::Comma | Tok::RBrace) {
@@ -370,30 +405,7 @@ impl Parser {
                 self.expect(Tok::Semi, "`;`（フィールドの終わり）")?;
             }
         }
-        let names: Vec<String> = methods.iter().map(|(m, _)| m.name.clone()).collect();
-        let static_names: Vec<String> = statics.iter().map(|(m, _)| m.name.clone()).collect();
-        let mut fns = Vec::new();
-        let count = methods.len();
-        for (i, (mut m, mspan)) in methods.into_iter().chain(statics).enumerate() {
-            let is_static = i >= count;
-            if fields.contains(&m.name) {
-                return Err(Diagnostic::new(format!("メソッド `{}` がフィールドと同じ名前です", m.name))
-                    .primary(mspan, "別の名前にしてください"));
-            }
-            // メソッドの中では、フィールドと同じ構造体のメソッドを `this.` なしで使える。
-            // 静的メソッドは `構造体名.` なしで使える（静的メソッドの中には this がない）
-            let ctx = ThisCtx {
-                fields: if is_static { &[] } else { &fields },
-                methods: if is_static { &[] } else { &names },
-                statics: &static_names,
-                owner: &name,
-            };
-            let skip = if is_static { 0 } else { 1 };
-            let mut scopes: Vec<Vec<String>> = vec![m.params.iter().skip(skip).map(|p| p.name.clone()).collect()];
-            bind_this_block(&mut m.body, &ctx, &mut scopes);
-            m.name = format!("{}.{}", name, m.name);
-            fns.push(m);
-        }
+        let fns = finish_methods(&name, &fields, &[], methods, statics)?;
         Ok((StructDef { name, tparams, fields, field_types, span }, fns))
     }
 
@@ -1162,7 +1174,7 @@ impl Parser {
                 let (args, end) = self.parse_args()?;
                 lambdas_borrow(&args);
                 let span = e.span.join(end);
-                e = Expr::new(ExprKind::MethodCall(Box::new(e), name, args), span);
+                e = Expr::new(ExprKind::MethodCall(Box::new(e), name, args, RefCell::new(None)), span);
                 continue;
             }
             let span = e.span.join(fspan);
@@ -1240,6 +1252,7 @@ impl Parser {
                                 in_value_if: true,
                                 enum_names: self.enum_names.clone(),
                                 struct_names: self.struct_names.clone(),
+                                enum_variants: self.enum_variants.clone(),
                             };
                             let e = sub.parse_expr()?;
                             if *sub.peek() != Tok::Eof {
@@ -1291,6 +1304,13 @@ impl Parser {
                 let start = self.bump().span;
                 self.bump();
                 let variant = self.expect_ident("種類の名前")?;
+                let is_static = matches!(self.enum_variants.get(&name), Some(vs) if !vs.contains(&variant));
+                if is_static && *self.peek() == Tok::LParen {
+                    // `Shape.make(...)`: enum の静的メソッドの呼び出し
+                    let (args, end) = self.parse_args()?;
+                    lambdas_borrow(&args);
+                    return Ok(Expr::new(ExprKind::Call(format!("{}.{}", name, variant), args), start.join(end)));
+                }
                 let (args, end) = if *self.peek() == Tok::LParen {
                     self.parse_args()?
                 } else {
@@ -1458,6 +1478,46 @@ fn binop_info(t: &Tok) -> Option<(BinOp, u8)> {
 // ---------------------------------------------------------------- メソッドの中の名前
 
 /// メソッドの本体で名前を書き換えるための情報
+/// 構造体・enum のメソッドを、`型名.メソッド名` という名前の関数にする。
+/// 本体のフィールド名・メソッド名を `this.名前` に書き換える。`taken` はメソッドにつけられない名前（フィールド・enum の種類）
+fn finish_methods(
+    name: &str,
+    fields: &[String],
+    taken: &[String],
+    methods: Vec<(FnDef, Span)>,
+    statics: Vec<(FnDef, Span)>,
+) -> R<Vec<FnDef>> {
+    let names: Vec<String> = methods.iter().map(|(m, _)| m.name.clone()).collect();
+    let static_names: Vec<String> = statics.iter().map(|(m, _)| m.name.clone()).collect();
+    let mut fns = Vec::new();
+    let count = methods.len();
+    for (i, (mut m, mspan)) in methods.into_iter().chain(statics).enumerate() {
+        let is_static = i >= count;
+        if fields.contains(&m.name) {
+            return Err(Diagnostic::new(format!("メソッド `{}` がフィールドと同じ名前です", m.name))
+                .primary(mspan, "別の名前にしてください"));
+        }
+        if taken.contains(&m.name) {
+            return Err(Diagnostic::new(format!("メソッド `{}` が種類と同じ名前です", m.name))
+                .primary(mspan, "別の名前にしてください"));
+        }
+        // メソッドの中では、フィールドと同じ型のメソッドを `this.` なしで使える。
+        // 静的メソッドは `型名.` なしで使える（静的メソッドの中には this がない）
+        let ctx = ThisCtx {
+            fields: if is_static { &[] } else { fields },
+            methods: if is_static { &[] } else { &names },
+            statics: &static_names,
+            owner: name,
+        };
+        let skip = if is_static { 0 } else { 1 };
+        let mut scopes: Vec<Vec<String>> = vec![m.params.iter().skip(skip).map(|p| p.name.clone()).collect()];
+        bind_this_block(&mut m.body, &ctx, &mut scopes);
+        m.name = format!("{}.{}", name, m.name);
+        fns.push(m);
+    }
+    Ok(fns)
+}
+
 struct ThisCtx<'a> {
     fields: &'a [String],
     methods: &'a [String],
@@ -1537,7 +1597,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
                 bind_this(a, ctx, scopes);
             }
             let (n, args) = (n.clone(), std::mem::take(args));
-            e.kind = ExprKind::MethodCall(this(e.span), n, args);
+            e.kind = ExprKind::MethodCall(this(e.span), n, args, RefCell::new(None));
         }
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
         ExprKind::Cast(i, _)
@@ -1582,7 +1642,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             bind_this_block(&mut l.body, ctx, scopes);
             scopes.pop();
         }
-        ExprKind::MethodCall(recv, _, args) => {
+        ExprKind::MethodCall(recv, _, args, _) => {
             bind_this(recv, ctx, scopes);
             for a in args {
                 bind_this(a, ctx, scopes);
@@ -1630,4 +1690,42 @@ fn lambdas_borrow(args: &[Expr]) {
             l.borrows.set(true);
         }
     }
+}
+
+/// `enum 名前 { ... }` ごとに、種類の名前（中かっこの 1 段目で、文の始めにある名前）を集める
+fn scan_variants(toks: &[Token]) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    for (k, w) in toks.windows(2).enumerate() {
+        let (Tok::Enum, Tok::Ident(n)) = (&w[0].tok, &w[1].tok) else { continue };
+        let Some(open) = toks[k..].iter().position(|t| t.tok == Tok::LBrace) else { continue };
+        let mut depth = 0;
+        let mut names = Vec::new();
+        let mut at_start = false;
+        for t in &toks[k + open..] {
+            match &t.tok {
+                Tok::LBrace => {
+                    depth += 1;
+                    at_start = depth == 1;
+                    continue;
+                }
+                Tok::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    at_start = depth == 1;
+                    continue;
+                }
+                Tok::Semi if depth == 1 => {
+                    at_start = true;
+                    continue;
+                }
+                Tok::Ident(v) if depth == 1 && at_start => names.push(v.clone()),
+                _ => {}
+            }
+            at_start = false;
+        }
+        out.insert(n.clone(), names);
+    }
+    out
 }

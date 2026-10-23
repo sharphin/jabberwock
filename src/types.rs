@@ -6,6 +6,7 @@
 //! ムーブ済みの変数を使う・ダングリングした ref を使う、は型の問題ではないので、ここでは扱わない
 //! （ref の安全は世代付き ref と `analyze` が守る。ref の型に寿命は書かない）。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::ast::*;
@@ -249,6 +250,10 @@ impl Access {
     fn require(&self, span: Span, doing: &str) -> R<()> {
         match self {
             Access::Write => Ok(()),
+            // `this` は ref なので、変数そのものではなく先を書き換える（enum のメソッドで `this = ...` と書いたとき）
+            Access::ImmutVar { name, .. } if name == "this" => Err(Diagnostic::new("`this` そのものは書き換えられません")
+                .primary(span, format!("ここで{}", doing))
+                .note("this の先を丸ごと書き換えるなら `*this = 値;` と書いてください（`fn mut` のメソッドで）")),
             Access::ImmutVar { name, decl } => Err(Diagnostic::new(format!(
                 "`{}` は mut ではないので書き換えられません",
                 name
@@ -1781,7 +1786,7 @@ impl<'a> Checker<'a> {
             },
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, e.span, hint),
             ExprKind::Call(name, args) => self.call(name, args, e.span, hint),
-            ExprKind::MethodCall(recv, name, args) => self.method_call(recv, name, args, e.span, hint),
+            ExprKind::MethodCall(recv, name, args, owner) => self.method_call(recv, name, args, owner, e.span, hint),
         }
     }
 
@@ -2190,6 +2195,10 @@ impl<'a> Checker<'a> {
             };
         }
         let Ty::Struct(sname, targs) = t else {
+            if matches!(t, Ty::Enum(..)) {
+                // enum の値は実行時に型の名前を持たないので、interface のメソッドを探せない
+                return Err(format!("interface に当てはめられるのは構造体だけです（`{}` は enum）", t.show()));
+            }
             return Err(format!("`{}` は構造体ではないのでメソッドを持ちません", t.show()));
         };
         let map = Self::targs(&self.structs[sname.as_str()].0.tparams, targs);
@@ -2353,13 +2362,22 @@ impl<'a> Checker<'a> {
             return self.call_value(name, &v.ty, args, span);
         }
         let Some(sig) = self.fns.get(name) else {
+            // `Shape.Square(1)`: 種類でもメソッドでもない（パーサは種類でない名前を静的メソッドとして読む）
+            if let Some((en, v)) = name.rsplit_once('.') {
+                if let Some((def, _)) = self.enums.get(en) {
+                    let names: Vec<&str> = def.variants.iter().map(|v| v.name.as_str()).collect();
+                    return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", en, v))
+                        .primary(span, "この種類は定義されていません")
+                        .note(format!("`{}` の種類: {}", en, names.join(", "))));
+                }
+            }
             let d = Diagnostic::new(format!("未定義の関数 `{}`", name)).primary(span, "この関数は定義されていません");
             return Err(if name == "range" { d.note("range(...) は `for i in range(...)` の中でだけ使えます") } else { d });
         };
         if sig.method {
             let (s, m) = name.rsplit_once('.').expect("method name");
             return Err(Diagnostic::new(format!("`{}` は this のあるメソッドです", name))
-                .primary(span, "構造体名からは呼べない")
+                .primary(span, "型の名前からは呼べない")
                 .note(format!("`{}` の値 p に対して `p.{}()` と呼んでください", s, m)));
         }
         if args.len() != sig.params.len() {
@@ -2378,7 +2396,15 @@ impl<'a> Checker<'a> {
     }
 
     /// `p.name(args)`。メソッドは `構造体名.name` という関数で、最初の引数が `this`（`ref 構造体`）
-    fn method_call(&mut self, recv: &Expr, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
+    fn method_call(
+        &mut self,
+        recv: &Expr,
+        name: &str,
+        args: &[Expr],
+        owner: &RefCell<Option<String>>,
+        span: Span,
+        hint: Option<&Ty>,
+    ) -> R<Ty> {
         let rt = self.expr(recv)?;
         let inner = match &rt {
             Ty::Own(x) | Ty::Ref(x, _) => (**x).clone(),
@@ -2415,14 +2441,18 @@ impl<'a> Checker<'a> {
             _ => {}
         }
         let st = match &rt {
-            Ty::Struct(..) => rt.clone(),
-            Ty::Own(x) | Ty::Ref(x, _) if matches!(**x, Ty::Struct(..)) => (**x).clone(),
+            Ty::Struct(..) | Ty::Enum(..) => rt.clone(),
+            Ty::Own(x) | Ty::Ref(x, _) if matches!(**x, Ty::Struct(..) | Ty::Enum(..)) => (**x).clone(),
             _ => {
-                return Err(Diagnostic::new("メソッドを呼べるのは構造体だけです")
+                return Err(Diagnostic::new("メソッドを呼べるのは構造体と enum だけです")
                     .primary(recv.span, format!("これは `{}` です", rt.show())))
             }
         };
-        let Ty::Struct(sname, _) = &st else { unreachable!() };
+        let (Ty::Struct(sname, _) | Ty::Enum(sname, _)) = &st else { unreachable!() };
+        if matches!(st, Ty::Enum(..)) {
+            // interp は enum の値から型の名前が分からないので、ここで書いておく
+            *owner.borrow_mut() = Some(sname.clone());
+        }
         let full = format!("{}.{}", sname, name);
         let Some(sig) = self.fns.get(full.as_str()) else {
             let prefix = format!("{}.", sname);

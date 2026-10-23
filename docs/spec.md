@@ -390,6 +390,7 @@ let Option<i64> y = None;
 
 - 種類の中身は「型 名前」。値は `型名.種類(中身)`。
 - Option の値は `Some(x)` と `None`。`None` の型は入れる先の型から決める（決まらなければエラー）。
+- Option には `is_some()` / `is_none()`、Result には `is_ok()` / `is_err()` のメソッドがある（bool を返す。中身は動かさない）。
 - 中身が数・bool・str・ref だけの enum は、値として読むとコピー。own や構造体を持ちうるならムーブ。
 - enum どうしの `==` はない（match を使う）。
 
@@ -486,6 +487,36 @@ print(p.len2());
 
   - 同じ構造体のメソッドの中からは `at(1, 2)` と `構造体名.` なしで呼べる。静的メソッドの中にはフィールドも this もない。
   - 静的メソッドを値から（`p.at()`）、this のあるメソッドを構造体名から（`Point.len2()`）は呼べない。
+- **enum にもメソッドを書ける**。決まりは構造体と同じ（`fn` / `fn mut` / `static fn`、`this` は呼び出し元を借りた ref）。
+
+  ```
+  enum Shape {
+      Circle(f64 r);
+      Rect(f64 w, f64 h);
+
+      fn f64 area() {
+          match this {
+              case Circle(r) -> 3.0 * r * r;
+              case Rect(w, h) -> w * h;
+          }
+      }
+      fn mut double() {                       // this の先を丸ごと置き換えるときは *this = ...
+          match this {
+              case Circle(r) -> *this = Shape.Circle(r * 2.0);
+              case Rect(w, h) -> *this = Shape.Rect(w * 2.0, h * 2.0);
+          }
+      }
+      static fn Shape square(f64 s) { Shape.Rect(s, s) }
+  }
+  let mut s = Shape.square(3.0);
+  s.double();
+  print(s.area());
+  ```
+
+  - メソッドは種類のあと（最後の種類の `;` のあと）に書く。種類と同じ名前のメソッドは作れない。
+  - enum にはフィールドがないので、中身は `match this` で取り出す。`this = ...` とは書けない（`*this = ...`）。
+  - `Shape.名前(...)` は、名前が種類なら enum の値、そうでなければ静的メソッドの呼び出し。
+  - enum は interface に当てはめられない（interface は構造体だけ）。
 
 ### 8.6 interface と型の引数の条件
 
