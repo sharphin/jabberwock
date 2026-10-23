@@ -1344,7 +1344,7 @@ void ward_chan_release(WChan *c, const WSite *site) {
     if (__atomic_sub_fetch(&c->rc, 1, __ATOMIC_ACQ_REL) > 0) return;
     // 受け取られずに残った値を捨てる
     for (int64_t i = 0; i < c->len; i++) {
-        if (c->drop) c->drop(c->buf + ((c->head + i) % c->cap) * c->esize, site);
+        if (c->drop) c->drop(c->buf + ((c->head + i) & (c->cap - 1)) * c->esize, site);
     }
     free(c->buf);
     free(c);
@@ -1358,16 +1358,16 @@ void ward_chan_send(WChan *c, void *v, const WSite *at) {
         finish_error(at, "このチャンネルはもう close されている", "送り終わってから close してください");
     }
     if (c->len == c->cap) {
-        int64_t cap = c->cap ? c->cap * 2 : 8;
+        int64_t cap = c->cap ? c->cap * 2 : 8; // いつも 2 のべき（位置は & で回す）
         char *nb = malloc((size_t)(cap * c->esize));
         for (int64_t i = 0; i < c->len; i++)
-            memcpy(nb + i * c->esize, c->buf + ((c->head + i) % c->cap) * c->esize, (size_t)c->esize);
+            memcpy(nb + i * c->esize, c->buf + ((c->head + i) & (c->cap - 1)) * c->esize, (size_t)c->esize);
         free(c->buf);
         c->buf = nb;
         c->cap = cap;
         c->head = 0;
     }
-    memcpy(c->buf + ((c->head + c->len) % c->cap) * c->esize, v, (size_t)c->esize);
+    memcpy(c->buf + ((c->head + c->len) & (c->cap - 1)) * c->esize, v, (size_t)c->esize);
     c->len++;
     changed();
     unlock(&g_lock);
@@ -1385,7 +1385,7 @@ int32_t ward_chan_recv(WChan *c, void *out, const WSite *at) {
     int32_t got = 0;
     if (c->len > 0) {
         memcpy(out, c->buf + c->head * c->esize, (size_t)c->esize);
-        c->head = (c->head + 1) % c->cap;
+        c->head = (c->head + 1) & (c->cap - 1);
         c->len--;
         got = 1;
     }
