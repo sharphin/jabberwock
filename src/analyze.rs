@@ -433,6 +433,7 @@ impl<'a> FnAnalyzer<'a> {
                             self.expr(a, false);
                         }
                     }
+                    "read_line" | "args" => {}
                     _ => {
                         let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
                         // 全引数を評価し終えた時点で判定する（`f(ref a, a)` のように後でムーブされる場合を除く）

@@ -41,7 +41,7 @@ fn main() {
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false`
 
-特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
+特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert` `read_line` `args`（組み込み関数）
 
 ## 3. 型
 
@@ -468,6 +468,37 @@ print("{{x}} はそのまま");                          // {x} はそのまま
 - 式は借りて読むだけ（own を埋め込んでもムーブしない）。結果は `str`。
 - `{ }` の中には文字列（`"`）を書けない（先に変数に入れる）。`{` / `}` そのものは `{{` / `}}`。
 
+### 6.7 文字列のメソッド
+
+```
+let s = "日本語テキスト";
+print(s.len(), s.slice(0, 3));        // 7 日本語
+for w in "a b c".split(" ") { ... }   // w は "a"、"b"、"c"
+match "42".to_int() {
+    case Some(n) -> print(n + 1);
+    case None -> print("数ではない");
+}
+```
+
+- 長さと位置は**文字単位**（バイトではない）。`"日本語".len()` は 3。
+- 文字列を返すメソッドは新しい文字列を返す（元の文字列は変わらない）。
+- 文字列は `+` でつなぐ。`==` `<` などで比べる（`<` は辞書順）。
+
+| メソッド | 戻り値 | 動き |
+|---|---|---|
+| `len()` | `i64` | 文字数 |
+| `chars()` | `str[]` | 1 文字ずつのリスト（文字型はまだないので、1 文字の str） |
+| `lines()` | `str[]` | 行ごとのリスト（改行は含まない） |
+| `split(sep)` | `str[]` | `sep` で分けたリスト。`sep` が空ならエラー |
+| `trim()` | `str` | 前後の空白を取る |
+| `to_upper()` / `to_lower()` | `str` | 大文字・小文字にする |
+| `contains(x)` / `starts_with(x)` / `ends_with(x)` | `bool` | x を含むか・x で始まるか・x で終わるか |
+| `find(x)` | `Option<i64>` | x が最初に出てくる位置（文字単位） |
+| `slice(a, b)` | `str` | a 文字目から b 文字目の手前まで。範囲の外なら実行時エラー |
+| `replace(a, b)` | `str` | a をすべて b に置き換える |
+| `repeat(n)` | `str` | n 回くり返す |
+| `to_int()` | `Option<i64>` | 整数に変換する（前後の空白は無視）。変換できなければ None |
+
 ### 8.8 配列
 
 ```
@@ -521,6 +552,8 @@ for x in v { ... } else { print("空でした"); }
 | `print(a, b, ...)` | 値を空白区切りで 1 行に出す。引数はムーブしない |
 | `drop(x)` | x を今すぐ解放する（x はムーブされる） |
 | `assert(条件)` | 条件が false なら実行時エラー |
+| `read_line()` | 標準入力から 1 行読む（`Option<str>`。改行は含まない）。入力が終わっていれば `None` |
+| `args()` | コマンドライン引数（`str[]`）。`ward prog.ward a b` なら `["a", "b"]` |
 
 ## 10. エラーと警告
 
@@ -541,3 +574,4 @@ for x in v { ... } else { print("空でした"); }
 | interface の値から元の構造体を取り出す（型で分岐） | これから |
 | リストの `insert` / `remove` / 並べ替えなど | これから |
 | 小数・文字型・モジュール・`const` | これから |
+| ファイルの読み書き | これから（今は標準入力の `read_line()` だけ） |

@@ -4,25 +4,27 @@ fn main() {
     let mut stats = false;
     let mut elide = true;
     let mut path = None;
+    let mut prog_args = Vec::new();
     for a in env::args().skip(1) {
+        if path.is_some() {
+            // ファイル名のあとの引数は、プログラムの `args()` に渡す
+            prog_args.push(a);
+            continue;
+        }
         match a.as_str() {
             "-h" | "--help" => {
-                eprintln!("使い方: ward [--stats] [--no-elide] <file.ward>");
+                eprintln!("使い方: ward [--stats] [--no-elide] <file.ward> [プログラムへの引数...]");
                 eprintln!("  --stats     ref の検査を静的解析でどれだけ消せたか表示する");
                 eprintln!("  --no-elide  静的解析をせず、すべての ref を実行時に検査する");
                 process::exit(0);
             }
             "--stats" => stats = true,
             "--no-elide" => elide = false,
-            _ if path.is_none() => path = Some(a),
-            _ => {
-                eprintln!("引数が多すぎます: {}", a);
-                process::exit(2);
-            }
+            _ => path = Some(a),
         }
     }
     let Some(path) = path else {
-        eprintln!("使い方: ward [--stats] [--no-elide] <file.ward>");
+        eprintln!("使い方: ward [--stats] [--no-elide] <file.ward> [プログラムへの引数...]");
         process::exit(2);
     };
 
@@ -38,7 +40,8 @@ fn main() {
     for w in ward::warnings(&src) {
         eprint!("{}", w.render(&path, &src));
     }
-    let outcome = ward::run_source_with(&src, true, elide);
+    let input = Box::new(std::io::BufReader::new(std::io::stdin()));
+    let outcome = ward::run_program(&src, true, elide, input, prog_args);
     if stats {
         let a = outcome.analysis;
         eprintln!("[stats] `*p` と `p.f` の箇所: 検査を消せた {} / 実行時に残る {}", a.elided, a.required);

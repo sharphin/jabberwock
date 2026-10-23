@@ -13,7 +13,7 @@ use crate::diag::{Diagnostic, Span};
 
 type R<T> = Result<T, Diagnostic>;
 
-const BUILTINS: [&str; 3] = ["print", "drop", "assert"];
+const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -261,6 +261,8 @@ struct IMethod {
 
 /// 組み込みの条件: 大小を比べられる型（整数と str）
 const ORDERED: &str = "ordered";
+
+const STR_METHODS: &str = "len, chars, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
 
 /// プログラム全体の型を調べる。よければ警告（実行は止めない）を返す
 pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
@@ -1410,6 +1412,35 @@ impl<'a> Checker<'a> {
         Ok(ret)
     }
 
+    /// 文字列のメソッド。位置と長さは文字単位
+    fn str_method(&mut self, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        let list = Ty::List(Box::new(Ty::Str));
+        let (params, ret): (Vec<Ty>, Ty) = match name {
+            "len" => (vec![], I64),
+            "chars" | "lines" => (vec![], list),
+            "split" => (vec![Ty::Str], list),
+            "trim" | "to_upper" | "to_lower" => (vec![], Ty::Str),
+            "contains" | "starts_with" | "ends_with" => (vec![Ty::Str], Ty::Bool),
+            "find" => (vec![Ty::Str], Ty::Enum("Option".to_string(), vec![I64])),
+            "slice" => (vec![I64, I64], Ty::Str),
+            "replace" => (vec![Ty::Str, Ty::Str], Ty::Str),
+            "repeat" => (vec![I64], Ty::Str),
+            "to_int" => (vec![], Ty::Enum("Option".to_string(), vec![I64])),
+            _ => {
+                return Err(Diagnostic::new(format!("文字列にメソッド `{}` はありません", name))
+                    .primary(span, "このメソッドは定義されていません")
+                    .note(format!("文字列のメソッド: {}", STR_METHODS)))
+            }
+        };
+        if args.len() != params.len() {
+            return Err(arity_error(name, params.len(), args.len(), span));
+        }
+        for (a, t) in args.iter().zip(&params) {
+            self.expect(a, t)?;
+        }
+        Ok(ret)
+    }
+
     /// 添字の式。整数ならどの型でもよい（数の書き方は i64）
     fn index_value(&mut self, idx: &Expr) -> R<()> {
         match self.expr_h(idx, Some(&I64))? {
@@ -1564,6 +1595,16 @@ impl<'a> Checker<'a> {
                 }
                 return Ok(Ty::Unit);
             }
+            "read_line" | "args" => {
+                if !args.is_empty() {
+                    return Err(arity_error(name, 0, args.len(), span));
+                }
+                return Ok(if name == "args" {
+                    Ty::List(Box::new(Ty::Str))
+                } else {
+                    Ty::Enum("Option".to_string(), vec![Ty::Str])
+                });
+            }
             "drop" | "assert" => {
                 if args.len() != 1 {
                     return Err(arity_error(name, 1, args.len(), span));
@@ -1619,6 +1660,7 @@ impl<'a> Checker<'a> {
                 return Ok(I64);
             }
             Ty::List(elem) => return self.list_method(recv, &rt, elem, name, args, span),
+            Ty::Str => return self.str_method(name, args, span),
             Ty::Param(p) => {
                 let ifaces: Vec<String> =
                     self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).cloned().collect();

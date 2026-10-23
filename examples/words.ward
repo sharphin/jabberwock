@@ -1,4 +1,5 @@
 // 単語の数え上げ（試しに書いたプログラム）。辞書がないので、リストを先頭から探す
+// ファイル名のあとに文章を渡すと、それを数える（ward words.ward "a b a"）
 struct Count {
     str word;
     i64 n;
@@ -23,9 +24,13 @@ fn Count[] count_words(ref str[] words) {
 }
 
 fn main() {
-    let text = "the cat and the dog and the bird";
-    let own str[] words = own ["the", "cat", "and", "the", "dog", "and", "the", "bird"];
-    let counts = count_words(ref words);
+    let mut text = "the cat and the dog and the bird";
+    let a = args();
+    if a.len() > 0 {
+        text = a[0];
+    }
+    let words = text.split(" ");
+    let counts = count_words(words);
     for i in range(counts.len()) {
         print("{counts[i].word}: {counts[i].n}");
     }

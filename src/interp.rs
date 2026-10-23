@@ -10,6 +10,7 @@
 //! 証明できない箇所だけ実行時検査が残る（安全）。
 
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::rc::Rc;
 
 use crate::ast::*;
@@ -18,7 +19,7 @@ use crate::diag::{Diagnostic, Span};
 type R<T> = Result<T, Diagnostic>;
 
 const MAX_DEPTH: usize = 5000;
-const BUILTINS: [&str; 3] = ["print", "drop", "assert"];
+const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -259,6 +260,10 @@ pub struct Interp {
     pub ref_checks: usize,
     /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
     pub ref_checks_elided: usize,
+    /// `read_line()` が読む入力
+    input: Box<dyn BufRead + Send>,
+    /// `args()` が返すコマンドライン引数
+    args: Vec<String>,
 }
 
 impl Interp {
@@ -274,7 +279,15 @@ impl Interp {
             unwinding: None,
             ref_checks: 0,
             ref_checks_elided: 0,
+            input: Box::new(std::io::empty()),
+            args: Vec::new(),
         }
+    }
+
+    /// `read_line()` が読む入力と、`args()` が返す引数を決める
+    pub fn set_io(&mut self, input: Box<dyn BufRead + Send>, args: Vec<String>) {
+        self.input = input;
+        self.args = args;
     }
 
     /// 解放されていないヒープオブジェクトの数（リーク検査用）
@@ -1346,6 +1359,24 @@ impl Interp {
                 self.release(v, span, &why);
                 Ok(Value::Unit)
             }
+            "read_line" => {
+                // 1 行読む（終わりの改行は取る）。入力が終わっていれば None
+                let mut line = String::new();
+                let n = self.input.read_line(&mut line).map_err(|e| {
+                    Diagnostic::new("入力を読めませんでした").primary(span, e.to_string())
+                })?;
+                if n == 0 {
+                    return Ok(none());
+                }
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+                Ok(some(Value::Str(Rc::from(line.as_str()))))
+            }
+            "args" => Ok(Value::Array(self.args.iter().map(|a| Value::Str(Rc::from(a.as_str()))).collect(), true)),
             "assert" => {
                 if args.len() != 1 {
                     return Err(arity_error("assert", 1, args.len(), span));
@@ -1396,6 +1427,24 @@ impl Interp {
                 (v, Some(pl))
             }
         };
+        // 文字列のメソッド
+        let text = match &rv {
+            Value::Str(t) => Some(t.clone()),
+            Value::Own(_) | Value::Ref(_) => {
+                let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.at(slot, &path) {
+                    Value::Str(t) => Some(t.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(text) = text {
+            if place.is_none() {
+                self.release(rv, span, "使い終わった一時的な値");
+            }
+            return str_method(&text, name, vals, span);
+        }
         // 配列・リストのメソッド（`len()`・`push(x)`・`pop()`）
         let seq_slot = match &rv {
             Value::Array(..) => Some(None),
@@ -1635,6 +1684,77 @@ fn select_arm<'a>(v: &Value, scrut_span: Span, arms: &'a [MatchArm]) -> R<Option
 
 fn undefined_var(name: &str, span: Span) -> Diagnostic {
     Diagnostic::new(format!("未定義の変数 `{}`", name)).primary(span, "この名前は見つかりません")
+}
+
+fn some(v: Value) -> Value {
+    Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy: true }
+}
+
+fn none() -> Value {
+    Value::Enum { variant: Rc::from("None"), fields: Vec::new(), copy: true }
+}
+
+fn str_list<'a>(items: impl Iterator<Item = &'a str>) -> Value {
+    Value::Array(items.map(|x| Value::Str(Rc::from(x))).collect(), true)
+}
+
+/// 文字列のメソッド。位置と長さは文字単位（バイトではない）
+fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
+    let s = |i: usize| match &vals[i] {
+        Value::Str(x) => Ok(x.clone()),
+        other => Err(Diagnostic::new("文字列が必要です").primary(span, format!("{} が渡された", other.type_name()))),
+    };
+    let n = |i: usize| match &vals[i] {
+        Value::Int(x, _) => Ok(*x),
+        other => Err(Diagnostic::new("整数が必要です").primary(span, format!("{} が渡された", other.type_name()))),
+    };
+    let string = |x: String| Value::Str(Rc::from(x.as_str()));
+    Ok(match name {
+        "len" => Value::Int(text.chars().count() as i128, IntTy::I64),
+        "chars" => Value::Array(text.chars().map(|c| string(c.to_string())).collect(), true),
+        "lines" => str_list(text.lines()),
+        "split" => {
+            let sep = s(0)?;
+            if sep.is_empty() {
+                return Err(Diagnostic::new("空の文字列では分けられません")
+                    .primary(span, "1 文字ずつにするなら `chars()` を使ってください"));
+            }
+            str_list(text.split(&*sep))
+        }
+        "trim" => string(text.trim().to_string()),
+        "to_upper" => string(text.to_uppercase()),
+        "to_lower" => string(text.to_lowercase()),
+        "contains" => Value::Bool(text.contains(&*s(0)?)),
+        "starts_with" => Value::Bool(text.starts_with(&*s(0)?)),
+        "ends_with" => Value::Bool(text.ends_with(&*s(0)?)),
+        "find" => match text.find(&*s(0)?) {
+            Some(b) => some(Value::Int(text[..b].chars().count() as i128, IntTy::I64)),
+            None => none(),
+        },
+        "slice" => {
+            let (a, b) = (n(0)?, n(1)?);
+            let len = text.chars().count() as i128;
+            if a < 0 || b < a || b > len {
+                return Err(Diagnostic::new("文字列の範囲の外です")
+                    .primary(span, format!("slice({}, {}) ですが、長さは {} です", a, b, len))
+                    .note("0 <= 始め <= 終わり <= 長さ にしてください"));
+            }
+            string(text.chars().skip(a as usize).take((b - a) as usize).collect())
+        }
+        "replace" => string(text.replace(&*s(0)?, &s(1)?)),
+        "repeat" => {
+            let k = n(0)?;
+            if k < 0 {
+                return Err(Diagnostic::new("負の回数はくり返せません").primary(span, format!("repeat({})", k)));
+            }
+            string(text.repeat(k as usize))
+        }
+        "to_int" => match text.trim().parse::<i64>() {
+            Ok(v) => some(Value::Int(v as i128, IntTy::I64)),
+            Err(_) => none(),
+        },
+        _ => return Err(Diagnostic::new(format!("文字列にメソッド `{}` はありません", name)).primary(span, "ここ")),
+    })
 }
 
 fn arity_error(name: &str, want: usize, got: usize, span: Span) -> Diagnostic {

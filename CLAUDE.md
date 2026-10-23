@@ -37,6 +37,7 @@
 | `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
 | `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a` |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
+| `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -104,6 +105,9 @@
 
 - 文字列の埋め込み: lexer が `{...}` の中を別に字句解析して `Tok::Interp`（位置は元のファイルに直す）、
   パーサが同じ enum / 構造体の名前で式に読む（`ExprKind::Interp`）。値は print と同じく `eval_borrow` で借りて読む（analyze も borrow）。
+
+- 文字列のメソッドは types.rs の `str_method`（型）と interp の `str_method`（動き）。長さと位置は文字単位。
+  入力は `Interp::set_io` で渡す（CLI は標準入力、テストは `run_source_with_input`）。`read_line` / `args` は組み込み関数（`BUILTINS`）。
 
 - 配列: `Value::Array`（要素にムーブする値があればムーブ）。`Place.path` は構造体のフィールドと配列の添字の両方をたどる。
   `a[i]`（`ExprKind::Index`）は **添字を先に評価してから** 配列の場所を求める（interp の `place` / `eval_borrow`、analyze も同じ順）。

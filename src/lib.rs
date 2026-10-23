@@ -56,19 +56,36 @@ pub fn run_source(src: &str, echo: bool) -> Outcome {
 }
 
 /// `elide` が false なら静的解析をせず、すべての ref を実行時に検査する（比較用）。
-/// 深い再帰でも落ちないよう、大きなスタックのスレッドで動かす。
 pub fn run_source_with(src: &str, echo: bool, elide: bool) -> Outcome {
+    run_program(src, echo, elide, Box::new(std::io::empty()), Vec::new())
+}
+
+/// 入力（`read_line()` が読む）を文字列で渡して実行する（テスト用）
+pub fn run_source_with_input(src: &str, input: &str, args: &[&str]) -> Outcome {
+    let input = std::io::Cursor::new(input.as_bytes().to_vec());
+    run_program(src, false, true, Box::new(input), args.iter().map(|a| a.to_string()).collect())
+}
+
+/// `input` は `read_line()` が読む入力、`args` は `args()` が返す引数。
+/// 深い再帰でも落ちないよう、大きなスタックのスレッドで動かす。
+pub fn run_program(
+    src: &str,
+    echo: bool,
+    elide: bool,
+    input: Box<dyn std::io::BufRead + Send>,
+    args: Vec<String>,
+) -> Outcome {
     std::thread::scope(|s| {
         std::thread::Builder::new()
             .stack_size(256 << 20)
-            .spawn_scoped(s, || run_inner(src, echo, elide))
+            .spawn_scoped(s, || run_inner(src, echo, elide, input, args))
             .expect("failed to spawn interpreter thread")
             .join()
             .expect("interpreter thread panicked")
     })
 }
 
-fn run_inner(src: &str, echo: bool, elide: bool) -> Outcome {
+fn run_inner(src: &str, echo: bool, elide: bool, input: Box<dyn std::io::BufRead + Send>, args: Vec<String>) -> Outcome {
     let fail = |d: Diagnostic| Outcome {
         output: String::new(),
         error: Some(d),
@@ -89,6 +106,7 @@ fn run_inner(src: &str, echo: bool, elide: bool) -> Outcome {
     };
     let analysis = if elide { analyze::analyze(&prog) } else { analyze::Stats::default() };
     let mut it = interp::Interp::new(echo);
+    it.set_io(input, args);
     let res = it.run(prog);
     Outcome {
         output: it.output.clone(),

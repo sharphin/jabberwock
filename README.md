@@ -9,6 +9,7 @@
 cargo run -- examples/counter.ward
 cargo run -- --stats examples/counter.ward     # ref の検査をどれだけ消せたか表示
 cargo run -- --no-elide examples/counter.ward  # 静的解析なし（全部実行時に検査）
+cargo run -- examples/words.ward "a b a"        # ファイル名のあとの引数は args() で受け取れる
 cargo test
 ```
 
