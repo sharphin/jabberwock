@@ -336,6 +336,24 @@ impl<'a> Machine<'a> {
                 let args = self.operands(f, locs, ops)?;
                 self.call(*fi, args, Vec::new(), *span)
             }
+            Rvalue::CallDyn { table, this, mutable, what, args, span } => {
+                let mut vals = self.operands(f, locs, args)?;
+                let (slot, path) = self.resolve(f, locs, this)?;
+                let Value::Struct(def, _) = at(self.it, slot, &path) else { unreachable!("interface values are structs") };
+                let fi = table.iter().find(|(n, _)| *n == def.name).map(|(_, i)| *i).ok_or_else(|| {
+                    Diagnostic::new(format!("`{}` にメソッドがありません", def.name)).primary(*span, "ここ")
+                })?;
+                let r = RefVal {
+                    slot,
+                    generation: self.it.heap.slots[slot].generation,
+                    path,
+                    borrowed_at: this.span,
+                    what: what.clone(),
+                    mutable: *mutable,
+                };
+                vals.insert(0, Value::Ref(r));
+                self.call(fi, vals, Vec::new(), *span)
+            }
             Rvalue::Closure(fi, ops) => Ok(Value::Func(Callee::Ir(*fi), self.operands(f, locs, ops)?)),
             Rvalue::CallValue(fv, ops, span) => {
                 let args = self.operands(f, locs, ops)?;

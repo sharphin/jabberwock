@@ -1235,6 +1235,41 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.drop_temp(&temp, sp);
                 Ok(r)
             }
+            Ty::Iface(_) => {
+                // 値の構造体で選ぶ（interp も値の構造体名でメソッドを探す）。その名前のメソッドを持つ構造体すべての表
+                let mut table = Vec::new();
+                let mut mutable = None;
+                let mut snames: Vec<&String> = self.structs.keys().collect();
+                snames.sort();
+                for sn in snames {
+                    let full = format!("{}.{}", sn, name);
+                    let Some(def) = self.calls.defs.get(full.as_str()).copied() else { continue };
+                    if !matches!(def.params.first(), Some(p) if p.name == "this") {
+                        continue;
+                    }
+                    if !def.tparams.is_empty() {
+                        return Err("ジェネリックな構造体を interface として使う".to_string());
+                    }
+                    mutable = Some(matches!(def.params[0].ty.kind, TypeKind::Ref(_, true)));
+                    table.push((sn.clone(), full));
+                }
+                let mut tab = Vec::new();
+                for (sn, full) in table {
+                    tab.push((sn, self.calls.index(&full, &HashMap::new())?));
+                }
+                let pl = recv_place(self)?.ok_or("定数の receiver")?;
+                let op = Rvalue::CallDyn {
+                    table: tab,
+                    this: pl,
+                    mutable: mutable.unwrap_or(false),
+                    what: describe(recv),
+                    args: vals,
+                    span: sp,
+                };
+                let r = self.temp_of(ty, op, sp);
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
             Ty::Array(..) | Ty::List(_) | Ty::Map(..) => {
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;
                 let arg_span = args.first().map_or(sp, |a| a.span);
@@ -1270,6 +1305,19 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let mut p = self.place(base)?;
                 self.project(&mut p, e, base, key)?;
                 Ok(p)
+            }
+            // 一時的な own の中は場所にできない（interp は値を計算してからエラーにする）
+            ExprKind::Deref(inner, _) if matches!(self.ty(inner), Ty::Own(_)) => {
+                let v = self.expr(inner)?;
+                self.terminate(Term::Fail(
+                    "一時的な own の中は場所として使えません".to_string(),
+                    inner.span,
+                    "先に変数に入れてください".to_string(),
+                ));
+                match v {
+                    Operand::Move(t, _) => Ok(Place::local(t, inner.span)),
+                    _ => Err("定数の中の場所".to_string()),
+                }
             }
             _ => Err("一時的な値の中の場所".to_string()),
         }

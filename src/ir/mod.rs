@@ -158,6 +158,9 @@ pub enum Rvalue {
     Keys(Place),
     /// 名前のある関数の呼び出し（関数の番号）
     Call(usize, Vec<Operand>, Span),
+    /// interface を型として使った値のメソッド呼び出し。`this` の先の構造体の名前で、表から関数を選ぶ（vtable）。
+    /// `this` は場所（先をたどったもの）で、引数を計算したあとで借りる
+    CallDyn { table: Vec<(String, usize)>, this: Place, mutable: bool, what: String, args: Vec<Operand>, span: Span },
     /// 関数の値を作る（関数の番号, 取り込む値）
     Closure(usize, Vec<Operand>),
     /// 関数の値の呼び出し（関数の値, 引数）。取り込んだ値は、読むだけの写しにして最後の引数として渡す
@@ -299,6 +302,10 @@ fn show_rvalue(r: &Rvalue, prog: &Program) -> String {
         Rvalue::Items { place, .. } => format!("items {}", show_place(place)),
         Rvalue::Keys(p) => format!("keys {}", show_place(p)),
         Rvalue::Call(i, args, _) => format!("{}({})", prog.fns[*i].name, ops(args)),
+        Rvalue::CallDyn { this, args, table, .. } => {
+            let names: Vec<&str> = table.iter().map(|(_, i)| prog.fns[*i].name.as_str()).collect();
+            format!("dyn [{}](ref {}, {})", names.join(" | "), show_place(this), ops(args))
+        }
         Rvalue::Closure(i, caps) => format!("closure {} [{}]", prog.fns[*i].name, ops(caps)),
         Rvalue::CallValue(f, args, _) => format!("call {}({})", show_operand(f), ops(args)),
         Rvalue::CopyOut(p, ..) => format!("copy_out {}", show_place(p)),
