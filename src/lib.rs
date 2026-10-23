@@ -28,8 +28,9 @@ pub struct Outcome {
     pub ref_checks_elided: usize,
 }
 
-/// どのプログラムにも最初からある定義。`Some(x)` / `None` は `Option.Some(x)` / `Option.None` の短い書き方
-const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\n";
+/// どのプログラムにも最初からある定義。`Some(x)` / `None` / `Ok(x)` / `Err(e)` は
+/// `Option.Some(x)` などの短い書き方
+const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\nenum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n}\n";
 
 /// 字句解析と構文解析をして、最初からある定義（`Option`）を前に足す
 fn parse(src: &str) -> Result<ast::Program, Diagnostic> {

@@ -30,6 +30,7 @@ impl Parser {
             .collect();
         // 組み込みの enum（prelude で定義）
         enum_names.push("Option".to_string());
+        enum_names.push("Result".to_string());
         Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names }
     }
 
@@ -757,9 +758,18 @@ impl Parser {
         }
     }
 
+    /// `.f` と `?`（Err / None ならそのまま return する）
     fn parse_postfix(&mut self) -> R<Expr> {
         let mut e = self.parse_primary()?;
-        while *self.peek() == Tok::Dot {
+        loop {
+            if self.eat(Tok::Question) {
+                let span = e.span.join(self.toks[self.pos - 1].span);
+                e = Expr::new(ExprKind::Try(Box::new(e)), span);
+                continue;
+            }
+            if *self.peek() != Tok::Dot {
+                break;
+            }
             self.bump();
             let fspan = self.span();
             let name = self.expect_ident("フィールド名")?;
@@ -797,6 +807,11 @@ impl Parser {
                 let start = self.bump().span;
                 let (args, end) = self.parse_args()?;
                 Ok(self.variant("Option", "Some", args, start.join(end)))
+            }
+            Tok::Ident(name) if (name == "Ok" || name == "Err") && *self.peek2() == Tok::LParen => {
+                let start = self.bump().span;
+                let (args, end) = self.parse_args()?;
+                Ok(self.variant("Result", &name, args, start.join(end)))
             }
             Tok::Ident(name) if self.enum_names.contains(&name) && *self.peek2() == Tok::Dot => {
                 // `Shape.Circle(5)` / `Shape.Empty`

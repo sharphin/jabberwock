@@ -193,6 +193,8 @@ pub enum ExprKind {
     Var(String),
     /// `e as T`。整数の型を明示的に変える（範囲の外は一周する）
     Cast(Box<Expr>, TypeExpr),
+    /// `e?`: e が `Err(x)` / `None` なら、関数からそれをそのまま return する。そうでなければ中身
+    Try(Box<Expr>),
     /// `Shape.Circle(5)` / `Shape.Empty` / `Some(x)` / `None`。enum の値を作る。
     /// Option の enum 名は "Option"。`copy` は型検査が決める「値として読むとコピーか」
     /// （中に own や構造体を持ちうる enum は、構造体と同じく読むとムーブ）。

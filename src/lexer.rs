@@ -58,6 +58,7 @@ pub enum Tok {
     Slash,
     Percent,
     Bang,
+    Question,
     AndAnd,
     OrOr,
     Eof,
@@ -128,6 +129,7 @@ impl Tok {
             Tok::Slash => "/",
             Tok::Percent => "%",
             Tok::Bang => "!",
+            Tok::Question => "?",
             Tok::AndAnd => "&&",
             Tok::OrOr => "||",
             _ => "?",
@@ -300,6 +302,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ('/', _) => (Tok::Slash, 1),
                     ('%', _) => (Tok::Percent, 1),
                     ('!', _) => (Tok::Bang, 1),
+                    ('?', _) => (Tok::Question, 1),
                     _ => {
                         return Err(Diagnostic::new("使えない文字です").primary(
                             Span { line, col, len: 1 },

@@ -41,7 +41,7 @@ fn main() {
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `own` `ref` `as` `true` `false`
 
-特別な名前: `Some` `None`（Option の値）、`Option`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
+特別な名前: `Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
 
 ## 3. 型
 
@@ -56,6 +56,7 @@ fn main() {
 | `str` | 文字列（1 種類だけ） |
 | 構造体名・enum 名 | 定義した型。型の引数があれば `Pair<i64>` のように書く |
 | `Option<T>` | `T` の値があるか、ないか（最初からある enum） |
+| `Result<T, E>` | 成功の値 `T` か、失敗の値 `E`（最初からある enum） |
 | `own T` | ヒープにある `T` の唯一の持ち主 |
 | `ref T` | `T` を借りた参照（読むだけ） |
 | `ref mut T` | `T` を借りた参照（書き換えてよい） |
@@ -145,7 +146,7 @@ fn inc(i64 mut n) { ... }    // 書き換える引数は「型 mut 名前」
 
 | 強さ | 演算子 | 型 |
 |---|---|---|
-| 1 | `.f`（フィールド）、`f(...)`（呼び出し） | |
+| 1 | `.f`（フィールド）、`f(...)`（呼び出し）、`e?` | `?` は Result / Option（[8.4](#84-result-と-)） |
 | 2 | `-x` `!x` `*p` `ref x` `ref mut x` | `-` は符号つき整数だけ。`!` は bool |
 | 3 | `x as T` | 整数 → 整数 |
 | 4 | `*` `/` `%` | 整数 |
@@ -203,7 +204,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.4](#84-match-で中身を受け取る)）。
+- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.5](#85-match-で中身を受け取る)）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -307,7 +308,28 @@ let Pair<u8> q = Pair { a: 1, b: 2 };  // 入れる先の型からも決まる
 - `Option<T>` は最初から `enum Option<T> { Some(T value); None; }` として定義されている。
   `Some(x)` / `None` は `Option.Some(x)` / `Option.None` の短い書き方。
 
-### 8.4 match で中身を受け取る
+### 8.4 Result と `?`
+
+```
+fn Result<i64, str> div(i64 a, i64 b) {
+    if b == 0 { Err("0 では割れません") } else { Ok(a / b) }
+}
+
+fn Result<i64, str> calc(i64 a, i64 b, i64 c) {
+    let x = div(a, b)?;        // Err なら、それをそのまま calc から返す
+    let y = div(x, c)?;
+    Ok(x + y)
+}
+```
+
+- 例外はない。失敗するかもしれない関数は `Result<T, E>` を返す。
+  `Result` は最初から `enum Result<T, E> { Ok(T value); Err(E error); }` として定義されている。`Ok(x)` / `Err(e)` は短い書き方。
+- `e?` は、e が `Ok(x)` なら `x`。`Err(e)` なら、関数からその `Err(e)` を返す。
+  - 使えるのは Result を返す関数の中だけ。Err の型は関数の Err の型と同じでなければならない（変換はしない）。
+  - Option にも使える（`None` ならそのまま返す）。Option を返す関数の中だけ。
+  - 式のどこに書いてもよい（`f(a()?, b()?)`）。抜けるとき、それまでに作った値や変数の own はすべて解放する。
+
+### 8.5 match で中身を受け取る
 
 ```
 match s {
@@ -345,7 +367,6 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 
 | 項目 | 決まっていること |
 |---|---|
-| Result と `?` | 例外はなく、Result と `?` でエラーを返す |
 | メソッド | Java 風（struct の中に書く）。`this` は書かなくてよい。書き換えるメソッドは `fn mut 名前()`（仮） |
 | 文字列の埋め込み | `"x = {x}"` |
 | あふれの確認 | `checked_add` のような明示的な関数 |

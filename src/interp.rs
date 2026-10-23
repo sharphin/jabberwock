@@ -233,6 +233,9 @@ pub struct Interp {
     pub output: String,
     echo: bool,
     depth: usize,
+    /// `e?` で関数を抜けている途中なら、返す値（`Err(x)` / `None`）と `?` の場所。
+    /// そのあいだ R は Err を返して、呼び出し中の関数（`call_fn`）まで戻る
+    unwinding: Option<(Value, Span)>,
     /// 実行時に行った ref の世代チェックの回数
     pub ref_checks: usize,
     /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
@@ -249,6 +252,7 @@ impl Interp {
             output: String::new(),
             echo,
             depth: 0,
+            unwinding: None,
             ref_checks: 0,
             ref_checks_elided: 0,
         }
@@ -304,6 +308,30 @@ impl Interp {
                 work.push((child, "持ち主が解放されたので、中身も連鎖して解放された".to_string()));
             }
         }
+    }
+
+    /// 評価の途中の値（引数など）を、`?` で抜けるときに解放する（ふつうのエラーなら何もしない）
+    fn discard(&mut self, vals: Vec<Value>, span: Span) {
+        if self.unwinding.is_some() {
+            for v in vals {
+                self.release(v, span, "`?` で関数を抜けたので、使われずに捨てられた");
+            }
+        }
+    }
+
+    /// 式を順に評価する。途中で `?` により抜けるなら、それまでの値を解放する
+    fn eval_all<'a>(&mut self, es: impl IntoIterator<Item = &'a Expr>) -> R<Vec<Value>> {
+        let mut vals = Vec::new();
+        for a in es {
+            match self.eval(a) {
+                Ok(v) => vals.push(v),
+                Err(d) => {
+                    self.discard(vals, a.span);
+                    return Err(d);
+                }
+            }
+        }
+        Ok(vals)
     }
 
     /// 値を捨てる。中にある own は（構造体のフィールドも含めて）すべて解放する。
@@ -836,14 +864,23 @@ impl Interp {
         match &e.kind {
             ExprKind::Int(n) => Ok(Value::Int(*n, IntTy::I64)),
             ExprKind::Variant { variant, args, copy, .. } => {
-                let mut fields = Vec::new();
-                for a in args {
-                    fields.push(self.eval(a)?);
-                }
+                let fields = self.eval_all(args)?;
                 // 型の引数を含む enum（ジェネリックな関数の中）は、中身を見て決める
                 let copy = copy.get().unwrap_or_else(|| !fields.iter().any(Value::moves));
                 Ok(Value::Enum { variant: Rc::from(variant.as_str()), fields, copy })
             }
+            ExprKind::Try(inner) => match self.eval(inner)? {
+                Value::Enum { variant, mut fields, .. } if &*variant == "Ok" || &*variant == "Some" => {
+                    Ok(fields.pop().expect("Ok / Some has one field"))
+                }
+                v @ Value::Enum { .. } => {
+                    // Err(x) / None をそのまま関数から返す（型検査が、戻り値の型と合うことを確かめている）
+                    self.unwinding = Some((v, e.span));
+                    Err(Diagnostic::new("`?` で関数を抜けています").primary(e.span, "ここ"))
+                }
+                other => Err(Diagnostic::new("`?` は Result か Option に使います")
+                    .primary(e.span, format!("ここは {} です", other.type_name()))),
+            },
             ExprKind::Cast(inner, ty) => match self.eval(inner)? {
                 Value::Int(n, _) => {
                     let t = match &ty.kind {
@@ -935,7 +972,13 @@ impl Interp {
                         return Err(Diagnostic::new(format!("フィールド `{}` が二回書かれています", init.name))
                             .primary(init.span, "ここが二回目"));
                     }
-                    slots[idx] = Some(self.eval(&init.value)?);
+                    match self.eval(&init.value) {
+                        Ok(v) => slots[idx] = Some(v),
+                        Err(d) => {
+                            self.discard(slots.into_iter().flatten().collect(), init.span);
+                            return Err(d);
+                        }
+                    }
                 }
                 let missing: Vec<&str> = def
                     .fields
@@ -992,7 +1035,13 @@ impl Interp {
                 let mut parts = Vec::new();
                 let mut temps = Vec::new();
                 for a in args {
-                    let (v, temp) = self.eval_borrow(a)?;
+                    let (v, temp) = match self.eval_borrow(a) {
+                        Ok(x) => x,
+                        Err(d) => {
+                            self.discard(temps.into_iter().map(|(v, _)| v).collect(), a.span);
+                            return Err(d);
+                        }
+                    };
                     parts.push(v.show());
                     if temp {
                         temps.push((v, a.span));
@@ -1040,10 +1089,7 @@ impl Interp {
                 if args.len() != f.params.len() {
                     return Err(arity_error(name, f.params.len(), args.len(), span));
                 }
-                let mut vals = Vec::new();
-                for a in args {
-                    vals.push(self.eval(a)?);
-                }
+                let vals = self.eval_all(args)?;
                 self.call_fn(&f, vals, span)
             }
         }
@@ -1064,16 +1110,28 @@ impl Interp {
         self.frames.push(Frame { scopes: vec![vars] });
 
         // 戻り値の型がある関数では、本体の最後の `;` のない式が戻り値になる
-        let (flow, tail) = self.exec_block_value(&f.body, f.ret.is_some())?;
+        let mut by_try = false;
+        let (flow, tail) = match self.exec_block_value(&f.body, f.ret.is_some()) {
+            Ok(r) => r,
+            // `e?` で抜けてきた。途中のスコープは frame に残っているので、下でまとめて解放する
+            Err(d) => match self.unwinding.take() {
+                Some((v, sp)) => {
+                    by_try = true;
+                    (Flow::Return(v, sp), Value::Unit)
+                }
+                None => return Err(d),
+            },
+        };
 
         let frame = self.frames.pop().expect("frame");
         self.depth -= 1;
         let (value, span, how) = match flow {
+            Flow::Return(v, sp) if by_try => (v, sp, "`?` で関数を抜けた"),
             Flow::Return(v, sp) => (v, sp, "関数から return した"),
             Flow::Normal => (tail, f.body.end, "スコープを抜けた"),
             Flow::Break(_) | Flow::Continue(_) => unreachable!("parser rejects break/continue outside loops"),
         };
-        for scope in frame.scopes {
+        for scope in frame.scopes.into_iter().rev() {
             self.drop_scope(scope, span, how);
         }
         Ok(value)

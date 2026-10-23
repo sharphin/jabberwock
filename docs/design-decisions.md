@@ -191,6 +191,14 @@ let x = pick(true, 1, 2);
 - ムーブかコピーかは中身しだい（own や構造体ならムーブ）。型の分からない関数の中で作った enum の値は、実行時に中身を見て決める。
 - `Option` は最初からある `enum Option<T> { Some(T value); None; }`。`Some(x)` / `None` は短い書き方として残す。
 
+## Result と `?`（2026-10-23 に決定・実装）
+
+- **例外はない。** 失敗は `Result<T, E>` で返す（最初からある enum `enum Result<T, E> { Ok(T value); Err(E error); }`）。
+- `Ok(x)` / `Err(e)` は `Some` / `None` と同じく、前に何もつけずに書ける。
+- **`e?` は Rust と同じ。** Err ならそのまま関数から返す。Option にも使える。
+  - Err の型の自動変換（Rust の `From`）はしない。型が違えばエラー（match で作り直す）。
+  - 式の途中でも使える。抜けるときは、途中まで作った引数・構造体・変数の own をすべて解放する。
+
 ## 名前
 
 - 言語名は **ward から jabberwock に変える予定**。時期は未定で、オーナーの指示を待つ（それまでは ward のまま）。

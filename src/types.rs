@@ -813,6 +813,7 @@ impl<'a> Checker<'a> {
         }
         match &e.kind {
             ExprKind::Int(_) => unreachable!("integer literals are constant trees"),
+            ExprKind::Try(inner) => self.try_expr(inner, e.span, hint),
             ExprKind::Cast(inner, te) => {
                 let target = self.resolve(te)?;
                 let Ty::Int(t) = target else {
@@ -1103,6 +1104,45 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+
+    /// `e?`。e が `Result<T, E>` なら関数の戻り値も `Result<_, E>`、`Option<T>` なら `Option<_>` でなければならない。
+    /// 式の型は中身の `T`
+    fn try_expr(&mut self, inner: &Expr, span: Span, hint: Option<&Ty>) -> R<Ty> {
+        // 中身の型の手がかりを、戻り値の型と合わせて渡す（`let i64 x = Ok(5)?;` の 5 を i64 に）
+        let inner_hint = match (&self.ret, hint) {
+            (Ty::Enum(n, a), Some(h)) if n == "Result" => Some(Ty::Enum(n.clone(), vec![h.clone(), a[1].clone()])),
+            (Ty::Enum(n, _), Some(h)) if n == "Option" => Some(Ty::Enum(n.clone(), vec![h.clone()])),
+            _ => None,
+        };
+        let t = self.expr_h(inner, inner_hint.as_ref())?;
+        let kind = match &t {
+            Ty::Enum(n, _) if n == "Result" || n == "Option" => n.as_str(),
+            _ => {
+                return Err(Diagnostic::new("`?` は Result か Option に使います")
+                    .primary(inner.span, format!("これは `{}` です", t.show())))
+            }
+        };
+        let Ty::Enum(_, args) = &t else { unreachable!() };
+        let usage = match kind {
+            "Result" => "`?` は、Result を返す関数の中で使えます（Err ならそのまま返す）",
+            _ => "`?` は、Option を返す関数の中で使えます（None ならそのまま返す）",
+        };
+        match &self.ret {
+            Ty::Enum(m, rargs) if m == kind => {
+                if kind == "Result" && args[1] != rargs[1] {
+                    return Err(Diagnostic::new("エラーの型が合いません")
+                        .primary(span, format!("ここの Err は `{}` ですが、関数が返す Err は `{}` です", args[1].show(), rargs[1].show()))
+                        .note("`match` で取り出して、関数のエラーの型に作り直してください"));
+                }
+            }
+            r => {
+                return Err(Diagnostic::new("ここでは `?` を使えません")
+                    .primary(span, format!("この関数の戻り値は `{}` です", r.show()))
+                    .note(usage))
+            }
+        }
+        Ok(args[0].clone())
     }
 
     fn call(&mut self, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
