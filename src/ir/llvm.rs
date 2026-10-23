@@ -57,9 +57,8 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
     let site = m.site(mf.span, "");
     let _ = write!(
         m.code,
-        "define void @ward_main() {{\n  %d = load i64, ptr @ward_depth\n  %c = icmp sge i64 %d, {}\n  br i1 %c, label %deep, label %ok\n\
-         deep:\n  call void @ward_fail_depth(ptr {})\n  unreachable\nok:\n  store i64 1, ptr @ward_depth\n  %r = call {} @f{}()\n  call void @ward_wait_all(ptr {})\n  ret void\n}}\n\n",
-        MAX_DEPTH, site, ret, main, site
+        "define void @ward_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @ward_wait_all(ptr {})\n  ret void\n}}\n\n",
+        ret, main, site
     );
     m.finish_helpers()?;
     let mut entries = Vec::new();
@@ -904,7 +903,7 @@ impl<'p> Module<'p> {
         self.helpers.insert(key, name.clone());
         let args_t = self.variant_lt(ctys)?;
         let mut b = B::default();
-        let mut args = Vec::new();
+        let mut args = vec!["i64 1".to_string()];
         for (i, ct) in ctys.iter().enumerate() {
             let lt = self.lt(ct)?;
             let p = b.val(format!("getelementptr {}, ptr %args, i32 0, i32 {}", args_t, i));
@@ -913,7 +912,6 @@ impl<'p> Module<'p> {
         }
         let ret_ty = self.prog.fns[fi].ret.clone();
         let ret = self.lt(&ret_ty)?;
-        b.op("store i64 1, ptr @ward_depth");
         let r = b.val(format!("call {} @f{}({})", ret, fi, args.join(", ")));
         b.op(format!("store {} {}, ptr %out", ret, r));
         let _ = write!(
@@ -1506,7 +1504,7 @@ impl<'p> Module<'p> {
     }
 
     /// 関数の値を作るための関数（関数の番号 fi、取り込む値の型）。(呼び出しの入口, 入れ物の表)
-    /// 入口 `@tramp{fi}(ptr env, ptr 呼んだ位置, 引数...)` は、取り込んだ値の読むだけの写しを作って本体を呼ぶ
+    /// 入口 `@tramp{fi}(i64 深さ, ptr env, ptr 呼んだ位置, 引数...)` は、取り込んだ値の読むだけの写しを作って本体を呼ぶ
     fn closure_fns(&mut self, fi: usize, ctys: &[Ty]) -> G<(String, String)> {
         let tramp = format!("@tramp{}", fi);
         let vt = format!("@vt{}", fi);
@@ -1519,8 +1517,8 @@ impl<'p> Module<'p> {
         let nparams = f.params - f.captures;
         let caps_t = self.variant_lt(ctys)?;
         let mut b = B::default();
-        let mut params = vec!["ptr %env".to_string(), "ptr %site".to_string()];
-        let mut args = Vec::new();
+        let mut params = vec!["i64 %depth".to_string(), "ptr %env".to_string(), "ptr %site".to_string()];
+        let mut args = vec!["i64 %depth".to_string()];
         for i in 0..nparams {
             let lt = self.lt(&f.locals[i].ty)?;
             params.push(format!("{} %a{}", lt, i));
@@ -1813,6 +1811,8 @@ struct FnGen<'m, 'p> {
     boxed: Vec<bool>,
     /// ムーブされうる変数（読むときにムーブ済みか確かめる）
     may_move: Vec<bool>,
+    /// 呼び出しの深さ（関数の最初の引数。グローバル変数に書かないので、呼び出しが安い）
+    depth: String,
 }
 
 impl<'m, 'p> FnGen<'m, 'p> {
@@ -1845,12 +1845,12 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 _ => {}
             }
         }
-        FnGen { m, f, idx, b: B::default(), boxed, may_move }
+        FnGen { m, f, idx, b: B::default(), boxed, may_move, depth: "%depth".to_string() }
     }
 
     fn run(mut self) -> G<()> {
         let f = self.f;
-        let mut params = Vec::new();
+        let mut params = vec!["i64 %depth".to_string()];
         for i in 0..f.params {
             params.push(format!("{} %a{}", self.m.lt(&f.locals[i].ty)?, i));
         }
@@ -2998,7 +2998,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
 
     /// 呼び出し（深さを確かめる）
     fn call(&mut self, f: &str, ret: &Ty, args: &[String], span: Span) -> G<String> {
-        let d = self.b.val("load i64, ptr @ward_depth");
+        let d = self.depth.clone();
         let deep = self.b.val(format!("icmp sge i64 {}, {}", d, MAX_DEPTH));
         let (_, ok) = self.b.if_true(&deep);
         let s = self.m.site(span, "");
@@ -3006,11 +3006,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.b.op("unreachable");
         self.b.label(&ok);
         let d1 = self.b.val(format!("add i64 {}, 1", d));
-        self.b.op(format!("store i64 {}, ptr @ward_depth", d1));
         let rl = self.m.lt(ret)?;
-        let v = self.b.val(format!("call {} {}({})", rl, f, args.join(", ")));
-        self.b.op(format!("store i64 {}, ptr @ward_depth", d));
-        Ok(v)
+        let mut all = vec![format!("i64 {}", d1)];
+        all.extend(args.iter().cloned());
+        Ok(self.b.val(format!("call {} {}({})", rl, f, all.join(", "))))
     }
 
     /// 関数の値を呼ぶ（深さを確かめる）。引数は関数の型の引数の型にそろえる
@@ -3075,6 +3074,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let c1 = self.b.val(format!("insertvalue {{ %fnv, ptr }} undef, %fnv {}, 0", fv));
         let c2 = self.b.val(format!("insertvalue {{ %fnv, ptr }} {}, ptr {}, 1", c1, args));
         self.b.op(format!("store {{ %fnv, ptr }} {}, ptr {}", c2, ctx));
+        // 比べる関数は実行時ライブラリから呼ばれるので、深さはグローバル変数で渡す
+        self.b.op(format!("store i64 {}, ptr @ward_depth", self.depth));
         self.b.op(format!("call void @ward_sort(ptr {}, i64 {}, i64 8, ptr {}, ptr {})", order, n, cmp, ctx));
         // 写しを片づける
         let fin = self.m.site(span, "sort_by の比べ終わった写し");
@@ -3104,6 +3105,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
     fn sort_cmp(&mut self, ft: &Ty, pa: &Ty, span: Span) -> G<String> {
         let name = format!("@sortcmp{}", self.m.fresh());
         let saved = std::mem::take(&mut self.b);
+        let depth = self.b.val("load i64, ptr @ward_depth");
+        let saved_depth = std::mem::replace(&mut self.depth, depth);
         let pl = self.m.lt(pa)?;
         let ctx = "%env";
         let fv = self.b.val(format!("load %fnv, ptr {}", ctx));
@@ -3118,6 +3121,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let r = self.call_value(&fv, ft, vals, span)?;
         let r = self.b.val(format!("zext i1 {} to i32", r));
         let body = std::mem::replace(&mut self.b, saved);
+        self.depth = saved_depth;
         let _ = write!(
             self.m.code,
             "define internal i32 {}(ptr %p, ptr %q, ptr %env) {{\nentry:\n{}{}  ret i32 {}\n}}\n\n",
