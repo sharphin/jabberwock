@@ -31,6 +31,7 @@
 | `tests/enums.rs` | enum と Option・match での取り出し・`match ref` |
 | `tests/generics.rs` | ジェネリクス（関数・構造体・enum の型の引数） |
 | `tests/results.rs` | Result と `?`（途中で抜けたときの解放も） |
+| `tests/methods.rs` | メソッド（`this`・`fn mut`・構造体の値への呼び出し） |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -73,6 +74,13 @@
   途中のスコープは frame に残ったままなので `call_fn` がまとめて解放する。評価途中の値（引数・構造体のフィールド・print の一時値）は
   `eval_all` / `discard` で解放する。新しく「値を集めながら評価する」場所を足すときは、同じように解放すること（リークする）。
   analyze では `?` で抜ける道は関数の中で合流しないので、続く道だけ考えればよい。
+
+- メソッドは、パーサが `構造体名.名前` という普通の関数にする（最初の引数 `this` は `ref [mut] 構造体<T..>`、
+  型の引数は構造体のもの＋メソッドのもの）。本体のフィールド名・メソッド名は `bind_this` が `this.名前` に書き換える
+  （引数・ローカル変数が同じ名前なら書き換えない）。呼び出しは `ExprKind::MethodCall`。
+  interp の `eval_method`: 一時的な receiver は先に評価、場所の receiver は引数のあとで借りる（analyze も同じ順）。
+  構造体の値の receiver はヒープへ貸し（`Lent`）、呼び出し後に解放して元の場所へ戻す。
+  analyze は receiver の型を知らないので、同じ名前のメソッドすべての呼び出しとして記録する（安全側）。
 
 ## 設計の決めごと
 

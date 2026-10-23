@@ -188,6 +188,9 @@ impl Access {
             .label(*decl, format!("ここで `{}` を宣言した（mut がない）", name))
             .primary(span, format!("ここで{}", doing))
             .note(format!("書き換えるなら `let mut {}` や `i64 mut {}` のように mut をつけてください", name, name))),
+            Access::ReadOnlyRef { what, .. } if what == "this" => Err(Diagnostic::new("書き換えないメソッドの中で書き換えようとしました")
+                .primary(span, format!("ここで{}", doing))
+                .note("フィールドを書き換えるメソッドは `fn mut 名前()` と書いてください")),
             Access::ReadOnlyRef { what, origin } => Err(Diagnostic::new("読むだけの ref を通して書き換えようとしました")
                 .label(*origin, format!("`{}` は読むだけの ref（mut がない）", what))
                 .primary(span, format!("ここで{}", doing))
@@ -415,17 +418,17 @@ impl<'a> Checker<'a> {
     }
 
     /// 型の引数を決めながら、引数（や中身）を調べる。`params` は定義の側の型（`T` を含みうる）。
-    /// `pre` は (戻り値などの型, 入れる先の型)。先に見比べて型の引数を決める手がかりにする。
+    /// `pre` は (戻り値などの型, 入れる先の型) の組。先に見比べて型の引数を決める手がかりにする。
     /// 数や `None` のように相手しだいで型が決まる式は、ほかの引数で型の引数が決まってから調べる
     fn instantiate(
         &mut self,
         tparams: &[String],
         params: &[Ty],
         args: &[&Expr],
-        pre: Option<(&Ty, &Ty)>,
+        pre: &[(&Ty, &Ty)],
     ) -> R<HashMap<String, Ty>> {
         let mut map = HashMap::new();
-        if let Some((pat, hint)) = pre {
+        for (pat, hint) in pre {
             unify(pat, hint, tparams, &mut map);
         }
         let mut got: Vec<Option<Ty>> = vec![None; args.len()];
@@ -499,7 +502,7 @@ impl<'a> Checker<'a> {
             _ => None,
         };
         let args: Vec<&Expr> = args.iter().collect();
-        let map = self.instantiate(&tparams, &params, &args, pre)?;
+        let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>())?;
         let targs = match self.all_bound(&tparams, &map, e.span, enum_name) {
             Ok(t) => t,
             Err(_) if enum_name == "Option" => {
@@ -920,7 +923,7 @@ impl<'a> Checker<'a> {
                     _ => None,
                 };
                 let values: Vec<&Expr> = inits.iter().map(|i| &i.value).collect();
-                let map = self.instantiate(&def.tparams, &params, &values, pre)?;
+                let map = self.instantiate(&def.tparams, &params, &values, &pre.into_iter().collect::<Vec<_>>())?;
                 let targs = self.all_bound(&def.tparams, &map, e.span, name)?;
                 Ok(Ty::Struct(name.clone(), targs))
             }
@@ -1001,6 +1004,7 @@ impl<'a> Checker<'a> {
             },
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, e.span, hint),
             ExprKind::Call(name, args) => self.call(name, args, e.span, hint),
+            ExprKind::MethodCall(recv, name, args) => self.method_call(recv, name, args, e.span, hint),
         }
     }
 
@@ -1176,7 +1180,55 @@ impl<'a> Checker<'a> {
         let (tparams, params, ret) = (sig.tparams.clone(), sig.params.clone(), sig.ret.clone());
         let pre = hint.map(|h| (&ret, h));
         let args: Vec<&Expr> = args.iter().collect();
-        let map = self.instantiate(&tparams, &params, &args, pre)?;
+        let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>())?;
+        if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
+            self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
+        }
+        Ok(subst(&ret, &map))
+    }
+
+    /// `p.name(args)`。メソッドは `構造体名.name` という関数で、最初の引数が `this`（`ref 構造体`）
+    fn method_call(&mut self, recv: &Expr, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
+        let rt = self.expr(recv)?;
+        let st = match &rt {
+            Ty::Struct(..) => rt.clone(),
+            Ty::Own(x) | Ty::Ref(x, _) if matches!(**x, Ty::Struct(..)) => (**x).clone(),
+            _ => {
+                return Err(Diagnostic::new("メソッドを呼べるのは構造体だけです")
+                    .primary(recv.span, format!("これは `{}` です", rt.show())))
+            }
+        };
+        let Ty::Struct(sname, _) = &st else { unreachable!() };
+        let full = format!("{}.{}", sname, name);
+        let Some(sig) = self.fns.get(full.as_str()) else {
+            let prefix = format!("{}.", sname);
+            let mut names: Vec<&str> = self.fns.keys().filter_map(|k| k.strip_prefix(prefix.as_str())).collect();
+            names.sort();
+            let d = Diagnostic::new(format!("`{}` にメソッド `{}` はありません", sname, name))
+                .primary(span, "このメソッドは定義されていません");
+            return Err(if names.is_empty() {
+                d.note(format!("`{}` にはメソッドがありません", sname))
+            } else {
+                d.note(format!("`{}` のメソッド: {}", sname, names.join(", ")))
+            });
+        };
+        if args.len() + 1 != sig.params.len() {
+            return Err(arity_error(&format!("{}.{}", sname, name), sig.params.len() - 1, args.len(), span));
+        }
+        let (tparams, params, ret) = (sig.tparams.clone(), sig.params.clone(), sig.ret.clone());
+        let Ty::Ref(this_ty, mutable) = &params[0] else { unreachable!("this is a ref") };
+        if *mutable {
+            // 書き換えるメソッド（`fn mut`）は、`ref mut` で借りられる相手にだけ呼べる
+            let a = if is_place(recv) { self.access(recv)? } else { Access::Write };
+            a.through(&rt, self.origin(recv), describe(recv))
+                .require(span, format!("書き換えるメソッド `{}` を呼ぼうとした", name).as_str())?;
+        }
+        let mut pre: Vec<(&Ty, &Ty)> = vec![(this_ty, &st)];
+        if let Some(h) = hint {
+            pre.push((&ret, h));
+        }
+        let args: Vec<&Expr> = args.iter().collect();
+        let map = self.instantiate(&tparams, &params[1..], &args, &pre)?;
         if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
             self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
         }

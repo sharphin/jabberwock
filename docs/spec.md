@@ -41,7 +41,7 @@ fn main() {
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `own` `ref` `as` `true` `false`
 
-特別な名前: `Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
+特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
 
 ## 3. 型
 
@@ -204,7 +204,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.5](#85-match-で中身を受け取る)）。
+- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.6](#86-match-で中身を受け取る)）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -329,7 +329,41 @@ fn Result<i64, str> calc(i64 a, i64 b, i64 c) {
   - Option にも使える（`None` ならそのまま返す）。Option を返す関数の中だけ。
   - 式のどこに書いてもよい（`f(a()?, b()?)`）。抜けるとき、それまでに作った値や変数の own はすべて解放する。
 
-### 8.5 match で中身を受け取る
+### 8.5 メソッド
+
+```
+struct Point {
+    i64 x;
+    i64 y;
+
+    fn i64 len2() {                 // 書き換えないメソッド
+        x * x + y * y               // フィールドは this. なしで使える（this.x とも書ける）
+    }
+
+    fn mut move_by(i64 dx, i64 dy) { // 書き換えるメソッドは fn mut
+        x += dx;
+        y += dy;
+    }
+}
+
+let mut p = Point { x: 3, y: 4 };
+p.move_by(1, 1);
+print(p.len2());
+```
+
+- メソッドは構造体の中、フィールドのあとに書く。形は関数と同じで、`fn mut` なら書き換えるメソッド。
+- メソッドの中では、フィールドと同じ構造体のメソッドを `this.` なしで使える。引数やローカル変数に同じ名前があればそちらが優先（そのときは `this.x`）。
+- `this` は呼び出し元を借りた ref。ふつうのメソッドでは `ref 構造体`、`fn mut` では `ref mut 構造体`。
+  - `fn mut` を呼べるのは、`ref mut` で借りられる相手だけ（`let mut` の変数、mut の持ち主の own、`ref mut`）。
+  - 書き換えないメソッドの中でフィールドに代入するとエラー。
+- `p.m()` の `p` は、構造体の値・own・ref のどれでもよい（`p.f` と同じく自動でたどる）。
+  - 構造体の値（own に入っていないもの）は、呼び出しのあいだだけヒープに移して借り、終わったら元に戻す。
+    `this` を借りた ref を返しても、呼び出しが終わった時点で無効になる（使うと実行時エラー）。
+  - 評価の順: `p` が変数や `a.b` なら、引数を先に評価してから借りる。`make().m()` のような一時的な値なら、それを先に評価する。
+- 型の引数のある構造体のメソッドは、構造体の型の引数をそのまま使える（`struct Stack<T> { ... fn mut push(T v) { ... } }`）。メソッド自身の型の引数もつけられる。
+- メソッドはフィールドと同じ名前にできない。
+
+### 8.6 match で中身を受け取る
 
 ```
 match s {
@@ -367,7 +401,7 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 
 | 項目 | 決まっていること |
 |---|---|
-| メソッド | Java 風（struct の中に書く）。`this` は書かなくてよい。書き換えるメソッドは `fn mut 名前()`（仮） |
+| 静的メソッド・enum のメソッド | `Point.new(1, 2)` のような形を検討中 |
 | 文字列の埋め込み | `"x = {x}"` |
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | 型の引数にできることを決める仕組み（比較できる T など） | これから |

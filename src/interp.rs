@@ -218,6 +218,13 @@ enum Root {
     Slot(usize),
 }
 
+/// メソッド呼び出しのために `this` として貸したスロット。呼び出しのあと解放する。
+/// `back` は値を戻す場所と、その場所を持つスロットの（貸したときの）世代
+struct Lent {
+    slot: usize,
+    back: Option<(Place, Option<(usize, u32)>)>,
+}
+
 enum Flow {
     Normal,
     Return(Value, Span),
@@ -1018,6 +1025,7 @@ impl Interp {
                 binary(*op, lv, rv, e.span)
             }
             ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
+            ExprKind::MethodCall(recv, name, args) => self.eval_method(recv, name, args, e.span),
             ExprKind::If { .. } | ExprKind::Match { .. } => {
                 let (flow, v) = self.eval_flow(e, true)?;
                 // 値として使う if / match の中では return / break / continue をパーサが禁止している
@@ -1093,6 +1101,96 @@ impl Interp {
                 self.call_fn(&f, vals, span)
             }
         }
+    }
+
+    /// `recv.name(args)`。`this` には recv を借りた ref を渡す。
+    /// recv が構造体の値なら、呼び出しのあいだだけヒープへ移して借り、終わったら元の場所へ戻す
+    /// （戻すときにそのスロットは解放されるので、`this` を借りた ref が残っていてもダングリングとして見つかる）
+    fn eval_method(&mut self, recv: &Expr, name: &str, args: &[Expr], span: Span) -> R<Value> {
+        // 一時的な値は先に評価する（ムーブ）。変数などの場所は、引数を評価してから借りる
+        let temp = if is_place(recv) { None } else { Some(self.eval(recv)?) };
+        let vals = match self.eval_all(args) {
+            Ok(v) => v,
+            Err(d) => {
+                self.discard(temp.into_iter().collect(), recv.span);
+                return Err(d);
+            }
+        };
+        let (rv, place) = match temp {
+            Some(v) => (v, None),
+            None => {
+                let pl = self.place(recv)?;
+                (self.place_mut(&pl).clone(), Some(pl))
+            }
+        };
+        let sname = match &rv {
+            Value::Struct(def, _) => def.name.clone(),
+            Value::Own(_) | Value::Ref(_) => {
+                let slot = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                    Value::Struct(def, _) => def.name.clone(),
+                    other => return Err(not_a_struct(other, recv.span)),
+                }
+            }
+            other => return Err(not_a_struct(other, recv.span)),
+        };
+        let f = self.fns.get(&format!("{}.{}", sname, name)).cloned().ok_or_else(|| {
+            Diagnostic::new(format!("`{}` にメソッド `{}` はありません", sname, name))
+                .primary(span, "このメソッドは定義されていません")
+        })?;
+        let mutable = matches!(f.params[0].ty.kind, TypeKind::Ref(_, true));
+        if mutable {
+            let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
+            access.through(&rv).require(span, &format!("書き換えるメソッド `{}` を呼ぼうとした", name))?;
+        }
+        let this = |slot: usize, generation: u32, what: String| {
+            Value::Ref(RefVal { slot, generation, borrowed_at: recv.span, what, mutable })
+        };
+        let mut lent: Option<Lent> = None;
+        let this_val = match rv {
+            Value::Own(slot) => {
+                if place.is_none() {
+                    // 一時的な own は、呼び出しが終わったら解放する
+                    lent = Some(Lent { slot, back: None });
+                }
+                this(slot, self.heap.slots[slot].generation, describe(recv))
+            }
+            Value::Ref(r) => Value::Ref(RefVal { mutable, ..r }),
+            v => {
+                let back = place.map(|pl| {
+                    // 元の場所は空にしておく（呼び出しのあいだに別の道から触れても、古い値は見えない）
+                    *self.place_mut(&pl) = Value::Unit;
+                    let owner = match pl.root {
+                        Root::Slot(s) => Some((s, self.heap.slots[s].generation)),
+                        Root::Var(_) => None,
+                    };
+                    (pl, owner)
+                });
+                let slot = self.heap.alloc(v);
+                lent = Some(Lent { slot, back });
+                this(slot, self.heap.slots[slot].generation, describe(recv))
+            }
+        };
+        let mut all = vec![this_val];
+        all.extend(vals);
+        let result = self.call_fn(&f, all, span)?;
+        match lent {
+            None => {}
+            Some(Lent { slot, back: None }) => self.free(slot, span, "メソッドの呼び出しに使い終わった一時的な値"),
+            Some(Lent { slot, back: Some((pl, owner)) }) => {
+                let v = self.heap.slots[slot].value.replace(Value::Unit).expect("lent slot is live");
+                self.free(slot, span, &format!("メソッドの呼び出しが終わって `{}` に戻した", describe(recv)));
+                if let Some((s, g)) = owner {
+                    if self.heap.slots[s].generation != g || self.heap.slots[s].value.is_none() {
+                        self.release(v, span, "戻す先が解放されていた");
+                        return Err(Diagnostic::new("メソッドの呼び出し中に、呼び出し先の持ち主が解放されました")
+                            .primary(recv.span, "この値を戻す場所がもうない"));
+                    }
+                }
+                *self.place_mut(&pl) = v;
+            }
+        }
+        Ok(result)
     }
 
     fn call_fn(&mut self, f: &Rc<FnDef>, args: Vec<Value>, call_span: Span) -> R<Value> {

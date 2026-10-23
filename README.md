@@ -128,6 +128,21 @@ let Option<i64> y = None;            // None だけでは型が決まらない�
 - `match ref s`（`s` は own か ref）は借りるだけ。中身の own は ref として受け取る。
 - Option は最初からある普通の enum（`enum Option<T> { Some(T value); None; }`）。
 
+## メソッド
+
+```
+struct Point {
+    i64 x;
+    i64 y;
+
+    fn i64 len2() { x * x + y * y }          // this. は書かなくてよい
+    fn mut move_by(i64 dx) { x += dx; }      // 書き換えるメソッドは fn mut
+}
+let mut p = Point { x: 3, y: 4 };
+p.move_by(1);
+print(p.len2());
+```
+
 ## Result と `?`
 
 ```
@@ -202,6 +217,6 @@ count = 3
 
 1. ~~構造体を足す（フィールドごとの所有）~~（v0.3）。次は `ref p.f` も解析で追えるようにする
 2. ~~静的解析で「この `ref` は絶対安全」と証明できた箇所の検査を消す~~（v0.2 で最初の版）
-3. ~~型検査~~・~~整数型~~・~~Option と enum~~・~~ジェネリクス~~・~~Result と `?`~~。次はメソッド
+3. ~~型検査~~・~~整数型~~・~~Option と enum~~・~~ジェネリクス~~・~~Result と `?`~~・~~メソッド~~。次は静的メソッド・文字列の埋め込み・配列など
 4. 並行処理でのデータ競合防止（最大の山）
 5. C / Cranelift / LLVM へのコード生成、セルフホスト

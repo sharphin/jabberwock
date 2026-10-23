@@ -411,16 +411,51 @@ impl<'a> FnAnalyzer<'a> {
                         let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
                         // 全引数を評価し終えた時点で判定する（`f(ref a, a)` のように後でムーブされる場合を除く）
                         let safe: Vec<bool> = facts.iter().map(|f| self.is_live_ref(*f)).collect();
-                        let arity_ok = matches!(self.pinned.get(name.as_str()), Some(p) if p.len() == safe.len());
-                        if arity_ok {
-                            let entry = self.calls.entry(name.clone()).or_insert_with(|| vec![true; safe.len()]);
-                            for (e, s) in entry.iter_mut().zip(safe) {
-                                *e = *e && s;
-                            }
-                        }
+                        self.record_call(name, safe);
                     }
                 }
                 None
+            }
+            ExprKind::MethodCall(recv, name, args) => {
+                // インタプリタと同じ順: 一時的な値の receiver は先に評価（ムーブ）、
+                // 変数などの場所なら引数のあとで借りる
+                let temp = if is_place(recv) { None } else { Some(self.expr(recv, false)) };
+                let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
+                // `this` が呼び出しのあいだ生きているか。一時的な own はこの呼び出しが終わるまで解放されない
+                let this_safe = match temp {
+                    Some(f) => f == Some(Fact::Own) || self.is_live_ref(f),
+                    None => {
+                        self.expr(recv, true);
+                        match &recv.kind {
+                            ExprKind::Var(n) => {
+                                let f = self.fact_of(n);
+                                f == Some(Fact::Own) || self.is_live_ref(f)
+                            }
+                            _ => false,
+                        }
+                    }
+                };
+                let mut safe = vec![this_safe];
+                safe.extend(facts.iter().map(|f| self.is_live_ref(*f)));
+                // どの構造体のメソッドかは型しだいなので、同じ名前のメソッドすべての呼び出しとして数える（安全側）
+                let suffix = format!(".{}", name);
+                let cands: Vec<String> =
+                    self.pinned.keys().filter(|k| k.ends_with(suffix.as_str())).map(|k| k.to_string()).collect();
+                for c in cands {
+                    self.record_call(&c, safe.clone());
+                }
+                None
+            }
+        }
+    }
+
+    /// 関数 `name` の呼び出しで、各引数が安全な ref かを記録する（全呼び出し箇所の AND）
+    fn record_call(&mut self, name: &str, safe: Vec<bool>) {
+        let arity_ok = matches!(self.pinned.get(name), Some(p) if p.len() == safe.len());
+        if arity_ok {
+            let entry = self.calls.entry(name.to_string()).or_insert_with(|| vec![true; safe.len()]);
+            for (e, s) in entry.iter_mut().zip(safe) {
+                *e = *e && s;
             }
         }
     }
@@ -535,5 +570,16 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
                 expr_checks(a, f);
             }
         }
+        ExprKind::MethodCall(recv, _, args) => {
+            expr_checks(recv, f);
+            for a in args {
+                expr_checks(a, f);
+            }
+        }
     }
+}
+
+/// 場所として扱える式か（interp の `is_place` と同じ）
+fn is_place(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
 }
