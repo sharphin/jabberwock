@@ -9,7 +9,10 @@ use std::rc::Rc;
 use super::*;
 use crate::ast::UnOp;
 use crate::diag::Diagnostic;
-use crate::interp::{as_bool, binary, float_to_int, moved_error, str_method, Interp, RefVal, Value, MAX_DEPTH};
+use crate::interp::{
+    as_bool, binary, bounds, float_to_int, locate, merge_sort, moved_error, none, some, str_method, Interp, MapVal, RefVal,
+    Value, MAX_DEPTH,
+};
 
 type R<T> = Result<T, Diagnostic>;
 
@@ -71,7 +74,7 @@ impl<'a> Machine<'a> {
                     return Ok(v);
                 }
                 Term::Switch(place, arms, other) => {
-                    let (slot, path) = self.resolve(f, &locs, place)?;
+                    let (slot, path) = self.resolve(f, &mut locs, place)?;
                     let Value::Enum { variant, .. } = at(self.it, slot, &path) else { unreachable!("switch on an enum") };
                     arms.iter().find(|(v, _)| *v == *variant).map_or(*other, |(_, b)| *b)
                 }
@@ -91,9 +94,7 @@ impl<'a> Machine<'a> {
                         *done
                     }
                 }
-                Term::Fail(title, span) => {
-                    return Err(Diagnostic::new(title.clone()).primary(*span, "これだと永遠に終わりません"))
-                }
+                Term::Fail(title, span, label) => return Err(Diagnostic::new(title.clone()).primary(*span, label.clone())),
                 Term::Unreachable => unreachable!("reached an unreachable block in {}", f.name),
             };
         }
@@ -114,7 +115,7 @@ impl<'a> Machine<'a> {
                     }
                     return Ok(());
                 }
-                let (slot, path) = self.resolve(f, locs, place)?;
+                let (slot, path) = self.resolve_in(f, locs, place, true)?;
                 let old = std::mem::replace(at_mut(self.it, slot, &path), v);
                 self.it.release(old, *span, "上書きされて、古い値が解放された");
             }
@@ -134,7 +135,12 @@ impl<'a> Machine<'a> {
     }
 
     /// 場所が指すスロットと、その中の道筋。ref の先は世代チェックをする
-    fn resolve(&mut self, f: &Func, locs: &[Loc], place: &Place) -> R<(usize, Vec<usize>)> {
+    fn resolve(&mut self, f: &Func, locs: &mut [Loc], place: &Place) -> R<(usize, Vec<usize>)> {
+        self.resolve_in(f, locs, place, false)
+    }
+
+    /// `create` なら、最後の辞書のキーがなければ入れる（`m[k] = v` の代入。値は呼び出し元が置く）
+    fn resolve_in(&mut self, f: &Func, locs: &mut [Loc], place: &Place, create: bool) -> R<(usize, Vec<usize>)> {
         let mut slot = match locs[place.local] {
             Loc::Live(s) => s,
             Loc::Moved(at) => return Err(moved_error(&f.locals[place.local].name, at, place.span)),
@@ -150,6 +156,19 @@ impl<'a> Machine<'a> {
                     path = pth;
                 }
                 Proj::Field(i, _) | Proj::Variant(_, i) => path.push(*i),
+                Proj::Index(k, key_span, base_span) => {
+                    let key = self.operand(f, locs, k)?;
+                    let last = std::ptr::eq(p, place.proj.last().expect("non-empty"));
+                    let c = at_mut(self.it, slot, &path);
+                    let i = match c {
+                        Value::Map(m) if create && last && m.find(&key).is_none() => {
+                            m.insert(key, Value::Unit);
+                            m.entries.len() - 1
+                        }
+                        c => locate(c, &key, *key_span, *base_span)?,
+                    };
+                    path.push(i);
+                }
             }
         }
         Ok((slot, path))
@@ -247,6 +266,47 @@ impl<'a> Machine<'a> {
                 let (slot, path) = self.resolve(f, locs, place)?;
                 Ok(std::mem::replace(at_mut(self.it, slot, &path), Value::Unit))
             }
+            Rvalue::Array(items, list) => Ok(Value::Array(self.operands(f, locs, items)?, *list)),
+            Rvalue::Repeat(x, n, list) => {
+                let v = self.operand(f, locs, x)?;
+                Ok(Value::Array(vec![v; *n as usize], *list))
+            }
+            Rvalue::Map(pairs, span) => {
+                let mut m = Box::<MapVal>::default();
+                for (k, v) in pairs {
+                    let k = self.operand(f, locs, k)?;
+                    let v = self.operand(f, locs, v)?;
+                    if let Some(old) = m.insert(k, v) {
+                        self.it.release(old, *span, "辞書の同じキーに後から入れた値で置き換えられた");
+                    }
+                }
+                Ok(Value::Map(m))
+            }
+            Rvalue::SeqOp { name, place, args, span, arg_span } => {
+                let vals = self.operands(f, locs, args)?;
+                let (slot, path) = self.resolve(f, locs, place)?;
+                self.seq_op(name, slot, &path, vals, *span, *arg_span)
+            }
+            Rvalue::Items { place, what, span } => {
+                let (slot, path) = self.resolve(f, locs, place)?;
+                let items: Vec<Value> = match at(self.it, slot, &path) {
+                    Value::Array(items, _) => items.clone(),
+                    Value::Map(m) => m.entries.iter().map(|(_, v)| v.clone()).collect(),
+                    _ => unreachable!("for over an array, a list or a map"),
+                };
+                Ok(Value::Array(items.into_iter().map(|v| self.it.view_of(v, *span, what)).collect(), true))
+            }
+            Rvalue::Keys(place) => {
+                let (slot, path) = self.resolve(f, locs, place)?;
+                Ok(Value::Array(
+                    match at(self.it, slot, &path) {
+                        Value::Array(items, _) => (0..items.len()).map(|i| Value::Int(i as i128, IntTy::I64)).collect(),
+                        Value::Map(m) => m.entries.iter().map(|(k, _)| k.clone()).collect(),
+                        _ => unreachable!("for over an array, a list or a map"),
+                    },
+                    true,
+                ))
+            }
             Rvalue::Own(a) => {
                 let v = self.operand(f, locs, a)?;
                 Ok(Value::Own(self.it.heap.alloc(v)))
@@ -301,6 +361,81 @@ impl<'a> Machine<'a> {
             }
         }
     }
+
+    /// 配列・リスト・辞書の操作（interp の `eval_method` の配列・辞書の部分と同じ）
+    fn seq_op(&mut self, name: &str, slot: usize, path: &[usize], mut vals: Vec<Value>, span: Span, arg_span: Span) -> R<Value> {
+        if name == "sort" {
+            let Value::Array(items, _) = at(self.it, slot, path) else { unreachable!("sort on an array") };
+            let items = items.clone();
+            let mut less = |_: &mut (), a: usize, b: usize| -> R<bool> {
+                Ok(match (&items[a], &items[b]) {
+                    (Value::Int(x, _), Value::Int(y, _)) => x < y,
+                    (Value::Float(x), Value::Float(y)) => x < y,
+                    (Value::Str(x), Value::Str(y)) => x < y,
+                    _ => unreachable!("type checked: ordered elements"),
+                })
+            };
+            let order = merge_sort(&mut (), (0..items.len()).collect(), &mut less)?;
+            let Value::Array(items, _) = at_mut(self.it, slot, path) else { unreachable!() };
+            let mut old: Vec<Option<Value>> = std::mem::take(items).into_iter().map(Some).collect();
+            *items = order.into_iter().map(|i| old[i].take().expect("each index once")).collect();
+            return Ok(Value::Unit);
+        }
+        let c = at_mut(self.it, slot, path);
+        if let Value::Map(m) = c {
+            return Ok(match name {
+                "len" => Value::Int(m.entries.len() as i128, IntTy::I64),
+                "contains" => Value::Bool(m.find(&vals[0]).is_some()),
+                "get" => match m.find(&vals[0]) {
+                    Some(i) => some(m.entries[i].1.clone()),
+                    None => none(),
+                },
+                "remove" => match m.remove(&vals[0]) {
+                    Some(v) => {
+                        let copy = !v.moves();
+                        Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy }
+                    }
+                    None => none(),
+                },
+                "keys" => Value::Array(m.entries.iter().map(|(k, _)| k.clone()).collect(), true),
+                _ => unreachable!("map method {}", name),
+            });
+        }
+        let Value::Array(items, _) = c else { unreachable!("array method on an array") };
+        Ok(match name {
+            "len" => Value::Int(items.len() as i128, IntTy::I64),
+            "push" => {
+                items.push(vals.remove(0));
+                Value::Unit
+            }
+            "pop" => match items.pop() {
+                Some(v) => {
+                    let copy = !v.moves();
+                    Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy }
+                }
+                None => none(),
+            },
+            "remove" => {
+                let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };
+                let k = bounds(i, items.len(), arg_span)?;
+                items.remove(k)
+            }
+            "insert" => {
+                let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };
+                if i < 0 || i > items.len() as i128 {
+                    let len = items.len();
+                    let v = vals.remove(1);
+                    self.it.release(v, span, "入れられずに捨てられた");
+                    return Err(Diagnostic::new("insert の位置が範囲の外です")
+                        .primary(arg_span, format!("位置は {} ですが、長さは {} です", i, len))
+                        .note("入れられる位置は 0〜長さ です"));
+                }
+                items.insert(i as usize, vals.remove(1));
+                Value::Unit
+            }
+            _ => unreachable!("array method {}", name),
+        })
+    }
 }
 
 /// スロットの中の道筋の先にある値。interp の `at` と違い、enum の中身もたどる（match で受け取るとき）
@@ -309,7 +444,8 @@ fn at<'v>(it: &'v Interp, slot: usize, path: &[usize]) -> &'v Value {
     for &i in path {
         v = match v {
             Value::Struct(_, fields) | Value::Array(fields, _) | Value::Enum { fields, .. } => &fields[i],
-            _ => unreachable!("paths go through structs, arrays and enums"),
+            Value::Map(m) => &m.entries[i].1,
+            _ => unreachable!("paths go through structs, arrays, maps and enums"),
         };
     }
     v
@@ -320,7 +456,8 @@ fn at_mut<'v>(it: &'v mut Interp, slot: usize, path: &[usize]) -> &'v mut Value 
     for &i in path {
         v = match v {
             Value::Struct(_, fields) | Value::Array(fields, _) | Value::Enum { fields, .. } => &mut fields[i],
-            _ => unreachable!("paths go through structs, arrays and enums"),
+            Value::Map(m) => &mut m.entries[i].1,
+            _ => unreachable!("paths go through structs, arrays, maps and enums"),
         };
     }
     v

@@ -50,7 +50,7 @@ pub enum Value {
 /// 辞書の中身。`entries` が入れた順の (キー, 値)、`index` がキーから位置を引く表
 #[derive(Debug, Clone, Default)]
 pub struct MapVal {
-    entries: Vec<(Value, Value)>,
+    pub(crate) entries: Vec<(Value, Value)>,
     index: HashMap<Key, usize>,
 }
 
@@ -72,12 +72,12 @@ fn key_of(v: &Value) -> Key {
 }
 
 impl MapVal {
-    fn find(&self, k: &Value) -> Option<usize> {
+    pub(crate) fn find(&self, k: &Value) -> Option<usize> {
         self.index.get(&key_of(k)).copied()
     }
 
     /// 入れる。同じキーがあれば値を置き換えて、古い値を返す
-    fn insert(&mut self, k: Value, v: Value) -> Option<Value> {
+    pub(crate) fn insert(&mut self, k: Value, v: Value) -> Option<Value> {
         match self.find(&k) {
             Some(i) => Some(std::mem::replace(&mut self.entries[i].1, v)),
             None => {
@@ -89,7 +89,7 @@ impl MapVal {
     }
 
     /// 取り出す。後ろの組は前に詰める（入れた順を保つ）
-    fn remove(&mut self, k: &Value) -> Option<Value> {
+    pub(crate) fn remove(&mut self, k: &Value) -> Option<Value> {
         let i = self.index.remove(&key_of(k))?;
         let (_, v) = self.entries.remove(i);
         for (j, (k, _)) in self.entries.iter().enumerate().skip(i) {
@@ -510,7 +510,7 @@ impl Interp {
     }
 
     /// 値の写し。中の own はすべて、それを借りた読むだけの ref にする（own は唯一の持ち主なので写せない）
-    fn view_of(&self, v: Value, span: Span, what: &str) -> Value {
+    pub(crate) fn view_of(&self, v: Value, span: Span, what: &str) -> Value {
         match v {
             Value::Own(slot) => Value::Ref(RefVal {
                 slot,
@@ -2112,7 +2112,7 @@ impl Interp {
 // ---------------------------------------------------------------- ヘルパ
 
 /// 安定なマージソート。`less` は途中で失敗しうる（比べる関数の実行時エラー）
-fn merge_sort<T>(cx: &mut T, v: Vec<usize>, less: &mut impl FnMut(&mut T, usize, usize) -> R<bool>) -> R<Vec<usize>> {
+pub(crate) fn merge_sort<T>(cx: &mut T, v: Vec<usize>, less: &mut impl FnMut(&mut T, usize, usize) -> R<bool>) -> R<Vec<usize>> {
     if v.len() <= 1 {
         return Ok(v);
     }
@@ -2171,7 +2171,7 @@ fn is_place(e: &Expr) -> bool {
 }
 
 /// 添字が範囲の中か確かめて、usize にする
-fn bounds(i: i128, len: usize, span: Span) -> R<usize> {
+pub(crate) fn bounds(i: i128, len: usize, span: Span) -> R<usize> {
     if i < 0 || i >= len as i128 {
         return Err(Diagnostic::new(format!("添字 {} は配列の範囲の外です", i))
             .primary(span, format!("長さは {} なので、添字は 0〜{} です", len, len as i128 - 1)));
@@ -2180,7 +2180,7 @@ fn bounds(i: i128, len: usize, span: Span) -> R<usize> {
 }
 
 /// 配列・辞書 `c` の中で、添字・キー `key` の要素がどこにあるか
-fn locate(c: &Value, key: &Value, key_span: Span, base_span: Span) -> R<usize> {
+pub(crate) fn locate(c: &Value, key: &Value, key_span: Span, base_span: Span) -> R<usize> {
     match (c, key) {
         (Value::Array(items, _), Value::Int(i, _)) => bounds(*i, items.len(), key_span),
         (Value::Array(..), other) => {
@@ -2249,11 +2249,11 @@ fn undefined_var(name: &str, span: Span) -> Diagnostic {
     Diagnostic::new(format!("未定義の変数 `{}`", name)).primary(span, "この名前は見つかりません")
 }
 
-fn some(v: Value) -> Value {
+pub(crate) fn some(v: Value) -> Value {
     Value::Enum { variant: Rc::from("Some"), fields: vec![v], copy: true }
 }
 
-fn none() -> Value {
+pub(crate) fn none() -> Value {
     Value::Enum { variant: Rc::from("None"), fields: Vec::new(), copy: true }
 }
 

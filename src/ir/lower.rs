@@ -333,7 +333,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.cur = exit;
             }
             Stmt::For { var, range, range_span, body, els } => self.for_range(var, range, *range_span, body, els.as_ref())?,
-            Stmt::ForEach { .. } => return Err("for x in a".to_string()),
+            Stmt::ForEach { key, var, var_span, iter, body, els } => {
+                self.for_each(key.as_ref(), var, *var_span, iter, body, els.as_ref())?
+            }
             Stmt::Break(sp) => {
                 let lp = self.loops.last().expect("parser rejects break outside loops");
                 let (to, depth) = (lp.brk, lp.brk_depth);
@@ -410,7 +412,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             None => None,
         };
         let zero = Operand::Const(Const::Int(0, IntTy::I64));
-        let fail_term = Term::Fail("range の刻みが 0 です".to_string(), range_span);
+        let fail_term = Term::Fail("range の刻みが 0 です".to_string(), range_span, "これだと永遠に終わりません".to_string());
 
         let head = self.new_block();
         let up = self.new_block();
@@ -480,6 +482,126 @@ impl<'a, 'p> FnLower<'a, 'p> {
         }
         self.goto_and_switch(exit);
         self.pop_scope(range_span, "ループを抜けた");
+        Ok(())
+    }
+
+    /// `for x in a` / `for (k, v) in m`（interp の `exec_for_each`）。a は借りて読み、始めた時点の要素の写しを回す
+    fn for_each(
+        &mut self,
+        key: Option<&(String, Span)>,
+        var: &str,
+        var_span: Span,
+        iter: &Expr,
+        body: &ast::Block,
+        els: Option<&ast::Block>,
+    ) -> L<()> {
+        let it = self.ty(iter);
+        let (cty, ptr) = match &it {
+            Ty::Own(x) | Ty::Ref(x, _) => ((**x).clone(), true),
+            t => (t.clone(), false),
+        };
+        let elem = match &cty {
+            Ty::Array(x, _) | Ty::List(x) => (**x).clone(),
+            Ty::Map(_, v) => (**v).clone(),
+            _ => return Err("配列でないものの for".to_string()),
+        };
+        let key_ty = match &cty {
+            Ty::Map(k, _) => (**k).clone(),
+            _ => Ty::Int(IntTy::I64),
+        };
+        let i64t = Ty::Int(IntTy::I64);
+        // 隠れた変数（ループの外へ出るとき drop する）
+        self.scopes.push(Vec::new());
+        let hidden = self.scopes.len();
+        let mut src = if is_place(iter) && !matches!(&iter.kind, ExprKind::Var(n) if self.lookup(n).is_none()) {
+            self.place(iter)?
+        } else {
+            // 一時的な値は回し終わったら捨てる
+            let t = match self.expr(iter)? {
+                Operand::Move(t, _) => t,
+                _ => return Err("定数の for".to_string()),
+            };
+            self.scopes.last_mut().expect("scope").push((String::new(), t));
+            Place::local(t, iter.span)
+        };
+        if ptr {
+            src.proj.push(Proj::Deref(ast::Check::Required, iter.span));
+        }
+        if key.is_some() && src.proj.iter().any(|p| matches!(p, Proj::Index(..))) {
+            return Err("要素の中の辞書の for (k, v)".to_string());
+        }
+        let what = format!("{} の要素", describe(iter));
+        let items = self.declare("", Ty::List(Box::new(elem.clone())), false, var_span);
+        self.assign(items, Rvalue::Items { place: src.clone(), what: what.clone(), span: var_span }, var_span);
+        let keys = match key {
+            Some(_) => {
+                let k = self.declare("", Ty::List(Box::new(key_ty)), false, var_span);
+                self.assign(k, Rvalue::Keys(src), var_span);
+                Some(k)
+            }
+            None => None,
+        };
+        let rd = |l: Local| Place::local(l, var_span);
+        let n = self.declare("", i64t.clone(), false, var_span);
+        let len = Rvalue::SeqOp { name: "len".to_string(), place: rd(items), args: Vec::new(), span: var_span, arg_span: var_span };
+        self.assign(n, len, var_span);
+        let i = self.declare("", i64t.clone(), true, var_span);
+        self.assign(i, Rvalue::Use(Operand::Const(Const::Int(0, IntTy::I64))), var_span);
+
+        let head = self.new_block();
+        let body_bb = self.new_block();
+        let next = self.new_block();
+        let done = self.new_block();
+        let exit = self.new_block();
+        self.goto_and_switch(head);
+        let c = self.temp_of(Ty::Bool, Rvalue::Bin(BinOp::Lt, Operand::Copy(rd(i)), Operand::Copy(rd(n)), var_span), var_span);
+        self.blocks[self.cur].term = Term::Branch(c, body_bb, done);
+        self.cur = body_bb;
+        self.scopes.push(Vec::new());
+        let at = |l: Local| {
+            let mut p = rd(l);
+            p.proj.push(Proj::Index(Operand::Copy(rd(i)), var_span, iter.span));
+            p
+        };
+        // ムーブする要素（構造体など）は写しを置いて、読むだけの ref で渡す
+        let view = if self.moves(&elem)? {
+            let w = self.declare("", elem.clone(), false, var_span);
+            self.assign(w, Rvalue::Use(Operand::Copy(at(items))), var_span);
+            Some(w)
+        } else {
+            None
+        };
+        if let (Some((kn, ks)), Some(keys)) = (key, keys) {
+            let kt = self.var_ty(*ks)?;
+            let k = self.declare(kn, kt, false, *ks);
+            self.assign(k, Rvalue::Use(Operand::Copy(at(keys))), *ks);
+        }
+        let vt = self.var_ty(var_span)?;
+        let v = self.declare(var, vt, false, var_span);
+        let value = match view {
+            Some(w) => Rvalue::Ref { place: rd(w), mutable: false, what, span: var_span },
+            None => Rvalue::Use(Operand::Copy(at(items))),
+        };
+        self.assign(v, value, var_span);
+        self.loops.push(Loop { brk: exit, brk_depth: hidden, cont: next, cont_depth: hidden + 1 });
+        self.block(body, None)?;
+        self.loops.pop();
+        self.goto_and_switch(next);
+        self.pop_scope(var_span, "次の周回へ進んだ");
+        let inc = Rvalue::Bin(BinOp::Add, Operand::Copy(rd(i)), Operand::Const(Const::Int(1, IntTy::I64)), var_span);
+        self.assign(i, inc, var_span);
+        self.blocks[self.cur].term = Term::Goto(head);
+        self.cur = done;
+        if let Some(els) = els {
+            let run_else = self.new_block();
+            let z = Rvalue::Bin(BinOp::Eq, Operand::Copy(rd(n)), Operand::Const(Const::Int(0, IntTy::I64)), var_span);
+            let z = self.temp_of(Ty::Bool, z, var_span);
+            self.blocks[self.cur].term = Term::Branch(z, run_else, exit);
+            self.cur = run_else;
+            self.block(els, None)?;
+        }
+        self.goto_and_switch(exit);
+        self.pop_scope(var_span, "for で回し終わった");
         Ok(())
     }
 
@@ -682,7 +804,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
     fn moves(&self, t: &Ty) -> L<bool> {
         Ok(match t {
             Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..) => false,
-            Ty::Own(_) | Ty::Struct(..) => true,
+            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) => true,
+            Ty::Array(x, _) => self.moves(x)?,
             Ty::Enum(n, args) => {
                 let (tparams, vs) = self.info.enums.get(n).ok_or("enum の記録がない")?;
                 let map: HashMap<String, Ty> = tparams.iter().cloned().zip(args.iter().cloned()).collect();
@@ -770,13 +893,50 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let place = self.place(inner)?;
                 self.temp_of(ty, Rvalue::Ref { place, mutable: *mutable, what: describe(inner), span: sp }, sp)
             }
-            ExprKind::Deref(..) | ExprKind::Field(..) => {
-                // ポインタの先・フィールドから取り出せるのはコピーできる値だけ（ムーブする値はまだ扱わない）
-                if self.moves(&ty)? {
-                    return Err("ポインタの先やフィールドからムーブする値を読む".to_string());
+            ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..) => {
+                // ポインタの先・フィールド・要素から取り出せるのはコピーできる値だけ。ムーブする値は、たどってから実行時エラー
+                if self.moves(&ty)? && !matches!(&e.kind, ExprKind::Deref(b, _) | ExprKind::Field(b, ..) | ExprKind::Index(b, ..) if !is_place(b)) {
+                    let place = self.place(e)?;
+                    let _ = self.temp_of(ty.clone(), Rvalue::Use(Operand::Copy(place)), sp);
+                    let title = match &e.kind {
+                        ExprKind::Deref(..) => "ポインタの先",
+                        ExprKind::Field(..) => "フィールド",
+                        _ => "配列の中",
+                    };
+                    let title = format!("{}にある {} は取り出せません", title, value_kind(&ty));
+                    self.terminate(Term::Fail(title, sp, "所有権をここから動かすことはできない".to_string()));
+                    return Ok(Operand::Const(Const::Unit));
                 }
-                let place = self.place(e)?;
-                self.temp_of(ty, Rvalue::Use(Operand::Copy(place)), sp)
+                if self.moves(&ty)? {
+                    return Err("一時的な値の中からムーブする値を読む".to_string());
+                }
+                let (place, t) = self.read_place(e)?;
+                let r = self.temp_of(ty, Rvalue::Use(Operand::Copy(place)), sp);
+                self.drop_temp(&t.map(|t| Operand::Move(t, sp)), sp);
+                r
+            }
+            ExprKind::ArrayLit(_, seq) if seq.get() == ast::Seq::Map => self.temp_of(ty, Rvalue::Map(Vec::new(), sp), sp),
+            ExprKind::ArrayLit(items, seq) => {
+                let mut ops = Vec::new();
+                for x in items {
+                    ops.push(self.expr(x)?);
+                }
+                self.temp_of(ty, Rvalue::Array(ops, seq.get() == ast::Seq::List), sp)
+            }
+            ExprKind::ArrayRepeat(x, n, list) => {
+                if self.moves(&self.ty(x))? {
+                    return Err("ムーブする値を並べる".to_string());
+                }
+                let v = self.expr(x)?;
+                self.temp_of(ty, Rvalue::Repeat(v, *n, list.get()), sp)
+            }
+            ExprKind::MapLit(pairs) => {
+                let mut ops = Vec::new();
+                for (k, v) in pairs {
+                    let k = self.expr(k)?;
+                    ops.push((k, self.expr(v)?));
+                }
+                self.temp_of(ty, Rvalue::Map(ops, sp), sp)
             }
             ExprKind::StructLit(name, inits) => {
                 let def = self.structs.get(name).cloned().ok_or_else(|| format!("構造体 `{}` がない", name))?;
@@ -851,9 +1011,6 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.match_expr(scrut, arms, default.as_ref(), Some(d))?;
                 Operand::Move(d, sp)
             }
-            ExprKind::Index(..) | ExprKind::ArrayLit(..) | ExprKind::ArrayRepeat(..) | ExprKind::MapLit(_) => {
-                return Err("配列・リスト・辞書".to_string())
-            }
             ExprKind::Lambda(_) => return Err("クロージャ".to_string()),
         })
     }
@@ -863,11 +1020,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let is_place_read = !e.borrow.get()
             && match &e.kind {
                 ExprKind::Var(n) => self.lookup(n).is_some(),
-                ExprKind::Deref(inner, _) | ExprKind::Field(inner, ..) => is_place(inner),
+                ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..) => true,
                 _ => false,
             };
         let r = if is_place_read {
-            Rvalue::Show(Operand::Copy(self.place(e)?), false, e.span)
+            let (pl, t) = self.read_place(e)?;
+            let r = self.temp_of(Ty::Str, Rvalue::Show(Operand::Copy(pl), false, e.span), e.span);
+            self.drop_temp(&t.map(|t| Operand::Move(t, e.span)), e.span);
+            return Ok(r);
         } else {
             match self.expr(e)? {
                 // 書いたままの文字列はそのまま
@@ -962,6 +1122,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
                         targs.entry(p.clone()).or_insert_with(|| a.clone());
                     }
                 }
+                if temp.is_none() && self.through_list(recv) {
+                    return Err("リストの中の値のメソッド".to_string());
+                }
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;
                 let this_ty = Ty::Ref(Box::new(Ty::Struct(sname.clone(), sargs.clone())), mutable);
                 let this = self.temp_of(this_ty, Rvalue::Ref { place: pl, mutable, what: describe(recv), span: recv.span }, sp);
@@ -970,6 +1133,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 ops.append(&mut vals);
                 let r = self.temp_of(ty, Rvalue::Call(f, ops, sp), sp);
                 // 一時的な receiver は、呼び出しが終わったら捨てる
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
+            Ty::Array(..) | Ty::List(_) | Ty::Map(..) if name != "sort_by" => {
+                let pl = recv_place(self)?.ok_or("定数の receiver")?;
+                let arg_span = args.first().map_or(sp, |a| a.span);
+                let op = Rvalue::SeqOp { name: name.to_string(), place: pl, args: vals, span: sp, arg_span };
+                let r = self.temp_of(ty, op, sp);
                 self.drop_temp(&temp, sp);
                 Ok(r)
             }
@@ -991,30 +1162,87 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let l = self.lookup(name).ok_or_else(|| format!("場所でない名前 `{}`", name))?;
                 Ok(Place::local(l, e.span))
             }
-            ExprKind::Deref(inner, check) if is_place(inner) => {
-                let mut p = self.place(inner)?;
-                p.proj.push(Proj::Deref(check.get(), e.span));
+            ExprKind::Deref(base, _) | ExprKind::Field(base, ..) | ExprKind::Index(base, ..) if is_place(base) => {
+                // 添字を先に評価してから、配列の場所を求める（interp の `place` と同じ順）
+                let key = match &e.kind {
+                    ExprKind::Index(_, idx, _) => Some(self.expr(idx)?),
+                    _ => None,
+                };
+                let mut p = self.place(base)?;
+                self.project(&mut p, e, base, key)?;
                 Ok(p)
             }
-            ExprKind::Field(base, name, check) if is_place(base) => {
-                let mut p = self.place(base)?;
-                let sname = match self.info.ty(base) {
-                    Some(Ty::Struct(n, _)) => n.clone(),
-                    Some(Ty::Own(t) | Ty::Ref(t, _)) => match &**t {
-                        Ty::Struct(n, _) => {
-                            p.proj.push(Proj::Deref(check.get(), e.span));
-                            n.clone()
-                        }
-                        _ => return Err("構造体でない先のフィールド".to_string()),
-                    },
-                    _ => return Err("構造体でない値のフィールド".to_string()),
-                };
-                let def = self.structs.get(&sname).ok_or("構造体がない")?;
+            _ => Err("一時的な値の中の場所".to_string()),
+        }
+    }
+
+    /// 読むための場所（interp の `eval_borrow`）。一時的な値の中（`make().x`・`make()[0]`・`*make()`）なら、
+    /// その値を入れた一時的な変数も返す（読み終わったら drop する）
+    fn read_place(&mut self, e: &Expr) -> L<(Place, Option<Local>)> {
+        let base = match &e.kind {
+            ExprKind::Deref(b, _) | ExprKind::Field(b, ..) | ExprKind::Index(b, ..) if !is_place(b) => b,
+            _ => return Ok((self.place(e)?, None)),
+        };
+        let key = match &e.kind {
+            ExprKind::Index(_, idx, _) => Some(self.expr(idx)?),
+            _ => None,
+        };
+        let t = match self.expr(base)? {
+            Operand::Move(t, _) => t,
+            _ => return Err("定数の中の場所".to_string()),
+        };
+        // 一時的な own・構造体の中から own は取り出せない（interp のエラー）
+        if !matches!(self.ty(base), Ty::Ref(..)) && self.moves(&self.ty(e))? {
+            return Err("一時的な値の中の own".to_string());
+        }
+        let mut p = Place::local(t, base.span);
+        self.project(&mut p, e, base, key)?;
+        Ok((p, Some(t)))
+    }
+
+    /// `base` の場所 `p` から、`e`（`*base`・`base.f`・`base[k]`）の場所へ進む。own / ref の先は自動でたどる
+    fn project(&mut self, p: &mut Place, e: &Expr, base: &Expr, key: Option<Operand>) -> L<()> {
+        let bt = self.ty(base);
+        let inner = match (&e.kind, &bt) {
+            (ExprKind::Deref(_, c), _) => {
+                p.proj.push(Proj::Deref(c.get(), e.span));
+                return Ok(());
+            }
+            (ExprKind::Field(_, _, c) | ExprKind::Index(_, _, c), Ty::Own(t) | Ty::Ref(t, _)) => {
+                p.proj.push(Proj::Deref(c.get(), e.span));
+                (**t).clone()
+            }
+            _ => bt.clone(),
+        };
+        match (&e.kind, &inner) {
+            (ExprKind::Field(_, name, _), Ty::Struct(sname, _)) => {
+                let def = self.structs.get(sname).ok_or("構造体がない")?;
                 let i = def.field_index(name).ok_or("ないフィールド")?;
                 p.proj.push(Proj::Field(i, e.span));
-                Ok(p)
             }
-            _ => Err("一時的な値の中の場所・配列の要素".to_string()),
+            (ExprKind::Index(_, idx, _), Ty::Array(..) | Ty::List(_) | Ty::Map(..)) => {
+                p.proj.push(Proj::Index(key.expect("index key"), idx.span, base.span));
+            }
+            _ => return Err(format!("{} の中の場所", inner.show())),
+        }
+        Ok(())
+    }
+
+    /// 場所がリスト・辞書の中を通るか（中の値は借りられない。interp の `through_list`）
+    fn through_list(&self, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Field(base, ..) | ExprKind::Index(base, ..) => {
+                let bt = self.ty(base);
+                let (inner, ptr) = match &bt {
+                    Ty::Own(t) | Ty::Ref(t, _) => ((**t).clone(), true),
+                    t => (t.clone(), false),
+                };
+                if matches!(e.kind, ExprKind::Index(..)) && matches!(inner, Ty::List(_) | Ty::Map(..)) {
+                    return true;
+                }
+                !ptr && self.through_list(base)
+            }
+            _ => false,
         }
     }
 }
@@ -1066,7 +1294,21 @@ fn reachable(blocks: Vec<Block>) -> Vec<Block> {
         .collect()
 }
 
+/// interp の `Value::type_name`（値の種類の名前）を型から
+fn value_kind(t: &Ty) -> &'static str {
+    match t {
+        Ty::Own(_) => "own",
+        Ty::Struct(..) => "構造体",
+        Ty::Enum(..) => "enum",
+        Ty::Array(..) => "配列",
+        Ty::List(_) => "リスト",
+        Ty::Map(..) => "辞書",
+        Ty::Fn(..) => "関数",
+        _ => "値",
+    }
+}
+
 fn is_place(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
+    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..))
 }
 
