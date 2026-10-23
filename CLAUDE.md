@@ -34,6 +34,7 @@
 | `tests/methods.rs` | メソッド（`this`・`fn mut`・構造体の値への呼び出し・静的メソッド） |
 | `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>`・interface を型として使う |
 | `tests/strings.rs` | 文字列の埋め込み `"x = {x}"` |
+| `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -95,6 +96,10 @@
 
 - 文字列の埋め込み: lexer が `{...}` の中を別に字句解析して `Tok::Interp`（位置は元のファイルに直す）、
   パーサが同じ enum / 構造体の名前で式に読む（`ExprKind::Interp`）。値は print と同じく `eval_borrow` で借りて読む（analyze も borrow）。
+
+- 配列: `Value::Array`（要素にムーブする値があればムーブ）。`Place.path` は構造体のフィールドと配列の添字の両方をたどる。
+  `a[i]`（`ExprKind::Index`）は **添字を先に評価してから** 配列の場所を求める（interp の `place` / `eval_borrow`、analyze も同じ順）。
+  定数の添字の範囲チェックは `types.rs`、実行時は `bounds`。`len()` は `eval_method` / `method_call` の特別扱い。
 
 ## 設計の決めごと
 

@@ -248,6 +248,10 @@ impl<'a> FnAnalyzer<'a> {
                         }
                     }
                     ExprKind::Deref(inner, check) | ExprKind::Field(inner, _, check) => self.deref(inner, check),
+                    ExprKind::Index(inner, idx, check) => {
+                        self.expr(idx, false);
+                        self.deref(inner, check);
+                    }
                     _ => {}
                 }
             }
@@ -414,6 +418,28 @@ impl<'a> FnAnalyzer<'a> {
                         self.record_call(name, safe);
                     }
                 }
+                None
+            }
+            // インタプリタと同じく、添字を先に評価してから配列をたどる
+            ExprKind::Index(inner, idx, check) => {
+                self.expr(idx, false);
+                if is_place(inner) {
+                    self.deref(inner, check);
+                } else {
+                    // 一時的な配列（`make()[0]`）は評価して捨てる
+                    self.expr(inner, false);
+                    check.set(Check::Required);
+                }
+                None
+            }
+            ExprKind::ArrayLit(items) => {
+                for x in items {
+                    self.expr(x, false);
+                }
+                None
+            }
+            ExprKind::ArrayRepeat(x, _) => {
+                self.expr(x, false);
                 None
             }
             ExprKind::Interp(parts) => {
@@ -592,10 +618,21 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
                 }
             }
         }
+        ExprKind::Index(b, i, c) => {
+            f(c);
+            expr_checks(i, f);
+            expr_checks(b, f);
+        }
+        ExprKind::ArrayLit(items) => {
+            for x in items {
+                expr_checks(x, f);
+            }
+        }
+        ExprKind::ArrayRepeat(x, _) => expr_checks(x, f),
     }
 }
 
 /// 場所として扱える式か（interp の `is_place` と同じ）
 fn is_place(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
+    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..))
 }

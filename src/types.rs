@@ -34,6 +34,8 @@ pub enum Ty {
     Own(Box<Ty>),
     /// bool は `mut`
     Ref(Box<Ty>, bool),
+    /// `i64[3]`
+    Array(Box<Ty>, u64),
 }
 
 impl Ty {
@@ -53,6 +55,7 @@ impl Ty {
             Ty::Own(t) => format!("own {}", t.show()),
             Ty::Ref(t, false) => format!("ref {}", t.show()),
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
+            Ty::Array(t, n) => format!("{}[{}]", t.show(), n),
         }
     }
 
@@ -96,6 +99,7 @@ fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
         Ty::Enum(n, args) => Ty::Enum(n.clone(), args.iter().map(|a| subst(a, map)).collect()),
         Ty::Own(x) => Ty::Own(Box::new(subst(x, map))),
         Ty::Ref(x, m) => Ty::Ref(Box::new(subst(x, map)), *m),
+        Ty::Array(x, n) => Ty::Array(Box::new(subst(x, map)), *n),
         _ => t.clone(),
     }
 }
@@ -104,7 +108,7 @@ fn contains_iface(t: &Ty) -> bool {
     match t {
         Ty::Iface(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_iface),
-        Ty::Own(x) | Ty::Ref(x, _) => contains_iface(x),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) => contains_iface(x),
         _ => false,
     }
 }
@@ -113,7 +117,7 @@ fn contains_param(t: &Ty) -> bool {
     match t {
         Ty::Param(_) => true,
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_param),
-        Ty::Own(x) | Ty::Ref(x, _) => contains_param(x),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) => contains_param(x),
         _ => false,
     }
 }
@@ -123,7 +127,7 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
     match pattern {
         Ty::Param(p) => tparams.contains(p) && !map.contains_key(p),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|a| has_unbound(a, tparams, map)),
-        Ty::Own(x) | Ty::Ref(x, _) => has_unbound(x, tparams, map),
+        Ty::Own(x) | Ty::Ref(x, _) | Ty::Array(x, _) => has_unbound(x, tparams, map),
         _ => false,
     }
 }
@@ -153,6 +157,7 @@ fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String
             }
         }
         (Ty::Own(x), Ty::Own(y)) | (Ty::Ref(x, _), Ty::Ref(y, _)) => unify(x, y, tparams, map),
+        (Ty::Array(x, n), Ty::Array(y, m)) if n == m => unify(x, y, tparams, map),
         _ => {}
     }
 }
@@ -391,6 +396,7 @@ impl<'a> Checker<'a> {
                 }
             }
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),
+            TypeKind::Array(inner, n) => Ty::Array(Box::new(self.resolve(inner)?), *n),
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
                 "str" => Ty::Str,
@@ -470,6 +476,8 @@ impl<'a> Checker<'a> {
         match t {
             Ty::Int(_) | Ty::Bool | Ty::Str | Ty::Ref(..) | Ty::Unit | Ty::Never => true,
             Ty::Own(_) | Ty::Struct(..) | Ty::Param(_) | Ty::Iface(_) => false,
+            // 要素がコピーできる配列はコピー（Rust と同じ）
+            Ty::Array(x, _) => self.copyable(x),
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
             Ty::Enum(..) => self.variants_of(t).expect("enum").iter().flat_map(|(_, f)| f).all(|t| self.copyable(t)),
         }
@@ -900,6 +908,93 @@ impl<'a> Checker<'a> {
         match &e.kind {
             ExprKind::Int(_) => unreachable!("integer literals are constant trees"),
             ExprKind::Try(inner) => self.try_expr(inner, e.span, hint),
+            ExprKind::Index(base, idx, _) => {
+                // インタプリタと同じく、添字を先に調べる
+                self.index_value(idx)?;
+                let t = self.expr(base)?;
+                let (elem, len) = match &t {
+                    Ty::Array(x, n) => ((**x).clone(), *n),
+                    Ty::Own(p) | Ty::Ref(p, _) => match &**p {
+                        Ty::Array(x, n) => ((**x).clone(), *n),
+                        _ => return Err(not_an_array(&t, base.span)),
+                    },
+                    _ => return Err(not_an_array(&t, base.span)),
+                };
+                if is_const_tree(idx) {
+                    if let Ok(v) = const_val(idx) {
+                        if v < 0 || v >= len as i128 {
+                            return Err(Diagnostic::new(format!("添字 {} は配列の範囲の外です", v))
+                                .primary(idx.span, format!("`{}` の添字は 0〜{} です", t.show(), len as i128 - 1)));
+                        }
+                    }
+                }
+                Ok(elem)
+            }
+            ExprKind::ArrayLit(items) => {
+                let want = match hint {
+                    Some(Ty::Array(x, n)) if *n == items.len() as u64 => Some((**x).clone()),
+                    _ => None,
+                };
+                if let Some(w) = want {
+                    for x in items {
+                        self.expect(x, &w)?;
+                    }
+                    return Ok(Ty::Array(Box::new(w), items.len() as u64));
+                }
+                if items.is_empty() {
+                    return Err(Diagnostic::new("空の配列の型が決まりません")
+                        .primary(e.span, "要素の型が分からない")
+                        .note("`let i64[0] a = [];` のように型を書いてください"));
+                }
+                // 要素の型をそろえる（数の書き方は、ほかの要素に合わせる）
+                let mut tys: Vec<Option<Ty>> = vec![None; items.len()];
+                let mut acc: Option<Ty> = None;
+                for (i, x) in items.iter().enumerate() {
+                    if is_const_tree(x) {
+                        continue;
+                    }
+                    let t = self.value(x)?;
+                    acc = Some(match acc {
+                        None => t.clone(),
+                        Some(Ty::Int(a)) => match (&t, IntTy::common(a, if let Ty::Int(b) = &t { *b } else { a })) {
+                            (Ty::Int(_), Some(c)) => Ty::Int(c),
+                            _ => return Err(mismatch(&Ty::Int(a), &t, x.span)),
+                        },
+                        Some(a) if self.fits(&t, &a) => a,
+                        Some(a) => return Err(mismatch(&a, &t, x.span)),
+                    });
+                    tys[i] = Some(t);
+                }
+                let elem = acc.unwrap_or(I64);
+                for (x, t) in items.iter().zip(tys) {
+                    match t {
+                        None => {
+                            self.expect(x, &elem)?;
+                        }
+                        Some(t) => convert(x, &t, &elem),
+                    }
+                }
+                Ok(Ty::Array(Box::new(elem), items.len() as u64))
+            }
+            ExprKind::ArrayRepeat(x, n) => {
+                let h = match hint {
+                    Some(Ty::Array(x, _)) => Some((**x).clone()),
+                    _ => None,
+                };
+                let t = match &h {
+                    Some(w) => {
+                        self.expect(x, w)?;
+                        w.clone()
+                    }
+                    None => self.value(x)?,
+                };
+                if !self.copyable(&t) {
+                    return Err(Diagnostic::new(format!("`{}` は複製できないので並べられません", t.show()))
+                        .primary(x.span, "own や構造体は 1 つしかない")
+                        .note("`[a, b, c]` のように 1 つずつ書いてください"));
+                }
+                Ok(Ty::Array(Box::new(t), *n))
+            }
             ExprKind::Interp(parts) => {
                 // print と同じく、どんな値でも文字にできる
                 for p in parts {
@@ -1234,6 +1329,14 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// 添字の式。整数ならどの型でもよい（数の書き方は i64）
+    fn index_value(&mut self, idx: &Expr) -> R<()> {
+        match self.expr_h(idx, Some(&I64))? {
+            Ty::Int(_) => Ok(()),
+            t => Err(Diagnostic::new("添字は整数です").primary(idx.span, format!("ここは `{}` です", t.show()))),
+        }
+    }
+
     /// `<T: ordered>` の T か
     fn is_ordered_param(&self, t: &Ty) -> bool {
         matches!(t, Ty::Param(p) if matches!(self.bounds.get(p), Some(b) if b.iter().any(|x| x == ORDERED)))
@@ -1421,6 +1524,13 @@ impl<'a> Checker<'a> {
             t => t.clone(),
         };
         match &inner {
+            Ty::Array(..) => {
+                if name != "len" || !args.is_empty() {
+                    return Err(Diagnostic::new(format!("配列にメソッド `{}` はありません", name))
+                        .primary(span, "配列のメソッドは `len()`（長さ）だけです"));
+                }
+                return Ok(I64);
+            }
             Ty::Param(p) => {
                 let ifaces: Vec<String> =
                     self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).cloned().collect();
@@ -1550,7 +1660,7 @@ impl<'a> Checker<'a> {
                 let t = self.expr(inner)?;
                 outer.through(&t, self.origin(inner), describe(inner))
             }
-            ExprKind::Field(base, ..) => {
+            ExprKind::Field(base, ..) | ExprKind::Index(base, ..) => {
                 let a = self.access(base)?;
                 let t = self.expr(base)?;
                 a.through(&t, self.origin(base), describe(base))
@@ -1651,6 +1761,8 @@ fn tail_expr(b: &Block) -> Option<&Expr> {
 /// 型の中に（own / ref を通さず）じかに入っている構造体・enum の名前
 fn by_value_names(t: &Ty, out: &mut Vec<String>) {
     match t {
+        // 配列は要素をじかに含む
+        Ty::Array(x, _) => by_value_names(x, out),
         Ty::Struct(n, args) | Ty::Enum(n, args) => {
             out.push(n.clone());
             // 型の引数も、じかに含まれるかもしれないとみなす（安全側）
@@ -1670,7 +1782,11 @@ fn tail_span(b: &Block) -> Span {
 }
 
 fn is_place(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
+    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..))
+}
+
+fn not_an_array(t: &Ty, span: Span) -> Diagnostic {
+    Diagnostic::new("添字が使えるのは配列だけです").primary(span, format!("ここは `{}` です", t.show()))
 }
 
 fn describe(e: &Expr) -> String {

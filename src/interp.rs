@@ -35,6 +35,8 @@ pub enum Value {
     Struct(Rc<StructDef>, Vec<Value>),
     /// enum の値（Option も）。`copy` は型検査が決めた「値として読むとコピーか」（false ならムーブ）
     Enum { variant: Rc<str>, fields: Vec<Value>, copy: bool },
+    /// 配列。要素にムーブする値があれば、値として読むとムーブ（なければコピー）
+    Array(Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,7 @@ impl Value {
             Value::Ref(_) => "ref",
             Value::Struct(..) => "構造体",
             Value::Enum { .. } => "enum",
+            Value::Array(_) => "配列",
         }
     }
 
@@ -65,21 +68,26 @@ impl Value {
     fn has_own(&self) -> bool {
         match self {
             Value::Own(_) => true,
-            Value::Struct(_, fields) | Value::Enum { fields, .. } => fields.iter().any(Value::has_own),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields) => fields.iter().any(Value::has_own),
             _ => false,
         }
     }
 
     /// 値として読むとムーブになるか（own・構造体・コピーできない enum）
     fn moves(&self) -> bool {
-        matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. })
+        match self {
+            Value::Array(items) => items.iter().any(Value::moves),
+            _ => matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. }),
+        }
     }
 
     /// 中にある own のスロットをすべて集める
     fn collect_owns(&self, out: &mut Vec<usize>) {
         match self {
             Value::Own(s) => out.push(*s),
-            Value::Struct(_, fields) | Value::Enum { fields, .. } => fields.iter().for_each(|f| f.collect_owns(out)),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields) => {
+                fields.iter().for_each(|f| f.collect_owns(out))
+            }
             _ => {}
         }
     }
@@ -96,6 +104,10 @@ impl Value {
                 let parts: Vec<String> =
                     def.fields.iter().zip(fields).map(|(n, v)| format!("{}: {}", n, v.show())).collect();
                 format!("{} {{ {} }}", def.name, parts.join(", "))
+            }
+            Value::Array(items) => {
+                let parts: Vec<String> = items.iter().map(Value::show).collect();
+                format!("[{}]", parts.join(", "))
             }
             Value::Enum { variant, fields, .. } if fields.is_empty() => variant.to_string(),
             Value::Enum { variant, fields, .. } => {
@@ -698,7 +710,7 @@ impl Interp {
                 }
                 Ok(())
             }
-            ExprKind::Deref(..) | ExprKind::Field(..) => {
+            ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..) => {
                 let place = self.place(target)?;
                 place.access.require(target.span, "書き換えようとした")?;
                 let old = std::mem::replace(self.place_mut(&place), newv);
@@ -763,7 +775,45 @@ impl Interp {
                 }
                 Ok((v, false))
             }
+            ExprKind::Index(base, idx, check) => {
+                if is_place(base) {
+                    let place = self.place(e)?;
+                    return Ok((self.place_mut(&place).clone(), false));
+                }
+                // 一時的な配列の要素（`make()[0]` など）。添字を先に評価する
+                let i = self.eval_index(idx)?;
+                let tmp = self.eval(base)?;
+                let (v, holder) = match &tmp {
+                    Value::Array(items) => (items[bounds(i, items.len(), idx.span)?].clone(), None),
+                    Value::Own(_) | Value::Ref(_) => {
+                        let slot = self.check_ptr(&tmp, e.span, check.get())?;
+                        let v = match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                            Value::Array(items) => items[bounds(i, items.len(), idx.span)?].clone(),
+                            other => return Err(not_an_array(other, base.span)),
+                        };
+                        (v, matches!(tmp, Value::Own(_)).then_some(slot))
+                    }
+                    other => return Err(not_an_array(other, base.span)),
+                };
+                if v.has_own() && !matches!(tmp, Value::Ref(_)) {
+                    return Err(Diagnostic::new("一時的な配列の中から own を取り出せません")
+                        .primary(e.span, "先に変数に入れてください"));
+                }
+                match holder {
+                    Some(slot) => self.free(slot, e.span, "使い終わった一時的な値"),
+                    None => self.release(tmp, e.span, "使い終わった一時的な値"),
+                }
+                Ok((v, false))
+            }
             _ => Ok((self.eval(e)?, true)),
+        }
+    }
+
+    /// 添字を評価する
+    fn eval_index(&mut self, idx: &Expr) -> R<i128> {
+        match self.eval(idx)? {
+            Value::Int(n, _) => Ok(n),
+            other => Err(Diagnostic::new("添字は整数です").primary(idx.span, format!("ここは {} です", other.type_name()))),
         }
     }
 
@@ -825,7 +875,37 @@ impl Interp {
                     Err(other) => Err(not_a_struct(&other, base.span)),
                 }
             }
-            _ => unreachable!("only Var/Deref/Field are places"),
+            ExprKind::Index(base, idx, check) => {
+                // 添字を先に評価する（そのあとで配列の場所を求める。analyze も同じ順）
+                let i = self.eval_index(idx)?;
+                if !is_place(base) {
+                    return Err(Diagnostic::new("一時的な配列の中は場所として使えません")
+                        .primary(base.span, "先に変数に入れてください"));
+                }
+                let mut place = self.place(base)?;
+                let here = match self.place_mut(&place) {
+                    Value::Array(items) => Ok(items.len()),
+                    v => Err(v.clone()),
+                };
+                match here {
+                    Ok(len) => {
+                        place.path.push(bounds(i, len, idx.span)?);
+                        Ok(place)
+                    }
+                    Err(p @ (Value::Own(_) | Value::Ref(_))) => {
+                        let slot = self.check_ptr(&p, e.span, check.get())?;
+                        let len = match &self.heap.slots[slot].value {
+                            Some(Value::Array(items)) => items.len(),
+                            Some(other) => return Err(not_an_array(other, base.span)),
+                            None => unreachable!("check_ptr returns live slots"),
+                        };
+                        let access = place.access.through(&p);
+                        Ok(Place { root: Root::Slot(slot), path: vec![bounds(i, len, idx.span)?], access })
+                    }
+                    Err(other) => Err(not_an_array(&other, base.span)),
+                }
+            }
+            _ => Err(Diagnostic::new("一時的な値の中は場所として使えません").primary(e.span, "先に変数に入れてください")),
         }
     }
 
@@ -839,8 +919,8 @@ impl Interp {
         };
         for &i in &place.path {
             v = match v {
-                Value::Struct(_, fields) => &mut fields[i],
-                _ => unreachable!("place path goes through structs"),
+                Value::Struct(_, fields) | Value::Array(fields) => &mut fields[i],
+                _ => unreachable!("place path goes through structs and arrays"),
             };
         }
         v
@@ -1026,6 +1106,23 @@ impl Interp {
             }
             ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
             ExprKind::MethodCall(recv, name, args) => self.eval_method(recv, name, args, e.span),
+            ExprKind::Index(..) => {
+                let (v, _) = self.eval_borrow(e)?;
+                if v.has_own() || v.moves() {
+                    return Err(Diagnostic::new(format!("配列の中にある {} は取り出せません", v.type_name()))
+                        .primary(e.span, "所有権をここから動かすことはできない")
+                        .note("`ref a[i]` で借りるか、`a[i] = ...` で置き換えてください"));
+                }
+                Ok(v)
+            }
+            ExprKind::ArrayLit(items) => Ok(Value::Array(self.eval_all(items)?)),
+            ExprKind::ArrayRepeat(x, n) => {
+                let v = self.eval(x)?;
+                if v.moves() {
+                    return Err(Diagnostic::new("複製できない値は並べられません").primary(x.span, "ここ"));
+                }
+                Ok(Value::Array(vec![v; *n as usize]))
+            }
             ExprKind::Interp(parts) => {
                 // print と同じく借りて読み、作った一時的な値は使い終わったら解放する
                 let mut out = String::new();
@@ -1150,6 +1247,24 @@ impl Interp {
                 (self.place_mut(&pl).clone(), Some(pl))
             }
         };
+        // 配列の `len()`
+        let arr_len = match &rv {
+            Value::Array(items) => Some(items.len()),
+            Value::Own(_) | Value::Ref(_) => {
+                let slot = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                    Value::Array(items) => Some(items.len()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(n) = arr_len {
+            if place.is_none() {
+                self.release(rv, span, "使い終わった一時的な値");
+            }
+            return Ok(Value::Int(n as i128, IntTy::I64));
+        }
         let sname = match &rv {
             Value::Struct(def, _) => def.name.clone(),
             Value::Own(_) | Value::Ref(_) => {
@@ -1278,13 +1393,27 @@ fn describe(e: &Expr) -> String {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Deref(inner, _) => format!("*{}", describe(inner)),
         ExprKind::Field(base, name, _) => format!("{}.{}", describe(base), name),
+        ExprKind::Index(base, ..) => format!("{}[..]", describe(base)),
         _ => "式".to_string(),
     }
 }
 
 /// 場所として扱える式か（`ref` やフィールド代入の対象になれる）
 fn is_place(e: &Expr) -> bool {
-    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..))
+    matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..))
+}
+
+/// 添字が範囲の中か確かめて、usize にする
+fn bounds(i: i128, len: usize, span: Span) -> R<usize> {
+    if i < 0 || i >= len as i128 {
+        return Err(Diagnostic::new(format!("添字 {} は配列の範囲の外です", i))
+            .primary(span, format!("長さは {} なので、添字は 0〜{} です", len, len as i128 - 1)));
+    }
+    Ok(i as usize)
+}
+
+fn not_an_array(v: &Value, span: Span) -> Diagnostic {
+    Diagnostic::new("添字が使えるのは配列だけです").primary(span, format!("ここは {} です", v.type_name()))
 }
 
 fn not_a_struct(v: &Value, span: Span) -> Diagnostic {

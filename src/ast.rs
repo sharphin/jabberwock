@@ -17,6 +17,8 @@ pub enum TypeKind {
     Own(Box<TypeExpr>),
     /// bool は `mut`
     Ref(Box<TypeExpr>, bool),
+    /// `i64[3]`: 長さが決まった配列
+    Array(Box<TypeExpr>, u64),
 }
 
 /// 整数の型
@@ -220,6 +222,12 @@ pub enum ExprKind {
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// `a[i]`: 配列の要素。`a` が own / ref なら自動で先をたどる（そのときの検査が `Check`）
+    Index(Box<Expr>, Box<Expr>, Cell<Check>),
+    /// `[1, 2, 3]`
+    ArrayLit(Vec<Expr>),
+    /// `[0; 5]`: 同じ値を並べた配列（値はコピーできる型だけ）
+    ArrayRepeat(Box<Expr>, u64),
     /// `"x = {x}"`: 埋め込みのある文字列。式は print と同じく借りて読む（ムーブしない）
     Interp(Vec<InterpPart>),
     /// `p.name(args)` : メソッド呼び出し。メソッドは `構造体名.name` という名前の関数で、

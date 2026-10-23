@@ -554,9 +554,9 @@ impl Parser {
                     Tok::PercentEq => Some(BinOp::Rem),
                     _ => return Ok(Stmt::Expr(e)),
                 };
-                if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..)) {
+                if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..) | ExprKind::Index(..)) {
                     return Err(Diagnostic::new("構文エラー: ここには代入できません")
-                        .primary(e.span, "代入先は変数名か `*p` か `p.f` だけです"));
+                        .primary(e.span, "代入先は変数名か `*p` か `p.f` か `a[i]` だけです"));
                 }
                 let t = self.bump();
                 // `x += e` は `x = x + e`、`x++` は `x = x + 1` として扱う（文としてだけ書ける）
@@ -823,7 +823,25 @@ impl Parser {
             }
             _ => return Err(self.unexpected("型")),
         };
-        Ok(TypeExpr { kind, span: start.join(self.prev_span()) })
+        let mut t = TypeExpr { kind, span: start.join(self.prev_span()) };
+        // `i64[3]`、`i64[3][2]`（長さ 3 の配列が 2 つ）
+        while self.eat(Tok::LBrack) {
+            let n = self.array_len()?;
+            self.expect(Tok::RBrack, "`]`")?;
+            t = TypeExpr { kind: TypeKind::Array(Box::new(t), n), span: start.join(self.prev_span()) };
+        }
+        Ok(t)
+    }
+
+    /// 配列の長さ（そのまま書いた数）
+    fn array_len(&mut self) -> R<u64> {
+        match self.peek().clone() {
+            Tok::Int(n) => {
+                self.bump();
+                Ok(n as u64)
+            }
+            _ => Err(self.unexpected("配列の長さ（数）")),
+        }
     }
 
     pub fn parse_expr(&mut self) -> R<Expr> {
@@ -918,6 +936,14 @@ impl Parser {
                 e = Expr::new(ExprKind::Try(Box::new(e)), span);
                 continue;
             }
+            if *self.peek() == Tok::LBrack {
+                self.bump();
+                let idx = self.with_struct_lit(true, |p| p.parse_expr())?;
+                let end = self.expect(Tok::RBrack, "`]`")?;
+                let span = e.span.join(end);
+                e = Expr::new(ExprKind::Index(Box::new(e), Box::new(idx), Cell::new(Check::Unvisited)), span);
+                continue;
+            }
             if *self.peek() != Tok::Dot {
                 break;
             }
@@ -948,6 +974,28 @@ impl Parser {
             Tok::Str(s) => {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Str(s), span))
+            }
+            Tok::LBrack => {
+                // `[1, 2, 3]` / `[0; 5]`
+                let start = self.bump().span;
+                let mut items = Vec::new();
+                if *self.peek() != Tok::RBrack {
+                    let first = self.with_struct_lit(true, |p| p.parse_expr())?;
+                    if self.eat(Tok::Semi) {
+                        let n = self.array_len()?;
+                        let end = self.expect(Tok::RBrack, "`]`")?;
+                        return Ok(Expr::new(ExprKind::ArrayRepeat(Box::new(first), n), start.join(end)));
+                    }
+                    items.push(first);
+                    while self.eat(Tok::Comma) {
+                        if *self.peek() == Tok::RBrack {
+                            break;
+                        }
+                        items.push(self.with_struct_lit(true, |p| p.parse_expr())?);
+                    }
+                }
+                let end = self.expect(Tok::RBrack, "`]`")?;
+                Ok(Expr::new(ExprKind::ArrayLit(items), start.join(end)))
             }
             Tok::Interp(parts) => {
                 let span = self.bump().span;
@@ -1226,6 +1274,16 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
                 }
             }
         }
+        ExprKind::Index(b, i, _) => {
+            bind_this(b, ctx, scopes);
+            bind_this(i, ctx, scopes);
+        }
+        ExprKind::ArrayLit(items) => {
+            for x in items {
+                bind_this(x, ctx, scopes);
+            }
+        }
+        ExprKind::ArrayRepeat(x, _) => bind_this(x, ctx, scopes),
         ExprKind::MethodCall(recv, _, args) => {
             bind_this(recv, ctx, scopes);
             for a in args {
