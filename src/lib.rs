@@ -7,6 +7,7 @@ pub mod interp;
 pub mod ir;
 pub mod lexer;
 pub mod modules;
+pub mod native;
 pub mod parser;
 pub mod types;
 
@@ -90,6 +91,18 @@ pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
             p.to_string()
         })
         .map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))
+}
+
+/// LLVM のテキスト（`ward --ll`）。`main` は最初のファイルの名前（エラーの位置に出す）
+pub fn llvm_text(src: &str, read: Reader, main: &str) -> Result<String, String> {
+    let (prog, files) = parse(src, read);
+    let prog = prog.map_err(|d| d.title)?;
+    let (_, info) = types::check_with_info(&prog).map_err(|d| d.title)?;
+    let mut irp = ir::lower::lower(&prog, &info).map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))?;
+    ir::analyze::analyze(&mut irp);
+    let names: Vec<String> =
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.ward", m) }).collect();
+    ir::llvm::emit(&irp, &names).map_err(|r| format!("まだ LLVM に書き出せない書き方があります: {}", r))
 }
 
 /// 実行せずに型検査だけして、警告と読んだファイルを返す（エラーがあれば警告は空。エラーは実行時に返る）
@@ -185,6 +198,12 @@ fn run_inner(
         if let Some(diff) = ir_mismatch(&irp, &it.output, res.as_ref().err(), it.live_objects()) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
+        // WARD_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
+        if std::env::var_os("WARD_NATIVE").is_some() {
+            if let Some(diff) = native_mismatch(&irp, &files, &it.output, res.as_ref().err(), it.live_objects()) {
+                panic!("実行ファイルの結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
+            }
+        }
     }
     Outcome {
         output: it.output.clone(),
@@ -214,4 +233,84 @@ fn ir_mismatch(irp: &ir::Program, output: &str, error: Option<&Diagnostic>, live
         (Some(a), Some(b)) if key(a) == key(b) => None,
         (a, b) => Some(format!("エラーが違う\ninterp: {:?}\nIR: {:?}", a.map(key), b.map(key))),
     }
+}
+
+/// LLVM に書き出して clang で作った実行ファイルを走らせ、インタプリタの結果と違えばその説明を返す
+fn native_mismatch(
+    irp: &ir::Program,
+    files: &[(String, String)],
+    output: &str,
+    error: Option<&Diagnostic>,
+    live: usize,
+) -> Option<String> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let trace = std::env::var_os("WARD_NATIVE_TRACE").is_some();
+    let names: Vec<String> =
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { "main.ward".to_string() } else { format!("{}.ward", m) }).collect();
+    let ll = match ir::llvm::emit(irp, &names) {
+        Ok(t) => t,
+        Err(why) => {
+            if trace {
+                eprintln!("\nNATIVE-SKIP {}", why);
+            }
+            return None;
+        }
+    };
+    let dir = std::env::temp_dir().join(format!("ward-native-{}", std::process::id()));
+    let name = format!("p{}", COUNTER.fetch_add(1, Ordering::SeqCst));
+    let exe = match native::compile_with_cached_runtime(&ll, &dir, &name) {
+        Ok(e) => e,
+        Err(e) => return Some(format!("{}\n--- ll ---\n{}", e, ll)),
+    };
+    let run = std::process::Command::new(&exe).env("WARD_LEAKS", "1").stdin(std::process::Stdio::null()).output();
+    let out = match run {
+        Ok(o) => o,
+        Err(e) => return Some(format!("実行できません: {}", e)),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let diff = if stdout != output {
+        Some(format!("出力が違う\ninterp:\n{}\n実行ファイル:\n{}\n{}", output, stdout, stderr))
+    } else {
+        match error {
+            None => {
+                let got = stderr.lines().find_map(|l| l.strip_prefix("[live] ")).and_then(|n| n.trim().parse::<usize>().ok());
+                if !out.status.success() {
+                    Some(format!("実行ファイルが失敗した（{:?}）\n{}", out.status.code(), stderr))
+                } else if got != Some(live) {
+                    Some(format!("残ったヒープの数が違う（interp {}・実行ファイル {:?}）", live, got))
+                } else {
+                    None
+                }
+            }
+            Some(d) => {
+                let title = stderr.lines().find_map(|l| l.strip_prefix("エラー: ")).unwrap_or("");
+                let at = stderr.lines().find_map(|l| l.trim_start().strip_prefix("==> ")).unwrap_or("");
+                let at = at.split("  ").next().unwrap_or("");
+                let want = d.labels.iter().find(|l| l.primary).map(|l| {
+                    format!("{}:{}:{}", names.get(l.span.file).map_or("?", |s| s.as_str()), l.span.line, l.span.col)
+                });
+                if out.status.code() != Some(1) || title != d.title || Some(at.to_string()) != want {
+                    Some(format!(
+                        "エラーが違う\ninterp: {} at {:?}\n実行ファイル（{:?}）:\n{}",
+                        d.title,
+                        want,
+                        out.status.code(),
+                        stderr
+                    ))
+                } else {
+                    None
+                }
+            }
+        }
+    };
+    if diff.is_none() {
+        let _ = std::fs::remove_file(&exe);
+        let _ = std::fs::remove_file(dir.join(format!("{}.ll", name)));
+        if trace {
+            eprintln!("\nNATIVE-OK");
+        }
+    }
+    diff.map(|d| format!("{}\n--- ll: {} ---", d, dir.join(format!("{}.ll", name)).display()))
 }

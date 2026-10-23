@@ -4,6 +4,7 @@ fn main() {
     let mut stats = false;
     let mut elide = true;
     let mut show_ir = false;
+    let mut show_ll = false;
     let mut path = None;
     let mut prog_args = Vec::new();
     for a in env::args().skip(1) {
@@ -14,20 +15,22 @@ fn main() {
         }
         match a.as_str() {
             "-h" | "--help" => {
-                eprintln!("使い方: ward [--stats] [--no-elide] [--ir] <file.ward> [プログラムへの引数...]");
+                eprintln!("使い方: ward [--stats] [--no-elide] [--ir] [--ll] <file.ward> [プログラムへの引数...]");
                 eprintln!("  --stats     ref の検査を静的解析でどれだけ消せたか表示する");
                 eprintln!("  --no-elide  静的解析をせず、すべての ref を実行時に検査する");
                 eprintln!("  --ir        実行せず、IR（中間表現）を表示する");
+                eprintln!("  --ll        実行せず、LLVM IR を表示する");
                 process::exit(0);
             }
             "--stats" => stats = true,
             "--no-elide" => elide = false,
             "--ir" => show_ir = true,
+            "--ll" => show_ll = true,
             _ => path = Some(a),
         }
     }
     let Some(path) = path else {
-        eprintln!("使い方: ward [--stats] [--no-elide] [--ir] <file.ward> [プログラムへの引数...]");
+        eprintln!("使い方: ward [--stats] [--no-elide] [--ir] [--ll] <file.ward> [プログラムへの引数...]");
         process::exit(2);
     };
 
@@ -42,6 +45,17 @@ fn main() {
     // `use geom;` は、このファイルと同じフォルダの geom.ward を読む
     let dir = std::path::Path::new(&path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.ward", name))).ok();
+
+    if show_ll {
+        match ward::llvm_text(&src, &read, &path) {
+            Ok(t) => print!("{}", t),
+            Err(e) => {
+                eprintln!("{}", e);
+                process::exit(1);
+            }
+        }
+        return;
+    }
 
     if show_ir {
         match ward::ir_text(&src, &read) {

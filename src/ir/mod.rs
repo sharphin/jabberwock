@@ -9,6 +9,7 @@
 
 pub mod analyze;
 pub mod exec;
+pub mod llvm;
 pub mod lower;
 
 use std::collections::HashMap;
@@ -31,6 +32,10 @@ pub struct Program {
     pub by_name: HashMap<String, usize>,
     /// 構造体の定義（値の表示とフィールドの名前に使う）
     pub structs: HashMap<String, Rc<StructDef>>,
+    /// 構造体のフィールドの型（型の引数, 定義の順の型）。LLVM の書き出しに使う
+    pub struct_tys: HashMap<String, (Vec<String>, Vec<Ty>)>,
+    /// enum の型の引数と種類（種類の番号は並びの順）
+    pub enums: HashMap<String, (Vec<String>, crate::types::Variants)>,
 }
 
 pub struct Func {

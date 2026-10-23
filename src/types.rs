@@ -323,6 +323,8 @@ pub struct TypeInfo {
     pub fn_ret: HashMap<String, Ty>,
     /// enum の型の引数と種類（名前, 中身の型。型の引数は `Ty::Param` のまま）
     pub enums: HashMap<String, (Vec<String>, Variants)>,
+    /// 構造体の型の引数とフィールドの型（定義の順。型の引数は `Ty::Param` のまま）
+    pub structs: HashMap<String, (Vec<String>, Vec<Ty>)>,
 }
 
 /// enum の種類の一覧（名前, 中身の型）
@@ -396,6 +398,7 @@ pub fn check_with_info(prog: &Program) -> R<(Vec<Diagnostic>, TypeInfo)> {
     for s in &prog.structs {
         c.tparams = s.tparams.clone();
         let tys = s.field_types.iter().map(|t| c.resolve(t)).collect::<R<Vec<_>>>()?;
+        c.info.structs.insert(s.name.clone(), (s.tparams.clone(), tys.clone()));
         c.structs.get_mut(s.name.as_str()).expect("inserted").1 = tys;
     }
     for en in &prog.enums {

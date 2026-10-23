@@ -50,7 +50,7 @@ pub fn lower(prog: &ast::Program, info: &TypeInfo) -> L<Program> {
         fns[i] = Some(f);
     }
     let fns = fns.into_iter().map(|f| f.expect("every queued function is lowered")).collect();
-    Ok(Program { fns, by_name: calls.by_name, structs })
+    Ok(Program { fns, by_name: calls.by_name, structs, struct_tys: info.structs.clone(), enums: info.enums.clone() })
 }
 
 /// 書き出す関数の本体
@@ -247,7 +247,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
     /// 式の型（作り分けている型の引数は具体的な型に置き換える）
     fn ty(&self, e: &Expr) -> Ty {
-        self.info.ty(e).map_or(Ty::Unit, |t| types::subst(t, &self.subst))
+        match self.info.ty(e) {
+            Some(t) => types::subst(t, &self.subst),
+            // 定数の式の中（`1 + 2` の `1 + 2` 以外）は型を記録しない。印（`Expr.int` / `Expr.float`）の型
+            None if e.float.get() => Ty::Float,
+            None => e.int.get().map_or(Ty::Unit, Ty::Int),
+        }
     }
 
     /// 呼び出しの式で型検査が決めた型の引数（具体的な型に置き換えたもの）
@@ -778,7 +783,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                         Some(_) => Rvalue::Use(Operand::Copy(fp)),
                     };
                     if b == "_" {
-                        let t = self.temp_of(Ty::Unit, value, *bspan);
+                        let t = self.temp_of(ftys.get(i).cloned().unwrap_or(Ty::Unit), value, *bspan);
                         self.emit(Inst::Discard { value: t, span: *bspan, why: "match で受け取られずに捨てられた".to_string() });
                         continue;
                     }
