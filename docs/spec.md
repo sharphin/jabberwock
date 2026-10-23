@@ -39,7 +39,7 @@ fn main() {
 | 文字列 | `"..."`。使えるエスケープは `\n` `\t` `\"` `\\`。途中で改行はできない |
 | 真偽値 | `true` `false` |
 
-予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `own` `ref` `as` `true` `false`
+予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `static` `own` `ref` `as` `true` `false`
 
 特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
 
@@ -362,6 +362,19 @@ print(p.len2());
   - 評価の順: `p` が変数や `a.b` なら、引数を先に評価してから借りる。`make().m()` のような一時的な値なら、それを先に評価する。
 - 型の引数のある構造体のメソッドは、構造体の型の引数をそのまま使える（`struct Stack<T> { ... fn mut push(T v) { ... } }`）。メソッド自身の型の引数もつけられる。
 - メソッドはフィールドと同じ名前にできない。
+- **静的メソッド**（this のないメソッド）は `static fn` と書き、`構造体名.名前(...)` で呼ぶ。
+
+  ```
+  struct Point {
+      i64 x;
+      i64 y;
+      static fn Point at(i64 x, i64 y) { Point { x: x, y: y } }
+  }
+  let p = Point.at(1, 2);
+  ```
+
+  - 同じ構造体のメソッドの中からは `at(1, 2)` と `構造体名.` なしで呼べる。静的メソッドの中にはフィールドも this もない。
+  - 静的メソッドを値から（`p.at()`）、this のあるメソッドを構造体名から（`Point.len2()`）は呼べない。
 
 ### 8.6 match で中身を受け取る
 
@@ -401,7 +414,7 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 
 | 項目 | 決まっていること |
 |---|---|
-| 静的メソッド・enum のメソッド | `Point.new(1, 2)` のような形を検討中 |
+| enum のメソッド | これから |
 | 文字列の埋め込み | `"x = {x}"` |
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | 型の引数にできることを決める仕組み（比較できる T など） | これから |

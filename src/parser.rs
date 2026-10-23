@@ -17,6 +17,8 @@ pub struct Parser {
     in_value_if: bool,
     /// ファイル中で定義されている enum の名前。`Name.Variant` を enum の値として読むため
     enum_names: Vec<String>,
+    /// ファイル中で定義されている構造体の名前。`Name.f(...)` を静的メソッドの呼び出しとして読むため
+    struct_names: Vec<String>,
 }
 
 impl Parser {
@@ -28,10 +30,17 @@ impl Parser {
                 _ => None,
             })
             .collect();
+        let struct_names: Vec<String> = toks
+            .windows(2)
+            .filter_map(|w| match (&w[0].tok, &w[1].tok) {
+                (Tok::Struct, Tok::Ident(n)) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
         // 組み込みの enum（prelude で定義）
         enum_names.push("Option".to_string());
         enum_names.push("Result".to_string());
-        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names }
+        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names }
     }
 
     fn peek(&self) -> &Tok {
@@ -182,23 +191,31 @@ impl Parser {
         let mut fields: Vec<String> = Vec::new();
         let mut field_types = Vec::new();
         let mut methods: Vec<(FnDef, Span)> = Vec::new();
+        let mut statics: Vec<(FnDef, Span)> = Vec::new();
         loop {
             self.skip_semis();
             if self.eat(Tok::RBrace) {
                 break;
             }
-            if *self.peek() == Tok::Fn {
+            if matches!(self.peek(), Tok::Fn | Tok::Static) {
                 let mspan = self.span();
-                let start = self.bump().span;
-                let mutable = self.eat(Tok::Mut);
+                let is_static = self.eat(Tok::Static);
+                let start = self.expect(Tok::Fn, "`fn`")?;
+                let mutable = !is_static && self.eat(Tok::Mut);
                 let mut m = self.parse_fn_rest(start)?;
-                if methods.iter().any(|(x, _)| x.name == m.name) {
+                if methods.iter().chain(&statics).any(|(x, _)| x.name == m.name) {
                     return Err(Diagnostic::new(format!("メソッド `{}` が二重に定義されています", m.name))
                         .primary(mspan, "同じ名前のメソッドがすでにある"));
                 }
                 if let Some(t) = m.tparams.iter().find(|t| tparams.contains(t)) {
                     return Err(Diagnostic::new(format!("型の引数 `{}` は構造体のものと同じ名前です", t))
                         .primary(m.span, "別の名前にしてください"));
+                }
+                if is_static {
+                    // 静的メソッドは this のない関数。構造体の型の引数は使える
+                    m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
+                    statics.push((m, mspan));
+                    continue;
                 }
                 // `this` は `ref 構造体`（`fn mut` なら `ref mut 構造体`）の引数
                 let sty = TypeExpr {
@@ -230,7 +247,7 @@ impl Parser {
                 return Err(Diagnostic::new(format!("フィールド `{}` が二重に定義されています", f))
                     .primary(fspan, "同じ名前のフィールドがすでにある"));
             }
-            if !methods.is_empty() {
+            if !methods.is_empty() || !statics.is_empty() {
                 return Err(Diagnostic::new("フィールドはメソッドより前に書いてください")
                     .primary(fspan, "メソッドのあとにフィールドがある"));
             }
@@ -245,15 +262,26 @@ impl Parser {
             }
         }
         let names: Vec<String> = methods.iter().map(|(m, _)| m.name.clone()).collect();
+        let static_names: Vec<String> = statics.iter().map(|(m, _)| m.name.clone()).collect();
         let mut fns = Vec::new();
-        for (mut m, mspan) in methods {
+        let count = methods.len();
+        for (i, (mut m, mspan)) in methods.into_iter().chain(statics).enumerate() {
+            let is_static = i >= count;
             if fields.contains(&m.name) {
                 return Err(Diagnostic::new(format!("メソッド `{}` がフィールドと同じ名前です", m.name))
                     .primary(mspan, "別の名前にしてください"));
             }
-            // メソッドの中では、フィールドと同じ構造体のメソッドを `this.` なしで使える
-            let mut scopes: Vec<Vec<String>> = vec![m.params.iter().skip(1).map(|p| p.name.clone()).collect()];
-            bind_this_block(&mut m.body, &fields, &names, &mut scopes);
+            // メソッドの中では、フィールドと同じ構造体のメソッドを `this.` なしで使える。
+            // 静的メソッドは `構造体名.` なしで使える（静的メソッドの中には this がない）
+            let ctx = ThisCtx {
+                fields: if is_static { &[] } else { &fields },
+                methods: if is_static { &[] } else { &names },
+                statics: &static_names,
+                owner: &name,
+            };
+            let skip = if is_static { 0 } else { 1 };
+            let mut scopes: Vec<Vec<String>> = vec![m.params.iter().skip(skip).map(|p| p.name.clone()).collect()];
+            bind_this_block(&mut m.body, &ctx, &mut scopes);
             m.name = format!("{}.{}", name, m.name);
             fns.push(m);
         }
@@ -880,6 +908,18 @@ impl Parser {
                 let (args, end) = self.parse_args()?;
                 Ok(self.variant("Result", &name, args, start.join(end)))
             }
+            Tok::Ident(name) if self.struct_names.contains(&name) && *self.peek2() == Tok::Dot => {
+                // `Point.origin(...)`: 静的メソッドの呼び出し。`構造体名.名前` という関数を呼ぶ
+                let start = self.bump().span;
+                self.bump();
+                let f = self.expect_ident("静的メソッドの名前")?;
+                if *self.peek() != Tok::LParen {
+                    return Err(Diagnostic::new("構造体名のあとには静的メソッドの呼び出しを書きます")
+                        .primary(start.join(self.prev_span()), "`Point.origin()` のように `(...)` が必要"));
+                }
+                let (args, end) = self.parse_args()?;
+                Ok(Expr::new(ExprKind::Call(format!("{}.{}", name, f), args), start.join(end)))
+            }
             Tok::Ident(name) if self.enum_names.contains(&name) && *self.peek2() == Tok::Dot => {
                 // `Shape.Circle(5)` / `Shape.Empty`
                 let start = self.bump().span;
@@ -1003,42 +1043,51 @@ fn binop_info(t: &Tok) -> Option<(BinOp, u8)> {
 
 // ---------------------------------------------------------------- メソッドの中の名前
 
+/// メソッドの本体で名前を書き換えるための情報
+struct ThisCtx<'a> {
+    fields: &'a [String],
+    methods: &'a [String],
+    statics: &'a [String],
+    /// 構造体の名前
+    owner: &'a str,
+}
+
 /// メソッドの本体で、フィールドの名前を `this.名前` に、同じ構造体のメソッドの呼び出しを
 /// `this.名前(...)` に書き換える（Java と同じく `this.` を省ける）。
 /// 引数やローカル変数に同じ名前があれば、そちらが優先（`scopes` で見分ける）
-fn bind_this_block(b: &mut Block, fields: &[String], methods: &[String], scopes: &mut Vec<Vec<String>>) {
+fn bind_this_block(b: &mut Block, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
     scopes.push(Vec::new());
     for s in &mut b.stmts {
         match s {
             Stmt::Let { name, init, .. } => {
-                bind_this(init, fields, methods, scopes);
+                bind_this(init, ctx, scopes);
                 scopes.last_mut().expect("scope").push(name.clone());
             }
             Stmt::Assign { target, value, .. } => {
-                bind_this(value, fields, methods, scopes);
-                bind_this(target, fields, methods, scopes);
+                bind_this(value, ctx, scopes);
+                bind_this(target, ctx, scopes);
             }
-            Stmt::Expr(e) => bind_this(e, fields, methods, scopes),
+            Stmt::Expr(e) => bind_this(e, ctx, scopes),
             Stmt::While { cond, body } => {
-                bind_this(cond, fields, methods, scopes);
-                bind_this_block(body, fields, methods, scopes);
+                bind_this(cond, ctx, scopes);
+                bind_this_block(body, ctx, scopes);
             }
-            Stmt::Loop { body } => bind_this_block(body, fields, methods, scopes),
+            Stmt::Loop { body } => bind_this_block(body, ctx, scopes),
             Stmt::For { var, range, body, els, .. } => {
                 for a in range {
-                    bind_this(a, fields, methods, scopes);
+                    bind_this(a, ctx, scopes);
                 }
                 scopes.push(vec![var.clone()]);
-                bind_this_block(body, fields, methods, scopes);
+                bind_this_block(body, ctx, scopes);
                 scopes.pop();
                 if let Some(els) = els {
-                    bind_this_block(els, fields, methods, scopes);
+                    bind_this_block(els, ctx, scopes);
                 }
             }
             Stmt::Break(_) | Stmt::Continue(_) => {}
             Stmt::Return { value, .. } => {
                 if let Some(e) = value {
-                    bind_this(e, fields, methods, scopes);
+                    bind_this(e, ctx, scopes);
                 }
             }
         }
@@ -1046,17 +1095,23 @@ fn bind_this_block(b: &mut Block, fields: &[String], methods: &[String], scopes:
     scopes.pop();
 }
 
-fn bind_this(e: &mut Expr, fields: &[String], methods: &[String], scopes: &mut Vec<Vec<String>>) {
+fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
     let local = |n: &str, scopes: &Vec<Vec<String>>| scopes.iter().flatten().any(|x| x == n);
     let this = |span: Span| Box::new(Expr::new(ExprKind::Var("this".to_string()), span));
     match &mut e.kind {
-        ExprKind::Var(n) if fields.contains(n) && !local(n, scopes) => {
+        ExprKind::Var(n) if ctx.fields.contains(n) && !local(n, scopes) => {
             let n = n.clone();
             e.kind = ExprKind::Field(this(e.span), n, Cell::new(Check::Unvisited));
         }
-        ExprKind::Call(n, args) if methods.contains(n) => {
+        ExprKind::Call(n, args) if ctx.statics.contains(n) => {
             for a in args.iter_mut() {
-                bind_this(a, fields, methods, scopes);
+                bind_this(a, ctx, scopes);
+            }
+            *n = format!("{}.{}", ctx.owner, n);
+        }
+        ExprKind::Call(n, args) if ctx.methods.contains(n) => {
+            for a in args.iter_mut() {
+                bind_this(a, ctx, scopes);
             }
             let (n, args) = (n.clone(), std::mem::take(args));
             e.kind = ExprKind::MethodCall(this(e.span), n, args);
@@ -1068,32 +1123,32 @@ fn bind_this(e: &mut Expr, fields: &[String], methods: &[String], scopes: &mut V
         | ExprKind::Ref(i, _)
         | ExprKind::Deref(i, _)
         | ExprKind::Field(i, _, _)
-        | ExprKind::Unary(_, i) => bind_this(i, fields, methods, scopes),
+        | ExprKind::Unary(_, i) => bind_this(i, ctx, scopes),
         ExprKind::Variant { args, .. } | ExprKind::Call(_, args) => {
             for a in args {
-                bind_this(a, fields, methods, scopes);
+                bind_this(a, ctx, scopes);
             }
         }
         ExprKind::MethodCall(recv, _, args) => {
-            bind_this(recv, fields, methods, scopes);
+            bind_this(recv, ctx, scopes);
             for a in args {
-                bind_this(a, fields, methods, scopes);
+                bind_this(a, ctx, scopes);
             }
         }
         ExprKind::StructLit(_, inits) => {
             for i in inits {
-                bind_this(&mut i.value, fields, methods, scopes);
+                bind_this(&mut i.value, ctx, scopes);
             }
         }
         ExprKind::If { cond, then, els } => {
-            bind_this(cond, fields, methods, scopes);
-            bind_this_block(then, fields, methods, scopes);
+            bind_this(cond, ctx, scopes);
+            bind_this_block(then, ctx, scopes);
             if let Some(b) = els {
-                bind_this_block(b, fields, methods, scopes);
+                bind_this_block(b, ctx, scopes);
             }
         }
         ExprKind::Match { scrut, arms, default } => {
-            bind_this(scrut, fields, methods, scopes);
+            bind_this(scrut, ctx, scopes);
             for a in arms {
                 let binds = a
                     .pats
@@ -1104,16 +1159,16 @@ fn bind_this(e: &mut Expr, fields: &[String], methods: &[String], scopes: &mut V
                     })
                     .collect();
                 scopes.push(binds);
-                bind_this_block(&mut a.body, fields, methods, scopes);
+                bind_this_block(&mut a.body, ctx, scopes);
                 scopes.pop();
             }
             if let Some(d) = default {
-                bind_this_block(d, fields, methods, scopes);
+                bind_this_block(d, ctx, scopes);
             }
         }
         ExprKind::Binary(_, l, r) => {
-            bind_this(l, fields, methods, scopes);
-            bind_this(r, fields, methods, scopes);
+            bind_this(l, ctx, scopes);
+            bind_this(r, ctx, scopes);
         }
     }
 }

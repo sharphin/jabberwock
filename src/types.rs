@@ -200,6 +200,8 @@ impl Access {
 }
 
 struct FnSig {
+    /// 最初の引数が `this` のメソッドか（`p.m()` でだけ呼べる）
+    method: bool,
     tparams: Vec<String>,
     params: Vec<Ty>,
     ret: Ty,
@@ -282,7 +284,12 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
             Some(t) => c.resolve(t)?,
             None => Ty::Unit,
         };
-        c.fns.insert(&f.name, FnSig { tparams: f.tparams.clone(), params, ret });
+        c.fns.insert(&f.name, FnSig {
+            method: f.name.contains('.') && matches!(f.params.first(), Some(p) if p.name == "this"),
+            tparams: f.tparams.clone(),
+            params,
+            ret,
+        });
     }
     for f in &prog.fns {
         c.check_fn(f)?;
@@ -1174,6 +1181,12 @@ impl<'a> Checker<'a> {
             let d = Diagnostic::new(format!("未定義の関数 `{}`", name)).primary(span, "この関数は定義されていません");
             return Err(if name == "range" { d.note("range(...) は `for i in range(...)` の中でだけ使えます") } else { d });
         };
+        if sig.method {
+            let (s, m) = name.split_once('.').expect("method name");
+            return Err(Diagnostic::new(format!("`{}` は this のあるメソッドです", name))
+                .primary(span, "構造体名からは呼べない")
+                .note(format!("`{}` の値 p に対して `p.{}()` と呼んでください", s, m)));
+        }
         if args.len() != sig.params.len() {
             return Err(arity_error(name, sig.params.len(), args.len(), span));
         }
@@ -1212,6 +1225,11 @@ impl<'a> Checker<'a> {
                 d.note(format!("`{}` のメソッド: {}", sname, names.join(", ")))
             });
         };
+        if !sig.method {
+            return Err(Diagnostic::new(format!("`{}` は静的メソッドです", full))
+                .primary(span, "値からは呼べない")
+                .note(format!("`{}.{}(...)` と呼んでください", sname, name)));
+        }
         if args.len() + 1 != sig.params.len() {
             return Err(arity_error(&format!("{}.{}", sname, name), sig.params.len() - 1, args.len(), span));
         }

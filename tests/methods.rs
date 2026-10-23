@@ -240,3 +240,70 @@ fn main() {{
     assert!(o.error.is_none());
     assert!(o.analysis.required > 0);
 }
+
+#[test]
+fn static_methods() {
+    let src = "
+struct Point {
+    i64 x;
+    i64 y;
+
+    static fn Point origin() {
+        Point { x: 0, y: 0 }
+    }
+
+    static fn Point at(i64 x, i64 y) {
+        Point { x: x, y: y }
+    }
+
+    fn Point moved(i64 d) {
+        at(x + d, y + d)
+    }
+}
+
+struct Pair<T> {
+    T a;
+    T b;
+
+    static fn Pair<T> same(T v) {
+        Pair { a: v, b: v }
+    }
+}
+
+fn main() {
+    let p = Point.origin();
+    let q = Point.at(1, 2).moved(10);
+    print(p.x, q.x, q.y);
+    let s = Pair.same(own 3);
+    print(*s.a + 0);
+}";
+    // own を 2 か所に入れようとしているので、2 つ目でムーブ済みエラーになる
+    let o = run_source(src, false);
+    assert!(o.error.unwrap().title.contains("ムーブ"));
+    let ok_src = src.replace("Pair.same(own 3)", "Pair.same(\"w\")").replace("*s.a + 0", "s.a, s.b");
+    assert_eq!(ok(&ok_src), "0 11 12\nw w\n");
+}
+
+#[test]
+fn static_method_errors() {
+    let src = |body: &str| format!("{}\nstruct S {{\n    i64 v;\n\n    static fn S make() {{\n        S {{ v: 1 }}\n    }}\n}}\nfn main() {{\n{}\n}}", POINT, body);
+    let d = err(&src("let p = Point { x: 1, y: 1 };\nPoint.len2(ref p);"));
+    assert!(d.title.contains("this のあるメソッド"), "{}", d.title);
+    let d = err(&src("let s = S.make();\ns.make();"));
+    assert!(d.title.contains("静的メソッドです"), "{}", d.title);
+    let d = err(&src("S.nothing();"));
+    assert!(d.title.contains("未定義の関数"), "{}", d.title);
+    let d = err(&src("let v = S.v;"));
+    assert!(d.title.contains("静的メソッドの呼び出し"), "{}", d.title);
+    // 静的メソッドの中には this がない
+    let d = err("
+struct S {
+    i64 v;
+
+    static fn i64 get() {
+        v
+    }
+}
+fn main() {}");
+    assert!(d.title.contains("未定義の変数") || d.title.contains("v"), "{}", d.title);
+}
