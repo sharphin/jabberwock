@@ -42,8 +42,8 @@ fn fib_example() {
 fn reassigning_an_own_frees_the_old_value() {
     let src = "
 fn main() {
-    let a = own 1
-    a = own 2
+    let mut a = own 1;
+    a = own 2;
     print(*a)
 }";
     assert_eq!(ok(src), "2\n");
@@ -53,7 +53,7 @@ fn main() {
 fn nested_own_is_freed_recursively() {
     let src = "
 fn main() {
-    let outer = own own 7
+    let outer = own own 7;
     print(**outer)
 }";
     assert_eq!(ok(src), "7\n");
@@ -63,11 +63,11 @@ fn main() {
 fn early_return_inside_loop_frees_locals() {
     let src = "
 fn find() {
-    let i = 0
+    let mut i = 0;
     while true {
-        let tmp = own i
-        if *tmp == 3 { return i }
-        i = i + 1
+        let tmp = own i;
+        if *tmp == 3 { return i; }
+        i = i + 1;
     }
 }
 fn main() {
@@ -80,9 +80,9 @@ fn main() {
 fn temporaries_do_not_leak() {
     let src = "
 fn main() {
-    print(*own 5)
-    own 6
-    let x = own 1
+    print(*own 5);
+    own 6;
+    let x = own 1;
     drop(x)
 }";
     assert_eq!(ok(src), "5\n");
@@ -92,10 +92,10 @@ fn main() {
 fn ref_of_ref_points_at_the_same_cell() {
     let src = "
 fn main() {
-    let a = own 5
-    let r = ref a
-    let q = ref r
-    *q = 9
+    let mut a = own 5;
+    let r = ref mut a;
+    let q = ref mut r;
+    *q = 9;
     print(*a)
 }";
     assert_eq!(ok(src), "9\n");
@@ -106,11 +106,11 @@ fn else_if_chain() {
     let src = "
 fn sign(n) {
     if n < 0 {
-        return -1
+        return -1;
     } else if n == 0 {
-        return 0
+        return 0;
     } else {
-        return 1
+        return 1;
     }
 }
 fn main() {
@@ -150,10 +150,10 @@ fn stale_ref_is_still_caught_after_slot_reuse() {
     // a のスロットは b に再利用される。世代がなければ r は b の中身を読んでしまう。
     let src = "
 fn main() {
-    let a = own 1
-    let r = ref a
-    drop(a)
-    let b = own 2
+    let a = own 1;
+    let r = ref a;
+    drop(a);
+    let b = own 2;
     print(*r)
 }";
     let d = err(src);
@@ -176,11 +176,11 @@ fn moving_inside_a_loop_is_detected_on_second_iteration() {
 fn eat(c) {
 }
 fn main() {
-    let a = own 1
-    let i = 0
+    let a = own 1;
+    let mut i = 0;
     while i < 2 {
-        eat(a)
-        i = i + 1
+        eat(a);
+        i = i + 1;
     }
 }";
     let d = err(src);
@@ -192,8 +192,8 @@ fn main() {
 fn cannot_move_an_own_out_through_a_pointer() {
     let src = "
 fn main() {
-    let outer = own own 1
-    let inner = *outer
+    let outer = own own 1;
+    let inner = *outer;
 }";
     let d = err(src);
     assert!(d.title.contains("取り出せません"));
@@ -205,7 +205,7 @@ fn main() {
 fn runaway_recursion_is_an_error_not_a_crash() {
     let src = "
 fn f(n) {
-    return f(n + 1)
+    return f(n + 1);
 }
 fn main() {
     f(0)
@@ -224,14 +224,14 @@ fn integer_overflow_and_div_zero_are_errors() {
 
 #[test]
 fn parse_error_points_at_the_right_line() {
-    let d = err("fn main() {\n    let = 5\n}");
+    let d = err("fn main() {\n    let = 5;\n}");
     let p = d.labels.iter().find(|l| l.primary).unwrap();
     assert_eq!(p.span.line, 2);
 }
 
 #[test]
 fn renders_japanese_source_without_panicking() {
-    let src = "fn main() {\n    let あ = own 1\n    drop(あ)\n    print(*あ)\n}";
+    let src = "fn main() {\n    let あ = own 1;\n    drop(あ);\n    print(*あ)\n}";
     let d = err(src);
     let text = d.render("t.ward", src);
     assert!(text.contains("use after move"));

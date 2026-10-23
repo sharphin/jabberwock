@@ -1,12 +1,12 @@
-// ref を渡して、相手の中身を書き換える
+// ref mut を渡して、相手の中身を書き換える
 fn inc(r) {
-    *r = *r + 1
+    *r += 1;
 }
 
 fn main() {
-    let count = own 0
-    inc(ref count)
-    inc(ref count)
-    inc(ref count)
+    let mut count = own 0;
+    inc(ref mut count);
+    inc(ref mut count);
+    inc(ref mut count);
     print("count =", *count)
 }

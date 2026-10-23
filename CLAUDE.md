@@ -14,8 +14,8 @@
 
 | ファイル | 役割 |
 |---|---|
-| `src/lexer.rs` | 字句解析。改行もトークン（文の区切り） |
-| `src/parser.rs` | 構文解析。`if`/`while` の条件では構造体リテラルを禁止（`{` があいまいになるため） |
+| `src/lexer.rs` | 字句解析。改行はただの空白（文の区切りは `;`） |
+| `src/parser.rs` | 構文解析。`if`/`while` の条件では構造体リテラルを禁止（`{` があいまいになるため）。`x += e` は `x = x + e`、`x++` は `x = x + 1` に書き換える（左辺は複製） |
 | `src/ast.rs` | 構文木。`Deref` と `Field` は静的解析の結論 `Cell<Check>` を持つ |
 | `src/analyze.rs` | 静的解析。証明できた `*p` / `p.f` の ref 世代チェックを消す |
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
@@ -26,6 +26,7 @@
 | `tests/structs.rs` | 構造体 |
 | `tests/control.rs` | loop / while / for / break / continue / if 式 |
 | `tests/match.rs` | match（Java の switch の矢印形式） |
+| `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
 ## 大事な不変条件
 
@@ -37,6 +38,10 @@
 - `break` / `continue` で抜けるときは、抜けるスコープの変数の事実を消してから合流させる（`facts_leaving`）。
 - `if` / `match` は式（`ExprKind::If` / `ExprKind::Match`）。文として使うときは `Stmt::Expr` に入り、中の return / break を `Flow` で外へ伝える（`eval_flow`）。
   値として使うときの中の return / 外への break はパーサが禁止しているので（`value_context`）、`eval` では `Flow` を気にしなくてよい。
+- 書き換えの可否は `Access`（Write / ImmutVar / ReadOnlyRef）で表す。`place()` が持ち主から順にたどって決め、
+  `ref mut` を通ると Write のまま、`ref` を通ると ReadOnlyRef になる。`RefVal.mutable` が「ref mut か」。
+  今は実行時に検査（型検査を入れたら静的に移す）。
+- ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
 
 ## 設計の決めごと
 

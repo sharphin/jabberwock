@@ -43,9 +43,9 @@ fn dangling(src: &str) {
 fn local_borrow_is_elided() {
     let src = "
 fn main() {
-    let a = own 1
-    let r = ref a
-    *r = *r + 1
+    let mut a = own 1;
+    let r = ref mut a;
+    *r = *r + 1;
     print(*r)
 }";
     let o = ok(src);
@@ -68,15 +68,15 @@ fn pinned_ref_survives_being_passed_on_and_recursion() {
     let src = "
 fn add(r, n) {
     if n > 0 {
-        *r = *r + 1
-        add(ref r, n - 1)
+        *r = *r + 1;
+        add(ref mut r, n - 1)
     }
 }
 
 fn main() {
-    let total = own 0
-    let r = ref total
-    add(r, 100)
+    let mut total = own 0;
+    let r = ref mut total;
+    add(r, 100);
     print(*total)
 }";
     let o = ok(src);
@@ -88,12 +88,12 @@ fn main() {
 fn borrow_in_loop_is_elided() {
     let src = "
 fn main() {
-    let sum = own 0
-    let r = ref sum
-    let i = 0
+    let mut sum = own 0;
+    let r = ref mut sum;
+    let mut i = 0;
     while i < 10 {
-        *r = *r + i
-        i = i + 1
+        *r = *r + i;
+        i = i + 1;
     }
     print(*sum)
 }";
@@ -115,9 +115,9 @@ fn reassigning_the_owner_keeps_the_check() {
     dangling(
         "
 fn main() {
-    let a = own 1
-    let r = ref a
-    a = own 2
+    let mut a = own 1;
+    let r = ref a;
+    a = own 2;
     print(*r)
 }",
     );
@@ -131,9 +131,9 @@ fn eat(c) {
 }
 
 fn main() {
-    let a = own 1
-    let r = ref a
-    eat(a)
+    let a = own 1;
+    let r = ref a;
+    eat(a);
     print(*r)
 }",
     );
@@ -144,9 +144,9 @@ fn dropping_the_owner_keeps_the_check() {
     dangling(
         "
 fn main() {
-    let a = own 1
-    let r = ref a
-    drop(a)
+    let a = own 1;
+    let r = ref a;
+    drop(a);
     print(*r)
 }",
     );
@@ -157,15 +157,15 @@ fn drop_later_in_the_loop_keeps_the_check() {
     // 1周目は安全でも、2周目には a が解放されている
     let src = "
 fn main() {
-    let a = own 1
-    let r = ref a
-    let i = 0
+    let a = own 1;
+    let r = ref a;
+    let mut i = 0;
     while i < 2 {
-        print(*r)
+        print(*r);
         if i == 0 {
             drop(a)
         }
-        i = i + 1
+        i = i + 1;
     }
 }";
     dangling(src);
@@ -176,8 +176,8 @@ fn drop_in_one_branch_keeps_the_check() {
     dangling(
         "
 fn main() {
-    let a = own 1
-    let r = ref a
+    let a = own 1;
+    let r = ref a;
     if 1 < 2 {
         drop(a)
     }
@@ -192,12 +192,12 @@ fn ref_and_its_owner_passed_together_keeps_the_check() {
     dangling(
         "
 fn f(r, c) {
-    drop(c)
+    drop(c);
     print(*r)
 }
 
 fn main() {
-    let a = own 1
+    let a = own 1;
     f(ref a, a)
 }",
     );
@@ -212,13 +212,13 @@ fn show(r) {
 }
 
 fn stale() {
-    let a = own 1
-    return ref a
+    let a = own 1;
+    return ref a;
 }
 
 fn main() {
-    let b = own 2
-    show(ref b)
+    let b = own 2;
+    show(ref b);
     show(stale())
 }",
     );
@@ -229,11 +229,11 @@ fn shadowing_does_not_confuse_the_analysis() {
     dangling(
         "
 fn main() {
-    let a = own 1
-    let r = ref a
+    let a = own 1;
+    let mut r = ref a;
     if true {
-        let a = own 2
-        r = ref a
+        let a = own 2;
+        r = ref a;
     }
     print(*r)
 }",
@@ -249,13 +249,13 @@ fn show(r) {
 }
 
 fn main() {
-    let r = r0()
+    let r = r0();
     show(ref r)
 }
 
 fn r0() {
-    let x = own 5
-    return ref x
+    let x = own 5;
+    return ref x;
 }",
     );
 }
@@ -265,8 +265,8 @@ fn self_reassignment_through_its_own_ref_keeps_the_check() {
     dangling(
         "
 fn main() {
-    let a = own 1
-    a = ref a
+    let mut a = own 1;
+    a = ref a;
     print(*a)
 }",
     );

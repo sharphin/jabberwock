@@ -8,21 +8,21 @@ struct Player {
 }
 
 fn move_by(p, dx, dy) {
-    p.pos.x = p.pos.x + dx // p は ref。p.pos は own。どちらも自動でたどる
-    p.pos.y = p.pos.y + dy
+    p.pos.x += dx; // p は ref。p.pos は own。どちらも自動でたどる
+    p.pos.y += dy;
 }
 
 fn main() {
-    let hero = own Player {
+    let mut hero = own Player {
         name: "勇者",
         pos: own Point { x: 0, y: 0 },
         score: 0,
-    }
-    let h = ref hero
-    move_by(h, 3, 4)
-    h.score = h.score + 10
-    print(hero.name, "は", *hero.pos, "にいる。スコア", hero.score)
+    };
+    let h = ref mut hero;
+    move_by(h, 3, 4);
+    h.score += 10;
+    print(hero.name, "は", *hero.pos, "にいる。スコア", hero.score);
 
-    hero.pos = own Point { x: 9, y: 9 } // 古い Point はここで解放される
+    hero.pos = own Point { x: 9, y: 9 }; // 古い Point はここで解放される
     print(*hero.pos)
 }

@@ -1,7 +1,7 @@
 # ward
 
 `own` と世代付き `ref` だけで「速い・簡単・安全」の隙間を狙う、小さな言語の核（v0.1・インタプリタ）。
-名前は仮。
+名前は jabberwock に変える予定（時期は未定）。
 
 ## 動かす
 
@@ -16,13 +16,13 @@ cargo test
 
 ```
 fn inc(r) {
-    *r = *r + 1
+    *r += 1;
 }
 
 fn main() {
-    let count = own 0     // own: 唯一の所有者
-    inc(ref count)        // ref: 借りる（ライフタイム注釈は存在しない）
-    print(*count)         // 1
+    let mut count = own 0;   // own: 唯一の所有者。書き換えるので mut
+    inc(ref mut count);      // ref mut: 書き換えてよい借用（ライフタイム注釈は存在しない）
+    print(*count);           // 1
 }
 ```
 
@@ -30,36 +30,41 @@ fn main() {
 - `own x` を読むと **ムーブ**。元の変数はそれ以降使えない。
 - `ref p` は **世代付き参照**。所有者が解放されると、使った瞬間に確実に検出される。
 - スコープを抜ける・`drop(x)`・再代入で `own` は解放される。中の `own` も連鎖して解放。
+- 文の終わりには `;`。改行はただの空白。
+- 変数は普段は書き換え不可。書き換えるものだけ `let mut`（引数も `fn f(mut a)`）。
+- `ref` は読むだけ、`ref mut` は書き換えてよい借用。`ref mut` で借りられるのは mut の持ち主だけ。
+- `x += 1` などの複合代入と、文としての `i++` / `i--` がある（`print(i++)` のように式の中では使えない）。
 - 値は整数・真偽値・文字列・構造体。`let` / `=` / `if` / `else` / `match` / `loop` / `while` / `for` / `break` / `continue` / `return` / `fn` / `struct`。組み込みは `print` `drop` `assert`。
 
 ## ループと if 式
 
 ```
 for i in range(1, 10, 2) {            // range(終わり) / range(始め, 終わり) / range(始め, 終わり, 刻み)
-    let kind = if i % 3 == 0 { "3の倍数" } else { "ふつう" }   // if は値にもなる
-    print(i, kind)
+    let kind = if i % 3 == 0 { "3の倍数" } else { "ふつう" };   // if は値にもなる
+    print(i, kind);
 }
 
 for i in range(0) {
 } else {
-    print("1 回も回らなかったときだけ実行")   // Python の for-else とは意味が違う
+    print("1 回も回らなかったときだけ実行");   // Python の for-else とは意味が違う
 }
 
 loop {                                // 無限ループ。break / continue が使える
-    break
+    break;
 }
 ```
 
 - 条件は `( )` で囲まない。`{ }` は必須。
-- 値として使う if には else が必要。値はブロックの最後の行。
+- 値として使う if には else が必要。値はブロックの最後の **`;` のない式**（Rust と同じ）。
+- `}` で終わる文（if・while・for・loop・match）のあとには `;` は要らない。
 - do-while と三項演算子 `? :` はない。
 
 ```
 let name = match n {                  // Java の switch の矢印形式。値にも文にもなる
-    case 0 -> "zero"
-    case 1, 2 -> "small"
-    default -> "many"
-}
+    case 0 -> "zero";
+    case 1, 2 -> "small";
+    default -> "many";
+};
 ```
 
 言語仕様の決めごとは [docs/design-decisions.md](docs/design-decisions.md) にまとめている。
@@ -71,16 +76,17 @@ struct Point { x, y }
 struct Player { name, pos, score }   // フィールドに型はまだない
 
 fn move_by(p, dx, dy) {
-    p.pos.x = p.pos.x + dx   // p は ref、p.pos は own。どちらも自動でたどる
+    p.pos.x += dx;   // p は ref mut、p.pos は own。どちらも自動でたどる
 }
 
 fn main() {
-    let hero = own Player { name: "勇者", pos: own Point { x: 0, y: 0 }, score: 0 }
-    move_by(ref hero, 3, 4)
-    hero.pos = own Point { x: 9, y: 9 }  // 古い Point はここで解放される
+    let mut hero = own Player { name: "勇者", pos: own Point { x: 0, y: 0 }, score: 0 };
+    move_by(ref mut hero, 3, 4);
+    hero.pos = own Point { x: 9, y: 9 };  // 古い Point はここで解放される
 }
 ```
 
+- フィールドを書き換えられるかは持ち主で決まる（`let mut` の変数か、`ref mut` を通しているか）。
 - フィールドごとに所有する。構造体が解放されると、own のフィールドも連鎖して解放される。
 - 構造体は値として読むとムーブ（中に own を持ちうるため）。
 - `p.f` は `p` が own / ref なら自動で先をたどる。ref をたどるときの世代チェックも静的解析の対象。
@@ -94,12 +100,14 @@ fn main() {
 error: 無効になった参照を使いました (dangling reference)
  --> examples/dangling_scope.ward:9:11
   |
-7 |         r = ref a
+7 |         r = ref a;
   |             ----- ここで `a` を借りた
 8 |     }
   |     - ここで解放された: `a` はスコープを抜けたので解放された
 9 |     print(*r)
   |           ^^ ここで使ったが、借りた先はもう存在しない
+  |
+  = note: 参照は、借りた元の所有者より長くは生きられません
 ```
 
 ## 静的解析で検査を消す
@@ -107,7 +115,7 @@ error: 無効になった参照を使いました (dangling reference)
 実行前に `src/analyze.rs` がプログラムを読み、「借りた先は必ず生きている」と証明できた `*r` の
 世代チェックを消す。証明できない箇所だけ実行時の検査が残る。
 
-- `let r = ref a` のあと、`a` が再代入・ムーブ・`drop`・スコープ終了されていない間の `*r` は安全。
+- `let r = ref a;` のあと、`a` が再代入・ムーブ・`drop`・スコープ終了されていない間の `*r` は安全。
   （`a` のスロットを解放できるのは `a` という名前を使う操作だけなので）
 - 関数の引数 `r` は、すべての呼び出し元が「生きている ref」を渡しているなら、関数の中ずっと安全。
   関数をまたいで繰り返し計算するので、再帰や ref の受け渡しにも効く。
@@ -117,7 +125,7 @@ error: 無効になった参照を使いました (dangling reference)
 ```
 $ cargo run -- --stats examples/counter.ward
 count = 3
-[stats] `*p` の箇所: 検査を消せた 3 / 実行時に残る 0
+[stats] `*p` と `p.f` の箇所: 検査を消せた 3 / 実行時に残る 0
 [stats] ref の世代チェック: 実行 0 回 / 省略 6 回
 ```
 
@@ -126,7 +134,7 @@ count = 3
 - 証明できなかった箇所の検査は **実行時**。ダングリングはコンパイルエラーではなく、確実に検出される実行時エラー。
 - 解析は保守的。`own` を返す関数の戻り値、ヒープに入れた ref、`ref p.f`（フィールドの借用）は追跡しない（検査が残る）。
 - 今は木をたどるインタプリタなので、検査を消しても速度差は小さい。効いてくるのはネイティブコード生成後。
-- 静的な型検査はまだない。
+- 静的な型検査はまだない。`mut` / `ref mut` の違反も今は実行時に（親切なメッセージで）止まる。型検査を入れたら実行前に出す。
 - ジェネリクス・クロージャ・並行処理は未実装。
 - 解放履歴（`Heap::history`）は消さないので、長時間走らせるとメモリが増える。
 

@@ -3,7 +3,7 @@ fn consume(c) {
 }
 
 fn main() {
-    let a = own 1
-    consume(a)
+    let a = own 1;
+    consume(a);
     print(*a)
 }

@@ -40,6 +40,8 @@ pub struct RefVal {
     generation: u32,
     borrowed_at: Span,
     what: String,
+    /// `ref mut` で借りたか（書き換えられるか）
+    mutable: bool,
 }
 
 impl Value {
@@ -141,6 +143,10 @@ enum VarState {
 struct Var {
     name: String,
     state: VarState,
+    /// `mut` がついているか（書き換えられるか）
+    mutable: bool,
+    /// 宣言した位置（書き換えられないときのエラー用）
+    decl: Span,
 }
 
 struct Frame {
@@ -151,6 +157,46 @@ struct Frame {
 struct Place {
     root: Root,
     path: Vec<usize>,
+    access: Access,
+}
+
+/// 場所に書き込めるか。書き込めないときはその理由（エラー表示用）
+#[derive(Clone)]
+enum Access {
+    Write,
+    /// `mut` のない変数（とその中身）
+    ImmutVar { name: String, decl: Span },
+    /// `mut` のない ref の先
+    ReadOnlyRef { what: String, borrowed_at: Span },
+}
+
+impl Access {
+    /// ポインタの先の場所に書き込めるか。own の先は持ち主と同じ、ref の先は ref 次第。
+    fn through(self, p: &Value) -> Access {
+        match p {
+            Value::Ref(r) if r.mutable => Access::Write,
+            Value::Ref(r) => Access::ReadOnlyRef { what: r.what.clone(), borrowed_at: r.borrowed_at },
+            _ => self,
+        }
+    }
+
+    /// 書き込めなければ、`doing`（「書き換えようとした」など）を添えたエラーにする
+    fn require(&self, span: Span, doing: &str) -> R<()> {
+        match self {
+            Access::Write => Ok(()),
+            Access::ImmutVar { name, decl } => Err(Diagnostic::new(format!(
+                "`{}` は mut ではないので書き換えられません",
+                name
+            ))
+            .label(*decl, format!("ここで `{}` を宣言した（mut がない）", name))
+            .primary(span, format!("ここで{}", doing))
+            .note(format!("書き換えるなら `let mut {}` や `fn f(mut {})` のように mut をつけてください", name, name))),
+            Access::ReadOnlyRef { what, borrowed_at } => Err(Diagnostic::new("読むだけの ref を通して書き換えようとしました")
+                .label(*borrowed_at, format!("ここで `{}` を ref で借りた（mut がない）", what))
+                .primary(span, format!("ここで{}", doing))
+                .note("書き換えるなら `ref mut` で借りてください")),
+        }
+    }
 }
 
 enum Root {
@@ -277,14 +323,14 @@ impl Interp {
         None
     }
 
-    fn declare(&mut self, name: &str, v: Value) {
+    fn declare(&mut self, name: &str, v: Value, mutable: bool, decl: Span) {
         self.frames
             .last_mut()
             .expect("frame")
             .scopes
             .last_mut()
             .expect("scope")
-            .push(Var { name: name.to_string(), state: VarState::Live(v) });
+            .push(Var { name: name.to_string(), state: VarState::Live(v), mutable, decl });
     }
 
     // ------------------------------------------------------------ ポインタ検査
@@ -334,7 +380,7 @@ impl Interp {
         let mut value = Value::Unit;
         for (i, s) in block.stmts.iter().enumerate() {
             let flow = match s {
-                Stmt::Expr(e) if want_value && i + 1 == block.stmts.len() => {
+                Stmt::Expr(e) if want_value && block.tail && i + 1 == block.stmts.len() => {
                     let (flow, v) = self.eval_flow(e, true)?;
                     value = v;
                     flow
@@ -390,9 +436,9 @@ impl Interp {
 
     fn exec_stmt(&mut self, s: &Stmt) -> R<Flow> {
         match s {
-            Stmt::Let { name, init } => {
+            Stmt::Let { name, mutable, span, init } => {
                 let v = self.eval(init)?;
-                self.declare(name, v);
+                self.declare(name, v, *mutable, *span);
                 Ok(Flow::Normal)
             }
             Stmt::Assign { target, value, span } => {
@@ -445,7 +491,7 @@ impl Interp {
                     ran = true;
                     // ループ変数は周回ごとの新しいスコープに置く
                     self.frames.last_mut().expect("frame").scopes.push(Vec::new());
-                    self.declare(var, Value::Int(i));
+                    self.declare(var, Value::Int(i), false, *range_span);
                     let r = self.loop_iteration(body);
                     self.frames.last_mut().expect("frame").scopes.pop();
                     if let Some(f) = r? {
@@ -481,6 +527,10 @@ impl Interp {
                     let var = self
                         .find_var(name)
                         .ok_or_else(|| undefined_var(name, target.span))?;
+                    if !var.mutable {
+                        let access = Access::ImmutVar { name: name.clone(), decl: var.decl };
+                        access.require(target.span, "書き換えようとした")?;
+                    }
                     std::mem::replace(&mut var.state, VarState::Live(newv))
                 };
                 if let VarState::Live(v) = old {
@@ -488,17 +538,9 @@ impl Interp {
                 }
                 Ok(())
             }
-            ExprKind::Deref(inner, check) => {
-                let (p, _) = self.eval_borrow(inner)?;
-                let slot = self.check_ptr(&p, target.span, check.get())?;
-                let old = self.heap.slots[slot].value.replace(newv);
-                if let Some(v) = old {
-                    self.release(v, span, "上書きされて、古い値が解放された");
-                }
-                Ok(())
-            }
-            ExprKind::Field(..) => {
+            ExprKind::Deref(..) | ExprKind::Field(..) => {
                 let place = self.place(target)?;
+                place.access.require(target.span, "書き換えようとした")?;
                 let old = std::mem::replace(self.place_mut(&place), newv);
                 self.release(old, span, &format!("`{}` が上書きされて、古い値が解放された", describe(target)));
                 Ok(())
@@ -575,17 +617,28 @@ impl Interp {
                 if let VarState::Moved(sp) = var.state {
                     return Err(moved_error(name, sp, e.span));
                 }
-                Ok(Place { root: Root::Var(name.clone()), path: Vec::new() })
+                let access = if var.mutable {
+                    Access::Write
+                } else {
+                    Access::ImmutVar { name: name.clone(), decl: var.decl }
+                };
+                Ok(Place { root: Root::Var(name.clone()), path: Vec::new(), access })
             }
             ExprKind::Deref(inner, check) => {
-                let (p, temp) = self.eval_borrow(inner)?;
-                if temp && matches!(p, Value::Own(_)) {
-                    // 一時的な own の中に書き込んでも、すぐ捨てられてしまう
-                    return Err(Diagnostic::new("一時的な own の中は場所として使えません")
-                        .primary(inner.span, "先に変数に入れてください"));
-                }
+                let (p, outer) = if is_place(inner) {
+                    let ip = self.place(inner)?;
+                    (self.place_mut(&ip).clone(), ip.access)
+                } else {
+                    let (p, temp) = self.eval_borrow(inner)?;
+                    if temp && matches!(p, Value::Own(_)) {
+                        // 一時的な own の中に書き込んでも、すぐ捨てられてしまう
+                        return Err(Diagnostic::new("一時的な own の中は場所として使えません")
+                            .primary(inner.span, "先に変数に入れてください"));
+                    }
+                    (p, Access::Write)
+                };
                 let slot = self.check_ptr(&p, e.span, check.get())?;
-                Ok(Place { root: Root::Slot(slot), path: Vec::new() })
+                Ok(Place { root: Root::Slot(slot), path: Vec::new(), access: outer.through(&p) })
             }
             ExprKind::Field(base, name, check) => {
                 let mut place = self.place(base)?;
@@ -606,7 +659,8 @@ impl Interp {
                             Some(other) => return Err(not_a_struct(other, base.span)),
                             None => unreachable!("check_ptr returns live slots"),
                         };
-                        Ok(Place { root: Root::Slot(slot), path: vec![idx] })
+                        let access = place.access.through(&p);
+                        Ok(Place { root: Root::Slot(slot), path: vec![idx], access })
                     }
                     Err(other) => Err(not_a_struct(&other, base.span)),
                 }
@@ -668,21 +722,31 @@ impl Interp {
                 let v = self.eval(inner)?;
                 Ok(Value::Own(self.heap.alloc(v)))
             }
-            ExprKind::Ref(inner) => {
+            ExprKind::Ref(inner, mutable) => {
                 if !is_place(inner) {
                     return Err(Diagnostic::new("借用できない式です")
                         .primary(inner.span, "`ref` は変数か `*p` か `p.f` にだけ使えます")
                         .note("`let x = own ...` で変数に入れてから `ref x` としてください"));
                 }
-                let (p, _) = self.eval_borrow(inner)?;
+                let (p, access) = if *mutable {
+                    let pl = self.place(inner)?;
+                    (self.place_mut(&pl).clone(), pl.access)
+                } else {
+                    (self.eval_borrow(inner)?.0, Access::Write)
+                };
+                if *mutable {
+                    // own を ref mut で借りるには持ち主が mut、ref から借り直すにはその ref が ref mut
+                    access.through(&p).require(e.span, "ref mut で借りようとした")?;
+                }
                 match p {
                     Value::Own(slot) => Ok(Value::Ref(RefVal {
                         slot,
                         generation: self.heap.slots[slot].generation,
                         borrowed_at: e.span,
                         what: describe(inner),
+                        mutable: *mutable,
                     })),
-                    Value::Ref(r) => Ok(Value::Ref(r)),
+                    Value::Ref(r) => Ok(Value::Ref(RefVal { mutable: *mutable, ..r })),
                     other => Err(Diagnostic::new("借用できない値です")
                         .primary(inner.span, format!("{} は own でも ref でもありません", other.type_name()))
                         .note("値を借りたいときは、まず `own` に入れてください")),
@@ -844,7 +908,7 @@ impl Interp {
             .params
             .iter()
             .zip(args)
-            .map(|(n, v)| Var { name: n.clone(), state: VarState::Live(v) })
+            .map(|(p, v)| Var { name: p.name.clone(), state: VarState::Live(v), mutable: p.mutable, decl: p.span })
             .collect();
         self.frames.push(Frame { scopes: vec![vars] });
 

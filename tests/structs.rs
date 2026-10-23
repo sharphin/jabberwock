@@ -43,9 +43,9 @@ fn structs_example() {
 
 #[test]
 fn literal_fields_can_be_written_in_any_order() {
-    let src = format!("{POINT}
+    let src = format!("{POINT};
 fn main() {{
-    let p = Point {{ y: 2, x: 1 }}
+    let p = Point {{ y: 2, x: 1 }};
     print(p, p.x + p.y)
 }}");
     assert_eq!(ok(&src).output, "Point { x: 1, y: 2 } 3\n");
@@ -57,9 +57,9 @@ fn field_assignment_frees_the_old_own() {
 struct Box2 { inner }
 
 fn main() {
-    let b = Box2 { inner: own 1 }
-    b.inner = own 2
-    b.inner = own 3
+    let mut b = Box2 { inner: own 1 };
+    b.inner = own 2;
+    b.inner = own 3;
     print(*b.inner)
 }";
     assert_eq!(ok(src).output, "3\n");
@@ -71,14 +71,14 @@ fn own_fields_are_freed_with_their_struct() {
 struct Pair { a, b }
 
 fn make() {
-    return own Pair { a: own 1, b: own own 2 }
+    return own Pair { a: own 1, b: own own 2 };
 }
 
 fn main() {
-    let p = make()
-    print(*p.a, **p.b)
-    let q = Pair { a: own 3, b: own 4 }
-    drop(q)
+    let p = make();
+    print(*p.a, **p.b);
+    let q = Pair { a: own 3, b: own 4 };
+    drop(q);
     print(Pair { a: own 5, b: 6 })
 }";
     // print の一時的な構造体の中の own も解放される（リークしない）
@@ -88,9 +88,9 @@ fn main() {
 
 #[test]
 fn field_of_a_temporary_does_not_leak() {
-    let src = format!("{POINT}
+    let src = format!("{POINT};
 fn make() {{
-    return own Point {{ x: 7, y: 8 }}
+    return own Point {{ x: 7, y: 8 }};
 }}
 
 fn main() {{
@@ -101,11 +101,11 @@ fn main() {{
 
 #[test]
 fn struct_field_in_if_and_while_conditions() {
-    let src = format!("{POINT}
+    let src = format!("{POINT};
 fn main() {{
-    let p = own Point {{ x: 0, y: 3 }}
+    let mut p = own Point {{ x: 0, y: 3 }};
     while p.x < p.y {{
-        p.x = p.x + 1
+        p.x = p.x + 1;
     }}
     if p.x == 3 {{
         print(\"ok\")
@@ -119,15 +119,15 @@ fn main() {{
 
 #[test]
 fn ref_to_a_struct_lets_a_function_update_it() {
-    let src = format!("{POINT}
+    let src = format!("{POINT};
 fn shift(p) {{
-    p.x = p.x + 10
+    p.x = p.x + 10;
 }}
 
 fn main() {{
-    let pt = own Point {{ x: 1, y: 2 }}
-    shift(ref pt)
-    shift(ref pt)
+    let mut pt = own Point {{ x: 1, y: 2 }};
+    shift(ref mut pt);
+    shift(ref mut pt);
     print(pt.x)
 }}");
     let o = ok(&src);
@@ -139,10 +139,10 @@ fn main() {{
 
 #[test]
 fn struct_value_moves_like_own() {
-    let d = err(&format!("{POINT}
+    let d = err(&format!("{POINT};
 fn main() {{
-    let p = Point {{ x: 1, y: 2 }}
-    let q = p
+    let p = Point {{ x: 1, y: 2 }};
+    let q = p;
     print(p.x)
 }}"));
     assert!(d.title.contains("use after move"), "{}", d.title);
@@ -154,9 +154,9 @@ fn ref_into_a_field_dangles_after_overwrite() {
 struct Box2 { inner }
 
 fn main() {
-    let b = own Box2 { inner: own 1 }
-    let r = ref b.inner
-    b.inner = own 2
+    let mut b = own Box2 { inner: own 1 };
+    let r = ref b.inner;
+    b.inner = own 2;
     print(*r)
 }";
     let d = err(src);
@@ -171,14 +171,14 @@ fn main() {
 
 #[test]
 fn field_through_a_dangling_ref_is_detected() {
-    let d = err(&format!("{POINT}
+    let d = err(&format!("{POINT};
 fn leak() {{
-    let p = own Point {{ x: 1, y: 2 }}
-    return ref p
+    let p = own Point {{ x: 1, y: 2 }};
+    return ref p;
 }}
 
 fn main() {{
-    let r = leak()
+    let r = leak();
     print(r.x)
 }}"));
     assert!(d.title.contains("dangling"), "{}", d.title);
@@ -190,18 +190,18 @@ fn cannot_move_an_own_out_of_a_field() {
 struct Box2 { inner }
 
 fn main() {
-    let b = Box2 { inner: own 1 }
-    let o = b.inner
+    let b = Box2 { inner: own 1 };
+    let o = b.inner;
 }");
     assert!(d.title.contains("取り出せません"), "{}", d.title);
 }
 
 #[test]
 fn cannot_move_a_struct_out_through_a_pointer() {
-    let d = err(&format!("{POINT}
+    let d = err(&format!("{POINT};
 fn main() {{
-    let p = own Point {{ x: 1, y: 2 }}
-    let q = *p
+    let p = own Point {{ x: 1, y: 2 }};
+    let q = *p;
 }}"));
     assert!(d.title.contains("取り出せません"), "{}", d.title);
 }
@@ -210,18 +210,18 @@ fn main() {{
 
 #[test]
 fn literal_errors() {
-    let missing = err(&format!("{POINT}fn main() {{\n let p = Point {{ x: 1 }}\n}}"));
+    let missing = err(&format!("{POINT}fn main() {{\n let p = Point {{ x: 1 }};\n}};"));
     assert!(missing.title.contains("足りません"));
     assert!(missing.labels[0].text.contains("y"));
 
-    let unknown = err(&format!("{POINT}fn main() {{\n let p = Point {{ x: 1, y: 2, z: 3 }}\n}}"));
+    let unknown = err(&format!("{POINT}fn main() {{\n let p = Point {{ x: 1, y: 2, z: 3 }};\n}};"));
     assert!(unknown.title.contains("`z`"));
     assert!(unknown.note.unwrap().contains("x, y"));
 
-    let twice = err(&format!("{POINT}fn main() {{\n let p = Point {{ x: 1, x: 2 }}\n}}"));
+    let twice = err(&format!("{POINT}fn main() {{\n let p = Point {{ x: 1, x: 2 }};\n}};"));
     assert!(twice.title.contains("二回"));
 
-    let undefined = err("fn main() {\n let p = Nope { x: 1 }\n}");
+    let undefined = err("fn main() {\n let p = Nope { x: 1 };\n}");
     assert!(undefined.title.contains("未定義の構造体"));
 }
 
@@ -233,17 +233,17 @@ fn definition_errors() {
 
 #[test]
 fn field_access_on_a_non_struct() {
-    let d = err("fn main() {\n let n = 5\n print(n.x)\n}");
+    let d = err("fn main() {\n let n = 5;\n print(n.x)\n}");
     assert!(d.title.contains("フィールドを持たない"));
-    let d = err("fn main() {\n let n = own 5\n print(n.x)\n}");
+    let d = err("fn main() {\n let n = own 5;\n print(n.x)\n}");
     assert!(d.title.contains("フィールドを持たない"));
 }
 
 #[test]
 fn temporary_own_cannot_be_used_as_a_place() {
-    let d = err(&format!("{POINT}
+    let d = err(&format!("{POINT};
 fn make() {{
-    return own Point {{ x: 1, y: 2 }}
+    return own Point {{ x: 1, y: 2 }};
 }}
 
 fn main() {{

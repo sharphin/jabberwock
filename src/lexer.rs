@@ -23,6 +23,7 @@ pub enum Tok {
     Struct,
     Own,
     Ref,
+    Mut,
     True,
     False,
     // 記号
@@ -36,6 +37,13 @@ pub enum Tok {
     Colon,
     Semi,
     Assign,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
+    PlusPlus,
+    MinusMinus,
     EqEq,
     NotEq,
     Lt,
@@ -50,7 +58,6 @@ pub enum Tok {
     Bang,
     AndAnd,
     OrOr,
-    Newline,
     Eof,
 }
 
@@ -61,7 +68,6 @@ impl Tok {
             Tok::Int(n) => format!("整数 `{}`", n),
             Tok::Str(_) => "文字列".to_string(),
             Tok::Ident(s) => format!("名前 `{}`", s),
-            Tok::Newline => "行の終わり".to_string(),
             Tok::Eof => "ファイルの終わり".to_string(),
             other => format!("`{}`", other.symbol()),
         }
@@ -86,6 +92,7 @@ impl Tok {
             Tok::Struct => "struct",
             Tok::Own => "own",
             Tok::Ref => "ref",
+            Tok::Mut => "mut",
             Tok::True => "true",
             Tok::False => "false",
             Tok::LParen => "(",
@@ -98,6 +105,13 @@ impl Tok {
             Tok::Colon => ":",
             Tok::Semi => ";",
             Tok::Assign => "=",
+            Tok::PlusEq => "+=",
+            Tok::MinusEq => "-=",
+            Tok::StarEq => "*=",
+            Tok::SlashEq => "/=",
+            Tok::PercentEq => "%=",
+            Tok::PlusPlus => "++",
+            Tok::MinusMinus => "--",
             Tok::EqEq => "==",
             Tok::NotEq => "!=",
             Tok::Lt => "<",
@@ -140,10 +154,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 col += 1;
             }
             '\n' => {
-                out.push(Token {
-                    tok: Tok::Newline,
-                    span: Span { line, col, len: 1 },
-                });
+                // 文の区切りは `;`。改行はただの空白
                 i += 1;
                 line += 1;
                 col = 1;
@@ -192,6 +203,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     "struct" => Tok::Struct,
                     "own" => Tok::Own,
                     "ref" => Tok::Ref,
+                    "mut" => Tok::Mut,
                     "true" => Tok::True,
                     "false" => Tok::False,
                     _ => Tok::Ident(text),
@@ -256,6 +268,13 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ('&', Some('&')) => (Tok::AndAnd, 2),
                     ('|', Some('|')) => (Tok::OrOr, 2),
                     ('-', Some('>')) => (Tok::Arrow, 2),
+                    ('+', Some('=')) => (Tok::PlusEq, 2),
+                    ('-', Some('=')) => (Tok::MinusEq, 2),
+                    ('*', Some('=')) => (Tok::StarEq, 2),
+                    ('/', Some('=')) => (Tok::SlashEq, 2),
+                    ('%', Some('=')) => (Tok::PercentEq, 2),
+                    ('+', Some('+')) => (Tok::PlusPlus, 2),
+                    ('-', Some('-')) => (Tok::MinusMinus, 2),
                     ('=', _) => (Tok::Assign, 1),
                     ('<', _) => (Tok::Lt, 1),
                     ('>', _) => (Tok::Gt, 1),

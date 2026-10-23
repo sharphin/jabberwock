@@ -42,14 +42,9 @@ impl Parser {
         t
     }
 
-    fn skip_newlines(&mut self) {
-        while *self.peek() == Tok::Newline {
-            self.bump();
-        }
-    }
-
-    fn skip_seps(&mut self) {
-        while matches!(self.peek(), Tok::Newline | Tok::Semi) {
+    /// 空の文（`;` だけ）を読み飛ばす
+    fn skip_semis(&mut self) {
+        while *self.peek() == Tok::Semi {
             self.bump();
         }
     }
@@ -67,6 +62,16 @@ impl Parser {
         }
     }
 
+    /// 次が `t` なら読んで true
+    fn eat(&mut self, t: Tok) -> bool {
+        if *self.peek() == t {
+            self.bump();
+            true
+        } else {
+            false
+        }
+    }
+
     fn expect_ident(&mut self, what: &str) -> R<String> {
         if let Tok::Ident(name) = self.peek().clone() {
             self.bump();
@@ -80,7 +85,7 @@ impl Parser {
         let mut fns = Vec::new();
         let mut structs = Vec::new();
         loop {
-            self.skip_seps();
+            self.skip_semis();
             match self.peek() {
                 Tok::Eof => break,
                 Tok::Struct => structs.push(self.parse_struct()?),
@@ -96,7 +101,6 @@ impl Parser {
         let span = start.join(self.prev_span());
         self.expect(Tok::LBrace, "`{`")?;
         let mut fields: Vec<String> = Vec::new();
-        self.skip_newlines();
         while *self.peek() != Tok::RBrace {
             let fspan = self.span();
             let f = self.expect_ident("フィールド名")?;
@@ -105,10 +109,8 @@ impl Parser {
                     .primary(fspan, "同じ名前のフィールドがすでにある"));
             }
             fields.push(f);
-            self.skip_newlines();
             if *self.peek() == Tok::Comma {
                 self.bump();
-                self.skip_newlines();
             } else {
                 break;
             }
@@ -122,13 +124,13 @@ impl Parser {
         let name = self.expect_ident("関数名")?;
         self.expect(Tok::LParen, "`(`")?;
         let mut params = Vec::new();
-        self.skip_newlines();
         while *self.peek() != Tok::RParen {
-            params.push(self.expect_ident("引数名")?);
-            self.skip_newlines();
+            let mutable = self.eat(Tok::Mut);
+            let span = self.span();
+            let name = self.expect_ident("引数名")?;
+            params.push(Param { name, mutable, span });
             if *self.peek() == Tok::Comma {
                 self.bump();
-                self.skip_newlines();
             } else {
                 break;
             }
@@ -139,15 +141,18 @@ impl Parser {
         Ok(FnDef { name, params, body, span: header })
     }
 
+    /// `{ 文; 文; 式 }`。文の終わりには `;` が要る（`{ }` で終わる if / while などは不要）。
+    /// 最後の `;` のない式がブロックの値になる。
     fn parse_block(&mut self) -> R<Block> {
         self.expect(Tok::LBrace, "`{`")?;
         let mut stmts = Vec::new();
+        let mut tail = false;
         loop {
-            self.skip_seps();
+            self.skip_semis();
             match self.peek().clone() {
                 Tok::RBrace => {
                     let end = self.bump().span;
-                    return Ok(Block { stmts, end });
+                    return Ok(Block { stmts, tail, end });
                 }
                 Tok::Eof => {
                     return Err(Diagnostic::new("構文エラー: `}` が閉じていません")
@@ -155,10 +160,27 @@ impl Parser {
                 }
                 _ => {}
             }
-            stmts.push(self.parse_stmt()?);
-            match self.peek().clone() {
-                Tok::Newline | Tok::Semi | Tok::RBrace => {}
-                _ => return Err(self.unexpected("改行か `;`（文の終わり）")),
+            let stmt = self.parse_stmt()?;
+            let block_like = is_block_like(&stmt);
+            let is_expr = matches!(stmt, Stmt::Expr(_));
+            let end_of_stmt = self.prev_span();
+            stmts.push(stmt);
+            tail = false;
+            match self.peek() {
+                Tok::Semi => {
+                    self.bump();
+                }
+                Tok::RBrace if is_expr => tail = true,
+                _ if block_like => {}
+                Tok::RBrace => {
+                    return Err(Diagnostic::new("構文エラー: 文の終わりに `;` が必要です")
+                        .primary(end_of_stmt, "この後ろに `;` を書いてください")
+                        .note("ブロックの最後に `;` なしで書けるのは、値になる式だけです"));
+                }
+                _ => {
+                    return Err(Diagnostic::new("構文エラー: 文の終わりに `;` が必要です")
+                        .primary(end_of_stmt, "この後ろに `;` を書いてください"));
+                }
             }
         }
     }
@@ -167,11 +189,12 @@ impl Parser {
         match self.peek().clone() {
             Tok::Let => {
                 self.bump();
+                let mutable = self.eat(Tok::Mut);
+                let span = self.span();
                 let name = self.expect_ident("変数名")?;
                 self.expect(Tok::Assign, "`=`")?;
-                self.skip_newlines();
                 let init = self.parse_expr()?;
-                Ok(Stmt::Let { name, init })
+                Ok(Stmt::Let { name, mutable, span, init })
             }
             Tok::If => Ok(Stmt::Expr(self.parse_if(false)?)),
             Tok::Match => Ok(Stmt::Expr(self.parse_match(false)?)),
@@ -211,7 +234,7 @@ impl Parser {
                         .note("文として使ってください"));
                 }
                 let value = match self.peek().clone() {
-                    Tok::Newline | Tok::Semi | Tok::RBrace | Tok::Eof => None,
+                    Tok::Semi | Tok::RBrace | Tok::Eof => None,
                     _ => Some(self.parse_expr()?),
                 };
                 let span = start.join(self.prev_span());
@@ -219,19 +242,34 @@ impl Parser {
             }
             _ => {
                 let e = self.parse_expr()?;
-                if *self.peek() == Tok::Assign {
-                    if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..)) {
-                        return Err(Diagnostic::new("構文エラー: ここには代入できません")
-                            .primary(e.span, "代入先は変数名か `*p` か `p.f` だけです"));
-                    }
-                    self.bump();
-                    self.skip_newlines();
-                    let value = self.parse_expr()?;
-                    let span = e.span.join(value.span);
-                    Ok(Stmt::Assign { target: e, value, span })
-                } else {
-                    Ok(Stmt::Expr(e))
+                let op = match self.peek() {
+                    Tok::Assign => None,
+                    Tok::PlusEq | Tok::PlusPlus => Some(BinOp::Add),
+                    Tok::MinusEq | Tok::MinusMinus => Some(BinOp::Sub),
+                    Tok::StarEq => Some(BinOp::Mul),
+                    Tok::SlashEq => Some(BinOp::Div),
+                    Tok::PercentEq => Some(BinOp::Rem),
+                    _ => return Ok(Stmt::Expr(e)),
+                };
+                if !matches!(e.kind, ExprKind::Var(_) | ExprKind::Deref(..) | ExprKind::Field(..)) {
+                    return Err(Diagnostic::new("構文エラー: ここには代入できません")
+                        .primary(e.span, "代入先は変数名か `*p` か `p.f` だけです"));
                 }
+                let t = self.bump();
+                // `x += e` は `x = x + e`、`x++` は `x = x + 1` として扱う（文としてだけ書ける）
+                let rhs = match t.tok {
+                    Tok::PlusPlus | Tok::MinusMinus => Expr { kind: ExprKind::Int(1), span: t.span },
+                    _ => self.parse_expr()?,
+                };
+                let span = e.span.join(self.prev_span());
+                let value = match op {
+                    None => rhs,
+                    Some(op) => Expr {
+                        kind: ExprKind::Binary(op, Box::new(e.clone()), Box::new(rhs)),
+                        span,
+                    },
+                };
+                Ok(Stmt::Assign { target: e, value, span })
             }
         }
     }
@@ -267,7 +305,7 @@ impl Parser {
         let mut arms: Vec<MatchArm> = Vec::new();
         let mut default: Option<Block> = None;
         loop {
-            self.skip_seps();
+            self.skip_semis();
             match self.peek().clone() {
                 Tok::RBrace => {
                     self.bump();
@@ -290,7 +328,7 @@ impl Parser {
                         }
                         self.bump();
                     }
-                    let body = self.parse_arm_body()?;
+                    let body = self.parse_arm_body(as_value)?;
                     arms.push(MatchArm { pats, body });
                 }
                 Tok::Default => {
@@ -298,13 +336,9 @@ impl Parser {
                     if default.is_some() {
                         return Err(Diagnostic::new("default が二回あります").primary(span, "ここが二回目"));
                     }
-                    default = Some(self.parse_arm_body()?);
+                    default = Some(self.parse_arm_body(as_value)?);
                 }
                 _ => return Err(self.unexpected("`case` か `default` か `}`")),
-            }
-            match self.peek() {
-                Tok::Newline | Tok::Semi | Tok::RBrace => {}
-                _ => return Err(self.unexpected("改行（case の終わり）")),
             }
         }
         if as_value && default.is_none() && !covers_both_bools(&arms) {
@@ -339,32 +373,40 @@ impl Parser {
         Ok((pat, start.join(self.prev_span())))
     }
 
-    /// `-> 式`、`-> 文`、`-> { ... }`。どれもブロックにそろえる
-    fn parse_arm_body(&mut self) -> R<Block> {
+    /// `-> 式;`、`-> 文;`、`-> { ... }`（Java と同じ）。どれもブロックにそろえる
+    fn parse_arm_body(&mut self, as_value: bool) -> R<Block> {
         self.expect(Tok::Arrow, "`->`")?;
-        self.skip_newlines();
         if *self.peek() == Tok::LBrace {
-            return self.parse_block();
+            return self.parse_value_block(as_value);
         }
         let stmt = self.parse_stmt()?;
-        Ok(Block { stmts: vec![stmt], end: self.prev_span() })
+        let end = self.prev_span();
+        let is_expr = matches!(stmt, Stmt::Expr(_));
+        if !is_block_like(&stmt) {
+            self.expect(Tok::Semi, "`;`（case の終わり）")?;
+        }
+        if as_value && !is_expr {
+            return Err(Diagnostic::new("値として使う match の case に値がありません")
+                .primary(end, "ここは値ではなく文")
+                .note("`case 1 -> 値;` のように書いてください"));
+        }
+        Ok(Block { stmts: vec![stmt], tail: is_expr, end })
     }
 
     fn parse_if_rest(&mut self, as_value: bool, start: Span) -> R<Expr> {
         let cond = self.parse_cond()?;
-        let then = self.parse_block()?;
+        let then = self.parse_value_block(as_value)?;
 
         // `}` の次の行に else がある書き方も許す
         let save = self.pos;
-        self.skip_newlines();
         let els = if *self.peek() == Tok::Else {
             self.bump();
             if *self.peek() == Tok::If {
                 let nested = self.parse_if(as_value)?;
                 let end = self.prev_span();
-                Some(Block { stmts: vec![Stmt::Expr(nested)], end })
+                Some(Block { stmts: vec![Stmt::Expr(nested)], tail: true, end })
             } else {
-                Some(self.parse_block()?)
+                Some(self.parse_value_block(as_value)?)
             }
         } else {
             self.pos = save;
@@ -376,6 +418,17 @@ impl Parser {
             None
         };
         Ok(Expr { kind: ExprKind::If { cond: Box::new(cond), then, els }, span: start })
+    }
+
+    /// 値として使う if / match のブロック。最後に `;` のない式（値）が必要
+    fn parse_value_block(&mut self, as_value: bool) -> R<Block> {
+        let b = self.parse_block()?;
+        if as_value && !b.tail {
+            return Err(Diagnostic::new("値として使うブロックの最後に値がありません")
+                .primary(b.end, "このブロックの値が決まらない")
+                .note("最後の式の `;` を外すと、それがブロックの値になります"));
+        }
+        Ok(b)
     }
 
     fn parse_loop_body(&mut self) -> R<Block> {
@@ -411,7 +464,6 @@ impl Parser {
         }
         let body = self.parse_loop_body()?;
         let save = self.pos;
-        self.skip_newlines();
         let els = if *self.peek() == Tok::Else {
             self.bump();
             Some(self.parse_block()?)
@@ -446,7 +498,6 @@ impl Parser {
                 _ => break,
             };
             self.bump();
-            self.skip_newlines();
             let rhs = self.parse_binary(prec + 1)?;
             let span = lhs.span.join(rhs.span);
             lhs = Expr {
@@ -483,9 +534,10 @@ impl Parser {
             }
             Tok::Ref => {
                 let start = self.bump().span;
+                let mutable = self.eat(Tok::Mut);
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
-                Ok(Expr { kind: ExprKind::Ref(Box::new(e)), span })
+                Ok(Expr { kind: ExprKind::Ref(Box::new(e), mutable), span })
             }
             Tok::Own => {
                 let start = self.bump().span;
@@ -533,14 +585,11 @@ impl Parser {
                 let start = self.bump().span;
                 if *self.peek() == Tok::LParen {
                     self.bump();
-                    self.skip_newlines();
                     let mut args = Vec::new();
                     while *self.peek() != Tok::RParen {
                         args.push(self.with_struct_lit(true, |p| p.parse_expr())?);
-                        self.skip_newlines();
                         if *self.peek() == Tok::Comma {
                             self.bump();
-                            self.skip_newlines();
                         } else {
                             break;
                         }
@@ -558,9 +607,7 @@ impl Parser {
             }
             Tok::LParen => {
                 let start = self.bump().span;
-                self.skip_newlines();
                 let inner = self.with_struct_lit(true, |p| p.parse_expr())?;
-                self.skip_newlines();
                 let end = self.expect(Tok::RParen, "`)`")?;
                 Ok(Expr { kind: inner.kind, span: start.join(end) })
             }
@@ -570,25 +617,30 @@ impl Parser {
 
     fn parse_struct_lit(&mut self, name: String, start: Span) -> R<Expr> {
         self.expect(Tok::LBrace, "`{`")?;
-        self.skip_newlines();
         let mut fields = Vec::new();
         while *self.peek() != Tok::RBrace {
             let span = self.span();
             let fname = self.expect_ident("フィールド名")?;
             self.expect(Tok::Colon, "`:`")?;
-            self.skip_newlines();
             let value = self.with_struct_lit(true, |p| p.parse_expr())?;
             fields.push(FieldInit { name: fname, span, value });
-            self.skip_newlines();
             if *self.peek() == Tok::Comma {
                 self.bump();
-                self.skip_newlines();
             } else {
                 break;
             }
         }
         let end = self.expect(Tok::RBrace, "`}`")?;
         Ok(Expr { kind: ExprKind::StructLit(name, fields), span: start.join(end) })
+    }
+}
+
+/// `{ }` で終わる文か（後ろに `;` が要らない）
+fn is_block_like(s: &Stmt) -> bool {
+    match s {
+        Stmt::While { .. } | Stmt::Loop { .. } | Stmt::For { .. } => true,
+        Stmt::Expr(e) => matches!(e.kind, ExprKind::If { .. } | ExprKind::Match { .. }),
+        _ => false,
     }
 }
 

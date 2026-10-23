@@ -50,8 +50,9 @@ pub enum ExprKind {
     Var(String),
     /// `own e` : ヒープに値を置き、唯一の所有者を返す
     Own(Box<Expr>),
-    /// `ref p` : 所有者（変数か `*p`）を世代付き参照として借りる
-    Ref(Box<Expr>),
+    /// `ref p` / `ref mut p` : 所有者（変数か `*p` か `p.f`）を世代付き参照として借りる。
+    /// bool は `mut`（書き換えられる ref か）
+    Ref(Box<Expr>, bool),
     /// `*p` : own / ref の先を読む。2つ目は静的解析の結論（世代チェックを消せるか）。
     Deref(Box<Expr>, Cell<Check>),
     /// `e.f` : フィールド。`e` が own / ref なら自動で先をたどる（そのときの検査が `Check`）。
@@ -94,13 +95,15 @@ pub struct MatchArm {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
+    /// 最後の文が `;` のない式で、ブロックの値になるか（Rust と同じ規則）
+    pub tail: bool,
     /// 閉じ括弧 `}` の位置。スコープ終了での解放を指し示すのに使う。
     pub end: Span,
 }
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Let { name: String, init: Expr },
+    Let { name: String, mutable: bool, span: Span, init: Expr },
     Assign { target: Expr, value: Expr, span: Span },
     /// 式文。`if` もここに入る（文として使う if）
     Expr(Expr),
@@ -114,9 +117,16 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub mutable: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
     pub body: Block,
     pub span: Span,
 }

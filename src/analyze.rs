@@ -132,7 +132,7 @@ impl<'a> FnAnalyzer<'a> {
         let safe = self.pinned.get(f.name.as_str()).cloned().unwrap_or_default();
         for (i, p) in f.params.iter().enumerate() {
             let fact = if safe.get(i) == Some(&true) { Some(Fact::Pinned) } else { None };
-            self.declare(p, fact);
+            self.declare(&p.name, fact);
         }
         self.block(&f.body);
     }
@@ -231,7 +231,7 @@ impl<'a> FnAnalyzer<'a> {
 
     fn stmt(&mut self, s: &Stmt) {
         match s {
-            Stmt::Let { name, init } => {
+            Stmt::Let { name, init, .. } => {
                 let f = self.expr(init, false);
                 self.declare(name, f);
             }
@@ -310,7 +310,7 @@ impl<'a> FnAnalyzer<'a> {
                 self.expr(inner, false);
                 Some(Fact::Own)
             }
-            ExprKind::Ref(inner) => {
+            ExprKind::Ref(inner, _) => {
                 self.expr(inner, true);
                 match &inner.kind {
                     ExprKind::Var(name) => {
@@ -463,7 +463,7 @@ fn for_each_check(b: &Block, f: &mut impl FnMut(&Cell<Check>)) {
 fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
     match &e.kind {
         ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
-        ExprKind::Own(i) | ExprKind::Ref(i) | ExprKind::Unary(_, i) => expr_checks(i, f),
+        ExprKind::Own(i) | ExprKind::Ref(i, _) | ExprKind::Unary(_, i) => expr_checks(i, f),
         ExprKind::Deref(i, c) | ExprKind::Field(i, _, c) => {
             f(c);
             expr_checks(i, f);

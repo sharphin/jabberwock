@@ -38,26 +38,26 @@ fn dangling(body: &str) {
 #[test]
 fn loop_with_break() {
     let o = out("
-    let i = 0
+    let mut i = 0;
     loop {
-        i = i + 1
-        if i == 3 { break }
+        i = i + 1;
+        if i == 3 { break; }
     }
-    print(i)");
+    print(i);");
     assert_eq!(o, "3\n");
 }
 
 #[test]
 fn while_with_continue() {
     let o = out("
-    let i = 0
-    let sum = 0
+    let mut i = 0;
+    let mut sum = 0;
     while i < 6 {
-        i = i + 1
-        if i % 2 == 0 { continue }
-        sum = sum + i
+        i = i + 1;
+        if i % 2 == 0 { continue; }
+        sum = sum + i;
     }
-    print(sum)");
+    print(sum);");
     assert_eq!(o, "9\n");
 }
 
@@ -84,7 +84,7 @@ fn for_else_runs_only_when_the_body_never_ran() {
         print(\"never\")
     }
     for i in range(3) {
-        break
+        break;
     } else {
         print(\"not after break either\")
     }");
@@ -96,7 +96,7 @@ fn nested_loops_break_only_the_inner_one() {
     let o = out("
     for i in range(3) {
         for j in range(3) {
-            if j == 1 { break }
+            if j == 1 { break; }
             print(i, j)
         }
     }");
@@ -107,13 +107,13 @@ fn nested_loops_break_only_the_inner_one() {
 fn locals_are_freed_on_break_and_continue() {
     out("
     for i in range(4) {
-        let a = own i
-        if i == 1 { continue }
-        if i == 2 { break }
+        let a = own i;
+        if i == 1 { continue; }
+        if i == 2 { break; }
     }
     loop {
-        let b = own 1
-        break
+        let b = own 1;
+        break;
     }");
 }
 
@@ -122,9 +122,9 @@ fn return_from_inside_a_loop() {
     let src = "
 fn find(n) {
     for i in range(100) {
-        if i * i >= n { return i }
+        if i * i >= n { return i; }
     }
-    return -1
+    return -1;
 }
 
 fn main() {
@@ -138,31 +138,31 @@ fn main() {
 #[test]
 fn if_as_a_value() {
     let o = out("
-    let a = 3
-    let b = 7
-    let m = if a > b { a } else { b }
-    print(m)
-    print(if a < 0 { \"負\" } else if a == 0 { \"ゼロ\" } else { \"正\" })
+    let a = 3;
+    let b = 7;
+    let m = if a > b { a } else { b };
+    print(m);
+    print(if a < 0 { \"負\" } else if a == 0 { \"ゼロ\" } else { \"正\" });
     let n = if true {
-        let t = a * 10
+        let t = a * 10;
         t + 1
     } else {
         0
-    }
-    print(n)");
+    };
+    print(n);");
     assert_eq!(o, "7\n正\n31\n");
 }
 
 #[test]
 fn nested_if_as_the_last_line_gives_the_value() {
     let o = out("
-    let x = 5
+    let x = 5;
     let s = if x > 0 {
         if x > 3 { \"big\" } else { \"small\" }
     } else {
         \"neg\"
-    }
-    print(s)");
+    };
+    print(s);");
     assert_eq!(o, "big\n");
 }
 
@@ -170,12 +170,12 @@ fn nested_if_as_the_last_line_gives_the_value() {
 fn if_value_can_be_an_own_and_is_freed() {
     let src = "
 fn pick(c) {
-    return if c { own 1 } else { own 2 }
+    return if c { own 1 } else { own 2 };
 }
 
 fn main() {
-    let x = if 1 < 2 { own 10 } else { own 20 }
-    print(*x, *pick(false))
+    let x = if 1 < 2 { own 10 } else { own 20 };
+    print(*x, *pick(false));
     if true { own 3 } else { own 4 }
 }";
     assert_eq!(ok(src).output, "10 2\n");
@@ -185,26 +185,26 @@ fn main() {
 
 #[test]
 fn value_if_needs_else() {
-    let d = err_in_main("let x = if true { 1 }");
+    let d = err_in_main("let x = if true { 1 };");
     assert!(d.title.contains("else が必要"), "{}", d.title);
 }
 
 #[test]
 fn break_and_continue_outside_a_loop() {
-    assert!(err_in_main("break").title.contains("ループの外"));
-    assert!(err_in_main("if true { continue }").title.contains("ループの外"));
+    assert!(err_in_main("break;").title.contains("ループの外"));
+    assert!(err_in_main("if true { continue; }").title.contains("ループの外"));
     // for の else はループ本体ではない
-    assert!(err_in_main("for i in range(0) { } else { break }").title.contains("ループの外"));
+    assert!(err_in_main("for i in range(0) { } else { break; }").title.contains("ループの外"));
 }
 
 #[test]
 fn no_return_or_outer_break_inside_a_value_if() {
-    let d = err("fn f() {\n let x = if true { return 1 } else { 2 }\n}\nfn main() {\n}");
+    let d = err("fn f() {\n let x = if true { return 1; } else { 2 };\n}\nfn main() {\n}");
     assert!(d.title.contains("return できません"), "{}", d.title);
-    let d = err_in_main("loop {\n let x = if true { break } else { 2 }\n}");
+    let d = err_in_main("loop {\n let x = if true { break; } else { 2 };\n}");
     assert!(d.title.contains("外のループへ break"), "{}", d.title);
     // 値として使う if の中のループで break するのはよい
-    out("let x = if true {\n loop { break }\n 1\n} else { 2 }");
+    out("let x = if true {\n loop { break; }\n 1\n} else { 2 };");
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn range_errors() {
     assert!(err_in_main("for i in range(\"a\") { }").title.contains("整数"));
     assert!(err_in_main("for i in range() { }").title.contains("1〜3"));
     assert!(err_in_main("for i in range(1, 2, 3, 4) { }").title.contains("1〜3"));
-    let d = err_in_main("let x = 3\nfor i in x { }");
+    let d = err_in_main("let x = 3;\nfor i in x { }");
     assert!(d.title.contains("range"), "{}", d.title);
 }
 
@@ -222,27 +222,27 @@ fn range_errors() {
 #[test]
 fn ref_to_a_loop_local_escaping_through_break_is_checked() {
     dangling("
-    let slot = own 0
-    let r = ref slot
+    let slot = own 0;
+    let mut r = ref slot;
     loop {
-        let a = own 1
-        r = ref a
-        break
+        let a = own 1;
+        r = ref a;
+        break;
     }
-    print(*r)");
+    print(*r);");
 }
 
 #[test]
 fn drop_before_continue_is_seen_on_the_next_iteration() {
     dangling("
-    let a = own 1
-    let r = ref a
-    let i = 0
+    let a = own 1;
+    let r = ref a;
+    let mut i = 0;
     while i < 3 {
-        i = i + 1
+        i = i + 1;
         if i == 2 {
-            drop(a)
-            continue
+            drop(a);
+            continue;
         }
         print(*r)
     }");
@@ -251,50 +251,50 @@ fn drop_before_continue_is_seen_on_the_next_iteration() {
 #[test]
 fn drop_before_break_is_seen_after_the_loop() {
     dangling("
-    let a = own 1
-    let r = ref a
+    let a = own 1;
+    let r = ref a;
     loop {
-        drop(a)
-        break
+        drop(a);
+        break;
     }
-    print(*r)");
+    print(*r);");
 }
 
 #[test]
 fn drop_in_for_else_is_seen_after_the_loop() {
     dangling("
-    let a = own 1
-    let r = ref a
+    let a = own 1;
+    let r = ref a;
     for i in range(0) {
     } else {
         drop(a)
     }
-    print(*r)");
+    print(*r);");
 }
 
 #[test]
 fn drop_in_one_branch_of_an_if_value() {
     dangling("
-    let a = own 1
-    let r = ref a
+    let a = own 1;
+    let r = ref a;
     let x = if true {
-        drop(a)
+        drop(a);
         1
     } else {
         2
-    }
-    print(*r)");
+    };
+    print(*r);");
 }
 
 #[test]
 fn checks_are_still_elided_in_loops_with_break() {
     let o = ok("
 fn main() {
-    let s = own 0
-    let r = ref s
+    let mut s = own 0;
+    let r = ref mut s;
     for i in range(10) {
-        *r = *r + i
-        if i == 5 { break }
+        *r = *r + i;
+        if i == 5 { break; }
     }
     print(*r)
 }");
