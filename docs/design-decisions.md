@@ -37,10 +37,17 @@ let y = 5                           // 普段は省略して推論（i64）
 - **for-else を入れる。** `else` はループの本体が **0 回** だったときに実行される。
   - 注意: Python の for-else（break せずに終わったときに実行）とは意味が違う。エラーメッセージやドキュメントで明示する。
 
-保留（if・switch/match・loop と一緒に考える）:
+- **`loop`（無限ループ）は残す。**
+- **switch は `match` という名前にする。**
+- **for は Python と Rust を混ぜた形**: `for i in range(1, 10, 2) { }`
+  - `range(終わり)` / `range(始め, 終わり)` / `range(始め, 終わり, 刻み)`。終わりは含まない（Python と同じ）。
+    例: `range(1, 10, 2)` は 1, 3, 5, 7, 9。逆向きは `range(10, 0, -1)`。
+  - 理由: Rust の `(1..10).step_by(2)` は直感に反する。
+  - for-else と組み合わせられる（`range(5, 5)` のように 0 回なら else）。
 
-- 条件を `( )` で囲むか（`if (x > 0) { }` か `if x > 0 { }`）
-- for の形（範囲 `for i in 0..10` か C 風 `for (i64 i = 0; i < 10; i = i + 1)`）。C 風のほうが柔軟という意見あり
-- Rust の `loop`（無限ループ）を入れるか
-- switch / match の形
-- if を値として使えるか、break / continue
+保留:
+
+- if を文にするか式にするか（式にすると `let x = if (a > b) { a } else { b }` のように三項演算子の代わりになる）
+- 条件を `( )` で囲むか
+- match の細かい形
+- break / continue
