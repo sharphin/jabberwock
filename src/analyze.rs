@@ -262,9 +262,9 @@ impl<'a> FnAnalyzer<'a> {
             }
             Stmt::While { cond, body } => self.loop_body(Some(cond), &[], body, true),
             Stmt::Loop { body } => self.loop_body(None, &[], body, false),
-            Stmt::ForEach { key, var, iter, body, els, .. } => {
-                // インタプリタは eval_borrow で読む（変数ならムーブしない）
-                self.expr(iter, true);
+            Stmt::ForEach { key, var, iter, body, els, consume, .. } => {
+                // インタプリタは eval_borrow で読む（変数ならムーブしない）。その場で作ったリストを回すときは eval
+                self.expr(iter, !consume.get());
                 let before = self.facts.clone();
                 let mut vars: Vec<&str> = key.iter().map(|(k, _)| k.as_str()).collect();
                 vars.push(var);

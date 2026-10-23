@@ -229,3 +229,40 @@ fn main() {
     assert!(o.error.unwrap().title.contains("dangling"));
     assert_eq!(o.live_objects, 0);
 }
+
+#[test]
+fn drain_and_reverse() {
+    // `for x in a.drain()` は要素を前から値として受け取る（a は空になる）。途中で抜けたら残りは捨てる
+    let src = "struct Job { i64 id; own i64 data; }
+fn Job[] make() { [Job { id: 1, data: own 10 }, Job { id: 2, data: own 20 }] }
+fn i64 take(Job j) { j.id + *j.data }
+fn main() {
+    let Job[] mut jobs = [Job { id: 1, data: own 1 }, Job { id: 2, data: own 2 }, Job { id: 3, data: own 3 }];
+    let mut t = 0;
+    for (i, j) in jobs.drain() {
+        t += take(j) * (i + 1);
+    }
+    print(t, jobs.len());
+    jobs.push(Job { id: 9, data: own 9 });
+    for j in jobs.drain() { if j.id == 9 { break; } }
+    for j in make() {
+        print(take(j));
+        if j2() { break; }
+    }
+    let (own i64)[] mut xs = [own 1, own 2, own 3];
+    xs.reverse();
+    print(xs);
+    for x in xs.drain() { print(*x); if *x == 2 { break; } }
+    for x in xs.drain() { print(*x); } else { print(\"空\"); }
+    let chan<Job> c = chan();
+    let Job[] mut js = [Job { id: 5, data: own 5 }];
+    let task<i64>[] mut ts = [];
+    for j in js.drain() {
+        ts.push(spawn(() -> take(j)));
+    }
+    for t2 in ts.drain() { print(t2.join()); }
+}
+fn bool j2() { false }
+";
+    assert_eq!(ok(src), "28 0\n11\n22\n[3, 2, 1]\n3\n2\n空\n10\n");
+}

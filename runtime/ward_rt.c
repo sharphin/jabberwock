@@ -757,6 +757,17 @@ void ward_list_remove(WList *l, int64_t esize, int64_t i, void *out) {
     l->len--;
 }
 
+void ward_list_reverse(WList *l, int64_t esize) {
+    char tmp[256];
+    char *big = esize > (int64_t)sizeof tmp ? malloc((size_t)esize) : tmp;
+    for (int64_t i = 0, j = l->len - 1; i < j; i++, j--) {
+        memcpy(big, l->data + i * esize, (size_t)esize);
+        memcpy(l->data + i * esize, l->data + j * esize, (size_t)esize);
+        memcpy(l->data + j * esize, big, (size_t)esize);
+    }
+    if (big != tmp) free(big);
+}
+
 void ward_list_free(WList *l) { free(l->data); }
 
 // 並べ替え（安定）。less(a, b, env) で比べる

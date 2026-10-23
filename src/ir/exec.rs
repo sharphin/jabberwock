@@ -533,6 +533,11 @@ impl<'a> Machine<'a> {
                 let k = bounds(i, items.len(), arg_span)?;
                 items.remove(k)
             }
+            "reverse" => {
+                items.reverse();
+                Value::Unit
+            }
+            "drain" => Value::Array(std::mem::take(items), true),
             "insert" => {
                 let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };
                 if i < 0 || i > items.len() as i128 {

@@ -141,6 +141,7 @@ declare void @ward_list_reserve(ptr, i64, i64)
 declare ptr @ward_list_push_slot(ptr, i64)
 declare ptr @ward_list_insert_slot(ptr, i64, i64)
 declare void @ward_list_remove(ptr, i64, i64, ptr)
+declare void @ward_list_reverse(ptr, i64)
 declare void @ward_list_free(ptr)
 declare void @ward_sort(ptr, i64, i64, ptr, ptr)
 declare void @ward_permute(ptr, i64, i64, ptr)
@@ -3698,6 +3699,16 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let dst = self.b.val(format!("call ptr @ward_list_insert_slot(ptr {}, i64 {}, i64 {})", pr.ptr, size, i));
                         self.b.op(format!("store {} {}, ptr {}", xl, v, dst));
                         Ok(("0".to_string(), Ty::Unit))
+                    }
+                    "reverse" => {
+                        self.b.op(format!("call void @ward_list_reverse(ptr {}, i64 {})", pr.ptr, size));
+                        Ok(("0".to_string(), Ty::Unit))
+                    }
+                    // 中身ごと新しいリストへ移し、元は空にする
+                    "drain" => {
+                        let v = self.b.val(format!("load %list, ptr {}", pr.ptr));
+                        self.b.op(format!("store %list zeroinitializer, ptr {}", pr.ptr));
+                        Ok((v, Ty::List(x.clone())))
                     }
                     "sort_by" => {
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));

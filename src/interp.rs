@@ -1282,6 +1282,55 @@ impl Interp {
         }
     }
 
+    /// その場で作ったリストを回す（`for x in a.drain()`）。要素を前から取り出して x へ移す。
+    /// IR と同じく、はじめに逆順にして後ろから pop する（途中で抜けたら、残りは逆順のまま捨てる）
+    #[inline(never)]
+    fn exec_for_take(
+        &mut self,
+        key: Option<&(String, Span)>,
+        var: &str,
+        var_span: Span,
+        iter: &Expr,
+        body: &Block,
+        els: Option<&Block>,
+    ) -> R<Flow> {
+        let Value::Array(mut items, _) = self.eval(iter)? else { unreachable!("type checked: a list") };
+        items.reverse();
+        let mut out = Ok(Flow::Normal);
+        let mut i = 0;
+        while let Some(v) = items.pop() {
+            self.frames.last_mut().expect("frame").scopes.push(Vec::new());
+            if let Some((kn, ks)) = key {
+                self.declare(kn, Value::Int(i, IntTy::I64), false, *ks);
+            }
+            self.declare(var, v, false, var_span);
+            let r = self.loop_iteration(body);
+            let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
+            self.drop_scope(scope, var_span, "次の周回へ進んだ");
+            i += 1;
+            match r {
+                Ok(None) => {}
+                Ok(Some(f)) => {
+                    out = Ok(f);
+                    break;
+                }
+                Err(d) => {
+                    out = Err(d);
+                    break;
+                }
+            }
+        }
+        let rest = Value::Array(items, true);
+        match &out {
+            Err(_) => self.discard(vec![rest], iter.span),
+            Ok(_) => self.release(rest, iter.span, "for で回し終わった一時的な値"),
+        }
+        match (out?, els) {
+            (Flow::Normal, Some(els)) if i == 0 => self.exec_block(els),
+            (f, _) => Ok(f),
+        }
+    }
+
     fn exec_stmt(&mut self, s: &Stmt) -> R<Flow> {
         match s {
             Stmt::Let { name, mutable, span, init, .. } => {
@@ -1363,7 +1412,10 @@ impl Interp {
                     _ => Ok(Flow::Normal),
                 }
             }
-            Stmt::ForEach { key, var, var_span, iter, body, els } => {
+            Stmt::ForEach { key, var, var_span, iter, body, els, consume } if consume.get() => {
+                self.exec_for_take(key.as_ref(), var, *var_span, iter, body, els.as_ref())
+            }
+            Stmt::ForEach { key, var, var_span, iter, body, els, .. } => {
                 self.exec_for_each(key.as_ref(), var, *var_span, iter, body, els.as_ref())
             }
             Stmt::Break(sp) => Ok(Flow::Break(*sp)),
@@ -2124,6 +2176,11 @@ impl Interp {
                     let k = bounds(i, items.len(), args[0].span)?;
                     items.remove(k)
                 }
+                "reverse" => {
+                    items.reverse();
+                    Value::Unit
+                }
+                "drain" => Value::Array(std::mem::take(items), true),
                 "insert" => {
                     let i = match vals[0] {
                         Value::Int(i, _) => i,

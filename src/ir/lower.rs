@@ -427,7 +427,10 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.cur = exit;
             }
             Stmt::For { var, range, range_span, body, els } => self.for_range(var, range, *range_span, body, els.as_ref())?,
-            Stmt::ForEach { key, var, var_span, iter, body, els } => {
+            Stmt::ForEach { key, var, var_span, iter, body, els, consume } if consume.get() => {
+                self.for_take(key.as_ref(), var, *var_span, iter, body, els.as_ref())?
+            }
+            Stmt::ForEach { key, var, var_span, iter, body, els, .. } => {
                 self.for_each(key.as_ref(), var, *var_span, iter, body, els.as_ref())?
             }
             Stmt::Break(sp) => {
@@ -697,6 +700,92 @@ impl<'a, 'p> FnLower<'a, 'p> {
         if let Some(els) = els {
             let run_else = self.new_block();
             let z = Rvalue::Bin(BinOp::Eq, Operand::Copy(rd(n)), Operand::Const(Const::Int(0, IntTy::I64)), var_span);
+            let z = self.temp_of(Ty::Bool, z, var_span);
+            self.blocks[self.cur].term = Term::Branch(z, run_else, exit);
+            self.cur = run_else;
+            self.block(els, None)?;
+        }
+        self.goto_and_switch(exit);
+        self.pop_scope(var_span, "for で回し終わった");
+        Ok(())
+    }
+
+    /// その場で作ったリストを回す（`for x in a.drain()`）。要素を前から値として受け取る。
+    /// はじめに逆順にして、周回ごとに後ろから pop する（interp の `exec_for_take` と同じ順）
+    fn for_take(
+        &mut self,
+        key: Option<&(String, Span)>,
+        var: &str,
+        var_span: Span,
+        iter: &Expr,
+        body: &ast::Block,
+        els: Option<&ast::Block>,
+    ) -> L<()> {
+        let elem = match self.ty(iter) {
+            Ty::List(x) => *x,
+            _ => return Err("リストでないものの for".to_string()),
+        };
+        let i64t = Ty::Int(IntTy::I64);
+        self.scopes.push(Vec::new());
+        let hidden = self.scopes.len();
+        let t = match self.expr(iter)? {
+            Operand::Move(t, _) => t,
+            _ => return Err("定数の for".to_string()),
+        };
+        self.scopes.last_mut().expect("scope").push((String::new(), t));
+        let rd = |l: Local| Place::local(l, var_span);
+        let seq = |name: &str, l: Local| Rvalue::SeqOp {
+            name: name.to_string(),
+            place: rd(l),
+            args: Vec::new(),
+            span: var_span,
+            arg_span: var_span,
+        };
+        let u = self.temp_of(Ty::Unit, seq("reverse", t), var_span);
+        self.emit(Inst::Discard { value: u, span: var_span, why: String::new() });
+        let i = self.declare("", i64t.clone(), true, var_span);
+        self.assign(i, Rvalue::Use(Operand::Const(Const::Int(0, IntTy::I64))), var_span);
+
+        let head = self.new_block();
+        let body_bb = self.new_block();
+        let none_bb = self.new_block();
+        let next = self.new_block();
+        let done = self.new_block();
+        let exit = self.new_block();
+        self.goto_and_switch(head);
+        let opt = Ty::Enum("Option".to_string(), vec![elem.clone()]);
+        let p = match self.temp_of(opt, seq("pop", t), var_span) {
+            Operand::Move(p, _) => p,
+            _ => return Err("pop".to_string()),
+        };
+        self.blocks[self.cur].term = Term::Switch(rd(p), vec![(Rc::from("Some"), body_bb)], none_bb);
+        self.cur = none_bb;
+        self.emit(Inst::Drop { local: p, span: var_span, why: "for で回し終わった".to_string() });
+        self.blocks[self.cur].term = Term::Goto(done);
+        self.cur = body_bb;
+        self.scopes.push(Vec::new());
+        if let Some((kn, ks)) = key {
+            let k = self.declare(kn, i64t.clone(), false, *ks);
+            self.assign(k, Rvalue::Use(Operand::Copy(rd(i))), *ks);
+        }
+        let vt = self.var_ty(var_span)?;
+        let v = self.declare(var, vt, false, var_span);
+        let mut fp = rd(p);
+        fp.proj.push(Proj::Variant(Rc::from("Some"), 0));
+        self.assign(v, Rvalue::Take(fp), var_span);
+        self.emit(Inst::Drop { local: p, span: var_span, why: "for で要素を取り出した".to_string() });
+        self.loops.push(Loop { brk: exit, brk_depth: hidden, cont: next, cont_depth: hidden + 1 });
+        self.block(body, None)?;
+        self.loops.pop();
+        self.goto_and_switch(next);
+        self.pop_scope(var_span, "次の周回へ進んだ");
+        let inc = Rvalue::Bin(BinOp::Add, Operand::Copy(rd(i)), Operand::Const(Const::Int(1, IntTy::I64)), var_span);
+        self.assign(i, inc, var_span);
+        self.blocks[self.cur].term = Term::Goto(head);
+        self.cur = done;
+        if let Some(els) = els {
+            let run_else = self.new_block();
+            let z = Rvalue::Bin(BinOp::Eq, Operand::Copy(rd(i)), Operand::Const(Const::Int(0, IntTy::I64)), var_span);
             let z = self.temp_of(Ty::Bool, z, var_span);
             self.blocks[self.cur].term = Term::Branch(z, run_else, exit);
             self.cur = run_else;

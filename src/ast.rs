@@ -339,7 +339,16 @@ pub enum Stmt {
     For { var: String, range: Vec<Expr>, range_span: Span, body: Block, els: Option<Block> },
     /// `for x in a { ... } else { ... }`: 配列・リストの要素を回す（a は借りるだけ。ループを始めた時点の要素を回す）
     /// `for x in a` / `for (k, v) in m`（`key` は組の前の名前。リストなら添字、辞書ならキー）
-    ForEach { key: Option<(String, Span)>, var: String, var_span: Span, iter: Expr, body: Block, els: Option<Block> },
+    /// `consume`: その場で作ったリストを回す（要素を値として受け取る。型検査が書く）
+    ForEach {
+        key: Option<(String, Span)>,
+        var: String,
+        var_span: Span,
+        iter: Expr,
+        body: Block,
+        els: Option<Block>,
+        consume: Cell<bool>,
+    },
     Break(Span),
     Continue(Span),
     Return { value: Option<Expr>, span: Span },

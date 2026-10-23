@@ -1319,8 +1319,10 @@ impl<'a> Checker<'a> {
                 }
                 Ok(false)
             }
-            Stmt::ForEach { key, var, var_span, iter, body, els } => {
+            Stmt::ForEach { key, var, var_span, iter, body, els, consume } => {
                 let t = self.expr(iter)?;
+                // その場で作ったリスト（`a.drain()`・関数の戻り値）は、要素を値として受け取る
+                consume.set(matches!(t, Ty::List(_)) && !is_place(iter));
                 // 前の名前の型（リストなら添字、辞書ならキー）と、要素の型
                 let (kt, elem) = match (seq_of(&t), map_of(&t)) {
                     (Some((elem, _)), _) => (I64, elem),
@@ -1338,7 +1340,7 @@ impl<'a> Checker<'a> {
                             .note("数を回すなら `for i in range(10)` と書きます"))
                     }
                 };
-                let vt = self.view_ty(elem);
+                let vt = if consume.get() { elem } else { self.view_ty(elem) };
                 self.scopes.push(HashMap::new());
                 if let Some((k, ks)) = key {
                     self.declare(k, VarInfo { ty: kt, mutable: false, decl: *ks })?;
@@ -1938,11 +1940,13 @@ impl<'a> Checker<'a> {
             "pop" => (0, Ty::Enum("Option".to_string(), vec![elem.clone()]), true),
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
+            "reverse" => (0, Ty::Unit, true),
+            "drain" => (0, Ty::List(Box::new(elem.clone())), true),
             "sort" | "sort_by" => (if name == "sort" { 0 } else { 1 }, Ty::Unit, true),
             _ => {
                 return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name)).primary(
                     span,
-                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`sort()`・`sort_by(f)` です",
+                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`sort()`・`sort_by(f)` です",
                 ))
             }
         };

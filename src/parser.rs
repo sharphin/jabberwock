@@ -939,7 +939,7 @@ impl Parser {
             let iter = self.parse_cond()?;
             let body = self.parse_loop_body()?;
             let els = if self.eat(Tok::Else) { Some(self.parse_block()?) } else { None };
-            return Ok(Stmt::ForEach { key, var, var_span, iter, body, els });
+            return Ok(Stmt::ForEach { key, var, var_span, iter, body, els, consume: Cell::new(false) });
         }
         let call = self.parse_postfix()?;
         let range = match call.kind {
