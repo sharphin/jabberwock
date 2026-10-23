@@ -347,6 +347,7 @@ impl<'p> Module<'p> {
                 }
                 format!("{{ {} }}", parts.join(", "))
             }
+            _ if self.niche(t)?.is_some() => "{ ptr }".to_string(),
             _ => {
                 let mut k = 0;
                 for (_, fs) in self.variants(t)? {
@@ -379,6 +380,43 @@ impl<'p> Module<'p> {
         self.variants(t)?.iter().position(|(n, _)| n == v).ok_or_else(|| format!("enum の種類 {} がない", v))
     }
 
+    /// 「中身なし」と「own 1 つ」の 2 種類だけの enum（`Option<own T>` など）は、ポインタ 1 つで表す（null が中身なし）。
+    /// そのときは（中身なしの種類, own の種類）の番号
+    fn niche(&self, t: &Ty) -> G<Option<(usize, usize)>> {
+        let Ty::Enum(..) = t else { return Ok(None) };
+        let vs = self.variants(t)?;
+        if vs.len() != 2 {
+            return Ok(None);
+        }
+        let own = |fs: &[Ty]| matches!(fs, [Ty::Own(x)] if !matches!(**x, Ty::Iface(_)));
+        Ok(match (&vs[0].1[..], &vs[1].1[..]) {
+            ([], fs) if own(fs) => Some((0, 1)),
+            (fs, []) if own(fs) => Some((1, 0)),
+            _ => None,
+        })
+    }
+
+    /// enum の種類の番号（i32）を読む
+    fn enum_tag(&mut self, b: &mut B, t: &Ty, p: &str) -> G<String> {
+        let et = self.lt(t)?;
+        if let Some((none, some)) = self.niche(t)? {
+            let v = b.val(format!("load ptr, ptr {}", p));
+            let is_none = b.val(format!("icmp eq ptr {}, null", v));
+            return Ok(b.val(format!("select i1 {}, i32 {}, i32 {}", is_none, none, some)));
+        }
+        let tp = b.val(format!("getelementptr {}, ptr {}, i32 0, i32 0", et, p));
+        Ok(b.val(format!("load i32, ptr {}", tp)))
+    }
+
+    /// enum の中身の場所（種類ごとの構造体 `variant_lt` として読む）
+    fn enum_payload(&mut self, b: &mut B, t: &Ty, p: &str) -> G<String> {
+        if self.niche(t)?.is_some() {
+            return Ok(p.to_string());
+        }
+        let et = self.lt(t)?;
+        Ok(b.val(format!("getelementptr {}, ptr {}, i32 0, i32 1", et, p)))
+    }
+
     /// 大きさと並びの単位（LLVM の既定の並べ方と同じ）。構造体の名前が空なら、中身を並べただけのもの（enum の中身）
     fn size_align(&mut self, t: &Ty) -> G<(u64, u64)> {
         Ok(match t {
@@ -400,6 +438,7 @@ impl<'p> Module<'p> {
                 let fs = self.struct_fields(t)?;
                 self.layout(&fs)?
             }
+            Ty::Enum(..) if self.niche(t)?.is_some() => (8, 8),
             Ty::Enum(..) => {
                 let mut k = 0;
                 for (_, fs) in self.variants(t)? {
@@ -709,10 +748,8 @@ impl<'p> Module<'p> {
             }
             Ty::Enum(..) => {
                 let vs = self.variants(t)?;
-                let et = self.lt(t)?;
-                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
-                let tag = b.val(format!("load i32, ptr {}", tag));
-                let pl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
+                let tag = self.enum_tag(b, t, "%p")?;
+                let pl = self.enum_payload(b, t, "%p")?;
                 let done = b.l();
                 let mut cases = Vec::new();
                 let mut bodies = String::new();
@@ -829,10 +866,8 @@ impl<'p> Module<'p> {
             }
             Ty::Enum(..) => {
                 let vs = self.variants(t)?;
-                let et = self.lt(t)?;
-                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
-                let tag = b.val(format!("load i32, ptr {}", tag));
-                let pl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
+                let tag = self.enum_tag(b, t, "%p")?;
+                let pl = self.enum_payload(b, t, "%p")?;
                 let done = b.l();
                 let mut cases = Vec::new();
                 let mut bodies = String::new();
@@ -1014,10 +1049,9 @@ impl<'p> Module<'p> {
                 // 種類の番号と中身をそのまま写してから、複製が要る中身だけ上書きする
                 let v = b.val(format!("load {}, ptr %p", et));
                 b.op(format!("store {} {}, ptr %dst", et, v));
-                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
-                let tag = b.val(format!("load i32, ptr {}", tag));
-                let spl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
-                let dpl = b.val(format!("getelementptr {}, ptr %dst, i32 0, i32 1", et));
+                let tag = self.enum_tag(b, t, "%p")?;
+                let spl = self.enum_payload(b, t, "%p")?;
+                let dpl = self.enum_payload(b, t, "%dst")?;
                 let done = b.l();
                 let mut cases = Vec::new();
                 let mut bodies = String::new();
@@ -1266,10 +1300,8 @@ impl<'p> Module<'p> {
             }
             Ty::Enum(..) => {
                 let vs = self.variants(t)?;
-                let et = self.lt(t)?;
-                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
-                let tag = b.val(format!("load i32, ptr {}", tag));
-                let pl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
+                let tag = self.enum_tag(b, t, "%p")?;
+                let pl = self.enum_payload(b, t, "%p")?;
                 let done = b.l();
                 let mut cases = Vec::new();
                 let mut bodies = String::new();
@@ -1428,12 +1460,10 @@ impl<'p> Module<'p> {
             Ty::Enum(..) => {
                 // 中身に own を持ちうる enum は、種類ごとに見る
                 let vs = self.variants(t)?;
-                let et = self.lt(t)?;
                 let acc = b.alloca("i1");
                 b.op(format!("store i1 false, ptr {}", acc));
-                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
-                let tag = b.val(format!("load i32, ptr {}", tag));
-                let pl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
+                let tag = self.enum_tag(b, t, "%p")?;
+                let pl = self.enum_payload(b, t, "%p")?;
                 let done = b.l();
                 let mut cases = Vec::new();
                 let mut bodies = String::new();
@@ -1748,7 +1778,7 @@ fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str) -> String {
     let blk = b.val(format!("extractvalue {} {}, 1", rt, r));
     let gen = b.val(format!("extractvalue {} {}, 2", rt, r));
     let site = b.val(format!("extractvalue {} {}, 3", rt, r));
-    let hp = b.val(format!("getelementptr i8, ptr {}, i64 -16", blk));
+    let hp = b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
     let g = b.val(format!("load i64, ptr {}", hp));
     let bad = b.val(format!("icmp ne i64 {}, {}", g, gen));
     let (_, ok) = b.if_true(&bad);
@@ -2087,9 +2117,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
             }
             Term::Switch(place, arms, other) => {
                 let pr = self.place(place, false)?;
-                let et = self.m.lt(&pr.ty)?;
-                let tp = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 0", et, pr.ptr));
-                let tag = self.b.val(format!("load i32, ptr {}", tp));
+                let tag = self.m.enum_tag(&mut self.b, &pr.ty, &pr.ptr)?;
                 let mut cases = Vec::new();
                 for (v, b) in arms {
                     let i = self.m.variant_index(&pr.ty, v)?;
@@ -2206,11 +2234,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     r.ty = fs[*i].clone();
                 }
                 Proj::Variant(v, i) => {
-                    let et = self.m.lt(&r.ty)?;
                     let vs = self.m.variants(&r.ty)?;
                     let (_, fs) = vs.iter().find(|(n, _)| **n == **v).ok_or("enum の種類がない")?;
                     let vt = self.m.variant_lt(fs)?;
-                    let pl = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 1", et, r.ptr));
+                    let pl = self.m.enum_payload(&mut self.b, &r.ty, &r.ptr)?;
                     r.ptr = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", vt, pl, i));
                     r.ty = fs[*i].clone();
                 }
@@ -2520,6 +2547,38 @@ impl<'m, 'p> FnGen<'m, 'p> {
         if lf == lto {
             return Ok(v.to_string());
         }
+        // ポインタ 1 つで表す enum と、そうでない形（中身の型が決まらなかった空の値など）のあいだは、種類の番号で作り直す
+        if let (Ty::Enum(a, _), Ty::Enum(b2, _)) = (from, to) {
+            let (nf, nt) = (self.m.niche(from)?, self.m.niche(to)?);
+            if a == b2 && nf != nt {
+                let tmp = self.b.alloca(&lf);
+                self.b.op(format!("store {} {}, ptr {}", lf, v, tmp));
+                let tag = self.m.enum_tag(&mut self.b, from, &tmp)?;
+                let pl = self.m.enum_payload(&mut self.b, from, &tmp)?;
+                let out = self.b.alloca(&lto);
+                self.b.op(format!("store {} zeroinitializer, ptr {}", lto, out));
+                let vs = self.m.variants(to)?;
+                let fvs = self.m.variants(from)?;
+                for (vi, (_, fs)) in vs.iter().enumerate() {
+                    let is = self.b.val(format!("icmp eq i32 {}, {}", tag, vi));
+                    let (_, skip) = self.b.if_true(&is);
+                    if nt.is_none() {
+                        let tp = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 0", lto, out));
+                        self.b.op(format!("store i32 {}, ptr {}", vi, tp));
+                    }
+                    // 中身は形が同じときだけ写す（違えばその種類の値は作られない: 中身の型が決まらなかった空の値）
+                    if !fs.is_empty() && fvs[vi].1 == *fs {
+                        let vt = self.m.variant_lt(fs)?;
+                        let dpl = self.m.enum_payload(&mut self.b, to, &out)?;
+                        let x = self.b.val(format!("load {}, ptr {}", vt, pl));
+                        self.b.op(format!("store {} {}, ptr {}", vt, x, dpl));
+                    }
+                    self.b.br(&skip);
+                    self.b.label(&skip);
+                }
+                return Ok(self.b.val(format!("load {}, ptr {}", lto, out)));
+            }
+        }
         // 型の引数だけ違う（中身の型が決まらなかった空の値など）: 大きさが入るなら、置き直して読む
         let (sf, _) = self.m.size_align(from)?;
         let (st, _) = self.m.size_align(to)?;
@@ -2604,7 +2663,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let join = self.b.l();
                         self.b.br(&join);
                         self.b.label(&no);
-                        let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -16", raw));
+                        let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", raw));
                         let g2 = self.b.val(format!("load i64, ptr {}", hp));
                         self.b.op(format!("store i64 {}, ptr {}", g2, vg));
                         self.b.op(format!("store ptr {}, ptr {}", site, vs));
@@ -2643,7 +2702,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             self.b.label(&after);
                         }
                         let blk = pr.block.clone().ok_or("区画にない変数を借りた")?;
-                        let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -16", blk));
+                        let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
                         let g = self.b.val(format!("load i64, ptr {}", hp));
                         let rv = self.make_ref(&pr.ptr, &blk, &g, &site);
                         if let Some(tid) = pr.tid {
@@ -2868,7 +2927,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let pr = self.place(this, false)?;
                 let tid = pr.tid.clone().ok_or("interface でない this")?;
                 let blk = pr.block.clone().ok_or("区画にない this")?;
-                let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -16", blk));
+                let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
                 let g = self.b.val(format!("load i64, ptr {}", hp));
                 let site = self.m.site(this.span, what);
                 let rv = self.make_ref(&pr.ptr, &blk, &g, &site);
@@ -3049,7 +3108,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         if boxed {
             let blk = self.b.val(format!("call ptr @ward_alloc(i64 {})", xsize));
             self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, blk, site));
-            let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -16", blk));
+            let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
             let g = self.b.val(format!("load i64, ptr {}", hp));
             let r = self.make_ref(&blk, &blk, &g, &site);
             self.b.op(format!("store %ref {}, ptr {}", r, dst));
@@ -3137,11 +3196,13 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let lt = self.m.lt(et)?;
         let tmp = self.b.alloca(&lt);
         self.b.op(format!("store {} zeroinitializer, ptr {}", lt, tmp));
-        let tp = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 0", lt, tmp));
-        self.b.op(format!("store i32 {}, ptr {}", vi, tp));
+        if self.m.niche(et)?.is_none() {
+            let tp = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 0", lt, tmp));
+            self.b.op(format!("store i32 {}, ptr {}", vi, tp));
+        }
         if !fs.is_empty() {
             let vt = self.m.variant_lt(&fs)?;
-            let pl = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 1", lt, tmp));
+            let pl = self.m.enum_payload(&mut self.b, et, &tmp)?;
             for (i, (v, t)) in vals.into_iter().enumerate() {
                 let v = self.coerce(&v, &t, &fs[i])?;
                 let ft = self.m.lt(&fs[i])?;

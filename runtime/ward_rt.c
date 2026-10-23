@@ -315,12 +315,13 @@ _Noreturn void ward_fail_moved(const char *name, const WSite *moved, const WSite
     finish_error(use, label, "移した後も使いたいなら `ref` で借りてください（例: `f(ref a)`）");
 }
 
+// 区画の頭は世代だけ（8 バイト）。世代が奇数なら解放済みで、中身の 2 語目に解放した位置を置く（1 語目は空き区画の鎖）
 typedef struct WHdr {
     uint64_t gen;
-    const WSite *freed;
 } WHdr;
 
 #define HDR(p) ((WHdr *)((char *)(p) - sizeof(WHdr)))
+#define FREED_SITE(p) (((const WSite **)(p))[1])
 
 // 使い回した区画の、前の解放の位置（エラーで「ここで解放された」を出すため。古いものから消える）
 #define NREUSED 4096
@@ -331,12 +332,24 @@ static _Thread_local struct {
 } reused[NREUSED];
 static _Thread_local unsigned reused_n;
 
-// 世代 gen の ref が無効になった解放（世代 gen+1 になったとき）の位置
+// ほかのスレッドへ送った区画（送ると世代が 2 進む。中身は使われ続けるので、位置はここに残す）
+static _Thread_local struct {
+    void *block;
+    uint64_t gen;
+    const WSite *why;
+} sent[NREUSED];
+static _Thread_local unsigned sent_n;
+
+// 世代 gen の ref を無効にした出来事（解放なら世代 gen+1、送ったなら gen+2）の位置
 static const WSite *freed_at(void *block, uint64_t gen) {
-    if (HDR(block)->gen == gen + 1) return HDR(block)->freed;
+    if (HDR(block)->gen == gen + 1) return FREED_SITE(block);
     for (unsigned k = 0; k < NREUSED; k++) {
         unsigned i = (reused_n - 1 - k) % NREUSED;
         if (reused[i].block == block && reused[i].gen == gen + 1) return reused[i].freed;
+    }
+    for (unsigned k = 0; k < NREUSED && k < sent_n; k++) {
+        unsigned i = (sent_n - 1 - k) % NREUSED;
+        if (sent[i].block == block && sent[i].gen == gen + 2) return sent[i].why;
     }
     return NULL;
 }
@@ -402,6 +415,7 @@ _Noreturn void ward_fail_insert(int64_t i, int64_t len, const WSite *at) {
 _Thread_local int64_t ward_live;
 _Thread_local int64_t ward_depth;
 
+// 小さい区画は 8 バイト刻みの大きさごとに空き区画の鎖を持ち、まとめて確保した塊から切り出す（OS には返さない）
 #define NCLASS 256
 static _Thread_local void *free_small[NCLASS + 1];
 typedef struct Big {
@@ -410,24 +424,43 @@ typedef struct Big {
     void *payload;
 } Big;
 static _Thread_local Big *free_big;
+static _Thread_local char *slab_cur, *slab_end;
 
-static size_t round16(int64_t n) { return n <= 0 ? 16 : ((size_t)n + 15) & ~(size_t)15; }
+static size_t round8(int64_t n) { return n <= 16 ? 16 : ((size_t)n + 7) & ~(size_t)7; }
+
+// 塊から n バイト（8 の倍数）を切り出す
+static void *slab_take(size_t n) {
+    if ((size_t)(slab_end - slab_cur) < n) {
+        size_t sz = 256 * 1024;
+        slab_cur = malloc(sz);
+        if (!slab_cur) ward_bug("メモリが足りません");
+        slab_end = slab_cur + sz;
+    }
+    void *r = slab_cur;
+    slab_cur += n;
+    return r;
+}
 
 static void remember_reuse(void *p) {
     unsigned i = reused_n++ % NREUSED;
     reused[i].block = p;
     reused[i].gen = HDR(p)->gen;
-    reused[i].freed = HDR(p)->freed;
+    reused[i].freed = FREED_SITE(p);
+    HDR(p)->gen++;
 }
 
 void *ward_alloc(int64_t size) {
-    size_t s = round16(size);
+    size_t s = round8(size);
     void *p = NULL;
-    if (s / 16 <= NCLASS) {
-        p = free_small[s / 16];
+    if (s / 8 <= NCLASS) {
+        p = free_small[s / 8];
         if (p) {
-            free_small[s / 16] = *(void **)p;
+            free_small[s / 8] = *(void **)p;
             remember_reuse(p);
+        } else {
+            WHdr *h = slab_take(sizeof(WHdr) + s);
+            h->gen = 0;
+            p = h + 1;
         }
     } else {
         for (Big **b = &free_big; *b; b = &(*b)->next) {
@@ -440,13 +473,12 @@ void *ward_alloc(int64_t size) {
                 break;
             }
         }
-    }
-    if (!p) {
-        WHdr *h = malloc(sizeof(WHdr) + s);
-        if (!h) ward_bug("メモリが足りません");
-        h->gen = 0;
-        h->freed = NULL;
-        p = h + 1;
+        if (!p) {
+            WHdr *h = malloc(sizeof(WHdr) + s);
+            if (!h) ward_bug("メモリが足りません");
+            h->gen = 0;
+            p = h + 1;
+        }
     }
     ward_live++;
     return p;
@@ -456,12 +488,12 @@ void *ward_alloc(int64_t size) {
 void ward_free(void *p, int64_t size, const WSite *why) {
     WHdr *h = HDR(p);
     h->gen++;
-    h->freed = why;
+    FREED_SITE(p) = why;
     ward_live--;
-    size_t s = round16(size);
-    if (s / 16 <= NCLASS) {
-        *(void **)p = free_small[s / 16];
-        free_small[s / 16] = p;
+    size_t s = round8(size);
+    if (s / 8 <= NCLASS) {
+        *(void **)p = free_small[s / 8];
+        free_small[s / 8] = p;
     } else {
         Big *b = malloc(sizeof(Big));
         b->next = free_big;
@@ -485,8 +517,12 @@ typedef struct WCell {
 #define CELL(p) ((WCell *)(((uintptr_t)(p)) & ~(uintptr_t)1))
 
 // own（または写し）の写しを作る。写しの写しは同じ先・同じ借りた場所
+static _Thread_local WCell *free_cells;
+
 void *ward_view(void *own, const WSite *site) {
-    WCell *c = malloc(sizeof(WCell));
+    WCell *c = free_cells;
+    if (c) free_cells = *(WCell **)c;
+    else c = slab_take(sizeof(WCell));
     if (IS_VIEW(own)) {
         *c = *CELL(own);
     } else {
@@ -497,7 +533,11 @@ void *ward_view(void *own, const WSite *site) {
     return (void *)((uintptr_t)c | 1);
 }
 
-void ward_view_free(void *v) { free(CELL(v)); }
+void ward_view_free(void *v) {
+    WCell *c = CELL(v);
+    *(WCell **)c = free_cells;
+    free_cells = c;
+}
 
 // 写しの先（世代を確かめる）
 void *ward_view_target(void *v, const WSite *use) {
@@ -1400,8 +1440,11 @@ void ward_wait_all(const WSite *at) {
 // ほかのスレッドへ送る区画: 世代を進める（送った側に残った ref は、使うとダングリングとして見つかる）
 void ward_send_block(void *p, const WSite *why) {
     WHdr *h = HDR(p);
-    h->gen++;
-    h->freed = why;
+    h->gen += 2;
+    unsigned i = sent_n++ % NREUSED;
+    sent[i].block = p;
+    sent[i].gen = h->gen;
+    sent[i].why = why;
 }
 
 // ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）
