@@ -322,8 +322,11 @@ pub struct TypeInfo {
     /// 関数の戻り値の型（なければ Unit）
     pub fn_ret: HashMap<String, Ty>,
     /// enum の型の引数と種類（名前, 中身の型。型の引数は `Ty::Param` のまま）
-    pub enums: HashMap<String, (Vec<String>, Vec<(String, Vec<Ty>)>)>,
+    pub enums: HashMap<String, (Vec<String>, Variants)>,
 }
+
+/// enum の種類の一覧（名前, 中身の型）
+pub type Variants = Vec<(String, Vec<Ty>)>;
 
 impl TypeInfo {
     pub fn ty(&self, e: &Expr) -> Option<&Ty> {
