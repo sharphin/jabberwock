@@ -25,12 +25,12 @@ fn err(body: &str) -> ward::diag::Diagnostic {
 fn string_methods_count_characters() {
     let o = main_ok("
     let s = \"日本語テキスト\";
-    print(s.len(), s.slice(0, 3), s.slice(3, 7), s.find(\"テ\"), s.find(\"x\"));
+    print(s.len(), s.byte_len(), s.slice(0, 3), s.slice(3, 7), s.find(\"テ\"), s.find(\"x\"));
     print(s.chars());
     print(\"  a b  \".trim(), \"Hi\".to_upper(), \"Hi\".to_lower(), \"ab\".repeat(3));
     print(s.contains(\"語\"), s.starts_with(\"日本\"), s.ends_with(\"本\"));
     print(\"a-b-c\".replace(\"-\", \"+\"));");
-    assert_eq!(o, "7 日本語 テキスト Some(3) None\n[日, 本, 語, テ, キ, ス, ト]\na b HI hi ababab\ntrue true false\na+b+c\n");
+    assert_eq!(o, "7 21 日本語 テキスト Some(3) None\n[日, 本, 語, テ, キ, ス, ト]\na b HI hi ababab\ntrue true false\na+b+c\n");
 }
 
 #[test]

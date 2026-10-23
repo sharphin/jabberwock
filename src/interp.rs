@@ -1711,6 +1711,7 @@ fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -> R<Value> 
     let string = |x: String| Value::Str(Rc::from(x.as_str()));
     Ok(match name {
         "len" => Value::Int(text.chars().count() as i128, IntTy::I64),
+        "byte_len" => Value::Int(text.len() as i128, IntTy::I64),
         "chars" => Value::Array(text.chars().map(|c| string(c.to_string())).collect(), true),
         "lines" => str_list(text.lines()),
         "split" => {

@@ -262,7 +262,7 @@ struct IMethod {
 /// 組み込みの条件: 大小を比べられる型（整数と str）
 const ORDERED: &str = "ordered";
 
-const STR_METHODS: &str = "len, chars, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
+const STR_METHODS: &str = "len, byte_len, chars, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
 
 /// プログラム全体の型を調べる。よければ警告（実行は止めない）を返す
 pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
@@ -1416,7 +1416,7 @@ impl<'a> Checker<'a> {
     fn str_method(&mut self, name: &str, args: &[Expr], span: Span) -> R<Ty> {
         let list = Ty::List(Box::new(Ty::Str));
         let (params, ret): (Vec<Ty>, Ty) = match name {
-            "len" => (vec![], I64),
+            "len" | "byte_len" => (vec![], I64),
             "chars" | "lines" => (vec![], list),
             "split" => (vec![Ty::Str], list),
             "trim" | "to_upper" | "to_lower" => (vec![], Ty::Str),
