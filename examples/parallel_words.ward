@@ -12,7 +12,11 @@ fn i64[str] count(str[] lines) {
 }
 
 fn main() {
-    let text = "the quick brown fox\njumps over the lazy dog\nthe dog sleeps\na fox is quick";
+    let text = """
+the quick brown fox
+jumps over the lazy dog
+the dog sleeps
+a fox is quick""";
     let lines = text.lines();
     let workers = 3;
     let (str[])[] mut parts = [];

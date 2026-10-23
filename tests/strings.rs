@@ -109,3 +109,13 @@ fn main() {
     assert!(o.error.unwrap().title.contains("dangling"));
     assert_eq!(o.output, "");
 }
+
+#[test]
+fn multi_line_strings() {
+    // `"""..."""` は途中で改行できる。開きの直後の改行は含めない。埋め込みも使える
+    let src = "fn main() {\n    let n = 3;\n    let s = \"\"\"\nこんにちは \"世界\"\n  n = {n}\n{{}}\"\"\";\n    print(s);\n    print(s.lines().len());\n}\n";
+    assert_eq!(ok(src), "こんにちは \"世界\"\n  n = 3\n{}\n3\n");
+    // 後ろの行の位置はずれない
+    let d = ward::run_source("fn main() {\n    let s = \"\"\"\nx\"\"\";\n    let i64 a = \"no\";\n}\n", false).error.expect("error");
+    assert_eq!(d.labels[0].span.line, 4);
+}

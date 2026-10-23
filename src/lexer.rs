@@ -294,21 +294,40 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 });
             }
             '"' => {
-                i += 1;
-                col += 1;
+                // `"""..."""` は途中で改行できる（開きの直後の改行は含めない）
+                let triple = chars.get(i + 1) == Some(&'"') && chars.get(i + 2) == Some(&'"');
+                let start_line = line;
+                let open = if triple { 3 } else { 1 };
+                i += open;
+                col += open;
+                if triple && chars.get(i) == Some(&'\n') {
+                    i += 1;
+                    line += 1;
+                    col = 1;
+                }
                 let mut text = String::new();
                 let mut parts: Vec<StrPart> = Vec::new();
                 loop {
-                    if i >= chars.len() || chars[i] == '\n' {
-                        return Err(Diagnostic::new("文字列が閉じていません").primary(
-                            Span { file: 0, line, col: start_col, len: 1 },
-                            "この `\"` に対応する閉じ `\"` が同じ行にありません",
-                        ));
+                    if i >= chars.len() || (chars[i] == '\n' && !triple) {
+                        let why = if triple {
+                            "この `\"\"\"` に対応する閉じ `\"\"\"` がありません"
+                        } else {
+                            "この `\"` に対応する閉じ `\"` が同じ行にありません（改行を含むなら `\"\"\"...\"\"\"`）"
+                        };
+                        return Err(Diagnostic::new("文字列が閉じていません")
+                            .primary(Span { file: 0, line: start_line, col: start_col, len: open }, why));
                     }
                     let ch = chars[i];
-                    if ch == '"' {
+                    if ch == '\n' {
+                        text.push('\n');
                         i += 1;
-                        col += 1;
+                        line += 1;
+                        col = 1;
+                        continue;
+                    }
+                    if ch == '"' && (!triple || (chars.get(i + 1) == Some(&'"') && chars.get(i + 2) == Some(&'"'))) {
+                        i += open;
+                        col += open;
                         break;
                     }
                     if (ch == '{' || ch == '}') && chars.get(i + 1) == Some(&ch) {
@@ -400,10 +419,8 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     }
                     Tok::Interp(parts)
                 };
-                out.push(Token {
-                    tok,
-                    span: Span { file: 0, line, col: start_col, len: col - start_col },
-                });
+                let len = if line == start_line { col - start_col } else { open };
+                out.push(Token { tok, span: Span { file: 0, line: start_line, col: start_col, len } });
             }
             _ => {
                 let next = chars.get(i + 1).copied();
