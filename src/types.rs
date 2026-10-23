@@ -29,6 +29,8 @@ pub enum Ty {
     Enum(String, Vec<Ty>),
     /// 型の引数（`fn T max<T>` の中の `T`）。中身が何かは分からない
     Param(String),
+    /// interface（`own Shape` / `ref Shape` の `Shape`）。当てはまる構造体のどれか。own か ref を通してだけ使う
+    Iface(String),
     Own(Box<Ty>),
     /// bool は `mut`
     Ref(Box<Ty>, bool),
@@ -47,7 +49,7 @@ impl Ty {
                 let a: Vec<String> = args.iter().map(Ty::show).collect();
                 format!("{}<{}>", n, a.join(", "))
             }
-            Ty::Param(n) => n.clone(),
+            Ty::Param(n) | Ty::Iface(n) => n.clone(),
             Ty::Own(t) => format!("own {}", t.show()),
             Ty::Ref(t, false) => format!("ref {}", t.show()),
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
@@ -95,6 +97,15 @@ fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
         Ty::Own(x) => Ty::Own(Box::new(subst(x, map))),
         Ty::Ref(x, m) => Ty::Ref(Box::new(subst(x, map)), *m),
         _ => t.clone(),
+    }
+}
+
+fn contains_iface(t: &Ty) -> bool {
+    match t {
+        Ty::Iface(_) => true,
+        Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_iface),
+        Ty::Own(x) | Ty::Ref(x, _) => contains_iface(x),
+        _ => false,
     }
 }
 
@@ -346,9 +357,19 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
 }
 
 impl<'a> Checker<'a> {
+    /// own / ref の先の型。interface の名前はここでだけ書ける
+    fn resolve_pointee(&self, t: &TypeExpr) -> R<Ty> {
+        match &t.kind {
+            TypeKind::Name(n) if self.interfaces.contains_key(n.as_str()) && !self.tparams.contains(n) => {
+                Ok(Ty::Iface(n.clone()))
+            }
+            _ => self.resolve(t),
+        }
+    }
+
     fn resolve(&self, t: &TypeExpr) -> R<Ty> {
         Ok(match &t.kind {
-            TypeKind::Own(inner) => Ty::Own(Box::new(self.resolve(inner)?)),
+            TypeKind::Own(inner) => Ty::Own(Box::new(self.resolve_pointee(inner)?)),
             TypeKind::App(n, args) => {
                 let want = match (self.structs.get(n.as_str()), self.enums.get(n.as_str())) {
                     (Some((d, _)), _) => d.tparams.len(),
@@ -369,7 +390,7 @@ impl<'a> Checker<'a> {
                     Ty::Enum(n.clone(), args)
                 }
             }
-            TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve(inner)?), *m),
+            TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
                 "str" => Ty::Str,
@@ -379,6 +400,11 @@ impl<'a> Checker<'a> {
                         .primary(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）だけです"))
                 }
                 _ if self.tparams.contains(n) => Ty::Param(n.clone()),
+                _ if self.interfaces.contains_key(n.as_str()) => {
+                    return Err(Diagnostic::new(format!("interface `{}` は own か ref を通して使います", n))
+                        .primary(t.span, format!("`own {}` か `ref {}` と書いてください", n, n))
+                        .note("中身の構造体によって大きさが違うので、そのままの値としては持てません"))
+                }
                 _ if self.structs.contains_key(n.as_str()) || self.enums.contains_key(n.as_str()) => {
                     let tps = match self.structs.get(n.as_str()) {
                         Some((d, _)) => &d.tparams,
@@ -443,7 +469,7 @@ impl<'a> Checker<'a> {
     fn copyable(&self, t: &Ty) -> bool {
         match t {
             Ty::Int(_) | Ty::Bool | Ty::Str | Ty::Ref(..) | Ty::Unit | Ty::Never => true,
-            Ty::Own(_) | Ty::Struct(..) | Ty::Param(_) => false,
+            Ty::Own(_) | Ty::Struct(..) | Ty::Param(_) | Ty::Iface(_) => false,
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
             Ty::Enum(..) => self.variants_of(t).expect("enum").iter().flat_map(|(_, f)| f).all(|t| self.copyable(t)),
         }
@@ -513,7 +539,7 @@ impl<'a> Checker<'a> {
                 continue;
             }
             let want = subst(p, &map);
-            if !assignable(t, &want) {
+            if !self.fits(t, &want) {
                 return Err(mismatch(&want, t, a.span));
             }
             convert(a, t, &want);
@@ -616,7 +642,7 @@ impl<'a> Checker<'a> {
                     .note("case を足すか、`default -> ...` でまとめてください"));
             }
         }
-        self.join(tys, None, want_value, "match")
+        self.join(tys, None, want_value, "match", hint.as_ref())
     }
 
     /// enum の case 1 つ分。受け取る名前を今のスコープに置く
@@ -690,7 +716,7 @@ impl<'a> Checker<'a> {
         let ret = self.ret.clone();
         let wants = ret != Ty::Unit;
         let got = self.block(&f.body, wants, Some(&ret))?;
-        if wants && !assignable(&got, &ret) {
+        if wants && !self.fits(&got, &ret) {
             if got == Ty::Unit {
                 return Err(Diagnostic::new("値を返さないまま関数が終わる道があります")
                     .primary(f.body.end, format!("ここで終わるが、`{}` の値を返していない", ret.show()))
@@ -755,7 +781,7 @@ impl<'a> Checker<'a> {
                 }
                 let t = match (ty, want) {
                     (Some(te), Some(want)) => {
-                        if !assignable(&got, &want) {
+                        if !self.fits(&got, &want) {
                             return Err(mismatch(&want, &got, init.span).label(te.span, "ここで型を決めた"));
                         }
                         convert(init, &got, &want);
@@ -844,7 +870,7 @@ impl<'a> Checker<'a> {
     /// 型 `want` の場所で使う式。整数は欠けない変換なら自動で変換する
     fn expect(&mut self, e: &Expr, want: &Ty) -> R<()> {
         let got = self.expr_h(e, Some(want))?;
-        if assignable(&got, want) {
+        if self.fits(&got, want) {
             convert(e, &got, want);
             Ok(())
         } else {
@@ -997,7 +1023,7 @@ impl<'a> Checker<'a> {
                     tys.push((self.block(els, want_value, else_hint)?, els));
                 }
                 let missing = if els.is_none() { Some(e.span) } else { None };
-                self.join(tys, missing, want_value, "if")
+                self.join(tys, missing, want_value, "if", hint)
             }
             ExprKind::Variant { .. } => self.variant_expr(e, hint),
             ExprKind::Match { scrut, arms, default } => {
@@ -1046,7 +1072,7 @@ impl<'a> Checker<'a> {
                 }
                 // default がなく、どの case にも当たらなければ何もせず抜ける
                 let missing = if default.is_none() && !covers_both_bools(arms) { Some(e.span) } else { None };
-                self.join(tys, missing, want_value, "match")
+                self.join(tys, missing, want_value, "match", hint)
             }
             ExprKind::Unary(UnOp::Not, inner) => {
                 self.expect(inner, &Ty::Bool)?;
@@ -1075,7 +1101,7 @@ impl<'a> Checker<'a> {
     }
 
     /// if / match の枝の型をまとめる。`missing` は枝がない場合（else / default なし）の位置
-    fn join(&self, branches: Vec<(Ty, &Block)>, missing: Option<Span>, want_value: bool, what: &str) -> R<Ty> {
+    fn join(&self, branches: Vec<(Ty, &Block)>, missing: Option<Span>, want_value: bool, what: &str, hint: Option<&Ty>) -> R<Ty> {
         if !want_value {
             // 文として使うときは値を捨てる。どの枝も必ず抜けるなら、ここで必ず抜ける
             let all_never = missing.is_none() && branches.iter().all(|(t, _)| *t == Ty::Never);
@@ -1085,13 +1111,19 @@ impl<'a> Checker<'a> {
         if let Some(sp) = missing {
             list.push((Ty::Unit, sp));
         }
+        // 枝ごとに違う構造体でも、入れる先が interface でみな当てはまるなら、その interface にまとめる
+        if let Some(h) = hint {
+            if contains_iface(h) && list.iter().all(|(t, _)| self.fits(t, h)) {
+                return Ok(h.clone());
+            }
+        }
         let mut acc = Ty::Never;
         let mut first: Option<(Ty, Span)> = None;
         for (t, span) in list {
-            if assignable(&t, &acc) {
+            if self.fits(&t, &acc) {
                 continue;
             }
-            if assignable(&acc, &t) {
+            if self.fits(&acc, &t) {
                 acc = t.clone();
             } else {
                 let (ft, fs) = first.clone().expect("acc came from an earlier branch");
@@ -1173,6 +1205,26 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `from` の値を `to` の場所に入れられるか（`assignable` に、構造体 → interface を足したもの）
+    fn fits(&self, from: &Ty, to: &Ty) -> bool {
+        if assignable(from, to) {
+            return true;
+        }
+        match (from, to) {
+            (Ty::Ref(a, m), Ty::Ref(b, n)) if *m || !*n => self.fits_iface(a, b),
+            (Ty::Own(a), Ty::Own(b)) => self.fits_iface(a, b),
+            _ => false,
+        }
+    }
+
+    /// 構造体（や条件つきの T）を interface として扱えるか
+    fn fits_iface(&self, from: &Ty, to: &Ty) -> bool {
+        match to {
+            Ty::Iface(i) => !matches!(from, Ty::Iface(_)) && self.satisfies(from, i).is_ok(),
+            _ => false,
+        }
+    }
+
     /// `<T: ordered>` の T か
     fn is_ordered_param(&self, t: &Ty) -> bool {
         matches!(t, Ty::Param(p) if matches!(self.bounds.get(p), Some(b) if b.iter().any(|x| x == ORDERED)))
@@ -1180,6 +1232,9 @@ impl<'a> Checker<'a> {
 
     /// 型 `t` が条件 `bound` を満たすか。満たさなければその理由
     fn satisfies(&self, t: &Ty, bound: &str) -> Result<(), String> {
+        if let Ty::Iface(i) = t {
+            return if i == bound { Ok(()) } else { Err(format!("interface `{}` は `{}` ではありません", i, bound)) };
+        }
         if let Ty::Param(p) = t {
             // 型の引数のまま渡すなら、こちらの関数にも同じ条件が要る
             let ok = matches!(self.bounds.get(p), Some(b) if b.iter().any(|x| x == bound));
@@ -1231,15 +1286,24 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 型の引数（`T`）の値に対するメソッド呼び出し。条件の interface から探す
-    fn param_method_call(&mut self, recv: &Expr, rt: &Ty, p: &str, name: &str, args: &[Expr], span: Span) -> R<Ty> {
-        let found = self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).find_map(|b| {
-            self.interfaces[b.as_str()].iter().find(|m| m.name == name).cloned()
-        });
+    /// 型の引数（`T`）や interface の値に対するメソッド呼び出し。`ifaces` の interface から探す
+    #[allow(clippy::too_many_arguments)]
+    fn iface_method_call(
+        &mut self,
+        recv: &Expr,
+        rt: &Ty,
+        ifaces: &[String],
+        label: &str,
+        help: &str,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> R<Ty> {
+        let found = ifaces.iter().find_map(|b| self.interfaces[b.as_str()].iter().find(|m| m.name == name).cloned());
         let Some(m) = found else {
-            return Err(Diagnostic::new(format!("`{}` にメソッド `{}` があるか分かりません", p, name))
-                .primary(span, "型の引数のメソッドは、条件の interface に書いたものだけ呼べます")
-                .note(format!("`<{}: 名前>` のように、`{}` を持つ interface を条件にしてください", p, name)));
+            return Err(Diagnostic::new(format!("`{}` にメソッド `{}` があるか分かりません", label, name))
+                .primary(span, "呼べるのは interface に書いたメソッドだけです")
+                .note(help));
         };
         if args.len() != m.params.len() {
             return Err(arity_error(name, m.params.len(), args.len(), span));
@@ -1343,16 +1407,22 @@ impl<'a> Checker<'a> {
     /// `p.name(args)`。メソッドは `構造体名.name` という関数で、最初の引数が `this`（`ref 構造体`）
     fn method_call(&mut self, recv: &Expr, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
         let rt = self.expr(recv)?;
-        let param = match &rt {
-            Ty::Param(p) => Some(p.clone()),
-            Ty::Own(x) | Ty::Ref(x, _) => match &**x {
-                Ty::Param(p) => Some(p.clone()),
-                _ => None,
-            },
-            _ => None,
+        let inner = match &rt {
+            Ty::Own(x) | Ty::Ref(x, _) => (**x).clone(),
+            t => t.clone(),
         };
-        if let Some(p) = param {
-            return self.param_method_call(recv, &rt, &p, name, args, span);
+        match &inner {
+            Ty::Param(p) => {
+                let ifaces: Vec<String> =
+                    self.bounds.get(p).into_iter().flatten().filter(|b| *b != ORDERED).cloned().collect();
+                let help = format!("`<{}: 名前>` のように、`{}` を持つ interface を条件にしてください", p, name);
+                return self.iface_method_call(recv, &rt, &ifaces, p, &help, name, args, span);
+            }
+            Ty::Iface(i) => {
+                let help = format!("interface `{}` に書いたメソッドだけ呼べます", i);
+                return self.iface_method_call(recv, &rt, std::slice::from_ref(i), i, &help, name, args, span);
+            }
+            _ => {}
         }
         let st = match &rt {
             Ty::Struct(..) => rt.clone(),

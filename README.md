@@ -149,6 +149,7 @@ print(p.len2());
 interface Shape { fn i64 area(); }
 fn describe<T: Shape>(ref T s) { print(s.area()); }   // area() を持つ構造体なら何でも渡せる
 fn T max<T: ordered>(T a, T b) { if a > b { a } else { b } }
+fn i64 area_of(ref Shape s) { s.area() }               // interface は型としても使える
 ```
 
 ## Result と `?`

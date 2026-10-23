@@ -401,7 +401,19 @@ fn T max<T: ordered>(T a, T b) { // ordered: 大小を比べられる（整数�
 - 条件は呼び出しの場所で確かめる。満たさなければ、足りないメソッドを示してエラー。
   型の引数のまま別のジェネリックな関数へ渡すときは、こちらにも同じ条件が要る。
 - 条件は関数とメソッドの型の引数にだけつけられる（構造体・enum の型の引数にはつけられない）。
-- interface を型として使う（`ref Shape` のような値）のはまだできない。
+- **interface は型としても使える**（own か ref を通して）。当てはまる構造体なら何でも入れられ、メソッドは中身の構造体のものが呼ばれる。
+
+  ```
+  fn i64 area_of(ref Shape s) { s.area() }
+  fn own Shape pick(bool big) {
+      if big { own Rect { w: 10, h: 10 } } else { own Square { side: 1 } }
+  }
+  let ref Shape s = if c { ref sq } else { ref r };   // 入れる先の型で、枝の違う構造体をまとめる
+  ```
+
+  - `own Square` は `own Shape` に、`ref Square` は `ref Shape` に、そのまま渡せる（逆はできない）。
+  - interface の値には、interface に書いたメソッドだけ呼べる（フィールドは読めない）。
+  - そのままの `Shape`（own / ref なし）は書けない。中身の構造体によって大きさが違うため。
 
 ### 8.7 match で中身を受け取る
 
@@ -444,5 +456,5 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 | enum のメソッド | これから |
 | 文字列の埋め込み | `"x = {x}"` |
 | あふれの確認 | `checked_add` のような明示的な関数 |
-| interface を型として使う（`ref Shape`） | これから |
+| interface の値から元の構造体を取り出す（型で分岐） | これから |
 | 小数・配列・文字型・モジュール・`const` | これから |

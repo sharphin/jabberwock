@@ -187,3 +187,116 @@ fn h<T: Bad>(ref T x) {{
 }}", SHAPES));
     assert!(d.title.contains("あるか分かりません"), "{}", d.title);
 }
+
+// ---------------------------------------------------------------- interface を型として使う
+
+#[test]
+fn interface_values_hold_any_matching_struct() {
+    let src = format!("{}
+struct Scene {{
+    own Shape main;
+    Option<own Shape> extra;
+}}
+
+fn i64 area_of(ref Shape s) {{
+    s.area()
+}}
+
+fn own Shape pick(bool big) {{
+    if big {{ own Rect {{ w: 10, h: 10 }} }} else {{ own Square {{ side: 1 }} }}
+}}
+
+fn main() {{
+    let sq = own Square {{ side: 3 }};
+    let r = own Rect {{ w: 2, h: 5 }};
+    print(area_of(ref sq), area_of(ref r));
+    let ref Shape s = if true {{ ref sq }} else {{ ref r }};
+    print(s.name());
+    let a = pick(true);
+    let b = pick(false);
+    print(a.name(), a.area(), b.name(), b.area());
+    let scene = own Scene {{ main: own Square {{ side: 4 }}, extra: Some(own Rect {{ w: 1, h: 2 }}) }};
+    print(scene.main.area());
+    let Option<own Shape> extra = Some(own Rect {{ w: 1, h: 2 }});
+    match extra {{
+        case Some(e) -> print(e.name());
+        case None -> print(\"なし\");
+    }}
+}}", SHAPES);
+    assert_eq!(ok(&src), "9 10\n正方形\n長方形 100 正方形 1\n16\n長方形\n");
+}
+
+#[test]
+fn mutable_methods_through_interface_refs() {
+    let src = "
+interface Growable {
+    fn mut grow(i64 n);
+    fn i64 size();
+}
+
+struct Ball {
+    i64 r;
+
+    fn mut grow(i64 n) { r += n; }
+    fn i64 size() { r }
+}
+
+fn grow_all(ref mut Growable g) {
+    g.grow(2);
+}
+
+fn main() {
+    let mut b = own Ball { r: 1 };
+    grow_all(ref mut b);
+    print(b.size());
+}";
+    assert_eq!(ok(src), "3\n");
+}
+
+#[test]
+fn interface_refs_dangle_safely() {
+    let src = format!("{}
+fn main() {{
+    let first = own Square {{ side: 1 }};
+    let ref Shape mut s = ref first;
+    let mut a = own Square {{ side: 2 }};
+    s = ref a;
+    a = own Square {{ side: 3 }};
+    print(s.area());
+}}", SHAPES);
+    let o = run_source(&src, false);
+    let d = o.error.expect("dangling");
+    assert!(d.title.contains("dangling"), "{}", d.title);
+}
+
+#[test]
+fn interface_type_errors() {
+    let d = err(&format!("{}
+fn f(Shape s) {{}}
+fn main() {{}}", SHAPES));
+    assert!(d.title.contains("own か ref を通して"), "{}", d.title);
+    let d = err(&format!("{}
+struct Circle {{
+    i64 r;
+    fn i64 area() {{ r }}
+}}
+fn main() {{
+    let c = own Circle {{ r: 1 }};
+    let ref Shape s = ref c;
+}}", SHAPES));
+    assert!(d.title.contains("型が合いません"), "{}", d.title);
+    let d = err(&format!("{}
+fn main() {{
+    let r = own Rect {{ w: 1, h: 1 }};
+    let ref Shape s = ref r;
+    s.grow(1);
+}}", SHAPES));
+    assert!(d.title.contains("あるか分かりません"), "{}", d.title);
+    let d = err(&format!("{}
+fn main() {{
+    let r = own Rect {{ w: 1, h: 1 }};
+    let ref Shape s = ref r;
+    print(s.w);
+}}", SHAPES));
+    assert!(d.title.contains("フィールド"), "{}", d.title);
+}

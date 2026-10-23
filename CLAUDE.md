@@ -87,7 +87,10 @@
 
 - interface と条件: 型検査だけの話（interp は値の構造体名でメソッドを探すので何もしない）。`FnDef.bounds` が型の引数ごとの条件。
   `types.rs` の `satisfies` が「構造体のメソッドが interface の形とそろうか」を調べ、`check_bounds` で呼び出しの場所で確かめる。
-  関数の中では `Checker.bounds` を見て、`T` のメソッド呼び出し（`param_method_call`）と比較（`is_ordered_param`）を許す。
+  関数の中では `Checker.bounds` を見て、`T` のメソッド呼び出しと比較（`is_ordered_param`）を許す。
+  interface を型として使うときは `Ty::Iface`（own / ref の先にだけ書ける。`resolve_pointee`）。`own S` → `own I`、
+  `ref S` → `ref I` は `Checker::fits`（`assignable` に interface を足したもの）で許す。interp は何もしない（値の構造体名でメソッドを探す）。
+  メソッド呼び出しは `T` も interface も `iface_method_call`。if / match の枝は、入れる先が interface なら `join` がそれにまとめる。
 
 ## 設計の決めごと
 
