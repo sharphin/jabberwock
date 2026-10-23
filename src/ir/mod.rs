@@ -44,6 +44,8 @@ pub struct Func {
     /// `locals[0..params]` が引数（クロージャなら、そのうち最後の `captures` 個が取り込んだ値）
     pub params: usize,
     pub captures: usize,
+    /// 取り込んだ値の元の型（lower は own を ref にして受け取る）
+    pub cap_tys: Vec<Ty>,
     pub ret: Ty,
     pub locals: Vec<LocalDecl>,
     pub blocks: Vec<Block>,

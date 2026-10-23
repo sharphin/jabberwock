@@ -879,6 +879,47 @@ int32_t ward_str_to_int(WStr *s, int64_t *out) {
     return 1;
 }
 
+// order の順に要素を並べ直す（sort_by）
+void ward_permute(char *data, int64_t n, int64_t es, const int64_t *order) {
+    if (n < 2) return;
+    char *tmp = malloc((size_t)(n * es));
+    for (int64_t k = 0; k < n; k++) memcpy(tmp + k * es, data + order[k] * es, (size_t)es);
+    memcpy(data, tmp, (size_t)(n * es));
+    free(tmp);
+}
+
+// ---------------------------------------------------------------- 関数の値（取り込んだ値の入れ物）
+//
+// 頭 24 バイト: 数・表（解放と写しの関数）・印（1: ムーブする・2: own を持つ・4: 元の値がムーブするものだった）。
+// そのあとに取り込んだ値が並ぶ。取り込んだ値は書き換えないので、複製は入れ物を共有して数を増やす。
+
+typedef struct WEnvVt {
+    void (*drop)(void *env, const WSite *site);
+    void *(*view)(void *env, const WSite *site);
+} WEnvVt;
+
+typedef struct WEnv {
+    int64_t rc;
+    const WEnvVt *vt;
+    int64_t flags;
+} WEnv;
+
+void *ward_env_new(int64_t size, const WEnvVt *vt) {
+    WEnv *e = calloc(1, (size_t)size);
+    e->rc = 1;
+    e->vt = vt;
+    return e;
+}
+
+void ward_env_retain(WEnv *e) { e->rc++; }
+
+void ward_env_release(WEnv *e, const WSite *site) {
+    if (--e->rc == 0) {
+        e->vt->drop(e, site);
+        free(e);
+    }
+}
+
 // ---------------------------------------------------------------- 入口
 
 void ward_main(void);

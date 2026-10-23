@@ -36,6 +36,10 @@ enum H {
     Hazard,
     /// `i32 (ptr a, ptr b, ptr env)`: a < b（sort）
     Less,
+    /// `i1 (ptr 値)`: 値として読むとムーブになるか（interp の `moves()`。own の写しはムーブしない）
+    Moves,
+    /// `i1 (ptr 値)`: 中に own を持つか（interp の `has_own()`）
+    HasOwn,
 }
 
 /// プログラム全体を LLVM のテキストにする。`files` はファイルの番号から名前
@@ -64,6 +68,7 @@ const PRELUDE: &str = r#"; ward が書き出した LLVM IR
 %iown = type { ptr, i64 }
 %list = type { ptr, i64, i64 }
 %site = type { ptr, i32, i32, i32, i32, ptr, ptr }
+%fnv = type { ptr, ptr }
 
 @ward_depth = external global i64
 @ward.unset = private constant %site { ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }
@@ -105,6 +110,12 @@ declare ptr @ward_list_insert_slot(ptr, i64, i64)
 declare void @ward_list_remove(ptr, i64, i64, ptr)
 declare void @ward_list_free(ptr)
 declare void @ward_sort(ptr, i64, i64, ptr, ptr)
+declare void @ward_permute(ptr, i64, i64, ptr)
+declare ptr @ward_env_new(i64, ptr)
+declare void @ward_env_retain(ptr)
+declare void @ward_env_release(ptr, ptr)
+declare ptr @malloc(i64)
+declare void @free(ptr)
 declare ptr @ward_map_new(i64, i32)
 declare i64 @ward_map_find(ptr, i64)
 declare i64 @ward_map_add(ptr, i64)
@@ -280,7 +291,7 @@ impl<'p> Module<'p> {
             Ty::Array(x, n) => format!("[{} x {}]", n, self.lt(x)?),
             Ty::List(_) => "%list".to_string(),
             Ty::Struct(..) | Ty::Enum(..) => self.named_type(t)?,
-            Ty::Fn(..) => return Err("関数の値".to_string()),
+            Ty::Fn(..) => "%fnv".to_string(),
             Ty::Param(_) | Ty::Iface(_) => return Err(format!("型 {}", t.show())),
         })
     }
@@ -344,6 +355,7 @@ impl<'p> Module<'p> {
             Ty::Ref(x, _) if matches!(**x, Ty::Iface(_)) => (40, 8),
             Ty::Ref(..) => (32, 8),
             Ty::List(_) => (24, 8),
+            Ty::Fn(..) => (16, 8),
             Ty::Array(x, n) => {
                 let (s, a) = self.size_align(x)?;
                 (ceil_div(s, a) * a * n, a)
@@ -521,6 +533,7 @@ impl<'p> Module<'p> {
             H::View => ("ptr %p, ptr %dst, ptr %site", "void"),
             H::Hazard => ("ptr %p", "i1"),
             H::Less => ("ptr %p, ptr %q, ptr %env", "i32"),
+            H::Moves | H::HasOwn => ("ptr %p", "i1"),
         };
         let result = match h {
             H::Drop => {
@@ -541,6 +554,10 @@ impl<'p> Module<'p> {
             }
             H::Hazard => {
                 let r = self.gen_hazard(&mut b, t)?;
+                format!("ret i1 {}", r)
+            }
+            H::Moves | H::HasOwn => {
+                let r = self.gen_moves(&mut b, t, h == H::Moves)?;
                 format!("ret i1 {}", r)
             }
             H::Less => {
@@ -702,6 +719,15 @@ impl<'p> Module<'p> {
                     b.loop_end(e);
                 }
                 b.op("call void @ward_list_free(ptr %p)");
+            }
+            Ty::Fn(..) => {
+                let v = b.val("load %fnv, ptr %p");
+                let env = b.val(format!("extractvalue %fnv {}, 1", v));
+                let has = b.val(format!("icmp ne ptr {}, null", env));
+                let (_, no) = b.if_true(&has);
+                b.op(format!("call void @ward_env_release(ptr {}, ptr %site)", env));
+                b.br(&no);
+                b.label(&no);
             }
             Ty::Map(k, v) => {
                 let m = b.val("load ptr, ptr %p");
@@ -876,6 +902,31 @@ impl<'p> Module<'p> {
                 call(self, b, v, &s, &d);
                 b.loop_end(e);
             }
+            Ty::Fn(..) => {
+                // 複製は取り込んだ値の入れ物を共有する（数を増やす）。写しは中身を写した新しい入れ物
+                let v = b.val("load %fnv, ptr %p");
+                let env = b.val(format!("extractvalue %fnv {}, 1", v));
+                let has = b.val(format!("icmp ne ptr {}, null", env));
+                let out = b.alloca("%fnv");
+                b.op(format!("store %fnv {}, ptr {}", v, out));
+                let (_, no) = b.if_true(&has);
+                match view {
+                    None => b.op(format!("call void @ward_env_retain(ptr {})", env)),
+                    Some(site) => {
+                        let vt = b.val(format!("getelementptr i8, ptr {}, i64 8", env));
+                        let vt = b.val(format!("load ptr, ptr {}", vt));
+                        let vf = b.val(format!("getelementptr {{ ptr, ptr }}, ptr {}, i32 0, i32 1", vt));
+                        let vf = b.val(format!("load ptr, ptr {}", vf));
+                        let ne = b.val(format!("call ptr {}(ptr {}, ptr {})", vf, env, site));
+                        let v2 = b.val(format!("insertvalue %fnv {}, ptr {}, 1", v, ne));
+                        b.op(format!("store %fnv {}, ptr {}", v2, out));
+                    }
+                }
+                b.br(&no);
+                b.label(&no);
+                let r = b.val(format!("load %fnv, ptr {}", out));
+                b.op(format!("store %fnv {}, ptr %dst", r));
+            }
             _ => return Err(format!("{} の複製", t.show())),
         }
         Ok(())
@@ -895,6 +946,7 @@ impl<'p> Module<'p> {
                 b.val(format!("icmp eq i64 {}, 0", tag))
             }
             Ty::Struct(..) | Ty::List(_) | Ty::Map(..) => "true".to_string(),
+            Ty::Fn(..) => env_flag(b, "%p", 3),
             Ty::Enum(..) => {
                 if self.trivial(t)? || !self.enum_moves(t)? {
                     "false".to_string()
@@ -927,7 +979,7 @@ impl<'p> Module<'p> {
     /// 値として取り出すとエラーになりうる型か
     fn can_hazard(&mut self, t: &Ty) -> G<bool> {
         Ok(match t {
-            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) => true,
+            Ty::Own(_) | Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Fn(..) => true,
             Ty::Enum(..) => self.enum_moves(t)?,
             Ty::Array(x, n) => *n > 0 && self.can_hazard(x)?,
             _ => false,
@@ -965,6 +1017,7 @@ impl<'p> Module<'p> {
         };
         match t {
             Ty::Unit | Ty::Never => lit(self, b, "()"),
+            Ty::Fn(..) => lit(self, b, "<関数>"),
             Ty::Int(i) => {
                 let v = b.val(format!("load i{}, ptr %p", i.bits()));
                 let w = widen(b, &v, *i);
@@ -1140,6 +1193,255 @@ impl<'p> Module<'p> {
         Ok(())
     }
 
+    /// `moves` なら interp の `moves()`、でなければ `has_own()`（値を見て決める）
+    fn gen_moves(&mut self, b: &mut B, t: &Ty, moves: bool) -> G<String> {
+        let h = if moves { H::Moves } else { H::HasOwn };
+        // 中身の一つでも当てはまれば true
+        let any = |me: &mut Self, b: &mut B, parts: Vec<(String, Ty)>| -> String {
+            let acc = b.alloca("i1");
+            b.op(format!("store i1 false, ptr {}", acc));
+            for (p, x) in parts {
+                let f = me.helper(h, &x);
+                let r = b.val(format!("call i1 {}(ptr {})", f, p));
+                let a = b.val(format!("load i1, ptr {}", acc));
+                let o = b.val(format!("or i1 {}, {}", a, r));
+                b.op(format!("store i1 {}, ptr {}", o, acc));
+            }
+            b.val(format!("load i1, ptr {}", acc))
+        };
+        Ok(match t {
+            Ty::Own(_) => {
+                let p = if is_iface_ptr(t) {
+                    let v = b.val("load %iown, ptr %p");
+                    b.val(format!("extractvalue %iown {}, 0", v))
+                } else {
+                    b.val("load ptr, ptr %p")
+                };
+                let bits = b.val(format!("ptrtoint ptr {} to i64", p));
+                let tag = b.val(format!("and i64 {}, 1", bits));
+                b.val(format!("icmp eq i64 {}, 0", tag))
+            }
+            Ty::Fn(..) => env_flag(b, "%p", if moves { 1 } else { 2 }),
+            Ty::Struct(..) | Ty::List(_) | Ty::Map(..) if moves => "true".to_string(),
+            Ty::Enum(..) if moves => {
+                if self.enum_moves(t)? {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            Ty::Struct(..) => {
+                let st = self.lt(t)?;
+                let mut parts = Vec::new();
+                for (i, f) in self.struct_fields(t)?.iter().enumerate() {
+                    if self.needs_drop(f)? {
+                        parts.push((b.val(format!("getelementptr {}, ptr %p, i32 0, i32 {}", st, i)), f.clone()));
+                    }
+                }
+                any(self, b, parts)
+            }
+            Ty::Enum(..) => {
+                // 中身に own を持ちうる enum は、種類ごとに見る
+                let vs = self.variants(t)?;
+                let et = self.lt(t)?;
+                let acc = b.alloca("i1");
+                b.op(format!("store i1 false, ptr {}", acc));
+                let tag = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 0", et));
+                let tag = b.val(format!("load i32, ptr {}", tag));
+                let pl = b.val(format!("getelementptr {}, ptr %p, i32 0, i32 1", et));
+                let done = b.l();
+                let mut cases = Vec::new();
+                let mut bodies = String::new();
+                for (vi, (_, fs)) in vs.iter().enumerate() {
+                    let mut sub = B { n: b.n, ..B::default() };
+                    let l = sub.l();
+                    cases.push(format!("i32 {}, label %{}", vi, l));
+                    sub.label(&l);
+                    let vt = self.variant_lt(fs)?;
+                    let mut parts = Vec::new();
+                    for (i, f) in fs.iter().enumerate() {
+                        if self.needs_drop(f)? {
+                            parts.push((sub.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", vt, pl, i)), f.clone()));
+                        }
+                    }
+                    let r = any(self, &mut sub, parts);
+                    sub.op(format!("store i1 {}, ptr {}", r, acc));
+                    sub.br(&done);
+                    b.n = sub.n;
+                    b.allocas.push_str(&sub.allocas);
+                    bodies.push_str(&sub.text);
+                }
+                b.op(format!("switch i32 {}, label %{} [ {} ]", tag, done, cases.join(" ")));
+                b.text.push_str(&bodies);
+                b.label(&done);
+                b.val(format!("load i1, ptr {}", acc))
+            }
+            Ty::Array(x, n) => {
+                let at = self.lt(t)?;
+                let f = self.helper(h, x);
+                let acc = b.alloca("i1");
+                b.op(format!("store i1 false, ptr {}", acc));
+                let (i, e) = b.loop_begin(&n.to_string());
+                let ep = b.val(format!("getelementptr {}, ptr %p, i64 0, i64 {}", at, i));
+                let r = b.val(format!("call i1 {}(ptr {})", f, ep));
+                let a = b.val(format!("load i1, ptr {}", acc));
+                let o = b.val(format!("or i1 {}, {}", a, r));
+                b.op(format!("store i1 {}, ptr {}", o, acc));
+                b.loop_end(e);
+                b.val(format!("load i1, ptr {}", acc))
+            }
+            Ty::List(x) | Ty::Map(_, x) => {
+                let f = self.helper(h, x);
+                let acc = b.alloca("i1");
+                b.op(format!("store i1 false, ptr {}", acc));
+                let (len, get): (String, ElemPtr) = if let Ty::List(_) = t {
+                    let xt = self.lt(x)?;
+                    let data = b.val("load ptr, ptr %p");
+                    let lp = b.val("getelementptr %list, ptr %p, i32 0, i32 1");
+                    let len = b.val(format!("load i64, ptr {}", lp));
+                    (len, Box::new(move |b: &mut B, i: &str| b.val(format!("getelementptr {}, ptr {}, i64 {}", xt, data, i))))
+                } else {
+                    let m = b.val("load ptr, ptr %p");
+                    let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                    (len, Box::new(move |b: &mut B, i: &str| b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i))))
+                };
+                let (i, e) = b.loop_begin(&len);
+                let ep = get(b, &i);
+                let r = b.val(format!("call i1 {}(ptr {})", f, ep));
+                let a = b.val(format!("load i1, ptr {}", acc));
+                let o = b.val(format!("or i1 {}, {}", a, r));
+                b.op(format!("store i1 {}, ptr {}", o, acc));
+                b.loop_end(e);
+                b.val(format!("load i1, ptr {}", acc))
+            }
+            _ => "false".to_string(),
+        })
+    }
+
+    /// 関数の値を作るための関数（関数の番号 fi、取り込む値の型）。(呼び出しの入口, 入れ物の表)
+    /// 入口 `@tramp{fi}(ptr env, ptr 呼んだ位置, 引数...)` は、取り込んだ値の読むだけの写しを作って本体を呼ぶ
+    fn closure_fns(&mut self, fi: usize, ctys: &[Ty]) -> G<(String, String)> {
+        let tramp = format!("@tramp{}", fi);
+        let vt = format!("@vt{}", fi);
+        let key = (H::Clone, format!("closure {}", fi));
+        if self.helpers.contains_key(&key) {
+            return Ok((tramp, vt));
+        }
+        self.helpers.insert(key, tramp.clone());
+        let f = &self.prog.fns[fi];
+        let nparams = f.params - f.captures;
+        let caps_t = self.variant_lt(ctys)?;
+        let mut b = B::default();
+        let mut params = vec!["ptr %env".to_string(), "ptr %site".to_string()];
+        let mut args = Vec::new();
+        for i in 0..nparams {
+            let lt = self.lt(&f.locals[i].ty)?;
+            params.push(format!("{} %a{}", lt, i));
+            args.push(format!("{} %a{}", lt, i));
+        }
+        let cp = b.val("getelementptr i8, ptr %env, i64 24");
+        for (i, ct) in ctys.iter().enumerate() {
+            let pt = f.locals[nparams + i].ty.clone();
+            let src = b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", caps_t, cp, i));
+            let lt = self.lt(ct)?;
+            let tmp = b.alloca(&lt);
+            let view = self.helper(H::View, ct);
+            b.op(format!("call void {}(ptr {}, ptr {}, ptr %site)", view, src, tmp));
+            let v = b.val(format!("load {}, ptr {}", lt, tmp));
+            // own は読むだけの ref として受け取る（lower の `lower_lambda`）
+            let v = match (ct, &pt) {
+                (Ty::Own(_), Ty::Ref(..)) => {
+                    let iface = is_iface_ptr(ct);
+                    let raw = if iface { b.val(format!("extractvalue %iown {}, 0", v)) } else { v.clone() };
+                    let t = b.val(format!("call ptr @ward_view_target_nocheck(ptr {})", raw));
+                    let g = b.val(format!("call i64 @ward_view_gen(ptr {})", raw));
+                    let s = b.val(format!("call ptr @ward_view_site(ptr {})", raw));
+                    b.op(format!("call void @ward_view_free(ptr {})", raw));
+                    let rt = if iface { "%iref" } else { "%ref" };
+                    let r = b.val(format!("insertvalue {} undef, ptr {}, 0", rt, t));
+                    let r = b.val(format!("insertvalue {} {}, ptr {}, 1", rt, r, t));
+                    let r = b.val(format!("insertvalue {} {}, i64 {}, 2", rt, r, g));
+                    let r = b.val(format!("insertvalue {} {}, ptr {}, 3", rt, r, s));
+                    if iface {
+                        let tid = b.val(format!("extractvalue %iown {}, 1", v));
+                        b.val(format!("insertvalue %iref {}, i64 {}, 4", r, tid))
+                    } else {
+                        r
+                    }
+                }
+                _ => v,
+            };
+            args.push(format!("{} {}", self.lt(&pt)?, v));
+        }
+        let ret = self.lt(&f.ret)?;
+        let r = b.val(format!("call {} @f{}({})", ret, fi, args.join(", ")));
+        let _ = write!(
+            self.code,
+            "define internal {} {}({}) {{\nentry:\n{}{}  ret {} {}\n}}\n\n",
+            ret,
+            tramp,
+            params.join(", "),
+            b.allocas,
+            b.text,
+            ret,
+            r
+        );
+        if ctys.is_empty() {
+            return Ok((tramp, vt));
+        }
+        // 入れ物の解放と写し
+        let mut b = B::default();
+        let cp = b.val("getelementptr i8, ptr %env, i64 24");
+        for (i, ct) in ctys.iter().enumerate() {
+            if self.needs_drop(ct)? {
+                let src = b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", caps_t, cp, i));
+                let d = self.helper(H::Drop, ct);
+                b.op(format!("call void {}(ptr {}, ptr %site)", d, src));
+            }
+        }
+        let _ = write!(self.code, "define internal void @envdrop{}(ptr %env, ptr %site) {{\nentry:\n{}{}  ret void\n}}\n\n", fi, b.allocas, b.text);
+        let mut b = B::default();
+        let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", caps_t);
+        let total = b.val(format!("add i64 24, {}", size));
+        let ne = b.val(format!("call ptr @ward_env_new(i64 {}, ptr {})", total, vt));
+        let cp = b.val("getelementptr i8, ptr %env, i64 24");
+        let np = b.val(format!("getelementptr i8, ptr {}, i64 24", ne));
+        for (i, ct) in ctys.iter().enumerate() {
+            let src = b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", caps_t, cp, i));
+            let dst = b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", caps_t, np, i));
+            let view = self.helper(H::View, ct);
+            b.op(format!("call void {}(ptr {}, ptr {}, ptr %site)", view, src, dst));
+        }
+        let flags = self.env_flags(&mut b, &np, ctys, &caps_t)?;
+        // 元の値がムーブするものだったか（取り込んだ関数の値を、呼んだ先で取り出せるか）
+        let old = b.val("getelementptr i8, ptr %env, i64 16");
+        let old = b.val(format!("load i64, ptr {}", old));
+        let om = b.val(format!("and i64 {}, 1", old));
+        let om = b.val(format!("shl i64 {}, 2", om));
+        let flags = b.val(format!("or i64 {}, {}", flags, om));
+        let fp = b.val(format!("getelementptr i8, ptr {}, i64 16", ne));
+        b.op(format!("store i64 {}, ptr {}", flags, fp));
+        let _ = write!(self.code, "define internal ptr @envview{}(ptr %env, ptr %site) {{\nentry:\n{}{}  ret ptr {}\n}}\n\n", fi, b.allocas, b.text, ne);
+        let _ = writeln!(self.globals, "{} = private unnamed_addr constant {{ ptr, ptr }} {{ ptr @envdrop{}, ptr @envview{} }}", vt, fi, fi);
+        Ok((tramp, vt))
+    }
+
+    /// 取り込んだ値（`caps` の場所）から、入れ物の印（1: ムーブする・2: own を持つ）を決める
+    fn env_flags(&mut self, b: &mut B, caps: &str, ctys: &[Ty], caps_t: &str) -> G<String> {
+        let mut flags = "0".to_string();
+        for (i, ct) in ctys.iter().enumerate() {
+            let src = b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", caps_t, caps, i));
+            for (h, bit) in [(H::Moves, 1), (H::HasOwn, 2)] {
+                let f = self.helper(h, ct);
+                let r = b.val(format!("call i1 {}(ptr {})", f, src));
+                let z = b.val(format!("zext i1 {} to i64", r));
+                let sh = b.val(format!("mul i64 {}, {}", z, bit));
+                flags = b.val(format!("or i64 {}, {}", flags, sh));
+            }
+        }
+        Ok(flags)
+    }
+
     fn gen_less(&mut self, b: &mut B, t: &Ty) -> G<String> {
         Ok(match t {
             Ty::Int(i) => {
@@ -1171,6 +1473,24 @@ fn moves(m: &mut Module, t: &Ty) -> G<bool> {
         Ty::Enum(..) => m.enum_moves(t)?,
         _ => false,
     })
+}
+
+/// 関数の値（`p` の場所）の入れ物の印に `mask` が立っているか（入れ物がなければ false）
+fn env_flag(b: &mut B, p: &str, mask: i64) -> String {
+    let v = b.val(format!("load %fnv, ptr {}", p));
+    let env = b.val(format!("extractvalue %fnv {}, 1", v));
+    let has = b.val(format!("icmp ne ptr {}, null", env));
+    let out = b.alloca("i1");
+    b.op(format!("store i1 false, ptr {}", out));
+    let (_, no) = b.if_true(&has);
+    let fp = b.val(format!("getelementptr i8, ptr {}, i64 16", env));
+    let f = b.val(format!("load i64, ptr {}", fp));
+    let m = b.val(format!("and i64 {}, {}", f, mask));
+    let r = b.val(format!("icmp ne i64 {}, 0", m));
+    b.op(format!("store i1 {}, ptr {}", r, out));
+    b.br(&no);
+    b.label(&no);
+    b.val(format!("load i1, ptr {}", out))
 }
 
 fn is_iface_ptr(t: &Ty) -> bool {
@@ -1837,8 +2157,83 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.op(format!("store ptr {}, ptr %s{}", site, l));
                 Ok((v, ty))
             }
-            Operand::Read(..) => Err("クロージャが取り込んだ変数".to_string()),
+            Operand::Read(l, span) => self.read(*l, *span),
         }
+    }
+
+    /// 値によって決める読み方（interp の `read_var`）。取り込んだ変数・関数の値の変数
+    fn read(&mut self, l: Local, span: Span) -> G<(String, Ty)> {
+        let f = self.f;
+        let ty = f.locals[l].ty.clone();
+        let first_cap = f.params - f.captures;
+        let is_cap = l >= first_cap && l < f.params;
+        self.check_live(l, span);
+        let p = self.local_ptr(l);
+        if is_cap {
+            // 取り込んだ元の値がムーブするものなら取り出せない（呼ぶたびに使うので）
+            let cant = match &ty {
+                Ty::Fn(..) => Some(env_flag(&mut self.b, &p, 4)),
+                _ => {
+                    // own は ref として受け取っている（元は own なのでムーブする）
+                    let orig_moves = matches!(ty, Ty::Ref(..)) && self.cap_was_own(l) || moves(self.m, &ty)?;
+                    if orig_moves {
+                        Some("true".to_string())
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(c) = cant {
+                let always = c == "true";
+                let (_, ok) = self.b.if_true(&c);
+                let title = self.m.cstr(&format!("クロージャに取り込んだ `{}` は取り出せません", f.locals[l].name));
+                let lab = self.m.cstr("クロージャは何度も呼べるので、取り込んだ値をムーブできない");
+                let s = self.m.site(span, "");
+                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, lab));
+                self.b.op("unreachable");
+                self.b.label(&ok);
+                if always {
+                    // ここには来ない。元の型の値として続ける
+                    let orig = f.cap_tys.get(l - first_cap).cloned().unwrap_or(ty);
+                    return Ok(("poison".to_string(), orig));
+                }
+            }
+            let v = self.read_copy(&p, &ty)?;
+            return Ok((v, ty));
+        }
+        if !matches!(ty, Ty::Fn(..)) {
+            return Err(format!("値で決める読み方 {}", ty.show()));
+        }
+        // 関数の値: 取り込んだものがムーブするならムーブ、でなければ複製
+        let mv = env_flag(&mut self.b, &p, 1);
+        let out = self.b.alloca("%fnv");
+        let yes = self.b.l();
+        let no = self.b.l();
+        let done = self.b.l();
+        self.b.op(format!("br i1 {}, label %{}, label %{}", mv, yes, no));
+        self.b.label(&yes);
+        let v = self.b.val(format!("load %fnv, ptr {}", p));
+        self.b.op(format!("store %fnv {}, ptr {}", v, out));
+        let why = format!("`{}` がムーブされた", f.locals[l].name);
+        let site = self.m.site(span, &why);
+        if self.boxed[l] {
+            let size = self.m.sizeof(&ty)?;
+            self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", p, size, site));
+        }
+        self.b.op(format!("store ptr {}, ptr %s{}", site, l));
+        self.b.br(&done);
+        self.b.label(&no);
+        let c = self.read_copy(&p, &ty)?;
+        self.b.op(format!("store %fnv {}, ptr {}", c, out));
+        self.b.br(&done);
+        self.b.label(&done);
+        Ok((self.b.val(format!("load %fnv, ptr {}", out)), ty))
+    }
+
+    /// 取り込んだ変数 `l` の元の型が own だったか（lower が ref にしている）
+    fn cap_was_own(&self, l: Local) -> bool {
+        let first = self.f.params - self.f.captures;
+        matches!(self.f.cap_tys.get(l.wrapping_sub(first)), Some(Ty::Own(_)))
     }
 
     /// 場所の値を複製して読む
@@ -2302,7 +2697,47 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.label(&done);
                 Ok((self.b.val(format!("load {}, ptr {}", rl, out)), ret))
             }
-            Rvalue::Closure(..) | Rvalue::CallValue(..) => Err("クロージャ".to_string()),
+            Rvalue::Closure(fi, ops) => {
+                let mut vals = Vec::new();
+                for o in ops {
+                    vals.push(self.operand(o)?);
+                }
+                let ctys: Vec<Ty> = vals.iter().map(|(_, t)| t.clone()).collect();
+                let (tramp, vt) = self.m.closure_fns(*fi, &ctys)?;
+                let fv = self.b.val(format!("insertvalue %fnv undef, ptr {}, 0", tramp));
+                if vals.is_empty() {
+                    let v = self.b.val(format!("insertvalue %fnv {}, ptr null, 1", fv));
+                    return Ok((v, want.clone()));
+                }
+                // 取り込んだ値の入れ物（頭 24 バイト: 数・表・印）
+                let caps_t = self.m.variant_lt(&ctys)?;
+                let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", caps_t);
+                let total = self.b.val(format!("add i64 24, {}", size));
+                let env = self.b.val(format!("call ptr @ward_env_new(i64 {}, ptr {})", total, vt));
+                let cp = self.b.val(format!("getelementptr i8, ptr {}, i64 24", env));
+                for (i, (v, t)) in vals.iter().enumerate() {
+                    let lt = self.m.lt(t)?;
+                    let dst = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", caps_t, cp, i));
+                    self.b.op(format!("store {} {}, ptr {}", lt, v, dst));
+                }
+                let flags = self.m.env_flags(&mut self.b, &cp, &ctys, &caps_t)?;
+                let fp = self.b.val(format!("getelementptr i8, ptr {}, i64 16", env));
+                self.b.op(format!("store i64 {}, ptr {}", flags, fp));
+                let v = self.b.val(format!("insertvalue %fnv {}, ptr {}, 1", fv, env));
+                Ok((v, want.clone()))
+            }
+            Rvalue::CallValue(fo, ops, span) => {
+                let mut vals = Vec::new();
+                for o in ops {
+                    vals.push(self.operand(o)?);
+                }
+                let (fv, ft) = self.operand(fo)?;
+                let v = self.call_value(&fv, &ft, vals, *span)?;
+                // 呼ぶために複製した関数の値を捨てる
+                self.discard(&fv, &ft, *span, "呼び終わった関数の値")?;
+                let Ty::Fn(_, ret) = ft else { return Err("関数でない値の呼び出し".to_string()) };
+                Ok((v, *ret))
+            }
             Rvalue::CopyOut(place, what, span) => {
                 let pr = self.place(place, false)?;
                 if self.m.can_hazard(&pr.ty)? {
@@ -2363,6 +2798,119 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let v = self.b.val(format!("call {} {}({})", rl, f, args.join(", ")));
         self.b.op(format!("store i64 {}, ptr @ward_depth", d));
         Ok(v)
+    }
+
+    /// 関数の値を呼ぶ（深さを確かめる）。引数は関数の型の引数の型にそろえる
+    fn call_value(&mut self, fv: &str, ft: &Ty, vals: Vec<(String, Ty)>, span: Span) -> G<String> {
+        let Ty::Fn(ps, ret) = ft else { return Err(format!("関数でない値 {}", ft.show())) };
+        let code = self.b.val(format!("extractvalue %fnv {}, 0", fv));
+        let env = self.b.val(format!("extractvalue %fnv {}, 1", fv));
+        let site = self.m.site(span, "クロージャに取り込んだ値");
+        let mut args = vec![format!("ptr {}", env), format!("ptr {}", site)];
+        for (i, (v, t)) in vals.into_iter().enumerate() {
+            let pt = ps.get(i).cloned().ok_or("引数の数が違う")?;
+            let v = self.coerce(&v, &t, &pt)?;
+            args.push(format!("{} {}", self.m.lt(&pt)?, v));
+        }
+        self.call(&code, ret, &args, span)
+    }
+
+    /// `sort_by(f)`（interp の `sort_list`）。要素の読むだけの写しを作って比べる関数に渡し、並べ終わった順に要素を動かす
+    fn sort_by(&mut self, data: &str, n: &str, x: &Ty, f: (String, Ty), span: Span) -> G<()> {
+        let (fv, ft) = f;
+        let Ty::Fn(ps, _) = &ft else { return Err("sort_by の関数の型".to_string()) };
+        let pa = ps.first().cloned().ok_or("sort_by の関数の引数")?;
+        let pl = self.m.lt(&pa)?;
+        let xl = self.m.lt(x)?;
+        let xsize = self.m.sizeof(x)?;
+        let psize = self.m.sizeof(&pa)?;
+        let site = self.m.site(span, "要素");
+        // 比べる関数に渡す値（要素の写し。ムーブする写しは区画に置いて ref で渡す）
+        let bytes = self.b.val(format!("mul i64 {}, {}", n, psize));
+        let bytes = self.b.val(format!("add i64 {}, 8", bytes));
+        let args = self.b.val(format!("call ptr @malloc(i64 {})", bytes));
+        let boxed = moves(self.m, x)? && !matches!(x, Ty::Own(_));
+        let view = self.m.helper(H::View, x);
+        let (i, e) = self.b.loop_begin(n);
+        let src = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", xl, data, i));
+        let dst = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", pl, args, i));
+        if boxed {
+            let blk = self.b.val(format!("call ptr @ward_alloc(i64 {})", xsize));
+            self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, blk, site));
+            let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -16", blk));
+            let g = self.b.val(format!("load i64, ptr {}", hp));
+            let r = self.make_ref(&blk, &blk, &g, &site);
+            self.b.op(format!("store %ref {}, ptr {}", r, dst));
+        } else {
+            let tmp = self.b.alloca(&xl);
+            self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, tmp, site));
+            let v = self.b.val(format!("load {}, ptr {}", xl, tmp));
+            let v = self.coerce(&v, x, &pa)?;
+            self.b.op(format!("store {} {}, ptr {}", pl, v, dst));
+        }
+        self.b.loop_end(e);
+        // 添字の並びを比べる関数で並べる
+        let ob = self.b.val(format!("mul i64 {}, 8", n));
+        let ob = self.b.val(format!("add i64 {}, 8", ob));
+        let order = self.b.val(format!("call ptr @malloc(i64 {})", ob));
+        let (i, e) = self.b.loop_begin(n);
+        let op = self.b.val(format!("getelementptr i64, ptr {}, i64 {}", order, i));
+        self.b.op(format!("store i64 {}, ptr {}", i, op));
+        self.b.loop_end(e);
+        let cmp = self.sort_cmp(&ft, &pa, span)?;
+        let ctx = self.b.alloca("{ %fnv, ptr }");
+        let c1 = self.b.val(format!("insertvalue {{ %fnv, ptr }} undef, %fnv {}, 0", fv));
+        let c2 = self.b.val(format!("insertvalue {{ %fnv, ptr }} {}, ptr {}, 1", c1, args));
+        self.b.op(format!("store {{ %fnv, ptr }} {}, ptr {}", c2, ctx));
+        self.b.op(format!("call void @ward_sort(ptr {}, i64 {}, i64 8, ptr {}, ptr {})", order, n, cmp, ctx));
+        // 写しを片づける
+        let fin = self.m.site(span, "sort_by の比べ終わった写し");
+        let (i, e) = self.b.loop_begin(n);
+        let ap = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", pl, args, i));
+        if boxed {
+            let r = self.b.val(format!("load %ref, ptr {}", ap));
+            let blk = self.b.val(format!("extractvalue %ref {}, 1", r));
+            if self.m.needs_drop(x)? {
+                let d = self.m.helper(H::Drop, x);
+                self.b.op(format!("call void {}(ptr {}, ptr {})", d, blk, fin));
+            }
+            self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", blk, xsize, fin));
+        } else if self.m.needs_drop(&pa)? {
+            let d = self.m.helper(H::Drop, &pa);
+            self.b.op(format!("call void {}(ptr {}, ptr {})", d, ap, fin));
+        }
+        self.b.loop_end(e);
+        self.b.op(format!("call void @free(ptr {})", args));
+        self.discard(&fv, &ft, span, "sort_by が使い終わった関数")?;
+        self.b.op(format!("call void @ward_permute(ptr {}, i64 {}, i64 {}, ptr {})", data, n, xsize, order));
+        self.b.op(format!("call void @free(ptr {})", order));
+        Ok(())
+    }
+
+    /// sort_by の比べる関数（`i32 (ptr 添字a, ptr 添字b, ptr {関数の値, 写しの並び})`）
+    fn sort_cmp(&mut self, ft: &Ty, pa: &Ty, span: Span) -> G<String> {
+        let name = format!("@sortcmp{}", self.m.fresh());
+        let saved = std::mem::take(&mut self.b);
+        let pl = self.m.lt(pa)?;
+        let ctx = "%env";
+        let fv = self.b.val(format!("load %fnv, ptr {}", ctx));
+        let ap = self.b.val(format!("getelementptr {{ %fnv, ptr }}, ptr {}, i32 0, i32 1", ctx));
+        let args = self.b.val(format!("load ptr, ptr {}", ap));
+        let mut vals = Vec::new();
+        for q in ["%p", "%q"] {
+            let k = self.b.val(format!("load i64, ptr {}", q));
+            let p = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", pl, args, k));
+            vals.push((self.read_copy(&p, pa)?, pa.clone()));
+        }
+        let r = self.call_value(&fv, ft, vals, span)?;
+        let r = self.b.val(format!("zext i1 {} to i32", r));
+        let body = std::mem::replace(&mut self.b, saved);
+        let _ = write!(
+            self.m.code,
+            "define internal i32 {}(ptr %p, ptr %q, ptr %env) {{\nentry:\n{}{}  ret i32 {}\n}}\n\n",
+            name, body.allocas, body.text, r
+        );
+        Ok(name)
     }
 
     fn make_enum(&mut self, et: &Ty, variant: &str, vals: Vec<(String, Ty)>) -> G<String> {
@@ -2747,6 +3295,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     self.b.op(format!("call void @ward_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", pr.ptr, n, size, less));
                     Ok(("0".to_string(), Ty::Unit))
                 }
+                "sort_by" => {
+                    let ptr = pr.ptr.clone();
+                    self.sort_by(&ptr, &n.to_string(), &x, vals[0].clone(), span)?;
+                    Ok(("0".to_string(), Ty::Unit))
+                }
                 _ => Err(format!("配列のメソッド {}", name)),
             },
             Ty::List(x) => {
@@ -2811,6 +3364,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         self.b.label(&ok);
                         let dst = self.b.val(format!("call ptr @ward_list_insert_slot(ptr {}, i64 {}, i64 {})", pr.ptr, size, i));
                         self.b.op(format!("store {} {}, ptr {}", xl, v, dst));
+                        Ok(("0".to_string(), Ty::Unit))
+                    }
+                    "sort_by" => {
+                        let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
+                        self.sort_by(&data, &len, &x, vals[0].clone(), span)?;
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     "sort" => {

@@ -182,6 +182,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             name: self.name,
             params: f.params.len(),
             captures: 0,
+            cap_tys: Vec::new(),
             ret: ret_ty,
             locals: self.locals,
             blocks: reachable(self.blocks),
@@ -197,6 +198,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             self.declare(&p.name, ty, false, p.span);
         }
         let ncaps = caps.len();
+        let cap_tys = caps.iter().map(|(_, t)| t.clone()).collect();
         for (n, t) in caps {
             let t = match t {
                 Ty::Own(x) => Ty::Ref(x, false),
@@ -219,6 +221,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             name: self.name,
             params: l.params.len() + ncaps,
             captures: ncaps,
+            cap_tys,
             ret: ret_ty,
             locals: self.locals,
             blocks: reachable(self.blocks),
