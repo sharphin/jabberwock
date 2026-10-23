@@ -22,7 +22,10 @@
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
-| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示） |
+| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ） |
+| `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
+| `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
+| `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
 | `tests/examples.rs` | 言語の基本動作 |
 | `tests/analyze.rs` | 検査を消す解析。消せる例と、消してはいけない例 |
 | `tests/structs.rs` | 構造体 |
@@ -42,6 +45,7 @@
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
 | `tests/typeinfo.rs` | 型検査が式ごとの型・型の引数を記録すること（IR の土台） |
+| `tests/ir.rs` | IR の表示と、書き出せる範囲 |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
@@ -151,6 +155,14 @@
   `f(x)` は、`f` という変数があれば関数の値の呼び出し（`call_var`。引数が先、変数はあとで借りる）。変数に関数と同じ名前は禁止（`not_a_fn_name`）。
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
+
+- IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（解析のあと。`Check` を `Proj::Deref` に写す）。
+  **デバッグビルドでは `run_inner` が、書き出せたプログラムを IR でも実行し、出力・エラーの題と位置・残ったヒープの数を interp と突き合わせる**
+  （違えば panic。全テストが自動で突き合わせになる）。interp の動きを変えたら lower / exec も同じに直すこと。
+  書き出しの決まり: 式の値はいつも一時的な変数に入れ、一時的な変数はちょうど 1 回 `move` で読む。名前のある変数は、ムーブする型（own・構造体）なら `move`、
+  ほかは `copy`。print と埋め込みは `Show`（場所なら借りて読む、一時的な値なら見たあと捨てる）。スコープを抜ける道ごとに内側から `drop`
+  （ムーブ済みなら何もしない）。`for range` は隠れた変数（名前が空）をスコープに置き、`Term::Step` で進める。
+  まだ書き出せないもの: enum / match・`?`・配列・リスト・辞書・クロージャ・メソッド・ジェネリクス・入力。
 
 ## 設計の決めごと
 

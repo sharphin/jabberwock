@@ -4,7 +4,7 @@
 //! 1つのエラーが複数のラベル付き位置を持てるようにしている。
 //! これがこの言語の「エラーとの付き合いやすさ」の土台。
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// どのファイルか（0 が最初に渡したファイル。モジュールは読んだ順に 1, 2, ...）
     pub file: usize,

@@ -4,6 +4,7 @@ pub mod analyze;
 pub mod ast;
 pub mod diag;
 pub mod interp;
+pub mod ir;
 pub mod lexer;
 pub mod modules;
 pub mod parser;
@@ -80,6 +81,15 @@ pub fn typed(src: &str, read: Reader) -> Result<(ast::Program, types::TypeInfo),
     Ok((prog, info))
 }
 
+/// IR（中間表現）を読みやすい文字にする（`ward --ir`）。エラーや、まだ書き出せない書き方があれば Err
+pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
+    let (prog, info) = typed(src, read).map_err(|d| d.title)?;
+    analyze::analyze(&prog);
+    ir::lower::lower(&prog, &info)
+        .map(|p| p.to_string())
+        .map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))
+}
+
 /// 実行せずに型検査だけして、警告と読んだファイルを返す（エラーがあれば警告は空。エラーは実行時に返る）
 pub fn warnings(src: &str, read: Reader) -> (Vec<Diagnostic>, Vec<(String, String)>) {
     let (prog, files) = parse(src, read);
@@ -154,14 +164,22 @@ fn run_inner(
         Ok(p) => p,
         Err(d) => return fail(d),
     };
-    let warnings = match types::check(&prog) {
+    let (warnings, info) = match types::check_with_info(&prog) {
         Ok(w) => w,
         Err(d) => return fail(d),
     };
     let analysis = if elide { analyze::analyze(&prog) } else { analyze::Stats::default() };
+    // デバッグビルドでは、書き出せるプログラムは IR でも実行して結果を突き合わせる（IR の書き出しの検査）
+    let lowered = if cfg!(debug_assertions) { ir::lower::lower(&prog, &info).ok() } else { None };
+    drop(info);
     let mut it = interp::Interp::new(echo);
     it.set_io(input, args);
     let res = it.run(prog);
+    if let Some(irp) = lowered {
+        if let Some(diff) = ir_mismatch(&irp, &it.output, res.as_ref().err(), it.live_objects()) {
+            panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
+        }
+    }
     Outcome {
         output: it.output.clone(),
         error: res.err(),
@@ -171,5 +189,23 @@ fn run_inner(
         ref_checks: it.ref_checks,
         ref_checks_elided: it.ref_checks_elided,
         files,
+    }
+}
+
+/// IR を実行して、インタプリタの結果（出力・エラーの題と位置・残ったヒープの数）と違えばその説明を返す
+fn ir_mismatch(irp: &ir::Program, output: &str, error: Option<&Diagnostic>, live: usize) -> Option<String> {
+    let mut it = interp::Interp::new(false);
+    let res = ir::exec::run(irp, &mut it);
+    if it.output != output {
+        return Some(format!("出力が違う\ninterp:\n{}\nIR:\n{}", output, it.output));
+    }
+    let key = |d: &Diagnostic| (d.title.clone(), d.labels.iter().find(|l| l.primary).map(|l| l.span));
+    match (error, res.as_ref().err()) {
+        (None, None) if live != it.live_objects() => {
+            Some(format!("残ったヒープの数が違う（interp {}・IR {}）", live, it.live_objects()))
+        }
+        (None, None) => None,
+        (Some(a), Some(b)) if key(a) == key(b) => None,
+        (a, b) => Some(format!("エラーが違う\ninterp: {:?}\nIR: {:?}", a.map(key), b.map(key))),
     }
 }

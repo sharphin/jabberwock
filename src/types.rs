@@ -317,6 +317,10 @@ pub struct TypeInfo {
     pub expr_ty: HashMap<*const Expr, Ty>,
     /// 呼び出し・構造体や enum の値を作る式で決めた型の引数
     pub targs: HashMap<*const Expr, HashMap<String, Ty>>,
+    /// 変数（引数・ローカル変数・ループ変数・case で受け取る名前）の型。宣言した位置で引く
+    pub var_ty: HashMap<Span, Ty>,
+    /// 関数の戻り値の型（なければ Unit）
+    pub fn_ret: HashMap<String, Ty>,
 }
 
 impl TypeInfo {
@@ -821,6 +825,7 @@ impl<'a> Checker<'a> {
             f.name.len() > m.len() && f.name.starts_with(m) && f.name.as_bytes()[m.len()] == b'.'
         });
         self.ret = sig.ret.clone();
+        self.info.fn_ret.insert(f.name.clone(), sig.ret.clone());
         self.tparams = f.tparams.clone();
         self.bounds = f.tparams.iter().cloned().zip(f.bounds.iter().cloned()).collect();
         self.fields = match (sig.method, f.name.rsplit_once('.')) {
@@ -835,6 +840,7 @@ impl<'a> Checker<'a> {
             }
             self.not_a_field(&p.name, p.span)?;
             self.not_a_fn_name(&p.name, p.span)?;
+            self.info.var_ty.insert(p.span, t.clone());
             params.insert(p.name.clone(), VarInfo { ty: t, mutable: p.mutable, decl: p.span });
         }
         self.scopes = vec![params];
@@ -873,6 +879,7 @@ impl<'a> Checker<'a> {
         }
         self.not_a_field(name, info.decl)?;
         self.not_a_fn_name(name, info.decl)?;
+        self.info.var_ty.insert(info.decl, info.ty.clone());
         self.scopes.last_mut().expect("scope").insert(name.to_string(), info);
         Ok(())
     }

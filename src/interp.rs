@@ -18,8 +18,8 @@ use crate::diag::{Diagnostic, Span};
 
 type R<T> = Result<T, Diagnostic>;
 
-const MAX_DEPTH: usize = 5000;
-const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
+pub(crate) const MAX_DEPTH: usize = 5000;
+pub(crate) const BUILTINS: [&str; 5] = ["print", "drop", "assert", "read_line", "args"];
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -110,18 +110,18 @@ pub enum Callee {
 
 #[derive(Debug, Clone)]
 pub struct RefVal {
-    slot: usize,
-    generation: u32,
+    pub(crate) slot: usize,
+    pub(crate) generation: u32,
     /// スロットの中のどこを指すか（構造体のフィールドと配列の添字の道筋）。own の先を指すなら空
-    path: Vec<usize>,
-    borrowed_at: Span,
-    what: String,
+    pub(crate) path: Vec<usize>,
+    pub(crate) borrowed_at: Span,
+    pub(crate) what: String,
     /// `ref mut` で借りたか（書き換えられるか）
-    mutable: bool,
+    pub(crate) mutable: bool,
 }
 
 impl Value {
-    fn type_name(&self) -> &'static str {
+    pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Value::Unit => "()",
             Value::Int(..) => "整数",
@@ -152,7 +152,7 @@ impl Value {
     }
 
     /// 値として読むとムーブになるか（own・構造体・コピーできない enum）
-    fn moves(&self) -> bool {
+    pub(crate) fn moves(&self) -> bool {
         match self {
             Value::Array(items, list) => *list || items.iter().any(Value::moves),
             // 取り込んだ値にムーブするものがあればムーブ（なければコピー）
@@ -177,9 +177,9 @@ impl Value {
 
 // ---------------------------------------------------------------- ヒープ
 
-struct Slot {
-    generation: u32,
-    value: Option<Value>,
+pub(crate) struct Slot {
+    pub(crate) generation: u32,
+    pub(crate) value: Option<Value>,
 }
 
 struct Freed {
@@ -187,8 +187,8 @@ struct Freed {
     why: String,
 }
 
-struct Heap {
-    slots: Vec<Slot>,
+pub(crate) struct Heap {
+    pub(crate) slots: Vec<Slot>,
     free_list: Vec<usize>,
     /// (スロット, その世代) がいつ・なぜ解放されたか。古い参照のエラー報告に使う。
     history: HashMap<(usize, u32), Freed>,
@@ -199,7 +199,7 @@ impl Heap {
         Heap { slots: Vec::new(), free_list: Vec::new(), history: HashMap::new() }
     }
 
-    fn alloc(&mut self, v: Value) -> usize {
+    pub(crate) fn alloc(&mut self, v: Value) -> usize {
         if let Some(i) = self.free_list.pop() {
             self.slots[i].value = Some(v);
             i
@@ -300,7 +300,7 @@ enum Flow {
 }
 
 pub struct Interp {
-    heap: Heap,
+    pub(crate) heap: Heap,
     frames: Vec<Frame>,
     fns: HashMap<String, Rc<FnDef>>,
     structs: HashMap<String, Rc<StructDef>>,
@@ -386,7 +386,7 @@ impl Interp {
     // ------------------------------------------------------------ 解放
 
     /// スロットを解放し、世代を進める。中身が own なら連鎖して解放する。
-    fn free(&mut self, slot: usize, span: Span, why: &str) {
+    pub(crate) fn free(&mut self, slot: usize, span: Span, why: &str) {
         let mut work: Vec<(usize, String)> = vec![(slot, why.to_string())];
         while let Some((s, why)) = work.pop() {
             let Some(inner) = self.heap.slots[s].value.take() else {
@@ -429,7 +429,7 @@ impl Interp {
     }
 
     /// 値を捨てる。中にある own は（構造体のフィールドも含めて）すべて解放する。
-    fn release(&mut self, v: Value, span: Span, why: &str) {
+    pub(crate) fn release(&mut self, v: Value, span: Span, why: &str) {
         let mut owns = Vec::new();
         v.collect_owns(&mut owns);
         for s in owns {
@@ -449,7 +449,7 @@ impl Interp {
 
     /// スロットの中身を取り出して、スロットだけ解放する（中の own は解放しない）。
     /// 世代が進むので、このスロットを指していた ref は無効になる
-    fn vacate(&mut self, slot: usize, span: Span, why: &str) -> Value {
+    pub(crate) fn vacate(&mut self, slot: usize, span: Span, why: &str) -> Value {
         let v = self.heap.slots[slot].value.take().expect("live slot");
         let g = self.heap.slots[slot].generation;
         self.heap.slots[slot].generation = g.wrapping_add(1);
@@ -459,7 +459,7 @@ impl Interp {
     }
 
     /// print と埋め込みで出す文字。own と ref は先の中身を出す（ref が無効なら実行時エラー）
-    fn show(&mut self, v: &Value, span: Span, depth: usize) -> R<String> {
+    pub(crate) fn show(&mut self, v: &Value, span: Span, depth: usize) -> R<String> {
         // ref は輪になりうるので、深くなりすぎたら打ち切る
         if depth > 32 {
             return Ok("...".to_string());
@@ -544,7 +544,7 @@ impl Interp {
     }
 
     /// スロットの中の道筋の先にある値
-    fn at(&self, slot: usize, path: &[usize]) -> &Value {
+    pub(crate) fn at(&self, slot: usize, path: &[usize]) -> &Value {
         let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
         for &i in path {
             v = match v {
@@ -557,7 +557,7 @@ impl Interp {
     }
 
     /// 道筋がリストの中を通るか（リストの要素の場所は借りられない）
-    fn through_list(&self, slot: usize, path: &[usize]) -> bool {
+    pub(crate) fn through_list(&self, slot: usize, path: &[usize]) -> bool {
         let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
         for &i in path {
             v = match v {
@@ -569,7 +569,7 @@ impl Interp {
         false
     }
 
-    fn at_mut(&mut self, slot: usize, path: &[usize]) -> &mut Value {
+    pub(crate) fn at_mut(&mut self, slot: usize, path: &[usize]) -> &mut Value {
         let mut v = self.heap.slots[slot].value.as_mut().expect("live slot");
         for &i in path {
             v = match v {
@@ -638,7 +638,7 @@ impl Interp {
 
     /// ポインタの先のスロットを返す。参照が古ければ時系列付きのエラーにする。
     /// `check` が `Elided` なら、静的解析が安全を証明済みなので世代チェックを飛ばす。
-    fn check_ptr(&mut self, p: &Value, use_span: Span, check: Check) -> R<(usize, Vec<usize>)> {
+    pub(crate) fn check_ptr(&mut self, p: &Value, use_span: Span, check: Check) -> R<(usize, Vec<usize>)> {
         match p {
             Value::Own(s) => Ok((*s, Vec::new())),
             Value::Ref(r) => {
@@ -2147,7 +2147,7 @@ fn convert(e: &Expr, v: Value) -> Value {
 }
 
 /// 小数を整数にする（0 の方へ切り捨て）。i128 に入らないものは端に寄せ、NaN は 0
-fn float_to_int(x: f64) -> i128 {
+pub(crate) fn float_to_int(x: f64) -> i128 {
     if x.is_nan() {
         0
     } else {
@@ -2155,7 +2155,7 @@ fn float_to_int(x: f64) -> i128 {
     }
 }
 
-fn describe(e: &Expr) -> String {
+pub(crate) fn describe(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Deref(inner, _) => format!("*{}", describe(inner)),
@@ -2326,7 +2326,7 @@ fn arity_error(name: &str, want: usize, got: usize, span: Span) -> Diagnostic {
         .primary(span, format!("{} 個必要ですが {} 個渡されました", want, got))
 }
 
-fn moved_error(name: &str, moved_at: Span, used_at: Span) -> Diagnostic {
+pub(crate) fn moved_error(name: &str, moved_at: Span, used_at: Span) -> Diagnostic {
     if moved_at == used_at {
         return Diagnostic::new(format!("ムーブ済みの値 `{}` を使いました (use after move)", name))
             .primary(
@@ -2341,7 +2341,7 @@ fn moved_error(name: &str, moved_at: Span, used_at: Span) -> Diagnostic {
         .note("移した後も使いたいなら `ref` で借りてください（例: `f(ref a)`）")
 }
 
-fn as_bool(v: Value, span: Span) -> R<bool> {
+pub(crate) fn as_bool(v: Value, span: Span) -> R<bool> {
     match v {
         Value::Bool(b) => Ok(b),
         other => Err(Diagnostic::new("真偽値が必要です")
@@ -2349,7 +2349,7 @@ fn as_bool(v: Value, span: Span) -> R<bool> {
     }
 }
 
-fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
+pub(crate) fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
     match (op, &l, &r) {
         (BinOp::Add, Value::Str(a), Value::Str(b)) => {
             let s = format!("{}{}", a, b);
