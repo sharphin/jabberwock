@@ -25,6 +25,9 @@ pub enum Ty {
     /// 決して終わらない（return / break / continue で必ず抜ける）。どの型にも合う
     Never,
     Struct(String),
+    Enum(String),
+    /// `Option<T>`（ジェネリクスが入るまでの特別扱い）
+    Option(Box<Ty>),
     Own(Box<Ty>),
     /// bool は `mut`
     Ref(Box<Ty>, bool),
@@ -38,7 +41,8 @@ impl Ty {
             Ty::Str => "str".to_string(),
             Ty::Unit => "値なし".to_string(),
             Ty::Never => "（終わらない）".to_string(),
-            Ty::Struct(n) => n.clone(),
+            Ty::Struct(n) | Ty::Enum(n) => n.clone(),
+            Ty::Option(t) => format!("Option<{}>", t.show()),
             Ty::Own(t) => format!("own {}", t.show()),
             Ty::Ref(t, false) => format!("ref {}", t.show()),
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
@@ -134,6 +138,8 @@ struct FnSig {
 
 struct Checker<'a> {
     structs: HashMap<&'a str, (&'a StructDef, Vec<Ty>)>,
+    /// enum ごとの定義と、種類ごとの中身の型
+    enums: HashMap<&'a str, (&'a EnumDef, Vec<Vec<Ty>>)>,
     fns: HashMap<&'a str, FnSig>,
     scopes: Vec<HashMap<String, VarInfo>>,
     /// 今調べている関数の戻り値の型
@@ -145,6 +151,7 @@ struct Checker<'a> {
 pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
     let mut c = Checker {
         structs: HashMap::new(),
+        enums: HashMap::new(),
         fns: HashMap::new(),
         scopes: Vec::new(),
         ret: Ty::Unit,
@@ -157,12 +164,29 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         }
         c.structs.insert(&s.name, (s, Vec::new()));
     }
+    for en in &prog.enums {
+        if c.structs.contains_key(en.name.as_str()) || c.enums.contains_key(en.name.as_str()) || en.name == "Option" {
+            return Err(Diagnostic::new(format!("型 `{}` が二重に定義されています", en.name))
+                .primary(en.span, "同じ名前の型がすでにある"));
+        }
+        c.enums.insert(&en.name, (en, Vec::new()));
+    }
     for s in &prog.structs {
         let tys = s.field_types.iter().map(|t| c.resolve(t)).collect::<R<Vec<_>>>()?;
         c.structs.get_mut(s.name.as_str()).expect("inserted").1 = tys;
     }
+    for en in &prog.enums {
+        let mut all = Vec::new();
+        for v in &en.variants {
+            all.push(v.fields.iter().map(|(t, _)| c.resolve(t)).collect::<R<Vec<_>>>()?);
+        }
+        c.enums.get_mut(en.name.as_str()).expect("inserted").1 = all;
+    }
     for s in &prog.structs {
-        c.check_finite(s)?;
+        c.check_finite(&s.name, s.span)?;
+    }
+    for en in &prog.enums {
+        c.check_finite(&en.name, en.span)?;
     }
     for f in &prog.fns {
         if BUILTINS.contains(&f.name.as_str()) {
@@ -195,6 +219,7 @@ impl<'a> Checker<'a> {
     fn resolve(&self, t: &TypeExpr) -> R<Ty> {
         Ok(match &t.kind {
             TypeKind::Own(inner) => Ty::Own(Box::new(self.resolve(inner)?)),
+            TypeKind::Option(inner) => Ty::Option(Box::new(self.resolve(inner)?)),
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve(inner)?), *m),
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
@@ -205,6 +230,11 @@ impl<'a> Checker<'a> {
                         .primary(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）だけです"))
                 }
                 _ if self.structs.contains_key(n.as_str()) => Ty::Struct(n.clone()),
+                _ if self.enums.contains_key(n.as_str()) => Ty::Enum(n.clone()),
+                "Option" => {
+                    return Err(Diagnostic::new("Option には中身の型が必要です")
+                        .primary(t.span, "`Option<i64>` のように書いてください"))
+                }
                 _ => {
                     return Err(Diagnostic::new(format!("未定義の型 `{}`", n))
                         .primary(t.span, "この型は定義されていません")
@@ -214,23 +244,210 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// 構造体が自分自身を（own / ref を通さず）じかに含んでいないか。含むと大きさが無限になる
-    fn check_finite(&self, s: &StructDef) -> R<()> {
-        let mut stack = vec![s.name.as_str()];
-        let mut seen: Vec<&str> = Vec::new();
+    /// 構造体や enum が自分自身を（own / ref を通さず）じかに含んでいないか。含むと大きさが無限になる
+    fn check_finite(&self, name: &str, span: Span) -> R<()> {
+        let mut stack = vec![name.to_string()];
+        let mut seen: Vec<String> = Vec::new();
         while let Some(n) = stack.pop() {
-            for t in &self.structs[n].1 {
-                if let Ty::Struct(m) = t {
-                    if m == &s.name {
-                        return Err(Diagnostic::new(format!("構造体 `{}` が自分自身をじかに含んでいます", s.name))
-                            .primary(s.span, "これだと大きさが無限になる")
-                            .note("`own` を通して持ってください（例: `own Node next;`）"));
-                    }
-                    if !seen.contains(&m.as_str()) {
-                        seen.push(m);
-                        stack.push(m);
+            let mut direct = Vec::new();
+            for t in self.contents(&n) {
+                by_value_names(t, &mut direct);
+            }
+            for m in direct {
+                if m == name {
+                    return Err(Diagnostic::new(format!("`{}` が自分自身をじかに含んでいます", name))
+                        .primary(span, "これだと大きさが無限になる")
+                        .note("`own` を通して持ってください（例: `own Node next;`）"));
+                }
+                if !seen.contains(&m) {
+                    seen.push(m.clone());
+                    stack.push(m);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 構造体のフィールド、または enum のすべての種類の中身の型
+    fn contents(&self, name: &str) -> Vec<&Ty> {
+        if let Some((_, tys)) = self.structs.get(name) {
+            return tys.iter().collect();
+        }
+        match self.enums.get(name) {
+            Some((_, vs)) => vs.iter().flatten().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// 値として読んだときにコピーされる型か（own や構造体を中に持ちうるならムーブ）
+    fn copyable(&self, t: &Ty) -> bool {
+        match t {
+            Ty::Int(_) | Ty::Bool | Ty::Str | Ty::Ref(..) | Ty::Unit | Ty::Never => true,
+            Ty::Own(_) | Ty::Struct(_) => false,
+            Ty::Option(inner) => self.copyable(inner),
+            // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
+            Ty::Enum(n) => self.contents(n).iter().all(|t| self.copyable(t)),
+        }
+    }
+
+    /// enum（または Option）の種類の一覧: (名前, 中身の型)
+    fn variants_of(&self, t: &Ty) -> Option<Vec<(String, Vec<Ty>)>> {
+        match t {
+            Ty::Option(inner) => Some(vec![("None".to_string(), Vec::new()), ("Some".to_string(), vec![(**inner).clone()])]),
+            Ty::Enum(n) => {
+                let (def, tys) = &self.enums[n.as_str()];
+                Some(def.variants.iter().zip(tys).map(|(v, t)| (v.name.clone(), t.clone())).collect())
+            }
+            _ => None,
+        }
+    }
+
+    /// `Shape.Circle(5)` / `Some(x)` / `None` の型。`hint` は値を入れる先の型
+    fn variant_expr(&mut self, e: &Expr, hint: Option<&Ty>) -> R<Ty> {
+        let ExprKind::Variant { enum_name, variant, args, copy } = &e.kind else { unreachable!() };
+        let ty = if enum_name == "Option" {
+            let inner_hint = match hint {
+                Some(Ty::Option(t)) => Some((**t).clone()),
+                _ => None,
+            };
+            if variant == "None" {
+                match inner_hint {
+                    Some(t) => Ty::Option(Box::new(t)),
+                    None => {
+                        return Err(Diagnostic::new("None の型が決まりません")
+                            .primary(e.span, "何の Option か分からない")
+                            .note("`let Option<i64> x = None;` のように型を書いてください"))
                     }
                 }
+            } else {
+                if args.len() != 1 {
+                    return Err(arity_error("Some", 1, args.len(), e.span));
+                }
+                let t = match &inner_hint {
+                    Some(want) => {
+                        self.expect(&args[0], want)?;
+                        want.clone()
+                    }
+                    None => self.value(&args[0])?,
+                };
+                Ty::Option(Box::new(t))
+            }
+        } else {
+            let (def, tys) = &self.enums[enum_name.as_str()];
+            let Some(i) = def.variants.iter().position(|v| v.name == *variant) else {
+                let names: Vec<&str> = def.variants.iter().map(|v| v.name.as_str()).collect();
+                return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", enum_name, variant))
+                    .primary(e.span, "この種類は定義されていません")
+                    .note(format!("`{}` の種類: {}", enum_name, names.join(", "))));
+            };
+            let want = tys[i].clone();
+            if args.len() != want.len() {
+                return Err(arity_error(&format!("{}.{}", enum_name, variant), want.len(), args.len(), e.span));
+            }
+            for (a, w) in args.iter().zip(&want) {
+                self.expect(a, w)?;
+            }
+            Ty::Enum(enum_name.clone())
+        };
+        copy.set(self.copyable(&ty));
+        Ok(ty)
+    }
+
+    /// enum（または Option）の match。全部の種類を書いたかも調べる
+    fn match_enum(
+        &mut self,
+        e: &Expr,
+        st: &Ty,
+        arms: &[MatchArm],
+        default: Option<&Block>,
+        want_value: bool,
+        hint: Option<&Ty>,
+    ) -> R<Ty> {
+        // `match x`（値）か `match ref x` / ref の変数（借りる）か
+        let (ety, by_ref) = match st {
+            Ty::Ref(t, m) => ((**t).clone(), Some(*m)),
+            Ty::Own(t) => ((**t).clone(), None),
+            t => (t.clone(), None),
+        };
+        let variants = self.variants_of(&ety).expect("caller checked");
+        let mut covered: Vec<String> = Vec::new();
+        let mut tys = Vec::new();
+        let mut hint = hint.cloned();
+        for arm in arms {
+            self.scopes.push(HashMap::new());
+            let r = self.match_arm(&ety, &variants, by_ref, arm, &mut covered);
+            let r = r.and_then(|_| self.block(&arm.body, want_value, hint.as_ref()));
+            self.scopes.pop();
+            let t = r?;
+            // `case Some(x) -> Some(x); case None -> None;` の None の型を前の case から決める
+            if hint.is_none() && matches!(t, Ty::Option(_)) {
+                hint = Some(t.clone());
+            }
+            tys.push((t, &arm.body));
+        }
+        if let Some(d) = default {
+            tys.push((self.block(d, want_value, hint.as_ref())?, d));
+        } else {
+            let missing: Vec<&str> =
+                variants.iter().map(|(n, _)| n.as_str()).filter(|n| !covered.iter().any(|c| c == n)).collect();
+            if !missing.is_empty() {
+                return Err(Diagnostic::new(format!("match で {} の場合が書かれていません", missing.join("・")))
+                    .primary(e.span, format!("`{}` の種類をすべて書く必要がある", ety.show()))
+                    .note("case を足すか、`default -> ...` でまとめてください"));
+            }
+        }
+        self.join(tys, None, want_value, "match")
+    }
+
+    /// enum の case 1 つ分。受け取る名前を今のスコープに置く
+    fn match_arm(
+        &mut self,
+        ety: &Ty,
+        variants: &[(String, Vec<Ty>)],
+        by_ref: Option<bool>,
+        arm: &MatchArm,
+        covered: &mut Vec<String>,
+    ) -> R<()> {
+        let several = arm.pats.len() > 1;
+        for (pat, span) in &arm.pats {
+            let Pat::Variant(name, binds) = pat else {
+                return Err(Diagnostic::new("enum の match の case には種類の名前を書きます")
+                    .primary(*span, format!("`{}` の種類ではない", ety.show())));
+            };
+            let Some((_, fields)) = variants.iter().find(|(n, _)| n == name) else {
+                let names: Vec<&str> = variants.iter().map(|(n, _)| n.as_str()).collect();
+                return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", ety.show(), name))
+                    .primary(*span, "この種類はない")
+                    .note(format!("種類: {}", names.join(", "))));
+            };
+            if binds.len() != fields.len() {
+                return Err(Diagnostic::new(format!("`{}` の中身の数が違います", name))
+                    .primary(*span, format!("中身は {} 個ですが、{} 個の名前が書かれています", fields.len(), binds.len()))
+                    .note("受け取らない中身には `_` と書いてください"));
+            }
+            covered.push(name.clone());
+            for ((b, bspan), ft) in binds.iter().zip(fields) {
+                if b == "_" {
+                    continue;
+                }
+                if several {
+                    return Err(Diagnostic::new("種類をまとめた case では中身を受け取れません")
+                        .primary(*bspan, "ここ")
+                        .note("case を分けるか、`_` にしてください"));
+                }
+                let t = match by_ref {
+                    None => ft.clone(),
+                    Some(_) if self.copyable(ft) => ft.clone(),
+                    Some(m) => match ft {
+                        Ty::Own(inner) => Ty::Ref(inner.clone(), m),
+                        _ => {
+                            return Err(Diagnostic::new("借りて match するとき、この中身は受け取れません")
+                                .primary(*bspan, format!("中身は `{}`（own を通さずに持つ値）", ft.show()))
+                                .note("中身を `own` で持たせるか、`_` で受け取らないでください"))
+                        }
+                    },
+                };
+                self.declare(b, VarInfo { ty: t, mutable: false, decl: *bspan });
             }
         }
         Ok(())
@@ -537,17 +754,32 @@ impl<'a> Checker<'a> {
             }
             ExprKind::If { cond, then, els } => {
                 self.expect(cond, &Ty::Bool)?;
-                let mut tys = vec![(self.block(then, want_value, hint)?, then)];
+                let a = self.block(then, want_value, hint)?;
+                // `if c { Some(1) } else { None }` の None の型を then から決める
+                let else_hint = match (hint, &a) {
+                    (None, Ty::Option(_)) => Some(&a),
+                    _ => hint,
+                };
+                let mut tys = vec![(a.clone(), then)];
                 if let Some(els) = els {
-                    tys.push((self.block(els, want_value, hint)?, els));
+                    tys.push((self.block(els, want_value, else_hint)?, els));
                 }
                 let missing = if els.is_none() { Some(e.span) } else { None };
                 self.join(tys, missing, want_value, "if")
             }
+            ExprKind::Variant { .. } => self.variant_expr(e, hint),
             ExprKind::Match { scrut, arms, default } => {
                 let st = self.expr(scrut)?;
+                let enum_like = |t: &Ty| matches!(t, Ty::Enum(_) | Ty::Option(_));
+                let subject = match &st {
+                    Ty::Ref(t, _) | Ty::Own(t) => &**t,
+                    t => t,
+                };
+                if enum_like(subject) {
+                    return self.match_enum(e, &st, arms, default.as_ref(), want_value, hint);
+                }
                 if !matches!(st, Ty::Int(_) | Ty::Bool | Ty::Str) {
-                    return Err(Diagnostic::new("match できるのは、今のところ整数・真偽値・文字列だけです")
+                    return Err(Diagnostic::new("match できるのは、今のところ整数・真偽値・文字列・enum だけです")
                         .primary(scrut.span, format!("ここは `{}` です", st.show())));
                 }
                 let mut tys = Vec::new();
@@ -563,6 +795,11 @@ impl<'a> Checker<'a> {
                             (Pat::Int(_), _) => I64,
                             (Pat::Bool(_), _) => Ty::Bool,
                             (Pat::Str(_), _) => Ty::Str,
+                            (Pat::Variant(n, _), _) => {
+                                return Err(Diagnostic::new("enum ではない値に、種類の case は使えません")
+                                    .label(scrut.span, format!("これは `{}`", st.show()))
+                                    .primary(*span, format!("`{}` は種類の名前として読まれた", n)))
+                            }
                         };
                         if pt != st {
                             return Err(Diagnostic::new("case の値と match する値の型が合いません")
@@ -892,6 +1129,15 @@ fn tail_expr(b: &Block) -> Option<&Expr> {
     match b.stmts.last() {
         Some(Stmt::Expr(e)) if b.tail => Some(e),
         _ => None,
+    }
+}
+
+/// 型の中に（own / ref を通さず）じかに入っている構造体・enum の名前
+fn by_value_names(t: &Ty, out: &mut Vec<String>) {
+    match t {
+        Ty::Struct(n) | Ty::Enum(n) => out.push(n.clone()),
+        Ty::Option(inner) => by_value_names(inner, out),
+        _ => {}
     }
 }
 

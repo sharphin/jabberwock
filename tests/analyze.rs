@@ -275,3 +275,29 @@ fn all_examples_behave_the_same_with_and_without_elision() {
         same_with_and_without_elision(&example(name));
     }
 }
+
+#[test]
+fn a_name_taken_in_a_case_shadows_the_outer_variable() {
+    // case の `r` は外の `r`（生きている ref）とは別の変数。外の事実を使って検査を消してはいけない
+    dangling(
+        "
+enum E {
+    A(ref i64 r);
+}
+
+fn ref i64 stale() {
+    let x = own 1;
+    return ref x;
+}
+
+fn main() {
+    let a = own 1;
+    let r = ref a;
+    print(*r);
+    let e = E.A(stale());
+    match e {
+        case A(r) -> print(*r);
+    }
+}",
+    );
+}

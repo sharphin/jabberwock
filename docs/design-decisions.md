@@ -120,7 +120,7 @@ let y = 5;                          // 普段は省略して推論（i64）
 - 配列・添字、文字型、モジュール・import・公開範囲、`const` はこれから（`as` は整数の変換として決定済み）。
 
 実装状況: `mut`・`ref mut`・`;`・複合代入・`++` / `--` は実装済み（`let mut x` / `let i64 mut x` の両方。違反は実行前のエラー）。
-Option・enum・Result・`?`・メソッド・文字列の埋め込み・ジェネリクスは未着手。
+Option と enum は実装済み（下の「enum と Option」）。Result・`?`・メソッド・文字列の埋め込み・ジェネリクスは未着手。
 
 ## 細部（2026-10-23 に決定）
 
@@ -139,6 +139,40 @@ Option・enum・Result・`?`・メソッド・文字列の埋め込み・ジェ�
   - 同時に何個 `ref mut` があってもよい（Rust のような「1 個だけ」の制限はない。安全は世代付き ref で守る）。
 - **C. メソッドは Java 風で `this` は書かなくてよい**（暗黙）。`this` を書き換えるメソッドは `fn mut 名前()` のように印をつける（仮）。未実装。
 - **D. `++` / `--` は文だけ。** `print(i++)` のように式の中には書けない（前置・後置の違いで迷わないため）。
+
+## enum と Option（2026-10-23 に決定・実装）
+
+```
+enum Shape {
+    Circle(i64 r);
+    Rect(i64 w, i64 h);
+    Empty;
+}
+let s = Shape.Circle(5);
+let i64 area = match s {
+    case Circle(r) -> 3 * r * r;
+    case Rect(w, h) -> w * h;
+    case Empty -> 0;
+};
+fn Option<i64> find(i64 n) { ... }
+let x = Some(5);
+let Option<i64> y = None;
+```
+
+- 定義は構造体と同じ形。種類の中身は「型 名前」（引数と同じ）、種類の区切りは `;`。
+- **値は `Shape.Circle(5)`（Java 風の `.`）。** Option だけは前に何もつけず `Some(x)` / `None`。
+- **match の case は種類の名前だけ**（`case Circle(r)`）。受け取らない中身は `_`。
+  - 種類をまとめた case（`case Circle(_), Rect(_, _) ->`）では中身を受け取れない。
+- **enum の match は、全部の種類を書かないとエラー**（文としての match でも）。default でまとめてもよい。
+  新しい種類を足したときの書き忘れを実行前に見つけるため。
+- 中身に own や構造体を持ちうる enum は、値として読むとムーブ（構造体と同じ）。中身が数・bool・str・ref だけならコピー。
+- `match x` は値の match（x がムーブなら x は使えなくなり、中身は受け取った名前へ移る）。
+  `match ref x` / `match ref mut x`（x は own か ref）は借りるだけ。中身の own は `ref T` として受け取り、数などはコピーで受け取る。
+  own を通さずに持つ構造体などの中身は、借りた match では受け取れない（`_` にする）。
+- **Option は `Option<T>`。** ジェネリクスが入るまで特別扱い。入ったら普通の enum に置き換える。
+  - `None` の型は、入れる先の型から決める（`let Option<i64> x = None;`、戻り値、引数、if の then 側など）。決まらなければエラー。
+- enum どうしの `==` はまだない（match を使う）。
+- 構造体と同じく、自分自身をじかに含む enum はエラー（own を通す）。
 
 ## 名前
 

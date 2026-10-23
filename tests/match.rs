@@ -128,7 +128,10 @@ fn case_type_mismatch_and_unsupported_values() {
     assert!(d.title.contains("型が合いません"), "{}", d.title);
     let d = err_in_main("let p = own 1;\nmatch p {\n default -> print(1);\n}");
     assert!(d.title.contains("match できるのは"), "{}", d.title);
+    // 名前は enum の種類として読む。変数の値とは比べない
     let d = err_in_main("let x = 1;\nmatch 1 {\n case x -> print(1);\n}");
+    assert!(d.title.contains("enum ではない値"), "{}", d.title);
+    let d = err_in_main("match 1 {\n case (1) -> print(1);\n}");
     assert!(d.title.contains("case に書けるのは"), "{}", d.title);
 }
 

@@ -33,6 +33,8 @@ pub enum Value {
     Ref(RefVal),
     /// 構造体。フィールドは定義の順。中に own を持ちうるので、値として読むとムーブになる。
     Struct(Rc<StructDef>, Vec<Value>),
+    /// enum の値（Option も）。`copy` は型検査が決めた「値として読むとコピーか」（false ならムーブ）
+    Enum { variant: Rc<str>, fields: Vec<Value>, copy: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +57,7 @@ impl Value {
             Value::Own(_) => "own",
             Value::Ref(_) => "ref",
             Value::Struct(..) => "構造体",
+            Value::Enum { .. } => "enum",
         }
     }
 
@@ -62,16 +65,21 @@ impl Value {
     fn has_own(&self) -> bool {
         match self {
             Value::Own(_) => true,
-            Value::Struct(_, fields) => fields.iter().any(Value::has_own),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } => fields.iter().any(Value::has_own),
             _ => false,
         }
+    }
+
+    /// 値として読むとムーブになるか（own・構造体・コピーできない enum）
+    fn moves(&self) -> bool {
+        matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. })
     }
 
     /// 中にある own のスロットをすべて集める
     fn collect_owns(&self, out: &mut Vec<usize>) {
         match self {
             Value::Own(s) => out.push(*s),
-            Value::Struct(_, fields) => fields.iter().for_each(|f| f.collect_owns(out)),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } => fields.iter().for_each(|f| f.collect_owns(out)),
             _ => {}
         }
     }
@@ -88,6 +96,11 @@ impl Value {
                 let parts: Vec<String> =
                     def.fields.iter().zip(fields).map(|(n, v)| format!("{}: {}", n, v.show())).collect();
                 format!("{} {{ {} }}", def.name, parts.join(", "))
+            }
+            Value::Enum { variant, fields, .. } if fields.is_empty() => variant.to_string(),
+            Value::Enum { variant, fields, .. } => {
+                let parts: Vec<String> = fields.iter().map(Value::show).collect();
+                format!("{}({})", variant, parts.join(", "))
             }
         }
     }
@@ -393,15 +406,20 @@ impl Interp {
                 break;
             }
         }
+        self.leave_scope(&result, block.end);
+        Ok((result, value))
+    }
+
+    /// 一番内側のスコープを抜け、その変数を解放する。`end` は普通に抜けたときの位置
+    fn leave_scope(&mut self, result: &Flow, end: Span) {
         let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
-        let (span, how) = match &result {
+        let (span, how) = match result {
             Flow::Return(_, sp) => (*sp, "関数から return した"),
             Flow::Break(sp) => (*sp, "break でループを抜けた"),
             Flow::Continue(sp) => (*sp, "continue で次の周回へ進んだ"),
-            Flow::Normal => (block.end, "スコープを抜けた"),
+            Flow::Normal => (end, "スコープを抜けた"),
         };
         self.drop_scope(scope, span, how);
-        Ok((result, value))
     }
 
     /// 式を評価する。文として使う if は中の return / break / continue を外へ伝える。
@@ -422,6 +440,9 @@ impl Interp {
             }
             ExprKind::Match { scrut, arms, default } => {
                 let v = self.eval(scrut)?;
+                if let Some(r) = self.match_enum(v.clone(), scrut, arms, default.as_ref(), want_value) {
+                    return r;
+                }
                 match select_arm(&v, scrut.span, arms)?.or(default.as_ref()) {
                     Some(blk) => self.exec_block_value(blk, want_value),
                     None => Ok((Flow::Normal, Value::Unit)),
@@ -429,6 +450,97 @@ impl Interp {
             }
             _ => Ok((Flow::Normal, self.eval(e)?)),
         }
+    }
+
+    /// enum の match。enum でなければ None（ふつうの match として続ける）。
+    /// 値の match なら中身は受け取る名前へ移る。借りた match（ref）なら、中身の own は ref として受け取る
+    fn match_enum(
+        &mut self,
+        v: Value,
+        scrut: &Expr,
+        arms: &[MatchArm],
+        default: Option<&Block>,
+        want_value: bool,
+    ) -> Option<R<(Flow, Value)>> {
+        let (subject, by_ref) = match v {
+            Value::Ref(r) => {
+                let slot = match self.check_ptr(&Value::Ref(r.clone()), scrut.span, Check::Required) {
+                    Ok(s) => s,
+                    Err(d) => return Some(Err(d)),
+                };
+                let inner = self.heap.slots[slot].value.clone().expect("live slot");
+                if !matches!(inner, Value::Enum { .. }) {
+                    return None;
+                }
+                (inner, Some(r))
+            }
+            Value::Own(slot) => {
+                let inner = self.heap.slots[slot].value.clone().expect("live slot");
+                if !matches!(inner, Value::Enum { .. }) {
+                    return None;
+                }
+                // 中身を取り出して、入れ物だけ解放する
+                self.heap.slots[slot].value = Some(Value::Unit);
+                self.free(slot, scrut.span, "match で中身を取り出したので、入れ物が解放された");
+                (inner, None)
+            }
+            v @ Value::Enum { .. } => (v, None),
+            _ => return None,
+        };
+        let Value::Enum { variant, fields, .. } = subject else { unreachable!() };
+        let hit = arms.iter().find_map(|a| {
+            a.pats.iter().find_map(|(p, _)| match p {
+                Pat::Variant(n, binds) if **n == *variant => Some((a, binds)),
+                _ => None,
+            })
+        });
+        let Some((arm, binds)) = hit else {
+            // default（型検査が、全部の種類を書いたか default があることを確かめている）
+            if by_ref.is_none() {
+                self.release(Value::Enum { variant, fields, copy: false }, scrut.span, "match の default で使われずに捨てられた");
+            }
+            return Some(match default {
+                Some(blk) => self.exec_block_value(blk, want_value),
+                None => Ok((Flow::Normal, Value::Unit)),
+            });
+        };
+        self.frames.last_mut().expect("frame").scopes.push(Vec::new());
+        for (f, (b, bspan)) in fields.into_iter().zip(binds) {
+            let val = match &by_ref {
+                None => f,
+                Some(r) => match f {
+                    // 中身の own は、借りた ref として受け取る
+                    Value::Own(s) => Value::Ref(RefVal {
+                        slot: s,
+                        generation: self.heap.slots[s].generation,
+                        borrowed_at: *bspan,
+                        what: format!("{} の中身 {}", r.what, b),
+                        mutable: r.mutable,
+                    }),
+                    other => other,
+                },
+            };
+            if b == "_" {
+                if by_ref.is_none() {
+                    self.release(val, *bspan, "match で受け取られずに捨てられた");
+                }
+                continue;
+            }
+            self.declare(b, val, false, *bspan);
+        }
+        let r = self.exec_block_value(&arm.body, want_value);
+        let flow = match &r {
+            Ok((f, _)) => f,
+            Err(_) => &Flow::Normal,
+        };
+        let flow = match flow {
+            Flow::Return(_, sp) => Flow::Return(Value::Unit, *sp),
+            Flow::Break(sp) => Flow::Break(*sp),
+            Flow::Continue(sp) => Flow::Continue(*sp),
+            Flow::Normal => Flow::Normal,
+        };
+        self.leave_scope(&flow, arm.body.end);
+        Some(r)
     }
 
     /// ループ本体を1周実行し、ループを続けるかどうかを返す
@@ -723,6 +835,13 @@ impl Interp {
     fn eval_kind(&mut self, e: &Expr) -> R<Value> {
         match &e.kind {
             ExprKind::Int(n) => Ok(Value::Int(*n, IntTy::I64)),
+            ExprKind::Variant { variant, args, copy, .. } => {
+                let mut fields = Vec::new();
+                for a in args {
+                    fields.push(self.eval(a)?);
+                }
+                Ok(Value::Enum { variant: Rc::from(variant.as_str()), fields, copy: copy.get() })
+            }
             ExprKind::Cast(inner, ty) => match self.eval(inner)? {
                 Value::Int(n, _) => {
                     let t = match &ty.kind {
@@ -741,7 +860,7 @@ impl Interp {
                 let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
                 match var.state.clone() {
                     // own を読む = ムーブ。元の変数は使えなくなる。
-                    VarState::Live(v @ (Value::Own(_) | Value::Struct(..))) => {
+                    VarState::Live(v) if v.moves() => {
                         var.state = VarState::Moved(e.span);
                         Ok(v)
                     }
@@ -785,7 +904,7 @@ impl Interp {
             }
             ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if v.has_own() || matches!(v, Value::Struct(..)) {
+                if v.has_own() || v.moves() {
                     return Err(Diagnostic::new(format!("ポインタの先にある {} は取り出せません", v.type_name()))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`*p = ...` で置き換えてください"));
@@ -794,7 +913,7 @@ impl Interp {
             }
             ExprKind::Field(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if v.has_own() || matches!(v, Value::Struct(..)) {
+                if v.has_own() || v.moves() {
                     return Err(Diagnostic::new(format!("フィールドにある {} は取り出せません", v.type_name()))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`p.f = ...` で置き換えてください"));

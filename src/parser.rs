@@ -15,11 +15,20 @@ pub struct Parser {
     loop_depth: usize,
     /// 値として使う if / match の中か（return / 外への break を禁止する）
     in_value_if: bool,
+    /// ファイル中で定義されている enum の名前。`Name.Variant` を enum の値として読むため
+    enum_names: Vec<String>,
 }
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false }
+        let enum_names = toks
+            .windows(2)
+            .filter_map(|w| match (&w[0].tok, &w[1].tok) {
+                (Tok::Enum, Tok::Ident(n)) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names }
     }
 
     fn peek(&self) -> &Tok {
@@ -89,15 +98,69 @@ impl Parser {
     pub fn parse_program(&mut self) -> R<Program> {
         let mut fns = Vec::new();
         let mut structs = Vec::new();
+        let mut enums = Vec::new();
         loop {
             self.skip_semis();
             match self.peek() {
                 Tok::Eof => break,
                 Tok::Struct => structs.push(self.parse_struct()?),
+                Tok::Enum => enums.push(self.parse_enum()?),
                 _ => fns.push(self.parse_fn()?),
             }
         }
-        Ok(Program { structs, fns })
+        Ok(Program { structs, enums, fns })
+    }
+
+    /// `enum Shape { Circle(i64 r); Rect(i64 w, i64 h); Empty; }`
+    fn parse_enum(&mut self) -> R<EnumDef> {
+        let start = self.expect(Tok::Enum, "`enum`")?;
+        let name = self.expect_ident("enum の名前")?;
+        let span = start.join(self.prev_span());
+        self.expect(Tok::LBrace, "`{`")?;
+        let mut variants: Vec<VariantDef> = Vec::new();
+        loop {
+            self.skip_semis();
+            if self.eat(Tok::RBrace) {
+                break;
+            }
+            let vspan = self.span();
+            let vname = self.expect_ident("種類の名前")?;
+            if variants.iter().any(|v| v.name == vname) {
+                return Err(Diagnostic::new(format!("種類 `{}` が二重に定義されています", vname))
+                    .primary(vspan, "同じ名前の種類がすでにある"));
+            }
+            let mut fields: Vec<(TypeExpr, String)> = Vec::new();
+            if self.eat(Tok::LParen) {
+                while *self.peek() != Tok::RParen {
+                    if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Comma | Tok::RParen) {
+                        return Err(Diagnostic::new("中身には型と名前が必要です")
+                            .primary(self.span(), "型か名前がない")
+                            .note("`Circle(i64 r)` のように「型 名前」で書いてください"));
+                    }
+                    let ty = self.parse_type()?;
+                    let fspan = self.span();
+                    let f = self.expect_ident("中身の名前")?;
+                    if fields.iter().any(|(_, n)| *n == f) {
+                        return Err(Diagnostic::new(format!("中身の名前 `{}` が二回あります", f))
+                            .primary(fspan, "同じ名前がすでにある"));
+                    }
+                    fields.push((ty, f));
+                    if !self.eat(Tok::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Tok::RParen, "`)`")?;
+            }
+            variants.push(VariantDef { name: vname, fields, span: vspan });
+            if *self.peek() == Tok::Comma {
+                return Err(Diagnostic::new("構文エラー: 種類の区切りは `;` です")
+                    .primary(self.span(), "ここを `;` にしてください"));
+            }
+            if *self.peek() != Tok::RBrace {
+                self.expect(Tok::Semi, "`;`（種類の終わり）")?;
+            }
+        }
+        Ok(EnumDef { name, variants, span })
     }
 
     fn parse_struct(&mut self) -> R<StructDef> {
@@ -350,7 +413,7 @@ impl Parser {
                     loop {
                         let (pat, span) = self.parse_pat()?;
                         let seen = arms.iter().flat_map(|a| a.pats.iter()).chain(pats.iter());
-                        if let Some((_, first)) = seen.into_iter().find(|(p, _)| *p == pat) {
+                        if let Some((_, first)) = seen.into_iter().find(|(p, _)| p.same_case(&pat)) {
                             return Err(Diagnostic::new("同じ値の case が二回あります")
                                 .label(*first, "最初はここ")
                                 .primary(span, "ここは決して選ばれない"));
@@ -374,7 +437,9 @@ impl Parser {
                 _ => return Err(self.unexpected("`case` か `default` か `}`")),
             }
         }
-        if as_value && default.is_none() && !covers_both_bools(&arms) {
+        // enum の場合は、全部の種類を書いたかを型検査が調べる
+        let has_variants = arms.iter().any(|a| a.pats.iter().any(|(p, _)| matches!(p, Pat::Variant(..))));
+        if as_value && default.is_none() && !covers_both_bools(&arms) && !has_variants {
             return Err(Diagnostic::new("値として使う match には default が必要です")
                 .primary(start.join(scrut.span), "どの case にも当てはまらないときの値がない")
                 .note("`default -> 値` を足してください"));
@@ -390,6 +455,22 @@ impl Parser {
             Tok::Str(s) => Pat::Str(s),
             Tok::True => Pat::Bool(true),
             Tok::False => Pat::Bool(false),
+            Tok::Ident(name) => {
+                // `Circle(r, _)` / `Empty` / `Some(x)` / `None`
+                self.bump();
+                let mut binds = Vec::new();
+                if self.eat(Tok::LParen) {
+                    while *self.peek() != Tok::RParen {
+                        let sp = self.span();
+                        binds.push((self.expect_ident("中身を受け取る名前")?, sp));
+                        if !self.eat(Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(Tok::RParen, "`)`")?;
+                }
+                return Ok((Pat::Variant(name, binds), start.join(self.prev_span())));
+            }
             Tok::Minus => {
                 self.bump();
                 match self.peek().clone() {
@@ -398,7 +479,7 @@ impl Parser {
                 }
             }
             _ => {
-                return Err(Diagnostic::new("case に書けるのは、今のところ整数・真偽値・文字列の値だけです")
+                return Err(Diagnostic::new("case に書けるのは、今のところ整数・真偽値・文字列の値と enum の種類だけです")
                     .primary(start, format!("ここに {} があります", self.peek().describe())))
             }
         };
@@ -522,7 +603,18 @@ impl Parser {
             }
             Tok::Ident(name) => {
                 self.bump();
-                TypeKind::Name(name)
+                if *self.peek() == Tok::Lt {
+                    self.bump();
+                    let inner = self.parse_type()?;
+                    self.expect(Tok::Gt, "`>`")?;
+                    if name != "Option" {
+                        return Err(Diagnostic::new("ジェネリクスはまだ使えません")
+                            .primary(start.join(self.prev_span()), "`<...>` をつけられるのは今のところ Option だけです"));
+                    }
+                    TypeKind::Option(Box::new(inner))
+                } else {
+                    TypeKind::Name(name)
+                }
             }
             _ => return Err(self.unexpected("型")),
         };
@@ -644,6 +736,27 @@ impl Parser {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Bool(false), span))
             }
+            Tok::Ident(name) if name == "None" => {
+                let span = self.bump().span;
+                Ok(self.variant("Option", "None", Vec::new(), span))
+            }
+            Tok::Ident(name) if name == "Some" && *self.peek2() == Tok::LParen => {
+                let start = self.bump().span;
+                let (args, end) = self.parse_args()?;
+                Ok(self.variant("Option", "Some", args, start.join(end)))
+            }
+            Tok::Ident(name) if self.enum_names.contains(&name) && *self.peek2() == Tok::Dot => {
+                // `Shape.Circle(5)` / `Shape.Empty`
+                let start = self.bump().span;
+                self.bump();
+                let variant = self.expect_ident("種類の名前")?;
+                let (args, end) = if *self.peek() == Tok::LParen {
+                    self.parse_args()?
+                } else {
+                    (Vec::new(), self.prev_span())
+                };
+                Ok(self.variant(&name, &variant, args, start.join(end)))
+            }
             Tok::Ident(name) => {
                 let start = self.bump().span;
                 if *self.peek() == Tok::LParen {
@@ -673,6 +786,30 @@ impl Parser {
             }
             _ => Err(self.unexpected("式")),
         }
+    }
+
+    /// `( 式, 式 )` を読む。閉じ括弧の位置も返す
+    fn parse_args(&mut self) -> R<(Vec<Expr>, Span)> {
+        self.expect(Tok::LParen, "`(`")?;
+        let mut args = Vec::new();
+        while *self.peek() != Tok::RParen {
+            args.push(self.with_struct_lit(true, |p| p.parse_expr())?);
+            if !self.eat(Tok::Comma) {
+                break;
+            }
+        }
+        let end = self.expect(Tok::RParen, "`)`")?;
+        Ok((args, end))
+    }
+
+    fn variant(&self, enum_name: &str, variant: &str, args: Vec<Expr>, span: Span) -> Expr {
+        let kind = ExprKind::Variant {
+            enum_name: enum_name.to_string(),
+            variant: variant.to_string(),
+            args,
+            copy: Cell::new(false),
+        };
+        Expr::new(kind, span)
     }
 
     fn parse_struct_lit(&mut self, name: String, start: Span) -> R<Expr> {

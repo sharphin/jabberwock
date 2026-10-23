@@ -12,6 +12,8 @@ pub struct TypeExpr {
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     Name(String),
+    /// `Option<T>`（ジェネリクスが入るまでの特別扱い）
+    Option(Box<TypeExpr>),
     Own(Box<TypeExpr>),
     /// bool は `mut`
     Ref(Box<TypeExpr>, bool),
@@ -191,6 +193,10 @@ pub enum ExprKind {
     Var(String),
     /// `e as T`。整数の型を明示的に変える（範囲の外は一周する）
     Cast(Box<Expr>, TypeExpr),
+    /// `Shape.Circle(5)` / `Shape.Empty` / `Some(x)` / `None`。enum の値を作る。
+    /// Option の enum 名は "Option"。`Cell<bool>` は型検査が決める「値として読むとコピーか」
+    /// （中に own や構造体を持ちうる enum は、構造体と同じく読むとムーブ）
+    Variant { enum_name: String, variant: String, args: Vec<Expr>, copy: Cell<bool> },
     /// `own e` : ヒープに値を置き、唯一の所有者を返す
     Own(Box<Expr>),
     /// `ref p` / `ref mut p` : 所有者（変数か `*p` か `p.f`）を世代付き参照として借りる。
@@ -226,6 +232,18 @@ pub enum Pat {
     Int(i128),
     Bool(bool),
     Str(String),
+    /// `Circle(r, _)` / `None`。enum の種類と、中身を受け取る名前（`_` は受け取らない）
+    Variant(String, Vec<(String, Span)>),
+}
+
+impl Pat {
+    /// 同じ場合を指すか（受け取る名前は問わない）
+    pub fn same_case(&self, other: &Pat) -> bool {
+        match (self, other) {
+            (Pat::Variant(a, _), Pat::Variant(b, _)) => a == b,
+            _ => self == other,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -294,8 +312,31 @@ impl StructDef {
     }
 }
 
+/// `enum Shape { Circle(i64 r); Rect(i64 w, i64 h); Empty; }`
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<VariantDef>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariantDef {
+    pub name: String,
+    /// 中身（型 名前）
+    pub fields: Vec<(TypeExpr, String)>,
+    pub span: Span,
+}
+
+impl EnumDef {
+    pub fn variant(&self, name: &str) -> Option<&VariantDef> {
+        self.variants.iter().find(|v| v.name == name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
     pub fns: Vec<FnDef>,
 }

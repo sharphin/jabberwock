@@ -341,7 +341,41 @@ impl<'a> FnAnalyzer<'a> {
             }
             ExprKind::Match { scrut, arms, default } => {
                 self.expr(scrut, false);
-                self.branches(arms.iter().map(|a| &a.body), default.as_ref());
+                // case で受け取る名前は、その case の中だけの新しい変数（何も分からない）
+                let before = self.facts.clone();
+                let mut acc: Option<Facts> = None;
+                for a in arms {
+                    self.facts = before.clone();
+                    self.scopes.push(Vec::new());
+                    for (p, _) in &a.pats {
+                        if let Pat::Variant(_, binds) = p {
+                            for (b, _) in binds {
+                                self.declare(b, None);
+                            }
+                        }
+                    }
+                    self.block(&a.body);
+                    for (_, id) in self.scopes.pop().expect("scope") {
+                        self.kill(id);
+                    }
+                    acc = meet_opt(acc, &self.facts);
+                }
+                if let Some(d) = default {
+                    self.facts = before.clone();
+                    self.block(d);
+                    acc = meet_opt(acc, &self.facts);
+                }
+                // default がなければ、どの case にも当たらない道も合流に入れる（安全側）
+                if default.is_none() {
+                    acc = meet_opt(acc, &before);
+                }
+                self.facts = acc.unwrap_or(before);
+                None
+            }
+            ExprKind::Variant { args, .. } => {
+                for a in args {
+                    self.expr(a, false);
+                }
                 None
             }
             ExprKind::Unary(_, inner) | ExprKind::Cast(inner, _) => {
@@ -493,7 +527,7 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
             expr_checks(l, f);
             expr_checks(r, f);
         }
-        ExprKind::Call(_, args) => {
+        ExprKind::Call(_, args) | ExprKind::Variant { args, .. } => {
             for a in args {
                 expr_checks(a, f);
             }

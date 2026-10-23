@@ -28,6 +28,7 @@
 | `tests/control.rs` | loop / while / for / break / continue / if 式 |
 | `tests/match.rs` | match（Java の switch の矢印形式） |
 | `tests/types.rs` | 型検査 |
+| `tests/enums.rs` | enum と Option・match での取り出し・`match ref` |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -53,6 +54,12 @@
   interp は `eval` / `eval_flow` の最後にその型へ変換する（`convert`）。印をつけるのは `types.rs` の `convert` / `set_tree` だけ。
 - 整数のあふれは一周する。定数の式（`is_const_tree`）の結果が型に入らないときだけ `types.rs` が警告を出す（そのまま書いた数ならエラー）。
   警告は `Diagnostic::warning` で、実行は止めない（`Outcome.warnings`、CLI は実行前に表示）。
+- enum の値は `Value::Enum { variant, fields, copy }`。`copy` は型検査が `ExprKind::Variant` の `Cell<bool>` に書く
+  （own や構造体を持ちうる型ならムーブ。`Value::moves`）。Option は enum 名 "Option" の特別扱い。
+- enum の match は interp の `match_enum`。値の match は中身を受け取る名前へ移し、借りた match（scrut が ref）は
+  中身の own を ref にして渡す。全部の種類を書いたかは `types.rs` の `match_enum` が調べる。
+  case で受け取る名前は、analyze でも新しい変数として宣言する（外の同名の変数の事実を使わない）。
+- パーサはファイル中の `enum 名前` を先に集め、`名前.種類` を enum の値として読む（`enum_names`）。
 - ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
 
 ## 設計の決めごと
