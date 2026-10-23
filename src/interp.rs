@@ -2063,6 +2063,35 @@ impl Interp {
         }
     }
 
+    /// `fn take` のメソッドの呼び出し。receiver を先に値として読み（ムーブ）、ふつうの関数と同じく呼ぶ
+    #[inline(never)]
+    fn eval_take_method(
+        &mut self,
+        recv: &Expr,
+        name: &str,
+        args: &[Expr],
+        owner: &RefCell<MethodTarget>,
+        span: Span,
+    ) -> R<Value> {
+        let this = self.eval(recv)?;
+        let sname = match (&owner.borrow().enum_name, &this) {
+            (Some(n), _) => n.clone(),
+            (None, Value::Struct(def, _)) => def.name.clone(),
+            (None, other) => return Err(not_a_struct(other, recv.span)),
+        };
+        let vals = match self.eval_all(args) {
+            Ok(v) => v,
+            Err(d) => {
+                self.discard(vec![this], recv.span);
+                return Err(d);
+            }
+        };
+        let f = self.fns.get(&format!("{}.{}", sname, name)).cloned().expect("type checked");
+        let mut all = vec![this];
+        all.extend(vals);
+        self.call_fn(&f, all, span)
+    }
+
     /// `recv.name(args)`。`this` には recv を借りた ref を渡す。
     /// recv が構造体の値なら、呼び出しのあいだだけヒープへ移して借り、終わったら元の場所へ戻す
     /// （戻すときにそのスロットは解放されるので、`this` を借りた ref が残っていてもダングリングとして見つかる）
@@ -2071,9 +2100,12 @@ impl Interp {
         recv: &Expr,
         name: &str,
         args: &[Expr],
-        owner: &RefCell<Option<String>>,
+        owner: &RefCell<MethodTarget>,
         span: Span,
     ) -> R<Value> {
+        if owner.borrow().take {
+            return self.eval_take_method(recv, name, args, owner, span);
+        }
         // 一時的な値は先に評価する（ムーブ）。変数などの場所は、引数を評価してから借りる
         let temp = if is_place(recv) { None } else { Some(self.eval(recv)?) };
         let vals = match self.eval_all(args) {
@@ -2284,7 +2316,7 @@ impl Interp {
             return Ok(result);
         }
         // enum の値は型の名前を持たないので、型検査が書いた名前を使う
-        let enum_name = owner.borrow().clone();
+        let enum_name = owner.borrow().enum_name.clone();
         let sname = match &rv {
             _ if enum_name.is_some() => {
                 if matches!(rv, Value::Own(_) | Value::Ref(_)) {

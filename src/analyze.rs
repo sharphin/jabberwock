@@ -520,10 +520,11 @@ impl<'a> FnAnalyzer<'a> {
                 }
                 None
             }
-            ExprKind::MethodCall(recv, name, args, _) => {
+            ExprKind::MethodCall(recv, name, args, target) => {
                 // インタプリタと同じ順: 一時的な値の receiver は先に評価（ムーブ）、
-                // 変数などの場所なら引数のあとで借りる
-                let temp = if is_place(recv) { None } else { Some(self.expr(recv, false)) };
+                // 変数などの場所なら引数のあとで借りる。`fn take` のメソッドは receiver をいつも先に読む（ムーブ）
+                let take = target.borrow().take;
+                let temp = if is_place(recv) && !take { None } else { Some(self.expr(recv, false)) };
                 let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
                 // `this` が呼び出しのあいだ生きているか。一時的な own はこの呼び出しが終わるまで解放されない
                 let this_safe = match temp {

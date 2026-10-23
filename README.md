@@ -131,7 +131,8 @@ let Option<i64> y = None;            // None だけでは型が決まらない�
 - 値は `Shape.Circle(2)` のように作る。Option は `Some(x)` と `None`。
 - 中身に own や構造体を持ちうる enum は、構造体と同じく値として読むとムーブ。中身が数などだけならコピー。
 - `match ref s`（`s` は own か ref）は借りるだけ。中身の own は ref として受け取る。
-- enum にもメソッドを書ける（構造体と同じ決まり）。Option / Result には `is_some()` などがある。
+- enum にもメソッドを書ける（構造体と同じ決まり）。this を値で受け取るメソッドは `fn take`。
+  Option / Result には `is_some()`・`unwrap_or(d)`・`ok_or(e)`・`map(f)` などがある。
 - Option は最初からある普通の enum（`enum Option<T> { Some(T value); None; }`）。
 
 ## メソッド

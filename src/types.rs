@@ -730,7 +730,14 @@ impl<'a> Checker<'a> {
                 if got[i].is_some() || order(a) != pass {
                     continue;
                 }
-                let hint = if has_unbound(p, tparams, &map) { None } else { Some(subst(p, &map)) };
+                let hint = match p {
+                    _ if !has_unbound(p, tparams, &map) => Some(subst(p, &map)),
+                    // クロージャの引数の型だけ決まっていれば、それを渡す（戻り値の型は本体から決まる。`Never` は「分からない」）
+                    Ty::Fn(ps, _) if matches!(a.kind, ExprKind::Lambda(_)) && !ps.iter().any(|x| has_unbound(x, tparams, &map)) => {
+                        Some(Ty::Fn(ps.iter().map(|x| subst(x, &map)).collect(), Box::new(Ty::Never)))
+                    }
+                    _ => None,
+                };
                 let t = self.expr_h(a, hint.as_ref())?;
                 if t == Ty::Unit {
                     return Err(Diagnostic::new("値のない式です").primary(a.span, "これは値を返さない"));
@@ -2207,7 +2214,9 @@ impl<'a> Checker<'a> {
             let Some(sig) = self.fns.get(full.as_str()).filter(|s| s.method) else {
                 return Err(format!("`{}` にメソッド `{}` がありません", sname, im.name));
             };
-            let Ty::Ref(_, smut) = &sig.params[0] else { unreachable!("this is a ref") };
+            let Ty::Ref(_, smut) = &sig.params[0] else {
+                return Err(format!("`{}.{}` は this を値で受け取る（fn take）ので、interface のメソッドになれません", sname, im.name));
+            };
             let params: Vec<Ty> = sig.params[1..].iter().map(|p| subst(p, &map)).collect();
             let shape_ok = sig.tparams.len() == self.structs[sname.as_str()].0.tparams.len()
                 && params == im.params
@@ -2401,7 +2410,7 @@ impl<'a> Checker<'a> {
         recv: &Expr,
         name: &str,
         args: &[Expr],
-        owner: &RefCell<Option<String>>,
+        owner: &RefCell<MethodTarget>,
         span: Span,
         hint: Option<&Ty>,
     ) -> R<Ty> {
@@ -2451,7 +2460,7 @@ impl<'a> Checker<'a> {
         let (Ty::Struct(sname, _) | Ty::Enum(sname, _)) = &st else { unreachable!() };
         if matches!(st, Ty::Enum(..)) {
             // interp は enum の値から型の名前が分からないので、ここで書いておく
-            *owner.borrow_mut() = Some(sname.clone());
+            owner.borrow_mut().enum_name = Some(sname.clone());
         }
         let full = format!("{}.{}", sname, name);
         let Some(sig) = self.fns.get(full.as_str()) else {
@@ -2475,8 +2484,20 @@ impl<'a> Checker<'a> {
             return Err(arity_error(&format!("{}.{}", sname, name), sig.params.len() - 1, args.len(), span));
         }
         let (tparams, params, ret) = (sig.tparams.clone(), sig.params.clone(), sig.ret.clone());
-        let Ty::Ref(this_ty, mutable) = &params[0] else { unreachable!("this is a ref") };
-        if *mutable {
+        let (this_ty, mutable) = match &params[0] {
+            Ty::Ref(t, m) => (&**t, *m),
+            // `fn take`: receiver を値として渡す（ムーブ）。own / ref の先からは取り出せない
+            t => {
+                if !matches!(rt, Ty::Struct(..) | Ty::Enum(..)) {
+                    return Err(Diagnostic::new(format!("`{}` は this を値で受け取るメソッドです", full))
+                        .primary(recv.span, format!("これは `{}` なので、中身を取り出せない", rt.show()))
+                        .note("own や ref の先の値には呼べません（構造体のフィールドから値を取り出せないのと同じ）"));
+                }
+                owner.borrow_mut().take = true;
+                (t, false)
+            }
+        };
+        if mutable {
             // 書き換えるメソッド（`fn mut`）は、`ref mut` で借りられる相手にだけ呼べる
             let a = if is_place(recv) { self.access(recv)? } else { Access::Write };
             a.through(&rt, self.origin(recv), describe(recv))

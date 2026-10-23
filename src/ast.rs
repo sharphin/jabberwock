@@ -199,6 +199,15 @@ pub enum Check {
     Required,
 }
 
+/// 型検査が決めた、メソッド呼び出しの相手
+#[derive(Debug, Clone, Default)]
+pub struct MethodTarget {
+    /// receiver が enum なら、その enum の名前（enum の値は型の名前を持たないので、interp がメソッドを探すのに使う）
+    pub enum_name: Option<String>,
+    /// `fn take` のメソッド: receiver を値として読む（ムーブする）
+    pub take: bool,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     Int(i128),
@@ -250,8 +259,8 @@ pub enum ExprKind {
     Lambda(Rc<Lambda>),
     /// `p.name(args)` : メソッド呼び出し。メソッドは `構造体名.name` という名前の関数で、
     /// 最初の引数 `this` に p を借りて渡す（p が own / ref ならその先、構造体の値なら一時的にヒープへ移して借りる）
-    /// 4 つめ: receiver が enum なら、その enum の名前（型検査が書く。interp がメソッドを探すのに使う）
-    MethodCall(Box<Expr>, String, Vec<Expr>, RefCell<Option<String>>),
+    /// 4 つめ: 型検査が書く、呼ぶメソッドのこと（interp / analyze が使う）
+    MethodCall(Box<Expr>, String, Vec<Expr>, RefCell<MethodTarget>),
 }
 
 #[derive(Debug, Clone)]

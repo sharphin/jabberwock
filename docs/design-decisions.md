@@ -332,10 +332,20 @@ let x = pick(true, 1, 2);
 - `Shape.x(...)` は x が種類でなければ静的メソッド。どちらでもなければ「種類 x はありません」のエラー。
 - Option / Result に `is_some` / `is_none` / `is_ok` / `is_err` を足した（prelude に ward で書いたメソッド）。
 - まだしないこと:
-  - this を値で受け取るメソッド（`o.unwrap_or(d)`・`o.ok_or(e)` をメソッドにするのに要る。今は `ok_or(o, e)` の関数）。
+  - this を値で受け取るメソッド（→ 下の `fn take` で対応した）。
   - enum を interface に当てはめること（enum の値は実行時に型の名前を持たないため。必要なら名前を持たせる）。
 - 作り: enum の値は型の名前を持たないので、型検査が `MethodCall` の 4 つめに enum の名前を書き、interp はそれでメソッドを探す。
   IR / 実行ファイルは型が分かっているので、構造体と同じ形の呼び出しになる。
+
+## this を値で受け取るメソッド `fn take`（2026-10-23。オーナーの依頼「1はあったほうが便利」）
+
+- 書き方は `fn take 戻り値の型 名前(...)`。`fn mut`（借りて書き換える）と並ぶ印で、「this を受け取って使い切る」意味。
+  `take` は予約語にしない（`fn take(...)` は take という名前のメソッド）。
+- 呼ぶと receiver をムーブする（関数の引数に渡すのと同じ）。own / ref の先からは呼べない（取り出せないので型検査のエラー）。
+- これで Option / Result に `unwrap_or`・`ok_or`・`map`・`ok` を足した（prelude に ward で書いたメソッド）。
+- interface のメソッドには当てはまらない（interface のメソッドは借りて呼ぶため）。
+- 作り: 型検査が `MethodTarget.take` を立て、interp（`eval_take_method`）・analyze・lower は receiver を先に値として読む。
+  関数の引数のクロージャの型の引数（`map<U>` の U）は、引数の型だけ渡して本体から決める（`instantiate`）。
 
 ## 複数行の文字列 `"""..."""`（2026-10-23。オーナーがカードで B を選択。試し書き 2 回目の #7）
 

@@ -57,11 +57,17 @@ pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String 
 /// `Option.Some(x)` などの短い書き方
 const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n\
     fn bool is_some() { match this { case Some(_) -> true; case None -> false; } }\n\
-    fn bool is_none() { match this { case Some(_) -> false; case None -> true; } }\n}\n\
+    fn bool is_none() { match this { case Some(_) -> false; case None -> true; } }\n\
+    fn take T unwrap_or(T _d) { match this { case Some(_v) -> _v; case None -> _d; } }\n\
+    fn take Result<T, E> ok_or<E>(E _e) { match this { case Some(_v) -> Ok(_v); case None -> Err(_e); } }\n\
+    fn take Option<U> map<U>(fn U(T) _f) { match this { case Some(_v) -> Some(_f(_v)); case None -> None; } }\n}\n\
 enum Result<T, E> {\n    Ok(T value);\n    Err(E error);\n\
     fn bool is_ok() { match this { case Ok(_) -> true; case Err(_) -> false; } }\n\
-    fn bool is_err() { match this { case Ok(_) -> false; case Err(_) -> true; } }\n}\n\
-fn Result<T, E> ok_or<T, E>(Option<T> o, E e) {\n    match o {\n        case Some(v) -> Ok(v);\n        case None -> Err(e);\n    }\n}\n";
+    fn bool is_err() { match this { case Ok(_) -> false; case Err(_) -> true; } }\n\
+    fn take T unwrap_or(T _d) { match this { case Ok(_v) -> _v; case Err(_) -> _d; } }\n\
+    fn take Option<T> ok() { match this { case Ok(_v) -> Some(_v); case Err(_) -> None; } }\n\
+    fn take Result<U, E> map<U>(fn U(T) _f) { match this { case Ok(_v) -> Ok(_f(_v)); case Err(_e) -> Err(_e); } }\n}\n\
+fn Result<T, E> ok_or<T, E>(Option<T> _o, E _e) {\n    match _o {\n        case Some(_v) -> Ok(_v);\n        case None -> Err(_e);\n    }\n}\n";
 
 /// 字句解析と構文解析をして（`use` したモジュールも読む）、最初からある定義（`Option`）を前に足す。
 /// 読んだファイルも返す（エラーの表示に使う）

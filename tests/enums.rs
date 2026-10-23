@@ -444,3 +444,100 @@ enum E {
 fn main() { let mut e = E.A(own 1); e.f(); }");
     assert_eq!(d.title, "無効になった参照を使いました (dangling reference)");
 }
+
+// ---------------------------------------------------------------- this を値で受け取るメソッド（fn take）
+
+#[test]
+fn take_methods() {
+    let src = "
+struct Tag {
+    str name;
+    i64 n;
+
+    fn take str label() { \"{name}:{n}\" }
+}
+
+enum Shape {
+    Circle(f64 r);
+    Rect(f64 w, f64 h);
+
+    fn take Shape scaled(f64 k) {
+        match this {
+            case Circle(r) -> Shape.Circle(r * k);
+            case Rect(w, h) -> Shape.Rect(w * k, h * k);
+        }
+    }
+    fn f64 area() { match this { case Circle(r) -> 3.0 * r * r; case Rect(w, h) -> w * h; } }
+}
+
+enum Slot {
+    Full(own i64 v);
+    Empty;
+
+    fn take i64 open() { match this { case Full(v) -> *v; case Empty -> 0; } }
+}
+
+fn main() {
+    let t = Tag { name: \"a\", n: 1 };
+    print(t.label());
+    print(Shape.Rect(1.0, 2.0).scaled(2.0).scaled(3.0).area());
+    let c = Shape.Circle(1.0);
+    let d = c.scaled(2.0);
+    print(d.area(), c.area());
+    let s = Slot.Full(own 7);
+    print(s.open(), Slot.Empty.open());
+}";
+    assert_eq!(ok(src), "a:1\n72.0\n12.0 3.0\n7 0\n");
+}
+
+#[test]
+fn option_and_result_take_methods() {
+    let src = "
+struct P { str name; }
+fn Result<i64, str> half(i64 n) { if n % 2 == 0 { Ok(n / 2) } else { Err(\"odd\") } }
+fn Result<i64, str> parse(str s) {
+    let n = s.to_int().ok_or(\"数ではない\")?;
+    Ok(n * 10)
+}
+fn i64 d(i64 x) { x }
+fn main() {
+    print(\"12\".to_int().unwrap_or(0), \"x\".to_int().unwrap_or(d(-1)));
+    print(parse(\"4\"), parse(\"q\"));
+    print(half(4).unwrap_or(0), half(3).unwrap_or(0), half(3).ok(), half(8).ok());
+    print(Some(3).map((x) -> x * 2), half(6).map((x) -> \"v{x}\"));
+    let Option<own P> op = Some(own P { name: \"a\" });
+    let p = op.unwrap_or(own P { name: \"b\" });
+    let Option<own P> none = None;
+    let q = none.unwrap_or(own P { name: \"c\" });
+    print(p.name, q.name, Some(own P { name: \"z\" }).map((pp) -> pp.name));
+}";
+    assert_eq!(ok(src), "12 -1\nOk(40) Err(数ではない)\n2 0 None Some(4)\nSome(6) Ok(v3)\na c Some(z)\n");
+}
+
+#[test]
+fn take_method_errors() {
+    let take = "enum E { A(own i64 x); B; fn take i64 get() { match this { case A(x) -> *x; case B -> 0; } } }\n";
+    // 値を渡すのでムーブする
+    let o = run_source(&format!("{take}fn main() {{ let e = E.A(own 3); print(e.get()); print(e.get()); }}"), false);
+    assert_eq!(o.error.expect("moved").title, "ムーブ済みの値 `e` を使いました (use after move)");
+    // ムーブした値を借りた ref は無効になる
+    let o = run_source(
+        &format!("{take}fn main() {{ let e = E.A(own 3); let r = ref e; print(e.get()); match r {{ case A(x) -> print(*x); case B -> {{}} }} }}"),
+        false,
+    );
+    assert_eq!(o.error.expect("dangling").title, "無効になった参照を使いました (dangling reference)");
+    // own / ref の先からは呼べない
+    let d = err(&format!("{take}fn main() {{ let e = own E.A(own 3); print(e.get()); }}"));
+    assert_eq!(d.title, "`E.get` は this を値で受け取るメソッドです");
+    let d = err("enum E { A; fn take i64 get() { 1 } fn i64 peek() { get() } } fn main() {}");
+    assert_eq!(d.title, "`E.get` は this を値で受け取るメソッドです");
+    // interface のメソッドにはなれない
+    let d = err("interface G { fn i64 get(); }
+struct S { i64 v; fn take i64 get() { v } }
+fn i64 need<T: G>(ref T t) { t.get() }
+fn main() { let s = S { v: 1 }; print(need(s)); }");
+    assert_eq!(d.title, "`S` は条件 `G` を満たしません");
+    // `fn take(...)` は take という名前のメソッド
+    let src = "struct S { i64 v; fn i64 take() { v } } fn main() { let s = S { v: 1 }; print(s.take()); }";
+    assert_eq!(ok(src), "1\n");
+}

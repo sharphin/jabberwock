@@ -322,6 +322,14 @@ impl Parser {
         let is_static = self.eat(Tok::Static);
         let start = self.expect(Tok::Fn, "`fn`")?;
         let mutable = !is_static && self.eat(Tok::Mut);
+        // `fn take`: this を値で受け取る（呼び出し元からムーブする）。`fn take(...)` は take という名前のメソッド
+        let take = !is_static
+            && !mutable
+            && matches!(self.peek(), Tok::Ident(t) if t == "take")
+            && *self.peek2() != Tok::LParen;
+        if take {
+            self.bump();
+        }
         let mut m = self.parse_fn_rest(start, true)?;
         if methods.iter().chain(statics.iter()).any(|(x, _)| x.name == m.name) {
             return Err(Diagnostic::new(format!("メソッド `{}` が二重に定義されています", m.name))
@@ -350,7 +358,7 @@ impl Parser {
             },
             span: m.span,
         };
-        let this_ty = TypeExpr { kind: TypeKind::Ref(Box::new(sty), mutable), span: m.span };
+        let this_ty = if take { sty } else { TypeExpr { kind: TypeKind::Ref(Box::new(sty), mutable), span: m.span } };
         m.params.insert(0, Param { ty: this_ty, name: "this".to_string(), mutable: false, span: m.span });
         m.tparams = tparams.iter().cloned().chain(m.tparams).collect();
         m.bounds = vec![Vec::new(); tparams.len()].into_iter().chain(m.bounds).collect();
@@ -1174,7 +1182,7 @@ impl Parser {
                 let (args, end) = self.parse_args()?;
                 lambdas_borrow(&args);
                 let span = e.span.join(end);
-                e = Expr::new(ExprKind::MethodCall(Box::new(e), name, args, RefCell::new(None)), span);
+                e = Expr::new(ExprKind::MethodCall(Box::new(e), name, args, RefCell::default()), span);
                 continue;
             }
             let span = e.span.join(fspan);
@@ -1597,7 +1605,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
                 bind_this(a, ctx, scopes);
             }
             let (n, args) = (n.clone(), std::mem::take(args));
-            e.kind = ExprKind::MethodCall(this(e.span), n, args, RefCell::new(None));
+            e.kind = ExprKind::MethodCall(this(e.span), n, args, RefCell::default());
         }
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
         ExprKind::Cast(i, _)

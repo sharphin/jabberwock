@@ -1473,7 +1473,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Ty::Own(x) | Ty::Ref(x, _) => ((**x).clone(), true),
             t => (t.clone(), false),
         };
-        let temp = if is_place(recv) { None } else { Some(self.expr(recv)?) };
+        // `fn take` のメソッドは receiver を値として先に読む（ムーブ。interp の `eval_take_method`）
+        let take = matches!(&e.kind, ExprKind::MethodCall(_, _, _, t) if t.borrow().take);
+        let temp = if is_place(recv) && !take { None } else { Some(self.expr(recv)?) };
         let mut vals = Vec::new();
         for a in args {
             vals.push(self.expr(a)?);
@@ -1517,6 +1519,12 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 for (p, a) in tparams.unwrap_or_default().iter().zip(&sargs) {
                     targs.entry(p.clone()).or_insert_with(|| a.clone());
                 }
+                if take {
+                    let f = self.calls.index(&full, &targs)?;
+                    let mut ops = vec![temp.expect("read first")];
+                    ops.append(&mut vals);
+                    return Ok(self.temp_of(ty, Rvalue::Call(f, ops, sp), sp));
+                }
                 if temp.is_none() && self.through_list(recv) {
                     return Err("リストの中の値のメソッド".to_string());
                 }
@@ -1542,7 +1550,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 for sn in snames {
                     let full = format!("{}.{}", sn, name);
                     let Some(def) = self.calls.defs.get(full.as_str()).copied() else { continue };
-                    if !matches!(def.params.first(), Some(p) if p.name == "this") {
+                    // `fn take` のメソッドは interface に当てはまらない（types の `satisfies`）
+                    if !matches!(def.params.first(), Some(p) if p.name == "this" && matches!(p.ty.kind, TypeKind::Ref(..))) {
                         continue;
                     }
                     if !def.tparams.is_empty() {

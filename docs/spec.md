@@ -435,7 +435,23 @@ let Option<i64> y = None;
 
 - 種類の中身は「型 名前」。値は `型名.種類(中身)`。
 - Option の値は `Some(x)` と `None`。`None` の型は入れる先の型から決める（決まらなければエラー）。
-- Option には `is_some()` / `is_none()`、Result には `is_ok()` / `is_err()` のメソッドがある（bool を返す。中身は動かさない）。
+- Option と Result には次のメソッドがある。
+
+| メソッド | 結果 | 動き |
+|---|---|---|
+| `o.is_some()` / `o.is_none()` | `bool` | 中身は動かさない |
+| `o.unwrap_or(d)` | `T` | `Some(x)` なら x、`None` なら d。o はムーブ |
+| `o.ok_or(e)` | `Result<T, E>` | `Some(x)` → `Ok(x)`、`None` → `Err(e)`。o はムーブ |
+| `o.map(f)` | `Option<U>` | `Some(x)` → `Some(f(x))`。o はムーブ |
+| `r.is_ok()` / `r.is_err()` | `bool` | 中身は動かさない |
+| `r.unwrap_or(d)` | `T` | `Ok(x)` なら x、`Err` なら d。r はムーブ |
+| `r.ok()` | `Option<T>` | `Ok(x)` → `Some(x)`、`Err` → `None`。r はムーブ |
+| `r.map(f)` | `Result<U, E>` | `Ok(x)` → `Ok(f(x))`。r はムーブ |
+
+  ```
+  let n = "12".to_int().unwrap_or(0);
+  let m = s.to_int().ok_or("数ではない")?;
+  ```
 - 中身が数・bool・str・ref だけの enum は、値として読むとコピー。own や構造体を持ちうるならムーブ。
 - enum どうしの `==` はない（match を使う）。
 
@@ -476,8 +492,8 @@ fn Result<i64, str> calc(i64 a, i64 b, i64 c) {
 ```
 
 - 例外はない。失敗するかもしれない関数は `Result<T, E>` を返す。
-- `ok_or(o, e)` は Option を Result にする（`Some(x)` → `Ok(x)`、`None` → `Err(e)`）。Result を返す関数の中で Option に `?` を使いたいときに:
-  `let n = ok_or(s.to_int(), "数ではない")?;`
+- `o.ok_or(e)` は Option を Result にする（`Some(x)` → `Ok(x)`、`None` → `Err(e)`）。Result を返す関数の中で Option に `?` を使いたいときに:
+  `let n = s.to_int().ok_or("数ではない")?;`（関数の形 `ok_or(o, e)` も使える）
   `Result` は最初から `enum Result<T, E> { Ok(T value); Err(E error); }` として定義されている。`Ok(x)` / `Err(e)` は短い書き方。
 - `e?` は、e が `Ok(x)` なら `x`。`Err(e)` なら、関数からその `Err(e)` を返す。
   - 使えるのは Result を返す関数の中だけ。Err の型は関数の Err の型と同じでなければならない（変換はしない）。
@@ -562,6 +578,27 @@ print(p.len2());
   - enum にはフィールドがないので、中身は `match this` で取り出す。`this = ...` とは書けない（`*this = ...`）。
   - `Shape.名前(...)` は、名前が種類なら enum の値、そうでなければ静的メソッドの呼び出し。
   - enum は interface に当てはめられない（interface は構造体だけ）。
+- **this を値で受け取るメソッド**は `fn take` と書く（構造体にも enum にも書ける）。呼ぶと receiver はムーブする（コピーできる値ならコピー）。
+
+  ```
+  enum Slot {
+      Full(own Item item);
+      Empty;
+      fn take Option<own Item> open() {     // 中身の own を取り出して返せる
+          match this {
+              case Full(item) -> Some(item);
+              case Empty -> None;
+          }
+      }
+  }
+  let item = slot.open();                  // slot はもう使えない
+  ```
+
+  - `this` は値（`Slot`）なので、`match this` は値の match になり、中身をムーブして受け取れる。
+  - own / ref の先にある値には呼べない（`p.f` から値を取り出せないのと同じ）。ふつうのメソッドの中から this に呼ぶこともできない。
+  - 構造体の `fn take` でも、フィールドの own を取り出すことはできない（今までどおり）。
+  - `fn take` のメソッドは interface のメソッドにはなれない。
+  - `fn take(...)` と書くと、take という名前のふつうのメソッドになる。
 
 ### 8.6 interface と型の引数の条件
 

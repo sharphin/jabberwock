@@ -122,7 +122,9 @@
   enum の値は型の名前を持たないので、型検査が `MethodCall` の 4 つめ（`RefCell<Option<String>>`）に enum の名前を書き、
   interp の `eval_method` はそれで `Enum.名前` を探す。`Shape.x(...)` は x が種類でなければ静的メソッド（パーサの `enum_variants`。
   モジュールの enum は `ModuleInfo.variants`）。enum は interface に当てはめられない（`satisfies`）。
-  Option / Result の `is_some` などは `lib.rs` の `PRELUDE` に ward で書いたメソッド。
+  Option / Result の `is_some` などは `lib.rs` の `PRELUDE` に ward で書いたメソッド（prelude の変数名は `_v` など、利用者の関数名とぶつからない名前にする）。
+  `fn take` のメソッドは this が値（`ref` でない型）。型検査が `MethodTarget.take` を立て（receiver は own / ref でない値だけ）、
+  interp の `eval_take_method`・analyze・lower は receiver を **引数より先に** 値として読む（ムーブ）。interface には当てはまらない。
 
 - interface と条件: 型検査だけの話（interp は値の構造体名でメソッドを探すので何もしない）。`FnDef.bounds` が型の引数ごとの条件。
   `types.rs` の `satisfies` が「構造体のメソッドが interface の形とそろうか」を調べ、`check_bounds` で呼び出しの場所で確かめる。
