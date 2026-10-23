@@ -211,8 +211,8 @@ fn option_errors() {
     assert!(e("let Option<i64> x = Some(\"a\");").title.contains("型が合いません"));
     assert!(e("let Option<i64> x = None;\nprint(x + 1);").title.contains("型が合わない演算"));
     assert!(e("let Option<i64> x = None;\nmatch x {\n case Some(v) -> print(v);\n}").title.contains("None の場合が書かれていません"));
-    assert!(e("let Option x = None;").title.contains("中身の型が必要"));
-    assert!(e("let Vec<i64> x = None;").title.contains("ジェネリクスはまだ"));
+    assert!(e("let Option x = None;").title.contains("型の引数が必要"));
+    assert!(e("let Vec<i64> x = None;").title.contains("未定義の型"));
 }
 
 #[test]

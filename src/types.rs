@@ -24,10 +24,11 @@ pub enum Ty {
     Unit,
     /// 決して終わらない（return / break / continue で必ず抜ける）。どの型にも合う
     Never,
-    Struct(String),
-    Enum(String),
-    /// `Option<T>`（ジェネリクスが入るまでの特別扱い）
-    Option(Box<Ty>),
+    /// 構造体・enum。2 つ目は型の引数（`Pair<i64>` の `i64`）
+    Struct(String, Vec<Ty>),
+    Enum(String, Vec<Ty>),
+    /// 型の引数（`fn T max<T>` の中の `T`）。中身が何かは分からない
+    Param(String),
     Own(Box<Ty>),
     /// bool は `mut`
     Ref(Box<Ty>, bool),
@@ -41,8 +42,12 @@ impl Ty {
             Ty::Str => "str".to_string(),
             Ty::Unit => "値なし".to_string(),
             Ty::Never => "（終わらない）".to_string(),
-            Ty::Struct(n) | Ty::Enum(n) => n.clone(),
-            Ty::Option(t) => format!("Option<{}>", t.show()),
+            Ty::Struct(n, args) | Ty::Enum(n, args) if args.is_empty() => n.clone(),
+            Ty::Struct(n, args) | Ty::Enum(n, args) => {
+                let a: Vec<String> = args.iter().map(Ty::show).collect();
+                format!("{}<{}>", n, a.join(", "))
+            }
+            Ty::Param(n) => n.clone(),
             Ty::Own(t) => format!("own {}", t.show()),
             Ty::Ref(t, false) => format!("ref {}", t.show()),
             Ty::Ref(t, true) => format!("ref mut {}", t.show()),
@@ -79,6 +84,66 @@ fn mismatch(want: &Ty, got: &Ty, span: Span) -> Diagnostic {
         return d.note(format!("値が欠けるかもしれない変換は `as` で明示してください（例: `x as {}`）", w.name()));
     }
     d
+}
+
+/// 型の引数を具体的な型に置き換える（決まっていないものはそのまま）
+fn subst(t: &Ty, map: &HashMap<String, Ty>) -> Ty {
+    match t {
+        Ty::Param(p) => map.get(p).cloned().unwrap_or_else(|| t.clone()),
+        Ty::Struct(n, args) => Ty::Struct(n.clone(), args.iter().map(|a| subst(a, map)).collect()),
+        Ty::Enum(n, args) => Ty::Enum(n.clone(), args.iter().map(|a| subst(a, map)).collect()),
+        Ty::Own(x) => Ty::Own(Box::new(subst(x, map))),
+        Ty::Ref(x, m) => Ty::Ref(Box::new(subst(x, map)), *m),
+        _ => t.clone(),
+    }
+}
+
+fn contains_param(t: &Ty) -> bool {
+    match t {
+        Ty::Param(_) => true,
+        Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_param),
+        Ty::Own(x) | Ty::Ref(x, _) => contains_param(x),
+        _ => false,
+    }
+}
+
+/// `pattern` の中の型の引数（`tparams`）が、まだ決まっていないものを含むか
+fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> bool {
+    match pattern {
+        Ty::Param(p) => tparams.contains(p) && !map.contains_key(p),
+        Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|a| has_unbound(a, tparams, map)),
+        Ty::Own(x) | Ty::Ref(x, _) => has_unbound(x, tparams, map),
+        _ => false,
+    }
+}
+
+/// 型の形を見比べて、型の引数が何かを決める（`T` と `i64` なら T = i64）。
+/// 合わないところは放っておく（あとで型の食い違いとして見つかる）。
+/// 整数どうしは、欠けずにそろえられる広い方にする（`max(a_u8, b_i64)` の T は i64）
+fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String, Ty>) {
+    match (pattern, actual) {
+        (_, Ty::Never) | (_, Ty::Unit) => {}
+        (Ty::Param(p), _) if tparams.contains(p) => match map.get(p) {
+            None => {
+                map.insert(p.clone(), actual.clone());
+            }
+            Some(Ty::Int(a)) => {
+                if let Ty::Int(b) = actual {
+                    if let Some(c) = IntTy::common(*a, *b) {
+                        map.insert(p.clone(), Ty::Int(c));
+                    }
+                }
+            }
+            Some(_) => {}
+        },
+        (Ty::Struct(n, xs), Ty::Struct(m, ys)) | (Ty::Enum(n, xs), Ty::Enum(m, ys)) if n == m => {
+            for (x, y) in xs.iter().zip(ys) {
+                unify(x, y, tparams, map);
+            }
+        }
+        (Ty::Own(x), Ty::Own(y)) | (Ty::Ref(x, _), Ty::Ref(y, _)) => unify(x, y, tparams, map),
+        _ => {}
+    }
 }
 
 /// 整数の値を、型 `want` の場所で使えるようにする（実行時に変換する印をつける）
@@ -132,6 +197,7 @@ impl Access {
 }
 
 struct FnSig {
+    tparams: Vec<String>,
     params: Vec<Ty>,
     ret: Ty,
 }
@@ -144,6 +210,8 @@ struct Checker<'a> {
     scopes: Vec<HashMap<String, VarInfo>>,
     /// 今調べている関数の戻り値の型
     ret: Ty,
+    /// 今いる定義（関数・構造体・enum）の型の引数
+    tparams: Vec<String>,
     warnings: Vec<Diagnostic>,
 }
 
@@ -155,6 +223,7 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         fns: HashMap::new(),
         scopes: Vec::new(),
         ret: Ty::Unit,
+        tparams: Vec::new(),
         warnings: Vec::new(),
     };
     for s in &prog.structs {
@@ -165,17 +234,19 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         c.structs.insert(&s.name, (s, Vec::new()));
     }
     for en in &prog.enums {
-        if c.structs.contains_key(en.name.as_str()) || c.enums.contains_key(en.name.as_str()) || en.name == "Option" {
+        if c.structs.contains_key(en.name.as_str()) || c.enums.contains_key(en.name.as_str()) {
             return Err(Diagnostic::new(format!("型 `{}` が二重に定義されています", en.name))
                 .primary(en.span, "同じ名前の型がすでにある"));
         }
         c.enums.insert(&en.name, (en, Vec::new()));
     }
     for s in &prog.structs {
+        c.tparams = s.tparams.clone();
         let tys = s.field_types.iter().map(|t| c.resolve(t)).collect::<R<Vec<_>>>()?;
         c.structs.get_mut(s.name.as_str()).expect("inserted").1 = tys;
     }
     for en in &prog.enums {
+        c.tparams = en.tparams.clone();
         let mut all = Vec::new();
         for v in &en.variants {
             all.push(v.fields.iter().map(|(t, _)| c.resolve(t)).collect::<R<Vec<_>>>()?);
@@ -202,12 +273,13 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
                 .primary(f.span, "ここ")
                 .note("`fn main() { ... }` と書いてください"));
         }
+        c.tparams = f.tparams.clone();
         let params = f.params.iter().map(|p| c.resolve(&p.ty)).collect::<R<Vec<_>>>()?;
         let ret = match &f.ret {
             Some(t) => c.resolve(t)?,
             None => Ty::Unit,
         };
-        c.fns.insert(&f.name, FnSig { params, ret });
+        c.fns.insert(&f.name, FnSig { tparams: f.tparams.clone(), params, ret });
     }
     for f in &prog.fns {
         c.check_fn(f)?;
@@ -219,7 +291,26 @@ impl<'a> Checker<'a> {
     fn resolve(&self, t: &TypeExpr) -> R<Ty> {
         Ok(match &t.kind {
             TypeKind::Own(inner) => Ty::Own(Box::new(self.resolve(inner)?)),
-            TypeKind::Option(inner) => Ty::Option(Box::new(self.resolve(inner)?)),
+            TypeKind::App(n, args) => {
+                let want = match (self.structs.get(n.as_str()), self.enums.get(n.as_str())) {
+                    (Some((d, _)), _) => d.tparams.len(),
+                    (_, Some((d, _))) => d.tparams.len(),
+                    _ => {
+                        return Err(Diagnostic::new(format!("未定義の型 `{}`", n))
+                            .primary(t.span, "この型は定義されていません"))
+                    }
+                };
+                if args.len() != want {
+                    return Err(Diagnostic::new(format!("`{}` の型の引数の数が違います", n))
+                        .primary(t.span, format!("{} 個必要ですが {} 個書かれています", want, args.len())));
+                }
+                let args = args.iter().map(|a| self.resolve(a)).collect::<R<Vec<_>>>()?;
+                if self.structs.contains_key(n.as_str()) {
+                    Ty::Struct(n.clone(), args)
+                } else {
+                    Ty::Enum(n.clone(), args)
+                }
+            }
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve(inner)?), *m),
             TypeKind::Name(n) => match n.as_str() {
                 "bool" => Ty::Bool,
@@ -229,11 +320,21 @@ impl<'a> Checker<'a> {
                     return Err(Diagnostic::new(format!("型 `{}` はまだ使えません", n))
                         .primary(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）だけです"))
                 }
-                _ if self.structs.contains_key(n.as_str()) => Ty::Struct(n.clone()),
-                _ if self.enums.contains_key(n.as_str()) => Ty::Enum(n.clone()),
-                "Option" => {
-                    return Err(Diagnostic::new("Option には中身の型が必要です")
-                        .primary(t.span, "`Option<i64>` のように書いてください"))
+                _ if self.tparams.contains(n) => Ty::Param(n.clone()),
+                _ if self.structs.contains_key(n.as_str()) || self.enums.contains_key(n.as_str()) => {
+                    let tps = match self.structs.get(n.as_str()) {
+                        Some((d, _)) => &d.tparams,
+                        None => &self.enums[n.as_str()].0.tparams,
+                    };
+                    if !tps.is_empty() {
+                        return Err(Diagnostic::new(format!("`{}` には型の引数が必要です", n))
+                            .primary(t.span, format!("`{}<{}>` のように書いてください", n, vec!["i64"; tps.len()].join(", "))));
+                    }
+                    if self.structs.contains_key(n.as_str()) {
+                        Ty::Struct(n.clone(), Vec::new())
+                    } else {
+                        Ty::Enum(n.clone(), Vec::new())
+                    }
                 }
                 _ => {
                     return Err(Diagnostic::new(format!("未定義の型 `{}`", n))
@@ -279,77 +380,138 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 値として読んだときにコピーされる型か（own や構造体を中に持ちうるならムーブ）
+    /// 値として読んだときにコピーされる型か（own や構造体を中に持ちうるならムーブ）。
+    /// 型の引数（`T`）は分からないのでコピーとは言えない
     fn copyable(&self, t: &Ty) -> bool {
         match t {
             Ty::Int(_) | Ty::Bool | Ty::Str | Ty::Ref(..) | Ty::Unit | Ty::Never => true,
-            Ty::Own(_) | Ty::Struct(_) => false,
-            Ty::Option(inner) => self.copyable(inner),
+            Ty::Own(_) | Ty::Struct(..) | Ty::Param(_) => false,
             // check_finite が自分をじかに含む enum を先に弾いているので、再帰は止まる
-            Ty::Enum(n) => self.contents(n).iter().all(|t| self.copyable(t)),
+            Ty::Enum(..) => self.variants_of(t).expect("enum").iter().flat_map(|(_, f)| f).all(|t| self.copyable(t)),
         }
     }
 
-    /// enum（または Option）の種類の一覧: (名前, 中身の型)
+    /// 定義の型の引数と、実際の型の引数の対応
+    fn targs(tparams: &[String], args: &[Ty]) -> HashMap<String, Ty> {
+        tparams.iter().cloned().zip(args.iter().cloned()).collect()
+    }
+
+    /// enum の種類の一覧: (名前, 中身の型)。型の引数は置き換え済み
     fn variants_of(&self, t: &Ty) -> Option<Vec<(String, Vec<Ty>)>> {
         match t {
-            Ty::Option(inner) => Some(vec![("None".to_string(), Vec::new()), ("Some".to_string(), vec![(**inner).clone()])]),
-            Ty::Enum(n) => {
+            Ty::Enum(n, args) => {
                 let (def, tys) = &self.enums[n.as_str()];
-                Some(def.variants.iter().zip(tys).map(|(v, t)| (v.name.clone(), t.clone())).collect())
+                let map = Self::targs(&def.tparams, args);
+                Some(
+                    def.variants
+                        .iter()
+                        .zip(tys)
+                        .map(|(v, t)| (v.name.clone(), t.iter().map(|x| subst(x, &map)).collect()))
+                        .collect(),
+                )
             }
             _ => None,
         }
     }
 
+    /// 型の引数を決めながら、引数（や中身）を調べる。`params` は定義の側の型（`T` を含みうる）。
+    /// `pre` は (戻り値などの型, 入れる先の型)。先に見比べて型の引数を決める手がかりにする。
+    /// 数や `None` のように相手しだいで型が決まる式は、ほかの引数で型の引数が決まってから調べる
+    fn instantiate(
+        &mut self,
+        tparams: &[String],
+        params: &[Ty],
+        args: &[&Expr],
+        pre: Option<(&Ty, &Ty)>,
+    ) -> R<HashMap<String, Ty>> {
+        let mut map = HashMap::new();
+        if let Some((pat, hint)) = pre {
+            unify(pat, hint, tparams, &mut map);
+        }
+        let mut got: Vec<Option<Ty>> = vec![None; args.len()];
+        // 0: ふつうの式、1: 数の式、2: `None` など enum の値（中身の型を相手に合わせたいもの）
+        let order = |a: &Expr| match a.kind {
+            ExprKind::Variant { .. } => 2,
+            _ if is_const_tree(a) => 1,
+            _ => 0,
+        };
+        for pass in 0..3 {
+            for (i, (a, p)) in args.iter().zip(params).enumerate() {
+                if got[i].is_some() || order(a) != pass {
+                    continue;
+                }
+                let hint = if has_unbound(p, tparams, &map) { None } else { Some(subst(p, &map)) };
+                let t = self.expr_h(a, hint.as_ref())?;
+                if t == Ty::Unit {
+                    return Err(Diagnostic::new("値のない式です").primary(a.span, "これは値を返さない"));
+                }
+                unify(p, &t, tparams, &mut map);
+                got[i] = Some(t);
+            }
+        }
+        for ((a, p), t) in args.iter().zip(params).zip(&got) {
+            let t = t.as_ref().expect("all arguments are checked");
+            if has_unbound(p, tparams, &map) {
+                continue;
+            }
+            let want = subst(p, &map);
+            if !assignable(t, &want) {
+                return Err(mismatch(&want, t, a.span));
+            }
+            convert(a, t, &want);
+        }
+        Ok(map)
+    }
+
+    /// 型の引数がすべて決まったか。決まらなければエラー
+    fn all_bound(&self, tparams: &[String], map: &HashMap<String, Ty>, span: Span, what: &str) -> R<Vec<Ty>> {
+        tparams
+            .iter()
+            .map(|p| {
+                map.get(p).cloned().ok_or_else(|| {
+                    Diagnostic::new(format!("{} の型の引数 `{}` が決まりません", what, p))
+                        .primary(span, "何の型か分からない")
+                        .note("`let Option<i64> x = None;` のように、入れる先の型を書いてください")
+                })
+            })
+            .collect()
+    }
+
     /// `Shape.Circle(5)` / `Some(x)` / `None` の型。`hint` は値を入れる先の型
     fn variant_expr(&mut self, e: &Expr, hint: Option<&Ty>) -> R<Ty> {
         let ExprKind::Variant { enum_name, variant, args, copy } = &e.kind else { unreachable!() };
-        let ty = if enum_name == "Option" {
-            let inner_hint = match hint {
-                Some(Ty::Option(t)) => Some((**t).clone()),
-                _ => None,
-            };
-            if variant == "None" {
-                match inner_hint {
-                    Some(t) => Ty::Option(Box::new(t)),
-                    None => {
-                        return Err(Diagnostic::new("None の型が決まりません")
-                            .primary(e.span, "何の Option か分からない")
-                            .note("`let Option<i64> x = None;` のように型を書いてください"))
-                    }
-                }
-            } else {
-                if args.len() != 1 {
-                    return Err(arity_error("Some", 1, args.len(), e.span));
-                }
-                let t = match &inner_hint {
-                    Some(want) => {
-                        self.expect(&args[0], want)?;
-                        want.clone()
-                    }
-                    None => self.value(&args[0])?,
-                };
-                Ty::Option(Box::new(t))
-            }
-        } else {
-            let (def, tys) = &self.enums[enum_name.as_str()];
-            let Some(i) = def.variants.iter().position(|v| v.name == *variant) else {
-                let names: Vec<&str> = def.variants.iter().map(|v| v.name.as_str()).collect();
-                return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", enum_name, variant))
-                    .primary(e.span, "この種類は定義されていません")
-                    .note(format!("`{}` の種類: {}", enum_name, names.join(", "))));
-            };
-            let want = tys[i].clone();
-            if args.len() != want.len() {
-                return Err(arity_error(&format!("{}.{}", enum_name, variant), want.len(), args.len(), e.span));
-            }
-            for (a, w) in args.iter().zip(&want) {
-                self.expect(a, w)?;
-            }
-            Ty::Enum(enum_name.clone())
+        let (def, tys) = &self.enums[enum_name.as_str()];
+        let def: &EnumDef = def;
+        let Some(i) = def.variants.iter().position(|v| v.name == *variant) else {
+            let names: Vec<&str> = def.variants.iter().map(|v| v.name.as_str()).collect();
+            return Err(Diagnostic::new(format!("`{}` に種類 `{}` はありません", enum_name, variant))
+                .primary(e.span, "この種類は定義されていません")
+                .note(format!("`{}` の種類: {}", enum_name, names.join(", "))));
         };
-        copy.set(self.copyable(&ty));
+        let params = tys[i].clone();
+        if args.len() != params.len() {
+            return Err(arity_error(&format!("{}.{}", enum_name, variant), params.len(), args.len(), e.span));
+        }
+        let tparams = def.tparams.clone();
+        let generic = Ty::Enum(enum_name.clone(), tparams.iter().map(|p| Ty::Param(p.clone())).collect());
+        let pre = match hint {
+            Some(h @ Ty::Enum(n, _)) if n == enum_name => Some((&generic, h)),
+            _ => None,
+        };
+        let args: Vec<&Expr> = args.iter().collect();
+        let map = self.instantiate(&tparams, &params, &args, pre)?;
+        let targs = match self.all_bound(&tparams, &map, e.span, enum_name) {
+            Ok(t) => t,
+            Err(_) if enum_name == "Option" => {
+                return Err(Diagnostic::new(format!("{} の型が決まりません", variant))
+                    .primary(e.span, "何の Option か分からない")
+                    .note("`let Option<i64> x = None;` のように型を書いてください"))
+            }
+            Err(d) => return Err(d),
+        };
+        let ty = Ty::Enum(enum_name.clone(), targs);
+        // 型の引数を含む（ジェネリックな関数の中）なら、実行時に中身を見て決める
+        copy.set(if contains_param(&ty) { None } else { Some(self.copyable(&ty)) });
         Ok(ty)
     }
 
@@ -380,7 +542,7 @@ impl<'a> Checker<'a> {
             self.scopes.pop();
             let t = r?;
             // `case Some(x) -> Some(x); case None -> None;` の None の型を前の case から決める
-            if hint.is_none() && matches!(t, Ty::Option(_)) {
+            if hint.is_none() && matches!(&t, Ty::Enum(_, a) if !a.is_empty()) {
                 hint = Some(t.clone());
             }
             tys.push((t, &arm.body));
@@ -712,17 +874,17 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Field(base, name, _) => {
                 let t = self.expr(base)?;
-                let sname = match &t {
-                    Ty::Struct(n) => n,
+                let (sname, targs) = match &t {
+                    Ty::Struct(n, a) => (n, a),
                     Ty::Own(x) | Ty::Ref(x, _) => match &**x {
-                        Ty::Struct(n) => n,
+                        Ty::Struct(n, a) => (n, a),
                         _ => return Err(not_a_struct(&t, base.span)),
                     },
                     _ => return Err(not_a_struct(&t, base.span)),
                 };
                 let (def, tys) = &self.structs[sname.as_str()];
                 match def.field_index(name) {
-                    Some(i) => Ok(tys[i].clone()),
+                    Some(i) => Ok(subst(&tys[i], &Self::targs(&def.tparams, targs))),
                     None => Err(no_field(def, name, e.span)),
                 }
             }
@@ -733,6 +895,7 @@ impl<'a> Checker<'a> {
                 };
                 let (def, tys) = (*def, tys.clone());
                 let mut seen = vec![false; def.fields.len()];
+                let mut params = Vec::new();
                 for init in inits {
                     let Some(i) = def.field_index(&init.name) else {
                         return Err(no_field(def, &init.name, init.span));
@@ -742,7 +905,7 @@ impl<'a> Checker<'a> {
                             .primary(init.span, "ここが二回目"));
                     }
                     seen[i] = true;
-                    self.expect(&init.value, &tys[i])?;
+                    params.push(tys[i].clone());
                 }
                 let missing: Vec<&str> =
                     def.fields.iter().zip(&seen).filter(|(_, s)| !**s).map(|(n, _)| n.as_str()).collect();
@@ -750,14 +913,22 @@ impl<'a> Checker<'a> {
                     return Err(Diagnostic::new(format!("`{}` のフィールドが足りません", name))
                         .primary(e.span, format!("{} がありません", missing.join(", "))));
                 }
-                Ok(Ty::Struct(name.clone()))
+                let generic = Ty::Struct(name.clone(), def.tparams.iter().map(|p| Ty::Param(p.clone())).collect());
+                let pre = match hint {
+                    Some(h @ Ty::Struct(n, _)) if n == name => Some((&generic, h)),
+                    _ => None,
+                };
+                let values: Vec<&Expr> = inits.iter().map(|i| &i.value).collect();
+                let map = self.instantiate(&def.tparams, &params, &values, pre)?;
+                let targs = self.all_bound(&def.tparams, &map, e.span, name)?;
+                Ok(Ty::Struct(name.clone(), targs))
             }
             ExprKind::If { cond, then, els } => {
                 self.expect(cond, &Ty::Bool)?;
                 let a = self.block(then, want_value, hint)?;
                 // `if c { Some(1) } else { None }` の None の型を then から決める
                 let else_hint = match (hint, &a) {
-                    (None, Ty::Option(_)) => Some(&a),
+                    (None, Ty::Enum(_, args)) if !args.is_empty() => Some(&a),
                     _ => hint,
                 };
                 let mut tys = vec![(a.clone(), then)];
@@ -770,7 +941,7 @@ impl<'a> Checker<'a> {
             ExprKind::Variant { .. } => self.variant_expr(e, hint),
             ExprKind::Match { scrut, arms, default } => {
                 let st = self.expr(scrut)?;
-                let enum_like = |t: &Ty| matches!(t, Ty::Enum(_) | Ty::Option(_));
+                let enum_like = |t: &Ty| matches!(t, Ty::Enum(..));
                 let subject = match &st {
                     Ty::Ref(t, _) | Ty::Own(t) => &**t,
                     t => t,
@@ -828,7 +999,7 @@ impl<'a> Checker<'a> {
                 other => Err(mismatch(&I64, &other, inner.span)),
             },
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, e.span, hint),
-            ExprKind::Call(name, args) => self.call(name, args, e.span),
+            ExprKind::Call(name, args) => self.call(name, args, e.span, hint),
         }
     }
 
@@ -934,7 +1105,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+    fn call(&mut self, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
         match name {
             "print" => {
                 for a in args {
@@ -962,11 +1133,14 @@ impl<'a> Checker<'a> {
         if args.len() != sig.params.len() {
             return Err(arity_error(name, sig.params.len(), args.len(), span));
         }
-        let (params, ret) = (sig.params.clone(), sig.ret.clone());
-        for (a, want) in args.iter().zip(&params) {
-            self.expect(a, want)?;
+        let (tparams, params, ret) = (sig.tparams.clone(), sig.params.clone(), sig.ret.clone());
+        let pre = hint.map(|h| (&ret, h));
+        let args: Vec<&Expr> = args.iter().collect();
+        let map = self.instantiate(&tparams, &params, &args, pre)?;
+        if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
+            self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
         }
-        Ok(ret)
+        Ok(subst(&ret, &map))
     }
 
     /// 二つの整数を同じ型（広い方）にそろえる。欠けない変換でそろわなければエラー
@@ -1135,8 +1309,13 @@ fn tail_expr(b: &Block) -> Option<&Expr> {
 /// 型の中に（own / ref を通さず）じかに入っている構造体・enum の名前
 fn by_value_names(t: &Ty, out: &mut Vec<String>) {
     match t {
-        Ty::Struct(n) | Ty::Enum(n) => out.push(n.clone()),
-        Ty::Option(inner) => by_value_names(inner, out),
+        Ty::Struct(n, args) | Ty::Enum(n, args) => {
+            out.push(n.clone());
+            // 型の引数も、じかに含まれるかもしれないとみなす（安全側）
+            for a in args {
+                by_value_names(a, out);
+            }
+        }
         _ => {}
     }
 }

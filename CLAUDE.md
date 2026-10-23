@@ -29,6 +29,7 @@
 | `tests/match.rs` | match（Java の switch の矢印形式） |
 | `tests/types.rs` | 型検査 |
 | `tests/enums.rs` | enum と Option・match での取り出し・`match ref` |
+| `tests/generics.rs` | ジェネリクス（関数・構造体・enum の型の引数） |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
@@ -55,12 +56,17 @@
 - 整数のあふれは一周する。定数の式（`is_const_tree`）の結果が型に入らないときだけ `types.rs` が警告を出す（そのまま書いた数ならエラー）。
   警告は `Diagnostic::warning` で、実行は止めない（`Outcome.warnings`、CLI は実行前に表示）。
 - enum の値は `Value::Enum { variant, fields, copy }`。`copy` は型検査が `ExprKind::Variant` の `Cell<bool>` に書く
-  （own や構造体を持ちうる型ならムーブ。`Value::moves`）。Option は enum 名 "Option" の特別扱い。
+  （own や構造体を持ちうる型ならムーブ。`Value::moves`）。型の引数を含んで決められないときは None で、interp が中身を見て決める。
+  Option は `lib.rs` の `PRELUDE`（`enum Option<T>`）を `parse` がプログラムの前に足す。`Some(x)` / `None` はパーサが `Option.Some` / `Option.None` にする。
 - enum の match は interp の `match_enum`。値の match は中身を受け取る名前へ移し、借りた match（scrut が ref）は
   中身の own を ref にして渡す。全部の種類を書いたかは `types.rs` の `match_enum` が調べる。
   case で受け取る名前は、analyze でも新しい変数として宣言する（外の同名の変数の事実を使わない）。
 - パーサはファイル中の `enum 名前` を先に集め、`名前.種類` を enum の値として読む（`enum_names`）。
 - ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
+
+- ジェネリクス: 型検査だけの話で、interp は型を見ない（値はそのまま動く）。`Ty::Param` は定義の中の `T`、
+  `Ty::Struct/Enum(名前, 型の引数)`。使う側では `instantiate` が引数（ふつうの式 → 数の式 → enum の値の順）と
+  入れる先の型から `unify` で型の引数を決め、`subst` で置き換える。`T` は copyable ではない（安全側）。
 
 ## 設計の決めごと
 

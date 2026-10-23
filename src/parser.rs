@@ -21,13 +21,15 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
-        let enum_names = toks
+        let mut enum_names: Vec<String> = toks
             .windows(2)
             .filter_map(|w| match (&w[0].tok, &w[1].tok) {
                 (Tok::Enum, Tok::Ident(n)) => Some(n.clone()),
                 _ => None,
             })
             .collect();
+        // 組み込みの enum（prelude で定義）
+        enum_names.push("Option".to_string());
         Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names }
     }
 
@@ -116,6 +118,7 @@ impl Parser {
         let start = self.expect(Tok::Enum, "`enum`")?;
         let name = self.expect_ident("enum の名前")?;
         let span = start.join(self.prev_span());
+        let tparams = self.parse_tparams()?;
         self.expect(Tok::LBrace, "`{`")?;
         let mut variants: Vec<VariantDef> = Vec::new();
         loop {
@@ -160,13 +163,14 @@ impl Parser {
                 self.expect(Tok::Semi, "`;`（種類の終わり）")?;
             }
         }
-        Ok(EnumDef { name, variants, span })
+        Ok(EnumDef { name, tparams, variants, span })
     }
 
     fn parse_struct(&mut self) -> R<StructDef> {
         let start = self.expect(Tok::Struct, "`struct`")?;
         let name = self.expect_ident("構造体名")?;
         let span = start.join(self.prev_span());
+        let tparams = self.parse_tparams()?;
         self.expect(Tok::LBrace, "`{`")?;
         let mut fields: Vec<String> = Vec::new();
         let mut field_types = Vec::new();
@@ -197,18 +201,15 @@ impl Parser {
                 self.expect(Tok::Semi, "`;`（フィールドの終わり）")?;
             }
         }
-        Ok(StructDef { name, fields, field_types, span })
+        Ok(StructDef { name, tparams, fields, field_types, span })
     }
 
     fn parse_fn(&mut self) -> R<FnDef> {
         let start = self.expect(Tok::Fn, "`fn` か `struct`（トップレベルには関数と構造体の定義だけ書けます）")?;
-        // `fn 名前(` なら戻り値なし、`fn 型 名前(` なら戻り値あり
-        let ret = if matches!(self.peek(), Tok::Ident(_)) && *self.peek2() == Tok::LParen {
-            None
-        } else {
-            Some(self.parse_type()?)
-        };
+        // `fn 名前(` / `fn 名前<T>(` なら戻り値なし、`fn 型 名前(` なら戻り値あり
+        let ret = if self.at_fn_name() { None } else { Some(self.parse_type()?) };
         let name = self.expect_ident("関数名")?;
+        let tparams = self.parse_tparams()?;
         self.expect(Tok::LParen, "`(`")?;
         let mut params = Vec::new();
         while *self.peek() != Tok::RParen {
@@ -233,7 +234,58 @@ impl Parser {
         self.expect(Tok::RParen, "`)`")?;
         let header = start.join(self.prev_span());
         let body = self.parse_block()?;
-        Ok(FnDef { name, ret, params, body, span: header })
+        Ok(FnDef { name, tparams, ret, params, body, span: header })
+    }
+
+    /// 今の位置が関数名か（`名前(` か `名前<...>(`）。そうでなければ戻り値の型
+    fn at_fn_name(&self) -> bool {
+        if !matches!(self.peek(), Tok::Ident(_)) {
+            return false;
+        }
+        match self.peek2() {
+            Tok::LParen => true,
+            Tok::Lt => {
+                // 対応する `>` の次が `(` なら `名前<T>(`、そうでなければ `Option<i64> 名前(`
+                let mut depth = 0;
+                for t in &self.toks[self.pos + 1..] {
+                    match t.tok {
+                        Tok::Lt => depth += 1,
+                        Tok::Gt => {
+                            depth -= 1;
+                            if depth == 0 {
+                                continue;
+                            }
+                        }
+                        Tok::LParen if depth == 0 => return true,
+                        _ if depth == 0 => return false,
+                        _ => {}
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// 型の引数の宣言 `<T, U>`（なければ空）
+    fn parse_tparams(&mut self) -> R<Vec<String>> {
+        let mut ps: Vec<String> = Vec::new();
+        if !self.eat(Tok::Lt) {
+            return Ok(ps);
+        }
+        loop {
+            let sp = self.span();
+            let p = self.expect_ident("型の引数の名前")?;
+            if ps.contains(&p) {
+                return Err(Diagnostic::new(format!("型の引数 `{}` が二回あります", p)).primary(sp, "ここ"));
+            }
+            ps.push(p);
+            if !self.eat(Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(Tok::Gt, "`>`")?;
+        Ok(ps)
     }
 
     /// `{ 文; 文; 式 }`。文の終わりには `;` が要る（`{ }` で終わる if / while などは不要）。
@@ -603,15 +655,16 @@ impl Parser {
             }
             Tok::Ident(name) => {
                 self.bump();
-                if *self.peek() == Tok::Lt {
-                    self.bump();
-                    let inner = self.parse_type()?;
-                    self.expect(Tok::Gt, "`>`")?;
-                    if name != "Option" {
-                        return Err(Diagnostic::new("ジェネリクスはまだ使えません")
-                            .primary(start.join(self.prev_span()), "`<...>` をつけられるのは今のところ Option だけです"));
+                if self.eat(Tok::Lt) {
+                    let mut args = Vec::new();
+                    loop {
+                        args.push(self.parse_type()?);
+                        if !self.eat(Tok::Comma) {
+                            break;
+                        }
                     }
-                    TypeKind::Option(Box::new(inner))
+                    self.expect(Tok::Gt, "`>`")?;
+                    TypeKind::App(name, args)
                 } else {
                     TypeKind::Name(name)
                 }
@@ -807,7 +860,7 @@ impl Parser {
             enum_name: enum_name.to_string(),
             variant: variant.to_string(),
             args,
-            copy: Cell::new(false),
+            copy: Cell::new(Some(false)),
         };
         Expr::new(kind, span)
     }

@@ -41,7 +41,7 @@ fn main() {
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `own` `ref` `as` `true` `false`
 
-特別な名前: `Some` `None`（Option の値）、`Option`（型）、`print` `drop` `assert`（組み込み関数）
+特別な名前: `Some` `None`（Option の値）、`Option`（最初からある enum）、`print` `drop` `assert`（組み込み関数）
 
 ## 3. 型
 
@@ -54,13 +54,13 @@ fn main() {
 | `usize` | 符号なし整数（添字用。64 ビットだが u64 とは別の型） |
 | `bool` | `true` / `false` |
 | `str` | 文字列（1 種類だけ） |
-| 構造体名・enum 名 | 定義した型 |
-| `Option<T>` | `T` の値があるか、ないか |
+| 構造体名・enum 名 | 定義した型。型の引数があれば `Pair<i64>` のように書く |
+| `Option<T>` | `T` の値があるか、ないか（最初からある enum） |
 | `own T` | ヒープにある `T` の唯一の持ち主 |
 | `ref T` | `T` を借りた参照（読むだけ） |
 | `ref mut T` | `T` を借りた参照（書き換えてよい） |
 
-- 小数（`f32` `f64`）・配列・ジェネリクス（Option 以外）は未実装。
+- 小数（`f32` `f64`）・配列は未実装。
 
 ### 3.2 数の書き方と型
 
@@ -203,7 +203,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.3](#83-match-で中身を受け取る)）。
+- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.4](#84-match-で中身を受け取る)）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -285,7 +285,29 @@ let Option<i64> y = None;
 - 中身が数・bool・str・ref だけの enum は、値として読むとコピー。own や構造体を持ちうるならムーブ。
 - enum どうしの `==` はない（match を使う）。
 
-### 8.3 match で中身を受け取る
+### 8.3 ジェネリクス（型の引数）
+
+```
+fn T pick<T>(bool first, T a, T b) { if first { a } else { b } }
+struct Pair<T> { T a; T b; }
+enum Either<L, R> { Left(L value); Right(R value); }
+
+let x = pick(true, 1, 2);              // T は i64
+let p = Pair { a: "x", b: "y" };       // Pair<str>
+let Pair<u8> q = Pair { a: 1, b: 2 };  // 入れる先の型からも決まる
+```
+
+- 型の引数は名前のあと `<T, U>` に書く。関数・構造体・enum につけられる。
+- 使うときに `<i64>` は書かない。引数・フィールド・入れる先の型から決める。決まらなければエラー。
+  - 数どうしなら、欠けずにそろう広い方の型になる（`pick(true, a_u8, b_i64)` の T は i64）。
+  - 数の書き方や `None` は、ほかの引数で決まった型に合わせる（`or_else(None, 5)` は T = i64）。
+- 型の名前として書くときは型の引数が必要（`Pair` ではなく `Pair<i64>`）。
+- 関数の中では `T` が何か分からないので、`T` の値どうしの計算や比較はできない（渡す・返す・しまう・print はできる）。
+- `T` が own や構造体なら値として読むとムーブ、数ならコピー（中身しだい）。
+- `Option<T>` は最初から `enum Option<T> { Some(T value); None; }` として定義されている。
+  `Some(x)` / `None` は `Option.Some(x)` / `Option.None` の短い書き方。
+
+### 8.4 match で中身を受け取る
 
 ```
 match s {
@@ -323,9 +345,9 @@ match ref t { ... }                    // 借りて match（t は own か ref）
 
 | 項目 | 決まっていること |
 |---|---|
-| ジェネリクス | `fn T max<T>(T a, T b)` の形 |
 | Result と `?` | 例外はなく、Result と `?` でエラーを返す |
 | メソッド | Java 風（struct の中に書く）。`this` は書かなくてよい。書き換えるメソッドは `fn mut 名前()`（仮） |
 | 文字列の埋め込み | `"x = {x}"` |
 | あふれの確認 | `checked_add` のような明示的な関数 |
+| 型の引数にできることを決める仕組み（比較できる T など） | これから |
 | 小数・配列・文字型・モジュール・`const` | これから |

@@ -28,10 +28,24 @@ pub struct Outcome {
     pub ref_checks_elided: usize,
 }
 
+/// どのプログラムにも最初からある定義。`Some(x)` / `None` は `Option.Some(x)` / `Option.None` の短い書き方
+const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n}\n";
+
+/// 字句解析と構文解析をして、最初からある定義（`Option`）を前に足す
+fn parse(src: &str) -> Result<ast::Program, Diagnostic> {
+    let mut prog = parser::Parser::new(lexer::lex(src)?).parse_program()?;
+    let prelude = parser::Parser::new(lexer::lex(PRELUDE).expect("prelude lexes"))
+        .parse_program()
+        .expect("prelude parses");
+    let mut enums = prelude.enums;
+    enums.append(&mut prog.enums);
+    prog.enums = enums;
+    Ok(prog)
+}
+
 /// 実行せずに型検査だけして、警告を返す（エラーがあれば空。エラーは実行時に返る）
 pub fn warnings(src: &str) -> Vec<Diagnostic> {
-    let Ok(toks) = lexer::lex(src) else { return Vec::new() };
-    let Ok(prog) = parser::Parser::new(toks).parse_program() else { return Vec::new() };
+    let Ok(prog) = parse(src) else { return Vec::new() };
     types::check(&prog).unwrap_or_default()
 }
 
@@ -64,11 +78,7 @@ fn run_inner(src: &str, echo: bool, elide: bool) -> Outcome {
         ref_checks_elided: 0,
     };
 
-    let toks = match lexer::lex(src) {
-        Ok(t) => t,
-        Err(d) => return fail(d),
-    };
-    let prog = match parser::Parser::new(toks).parse_program() {
+    let prog = match parse(src) {
         Ok(p) => p,
         Err(d) => return fail(d),
     };

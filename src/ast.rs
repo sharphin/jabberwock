@@ -12,8 +12,8 @@ pub struct TypeExpr {
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     Name(String),
-    /// `Option<T>`（ジェネリクスが入るまでの特別扱い）
-    Option(Box<TypeExpr>),
+    /// `Pair<i64>`、`Option<T>`。型の引数つきの名前
+    App(String, Vec<TypeExpr>),
     Own(Box<TypeExpr>),
     /// bool は `mut`
     Ref(Box<TypeExpr>, bool),
@@ -194,9 +194,10 @@ pub enum ExprKind {
     /// `e as T`。整数の型を明示的に変える（範囲の外は一周する）
     Cast(Box<Expr>, TypeExpr),
     /// `Shape.Circle(5)` / `Shape.Empty` / `Some(x)` / `None`。enum の値を作る。
-    /// Option の enum 名は "Option"。`Cell<bool>` は型検査が決める「値として読むとコピーか」
-    /// （中に own や構造体を持ちうる enum は、構造体と同じく読むとムーブ）
-    Variant { enum_name: String, variant: String, args: Vec<Expr>, copy: Cell<bool> },
+    /// Option の enum 名は "Option"。`copy` は型検査が決める「値として読むとコピーか」
+    /// （中に own や構造体を持ちうる enum は、構造体と同じく読むとムーブ）。
+    /// None は型の引数を含んで決められないとき（実行時に中身を見て決める）
+    Variant { enum_name: String, variant: String, args: Vec<Expr>, copy: Cell<Option<bool>> },
     /// `own e` : ヒープに値を置き、唯一の所有者を返す
     Own(Box<Expr>),
     /// `ref p` / `ref mut p` : 所有者（変数か `*p` か `p.f`）を世代付き参照として借りる。
@@ -289,6 +290,8 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
+    /// 型の引数（`fn T max<T>(...)` の `T`）
+    pub tparams: Vec<String>,
     /// 戻り値の型。なければ値を返さない関数
     pub ret: Option<TypeExpr>,
     pub params: Vec<Param>,
@@ -300,6 +303,7 @@ pub struct FnDef {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
+    pub tparams: Vec<String>,
     pub fields: Vec<String>,
     /// `fields` と同じ順のフィールドの型
     pub field_types: Vec<TypeExpr>,
@@ -316,6 +320,7 @@ impl StructDef {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
+    pub tparams: Vec<String>,
     pub variants: Vec<VariantDef>,
     pub span: Span,
 }

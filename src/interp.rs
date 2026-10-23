@@ -840,7 +840,9 @@ impl Interp {
                 for a in args {
                     fields.push(self.eval(a)?);
                 }
-                Ok(Value::Enum { variant: Rc::from(variant.as_str()), fields, copy: copy.get() })
+                // 型の引数を含む enum（ジェネリックな関数の中）は、中身を見て決める
+                let copy = copy.get().unwrap_or_else(|| !fields.iter().any(Value::moves));
+                Ok(Value::Enum { variant: Rc::from(variant.as_str()), fields, copy })
             }
             ExprKind::Cast(inner, ty) => match self.eval(inner)? {
                 Value::Int(n, _) => {
