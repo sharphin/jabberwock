@@ -306,9 +306,32 @@ impl<'a> FnAnalyzer<'a> {
 
     // ------------------------------------------------------------ 式
 
+    /// `ref inner`。own 変数を直接借りたなら RefTo、ref 変数の借り直しなら同じ事実
+    fn ref_of(&mut self, inner: &Expr) -> Option<Fact> {
+        self.expr_kind(inner, true);
+        match &inner.kind {
+            ExprKind::Var(name) => {
+                let id = self.lookup(name)?;
+                match self.facts.get(&id).copied()? {
+                    Fact::Own => Some(Fact::RefTo(id)),
+                    f => Some(f), // ref の ref は同じ先を指す
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// 式を評価順にたどり、結果の値について分かることを返す。
     /// `borrow` はインタプリタの `eval_borrow` に当たる（変数を読んでもムーブしない）。
     fn expr(&mut self, e: &Expr, borrow: bool) -> Option<Fact> {
+        if e.borrow.get() {
+            // 型検査が自動で借りると決めた引数（`ref e` と同じ）
+            return self.ref_of(e);
+        }
+        self.expr_kind(e, borrow)
+    }
+
+    fn expr_kind(&mut self, e: &Expr, borrow: bool) -> Option<Fact> {
         match &e.kind {
             ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) => None,
             ExprKind::Var(name) => {
@@ -325,19 +348,7 @@ impl<'a> FnAnalyzer<'a> {
                 self.expr(inner, false);
                 Some(Fact::Own)
             }
-            ExprKind::Ref(inner, _) => {
-                self.expr(inner, true);
-                match &inner.kind {
-                    ExprKind::Var(name) => {
-                        let id = self.lookup(name)?;
-                        match self.facts.get(&id).copied()? {
-                            Fact::Own => Some(Fact::RefTo(id)),
-                            f => Some(f), // ref の ref は同じ先を指す
-                        }
-                    }
-                    _ => None,
-                }
-            }
+            ExprKind::Ref(inner, _) => self.ref_of(inner),
             // `r.f` も r が own / ref なら先をたどるので、`*r` と同じ判定
             ExprKind::Deref(inner, check) | ExprKind::Field(inner, _, check) => {
                 self.deref(inner, check);

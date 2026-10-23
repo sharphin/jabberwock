@@ -158,9 +158,9 @@ fn main() {
 }
 
 #[test]
-fn ref_to_this_does_not_outlive_the_call() {
-    // 構造体の値に対するメソッドは、呼び出しのあいだだけヒープに移して借りる。
-    // this を返しても、呼び出しが終わればダングリングとして見つかる
+fn ref_to_this_does_not_outlive_the_receiver() {
+    // 変数にある構造体の値に対するメソッドは、その変数を借りて this にする。
+    // this を返せば、変数が生きているあいだは使える
     let src = "
 struct P {
     i64 x;
@@ -173,6 +173,21 @@ struct P {
 fn main() {
     let p = P { x: 1 };
     let r = p.me();
+    print(r.x);
+}";
+    assert_eq!(ok(src), "1\n");
+    // 一時的な値は呼び出しのあいだだけヒープに置くので、呼び出しが終わればダングリング
+    let src = "
+struct P {
+    i64 x;
+
+    fn ref P me() {
+        this
+    }
+}
+
+fn main() {
+    let r = P { x: 1 }.me();
     print(r.x);
 }";
     let o = run_source(src, false);

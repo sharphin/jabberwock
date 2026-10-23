@@ -147,11 +147,14 @@ pub struct Expr {
     /// 整数の式なら、型検査が決めた「この式の値を使う型」。実行時はこの型に変換してから使う
     /// （数の書き方を相手の型に合わせる・欠けない変換を自動でする、のため）
     pub int: Cell<Option<IntTy>>,
+    /// 型検査が「自動で借りる」と決めた引数（`ref T` の引数に `ref` なしで渡した場所）。
+    /// interp と analyze は `ref e` と同じに扱う
+    pub borrow: Cell<bool>,
 }
 
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Expr {
-        Expr { kind, span, int: Cell::new(None) }
+        Expr { kind, span, int: Cell::new(None), borrow: Cell::new(false) }
     }
 }
 

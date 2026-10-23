@@ -87,6 +87,9 @@ fn assignable(from: &Ty, to: &Ty) -> bool {
 fn mismatch(want: &Ty, got: &Ty, span: Span) -> Diagnostic {
     let d = Diagnostic::new("型が合いません")
         .primary(span, format!("ここは `{}` ですが、`{}` が必要です", got.show(), want.show()));
+    if matches!(want, Ty::Ref(_, true)) && !matches!(got, Ty::Ref(..)) {
+        return d.note("書き換えられる引数（`ref mut`）には、呼ぶ側でも `ref mut x` と書いてください");
+    }
     if let (Ty::Int(_), Ty::Int(w)) = (got, want) {
         // 値が欠けうる変換は自動ではしない
         return d.note(format!("値が欠けるかもしれない変換は `as` で明示してください（例: `x as {}`）", w.name()));
@@ -523,6 +526,7 @@ impl<'a> Checker<'a> {
         params: &[Ty],
         args: &[&Expr],
         pre: &[(&Ty, &Ty)],
+        auto_ref: bool,
     ) -> R<HashMap<String, Ty>> {
         let mut map = HashMap::new();
         for (pat, hint) in pre {
@@ -545,6 +549,7 @@ impl<'a> Checker<'a> {
                 if t == Ty::Unit {
                     return Err(Diagnostic::new("値のない式です").primary(a.span, "これは値を返さない"));
                 }
+                let t = if auto_ref { self.auto_borrow(a, t, p)? } else { t };
                 unify(p, &t, tparams, &mut map);
                 got[i] = Some(t);
             }
@@ -599,7 +604,7 @@ impl<'a> Checker<'a> {
             _ => None,
         };
         let args: Vec<&Expr> = args.iter().collect();
-        let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>())?;
+        let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>(), false)?;
         let targs = match self.all_bound(&tparams, &map, e.span, enum_name) {
             Ok(t) => t,
             Err(_) if enum_name == "Option" => {
@@ -1087,12 +1092,18 @@ impl<'a> Checker<'a> {
                         .note("`let x = own ...;` で変数に入れてから `ref x` としてください"));
                 }
                 let t = self.expr(inner)?;
-                let Some(target) = t.pointee() else {
-                    return Err(Diagnostic::new("借用できない値です")
-                        .primary(inner.span, format!("`{}` は own でも ref でもありません", t.show()))
-                        .note("値を借りたいときは、まず `own` に入れてください"));
+                // own なら先を、ref なら同じ先を借りる。それ以外の値は、その場所そのものを借りる
+                let target = match t.pointee() {
+                    Some(x) => x.clone(),
+                    None => {
+                        if let Some(at) = self.inside_list(inner)? {
+                            return Err(Diagnostic::new("リストの中の値は借りられません")
+                                .primary(at, "リストは伸び縮みするので、中の場所が変わる")
+                                .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                        }
+                        t.clone()
+                    }
                 };
-                let target = target.clone();
                 if *mutable {
                     // own を ref mut で借りるには持ち主が mut、ref から借り直すにはその ref が ref mut
                     let origin = self.origin(inner);
@@ -1155,7 +1166,7 @@ impl<'a> Checker<'a> {
                     _ => None,
                 };
                 let values: Vec<&Expr> = inits.iter().map(|i| &i.value).collect();
-                let map = self.instantiate(&def.tparams, &params, &values, &pre.into_iter().collect::<Vec<_>>())?;
+                let map = self.instantiate(&def.tparams, &params, &values, &pre.into_iter().collect::<Vec<_>>(), false)?;
                 let targs = self.all_bound(&def.tparams, &map, e.span, name)?;
                 Ok(Ty::Struct(name.clone(), targs))
             }
@@ -1496,7 +1507,12 @@ impl<'a> Checker<'a> {
                 .require(span, format!("書き換えるメソッド `{}` を呼ぼうとした", name).as_str())?;
         }
         for (a, t) in args.iter().zip(&m.params) {
-            self.expect(a, t)?;
+            let got = self.expr_h(a, Some(t))?;
+            let got = self.auto_borrow(a, got, t)?;
+            if !self.fits(&got, t) {
+                return Err(mismatch(t, &got, a.span));
+            }
+            convert(a, &got, t);
         }
         Ok(m.ret)
     }
@@ -1578,7 +1594,7 @@ impl<'a> Checker<'a> {
         let bounds = sig.bounds.clone();
         let pre = hint.map(|h| (&ret, h));
         let args: Vec<&Expr> = args.iter().collect();
-        let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>())?;
+        let map = self.instantiate(&tparams, &params, &args, &pre.into_iter().collect::<Vec<_>>(), true)?;
         if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
             self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
         }
@@ -1658,7 +1674,7 @@ impl<'a> Checker<'a> {
             pre.push((&ret, h));
         }
         let args: Vec<&Expr> = args.iter().collect();
-        let map = self.instantiate(&tparams, &params[1..], &args, &pre)?;
+        let map = self.instantiate(&tparams, &params[1..], &args, &pre, true)?;
         if contains_param(&ret) || params.iter().any(|p| has_unbound(p, &tparams, &map)) {
             self.all_bound(&tparams, &map, span, &format!("`{}`", name))?;
         }
@@ -1717,6 +1733,49 @@ impl<'a> Checker<'a> {
     }
 
     /// 場所 `e` に書き込めるか
+    /// 引数 `a`（型 `t`）を、引数の型 `want` が `ref T` なら自動で借りる（`ref a` と書いたのと同じ）。
+    /// 借りるのは場所（変数・フィールド・添字・`*p`）だけ。`ref mut` は呼ぶ側に書いてもらう
+    fn auto_borrow(&mut self, a: &Expr, t: Ty, want: &Ty) -> R<Ty> {
+        if !matches!(want, Ty::Ref(_, false)) || matches!(t, Ty::Ref(..)) || !is_place(a) {
+            return Ok(t);
+        }
+        let target = match t.pointee() {
+            Some(x) => x.clone(),
+            None => {
+                if let Some(at) = self.inside_list(a)? {
+                    return Err(Diagnostic::new("リストの中の値は借りられません")
+                        .primary(at, "`ref` の引数なので借りて渡そうとしたが、リストは伸び縮みするので中の場所が変わる")
+                        .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                }
+                t
+            }
+        };
+        a.borrow.set(true);
+        Ok(Ty::Ref(Box::new(target), false))
+    }
+
+    /// 場所 `e`（own / ref でない値）が、リストの要素の中にあるか。あればその添字の位置
+    fn inside_list(&mut self, e: &Expr) -> R<Option<Span>> {
+        let (base, is_index) = match &e.kind {
+            ExprKind::Field(base, ..) => (base, false),
+            ExprKind::Index(base, ..) => (base, true),
+            _ => return Ok(None),
+        };
+        // 型をもう一度求める（警告が二重に出ないよう、増えた分は捨てる）
+        let n = self.warnings.len();
+        let bt = self.expr(base);
+        self.warnings.truncate(n);
+        match bt? {
+            // own / ref の先は別のスロットなので、ここで道筋が切れる
+            Ty::Own(x) | Ty::Ref(x, _) => Ok(match &*x {
+                Ty::List(_) if is_index => Some(e.span),
+                _ => None,
+            }),
+            Ty::List(_) if is_index => Ok(Some(e.span)),
+            _ => self.inside_list(base),
+        }
+    }
+
     fn access(&mut self, e: &Expr) -> R<Access> {
         Ok(match &e.kind {
             ExprKind::Var(name) => {

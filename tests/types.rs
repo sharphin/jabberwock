@@ -176,7 +176,7 @@ fn branches_of_a_value_must_agree() {
 
 #[test]
 fn pointers_are_checked() {
-    assert!(main_err("    let x = 5;\n    let r = ref x;").title.contains("借用できない値"));
+    assert!(main_err("    let r = ref 5;").title.contains("借用できない式"));
     assert!(main_err("    let x = 5;\n    print(*x);").title.contains("`*` でたどれるのは own と ref だけ"));
     let d = main_err("    let a = own 1;\n    let ref bool r = ref a;");
     assert!(d.labels.iter().any(|l| l.text.contains("`ref i64` ですが、`ref bool` が必要")));

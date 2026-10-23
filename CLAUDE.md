@@ -37,12 +37,19 @@
 | `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
 | `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a` |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
+| `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
 ## 大事な不変条件
 
 - `own` は唯一の所有者。値として読むとムーブ。構造体も値として読むとムーブ（中に own を持ちうるため）。
 - 値を捨てるときは `release` で中の own を（構造体のフィールドも含めて）すべて解放する。リークはテストで `live_objects == 0` を確認。
+- 変数の値もヒープのスロットに置く（`VarState::Live(slot)`）。ムーブ・スコープ終了で `vacate` して世代を進める（変数を借りた ref が無効になる）。
+  `RefVal` は `slot` / `generation` に加えてスロットの中の道筋 `path`（フィールドと添字）を持つ。own の先を指すなら空。
+  道筋はリストの中を通らない（`through_list` / types.rs の `inside_list` で弾く）。enum の中も通らない（`place` が通さない）。
+  `check_ptr` は (スロット, 道筋) を返し、`at` / `at_mut` で中の値をたどる。
+- `ref T` の引数に `ref` なしで場所を渡すと、types.rs の `auto_borrow` が `Expr.borrow` を立てる。interp（`eval` / `eval_borrow`）と
+  analyze（`expr`）はそれを `ref e` と同じに扱う（`make_ref` / `ref_of`）。関数とメソッドの引数だけ（enum の中身・構造体のフィールドは対象外）。
 - 静的解析の根拠: own 変数 `a` のスロットを解放できるのは `a` という名前を使う操作（再代入・ムーブ・`drop`・スコープ終了）だけ。呼び出された関数は呼び出し元の変数に触れない。
 - 解析は安全側。分からないものは `Check::Required`（実行時検査）。デバッグビルドでは消した検査も `debug_assert!` で確かめる。
 - 解析とインタプリタの「評価順」と「ムーブする／しない（`eval` と `eval_borrow`）」は必ず一致させる。
@@ -83,7 +90,7 @@
   型の引数は構造体のもの＋メソッドのもの）。本体のフィールド名・メソッド名は `bind_this` が `this.名前` に書き換える
   （引数・ローカル変数が同じ名前なら書き換えない）。呼び出しは `ExprKind::MethodCall`。
   interp の `eval_method`: 一時的な receiver は先に評価、場所の receiver は引数のあとで借りる（analyze も同じ順）。
-  構造体の値の receiver はヒープへ貸し（`Lent`）、呼び出し後に解放して元の場所へ戻す。
+  場所にある構造体の値の receiver はその場所を借りて this にする。一時的な値とリストの中の receiver だけヒープへ貸し（`Lent`）、呼び出し後に解放して元の場所へ戻す。
   analyze は receiver の型を知らないので、同じ名前のメソッドすべての呼び出しとして記録する（安全側）。
   静的メソッド（`static fn`）は this のない `構造体名.名前` の関数。パーサが `struct 名前` を先に集め（`struct_names`）、
   `Point.at(...)` を `ExprKind::Call("Point.at")` にする。型検査の `FnSig.method` で呼び方の取り違えを弾く。

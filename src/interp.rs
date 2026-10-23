@@ -44,6 +44,8 @@ pub enum Value {
 pub struct RefVal {
     slot: usize,
     generation: u32,
+    /// スロットの中のどこを指すか（構造体のフィールドと配列の添字の道筋）。own の先を指すなら空
+    path: Vec<usize>,
     borrowed_at: Span,
     what: String,
     /// `ref mut` で借りたか（書き換えられるか）
@@ -163,7 +165,8 @@ impl Heap {
 
 #[derive(Clone)]
 enum VarState {
-    Live(Value),
+    /// 値はヒープのスロットに置く（`ref x` で変数そのものを借りられるように）
+    Live(usize),
     /// 所有権が移動済み。どこで移動したかを覚えておく。
     Moved(Span),
 }
@@ -181,9 +184,9 @@ struct Frame {
     scopes: Vec<Vec<Var>>,
 }
 
-/// 書き込み・読み出しができる場所（変数かヒープのスロット）と、その中のフィールドの道筋
+/// 書き込み・読み出しができる場所（ヒープのスロット。変数もスロットに置く）と、その中のフィールドの道筋
 struct Place {
-    root: Root,
+    slot: usize,
     path: Vec<usize>,
     access: Access,
 }
@@ -225,11 +228,6 @@ impl Access {
                 .note("書き換えるなら `ref mut` で借りてください")),
         }
     }
-}
-
-enum Root {
-    Var(String),
-    Slot(usize),
 }
 
 /// メソッド呼び出しのために `this` として貸したスロット。呼び出しのあと解放する。
@@ -306,8 +304,16 @@ impl Interp {
         let main = self.fns.get("main").cloned().ok_or_else(|| {
             Diagnostic::new("`main` 関数がありません").note("`fn main() { ... }` を定義してください")
         })?;
-        self.call_fn(&main, Vec::new(), main.span)?;
-        Ok(())
+        let r = self.call_fn(&main, Vec::new(), main.span);
+        if r.is_err() {
+            // 実行時エラーで止まったときも、残っている変数を片づける（リーク検査を正しくするため）
+            while let Some(frame) = self.frames.pop() {
+                for scope in frame.scopes.into_iter().rev() {
+                    self.drop_scope(scope, main.span, "エラーで止まった");
+                }
+            }
+        }
+        r.map(|_| ())
     }
 
     // ------------------------------------------------------------ 解放
@@ -366,10 +372,59 @@ impl Interp {
 
     fn drop_scope(&mut self, scope: Vec<Var>, span: Span, how: &str) {
         for var in scope.into_iter().rev() {
-            if let VarState::Live(v) = var.state {
-                self.release(v, span, &format!("`{}` は{}ので解放された", var.name, how));
+            if let VarState::Live(slot) = var.state {
+                let why = format!("`{}` は{}ので解放された", var.name, how);
+                let v = self.vacate(slot, span, &why);
+                self.release(v, span, &why);
             }
         }
+    }
+
+    /// スロットの中身を取り出して、スロットだけ解放する（中の own は解放しない）。
+    /// 世代が進むので、このスロットを指していた ref は無効になる
+    fn vacate(&mut self, slot: usize, span: Span, why: &str) -> Value {
+        let v = self.heap.slots[slot].value.take().expect("live slot");
+        let g = self.heap.slots[slot].generation;
+        self.heap.slots[slot].generation = g.wrapping_add(1);
+        self.heap.history.insert((slot, g), Freed { span, why: why.to_string() });
+        self.heap.free_list.push(slot);
+        v
+    }
+
+    /// スロットの中の道筋の先にある値
+    fn at(&self, slot: usize, path: &[usize]) -> &Value {
+        let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
+        for &i in path {
+            v = match v {
+                Value::Struct(_, fields) | Value::Array(fields, _) => &fields[i],
+                _ => unreachable!("paths go through structs and arrays"),
+            };
+        }
+        v
+    }
+
+    /// 道筋がリストの中を通るか（リストの要素の場所は借りられない）
+    fn through_list(&self, slot: usize, path: &[usize]) -> bool {
+        let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
+        for &i in path {
+            v = match v {
+                Value::Array(_, true) => return true,
+                Value::Struct(_, fields) | Value::Array(fields, _) => &fields[i],
+                _ => unreachable!("paths go through structs and arrays"),
+            };
+        }
+        false
+    }
+
+    fn at_mut(&mut self, slot: usize, path: &[usize]) -> &mut Value {
+        let mut v = self.heap.slots[slot].value.as_mut().expect("live slot");
+        for &i in path {
+            v = match v {
+                Value::Struct(_, fields) | Value::Array(fields, _) => &mut fields[i],
+                _ => unreachable!("paths go through structs and arrays"),
+            };
+        }
+        v
     }
 
     // ------------------------------------------------------------ 変数
@@ -387,22 +442,23 @@ impl Interp {
     }
 
     fn declare(&mut self, name: &str, v: Value, mutable: bool, decl: Span) {
+        let slot = self.heap.alloc(v);
         self.frames
             .last_mut()
             .expect("frame")
             .scopes
             .last_mut()
             .expect("scope")
-            .push(Var { name: name.to_string(), state: VarState::Live(v), mutable, decl });
+            .push(Var { name: name.to_string(), state: VarState::Live(slot), mutable, decl });
     }
 
     // ------------------------------------------------------------ ポインタ検査
 
     /// ポインタの先のスロットを返す。参照が古ければ時系列付きのエラーにする。
     /// `check` が `Elided` なら、静的解析が安全を証明済みなので世代チェックを飛ばす。
-    fn check_ptr(&mut self, p: &Value, use_span: Span, check: Check) -> R<usize> {
+    fn check_ptr(&mut self, p: &Value, use_span: Span, check: Check) -> R<(usize, Vec<usize>)> {
         match p {
-            Value::Own(s) => Ok(*s),
+            Value::Own(s) => Ok((*s, Vec::new())),
             Value::Ref(r) => {
                 let slot = &self.heap.slots[r.slot];
                 let valid = slot.generation == r.generation && slot.value.is_some();
@@ -410,11 +466,11 @@ impl Interp {
                     // 解析の誤りを見逃さないよう、デバッグビルドでだけ念のため確かめる
                     debug_assert!(valid, "static analysis elided the check of a dangling ref");
                     self.ref_checks_elided += 1;
-                    return Ok(r.slot);
+                    return Ok((r.slot, r.path.clone()));
                 }
                 self.ref_checks += 1;
                 if valid {
-                    return Ok(r.slot);
+                    return Ok((r.slot, r.path.clone()));
                 }
                 let mut d = Diagnostic::new("無効になった参照を使いました (dangling reference)")
                     .label(r.borrowed_at, format!("ここで `{}` を借りた", r.what));
@@ -513,11 +569,11 @@ impl Interp {
     ) -> Option<R<(Flow, Value)>> {
         let (subject, by_ref) = match v {
             Value::Ref(r) => {
-                let slot = match self.check_ptr(&Value::Ref(r.clone()), scrut.span, Check::Required) {
+                let (slot, path) = match self.check_ptr(&Value::Ref(r.clone()), scrut.span, Check::Required) {
                     Ok(s) => s,
                     Err(d) => return Some(Err(d)),
                 };
-                let inner = self.heap.slots[slot].value.clone().expect("live slot");
+                let inner = self.at(slot, &path).clone();
                 if !matches!(inner, Value::Enum { .. }) {
                     return None;
                 }
@@ -562,6 +618,7 @@ impl Interp {
                     Value::Own(s) => Value::Ref(RefVal {
                         slot: s,
                         generation: self.heap.slots[s].generation,
+                        path: Vec::new(),
                         borrowed_at: *bspan,
                         what: format!("{} の中身 {}", r.what, b),
                         mutable: r.mutable,
@@ -667,7 +724,8 @@ impl Interp {
                     self.frames.last_mut().expect("frame").scopes.push(Vec::new());
                     self.declare(var, Value::Int(i, ty), false, *range_span);
                     let r = self.loop_iteration(body);
-                    self.frames.last_mut().expect("frame").scopes.pop();
+                    let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
+                    self.drop_scope(scope, *range_span, "次の周回へ進んだ");
                     if let Some(f) = r? {
                         return Ok(f);
                     }
@@ -686,8 +744,8 @@ impl Interp {
                 let items = match &src {
                     Value::Array(items, _) => items.clone(),
                     Value::Own(_) | Value::Ref(_) => {
-                        let slot = self.check_ptr(&src, iter.span, Check::Required)?;
-                        match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                        let (slot, path) = self.check_ptr(&src, iter.span, Check::Required)?;
+                        match self.at(slot, &path) {
                             Value::Array(items, _) => items.clone(),
                             other => return Err(not_an_array(other, iter.span)),
                         }
@@ -703,6 +761,7 @@ impl Interp {
                         Value::Own(slot) => Value::Ref(RefVal {
                             slot,
                             generation: self.heap.slots[slot].generation,
+                            path: Vec::new(),
                             borrowed_at: *var_span,
                             what: what.clone(),
                             mutable: false,
@@ -716,7 +775,8 @@ impl Interp {
                     self.frames.last_mut().expect("frame").scopes.push(Vec::new());
                     self.declare(var, v, false, *var_span);
                     let r = self.loop_iteration(body);
-                    self.frames.last_mut().expect("frame").scopes.pop();
+                    let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
+                    self.drop_scope(scope, *var_span, "次の周回へ進んだ");
                     match r {
                         Ok(None) => {}
                         Ok(Some(f)) => {
@@ -756,7 +816,7 @@ impl Interp {
         let newv = self.eval(value)?;
         match &target.kind {
             ExprKind::Var(name) => {
-                let old = {
+                let state = {
                     let var = self
                         .find_var(name)
                         .ok_or_else(|| undefined_var(name, target.span))?;
@@ -764,10 +824,18 @@ impl Interp {
                         let access = Access::ImmutVar { name: name.clone(), decl: var.decl };
                         access.require(target.span, "書き換えようとした")?;
                     }
-                    std::mem::replace(&mut var.state, VarState::Live(newv))
+                    var.state.clone()
                 };
-                if let VarState::Live(v) = old {
-                    self.release(v, span, &format!("`{}` に再代入されて、古い値が解放された", name));
+                match state {
+                    // 同じスロットに入れ直す（変数を借りた ref はそのまま使え、新しい値が見える）
+                    VarState::Live(slot) => {
+                        let old = self.heap.slots[slot].value.replace(newv).expect("live slot");
+                        self.release(old, span, &format!("`{}` に再代入されて、古い値が解放された", name));
+                    }
+                    VarState::Moved(_) => {
+                        let slot = self.heap.alloc(newv);
+                        self.find_var(name).expect("var").state = VarState::Live(slot);
+                    }
                 }
                 Ok(())
             }
@@ -787,18 +855,21 @@ impl Interp {
     /// 値を「借りて読む」評価。変数はムーブしない。
     /// 戻り値の bool は「新しく作られた一時値か」（own なら使い終わりで解放が必要）。
     fn eval_borrow(&mut self, e: &Expr) -> R<(Value, bool)> {
+        if e.borrow.get() {
+            return Ok((self.make_ref(e, false, e.span)?, true));
+        }
         match &e.kind {
             ExprKind::Var(name) => {
                 let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
-                match &var.state {
-                    VarState::Live(v) => Ok((v.clone(), false)),
-                    VarState::Moved(sp) => Err(moved_error(name, *sp, e.span)),
+                match var.state {
+                    VarState::Live(slot) => Ok((self.heap.slots[slot].value.clone().expect("live slot"), false)),
+                    VarState::Moved(sp) => Err(moved_error(name, sp, e.span)),
                 }
             }
             ExprKind::Deref(inner, check) => {
                 let (p, temp) = self.eval_borrow(inner)?;
-                let slot = self.check_ptr(&p, e.span, check.get())?;
-                let v = self.heap.slots[slot].value.clone().expect("live slot has a value");
+                let (slot, path) = self.check_ptr(&p, e.span, check.get())?;
+                let v = self.at(slot, &path).clone();
                 if temp {
                     if let Value::Own(tmp) = p {
                         if v.has_own() {
@@ -820,8 +891,8 @@ impl Interp {
                 let (v, holder) = match &tmp {
                     Value::Struct(def, fields) => (fields[self.field_index(def, name, e.span)?].clone(), None),
                     Value::Own(_) | Value::Ref(_) => {
-                        let slot = self.check_ptr(&tmp, e.span, check.get())?;
-                        let v = self.field_of_slot(slot, name, e.span)?.clone();
+                        let (slot, path) = self.check_ptr(&tmp, e.span, check.get())?;
+                        let v = self.field_of(slot, &path, name, e.span)?.clone();
                         (v, matches!(tmp, Value::Own(_)).then_some(slot))
                     }
                     other => return Err(not_a_struct(other, base.span)),
@@ -847,8 +918,8 @@ impl Interp {
                 let (v, holder) = match &tmp {
                     Value::Array(items, _) => (items[bounds(i, items.len(), idx.span)?].clone(), None),
                     Value::Own(_) | Value::Ref(_) => {
-                        let slot = self.check_ptr(&tmp, e.span, check.get())?;
-                        let v = match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                        let (slot, path) = self.check_ptr(&tmp, e.span, check.get())?;
+                        let v = match self.at(slot, &path) {
                             Value::Array(items, _) => items[bounds(i, items.len(), idx.span)?].clone(),
                             other => return Err(not_an_array(other, base.span)),
                         };
@@ -893,7 +964,8 @@ impl Interp {
                 } else {
                     Access::ImmutVar { name: name.clone(), decl: var.decl }
                 };
-                Ok(Place { root: Root::Var(name.clone()), path: Vec::new(), access })
+                let VarState::Live(slot) = var.state else { unreachable!("checked above") };
+                Ok(Place { slot, path: Vec::new(), access })
             }
             ExprKind::Deref(inner, check) => {
                 let (p, outer) = if is_place(inner) {
@@ -908,8 +980,8 @@ impl Interp {
                     }
                     (p, Access::Write)
                 };
-                let slot = self.check_ptr(&p, e.span, check.get())?;
-                Ok(Place { root: Root::Slot(slot), path: Vec::new(), access: outer.through(&p) })
+                let (slot, path) = self.check_ptr(&p, e.span, check.get())?;
+                Ok(Place { slot, path, access: outer.through(&p) })
             }
             ExprKind::Field(base, name, check) => {
                 let mut place = self.place(base)?;
@@ -924,14 +996,14 @@ impl Interp {
                         Ok(place)
                     }
                     Err(p @ (Value::Own(_) | Value::Ref(_))) => {
-                        let slot = self.check_ptr(&p, e.span, check.get())?;
-                        let idx = match &self.heap.slots[slot].value {
-                            Some(Value::Struct(def, _)) => self.field_index(def, name, e.span)?,
-                            Some(other) => return Err(not_a_struct(other, base.span)),
-                            None => unreachable!("check_ptr returns live slots"),
+                        let (slot, mut path) = self.check_ptr(&p, e.span, check.get())?;
+                        let idx = match self.at(slot, &path) {
+                            Value::Struct(def, _) => self.field_index(def, name, e.span)?,
+                            other => return Err(not_a_struct(other, base.span)),
                         };
+                        path.push(idx);
                         let access = place.access.through(&p);
-                        Ok(Place { root: Root::Slot(slot), path: vec![idx], access })
+                        Ok(Place { slot, path, access })
                     }
                     Err(other) => Err(not_a_struct(&other, base.span)),
                 }
@@ -954,14 +1026,14 @@ impl Interp {
                         Ok(place)
                     }
                     Err(p @ (Value::Own(_) | Value::Ref(_))) => {
-                        let slot = self.check_ptr(&p, e.span, check.get())?;
-                        let len = match &self.heap.slots[slot].value {
-                            Some(Value::Array(items, _)) => items.len(),
-                            Some(other) => return Err(not_an_array(other, base.span)),
-                            None => unreachable!("check_ptr returns live slots"),
+                        let (slot, mut path) = self.check_ptr(&p, e.span, check.get())?;
+                        let len = match self.at(slot, &path) {
+                            Value::Array(items, _) => items.len(),
+                            other => return Err(not_an_array(other, base.span)),
                         };
+                        path.push(bounds(i, len, idx.span)?);
                         let access = place.access.through(&p);
-                        Ok(Place { root: Root::Slot(slot), path: vec![bounds(i, len, idx.span)?], access })
+                        Ok(Place { slot, path, access })
                     }
                     Err(other) => Err(not_an_array(&other, base.span)),
                 }
@@ -971,20 +1043,7 @@ impl Interp {
     }
 
     fn place_mut(&mut self, place: &Place) -> &mut Value {
-        let mut v = match &place.root {
-            Root::Var(name) => match &mut self.find_var(name).expect("place var").state {
-                VarState::Live(v) => v,
-                VarState::Moved(_) => unreachable!("place() rejects moved vars"),
-            },
-            Root::Slot(s) => self.heap.slots[*s].value.as_mut().expect("live slot"),
-        };
-        for &i in &place.path {
-            v = match v {
-                Value::Struct(_, fields) | Value::Array(fields, _) => &mut fields[i],
-                _ => unreachable!("place path goes through structs and arrays"),
-            };
-        }
-        v
+        self.at_mut(place.slot, &place.path)
     }
 
     fn field_index(&self, def: &StructDef, name: &str, span: Span) -> R<usize> {
@@ -995,15 +1054,68 @@ impl Interp {
         })
     }
 
-    fn field_of_slot(&self, slot: usize, name: &str, span: Span) -> R<&Value> {
-        match self.heap.slots[slot].value.as_ref().expect("live slot") {
+    fn field_of(&self, slot: usize, path: &[usize], name: &str, span: Span) -> R<&Value> {
+        match self.at(slot, path) {
             Value::Struct(def, fields) => Ok(&fields[self.field_index(def, name, span)?]),
             other => Err(not_a_struct(other, span)),
         }
     }
 
+    /// `ref inner` / `ref mut inner`。own なら先を、ref なら同じ先を借りる。それ以外の値は、その場所そのものを借りる
+    fn make_ref(&mut self, inner: &Expr, mutable: bool, span: Span) -> R<Value> {
+        if !is_place(inner) {
+            return Err(Diagnostic::new("借用できない式です")
+                .primary(inner.span, "`ref` は変数か `*p` か `p.f` にだけ使えます")
+                .note("`let x = own ...` で変数に入れてから `ref x` としてください"));
+        }
+        let pl = self.place(inner)?;
+        // own なら先を、ref なら同じ先を借りる。それ以外の値は、その場所そのものを借りる
+        let p = match self.place_mut(&pl) {
+            v @ (Value::Own(_) | Value::Ref(_)) => Some(v.clone()),
+            _ => None,
+        };
+        if mutable {
+            // own を ref mut で借りるには持ち主が mut、ref から借り直すにはその ref が ref mut
+            let access = match &p {
+                Some(p) => pl.access.clone().through(p),
+                None => pl.access.clone(),
+            };
+            access.require(span, "ref mut で借りようとした")?;
+        }
+        match p {
+            Some(Value::Own(slot)) => Ok(Value::Ref(RefVal {
+                slot,
+                generation: self.heap.slots[slot].generation,
+                path: Vec::new(),
+                borrowed_at: span,
+                what: describe(inner),
+                mutable,
+            })),
+            Some(Value::Ref(r)) => Ok(Value::Ref(RefVal { mutable, ..r })),
+            _ => {
+                if self.through_list(pl.slot, &pl.path) {
+                    return Err(Diagnostic::new("リストの中の値は借りられません")
+                        .primary(inner.span, "リストは伸び縮みするので、中の場所が変わる")
+                        .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                }
+                Ok(Value::Ref(RefVal {
+                    slot: pl.slot,
+                    generation: self.heap.slots[pl.slot].generation,
+                    path: pl.path,
+                    borrowed_at: span,
+                    what: describe(inner),
+                    mutable,
+                }))
+            }
+        }
+    }
+
     /// 式を評価する。整数なら、型検査が決めた型（`Expr.int`）に変換して返す
     fn eval(&mut self, e: &Expr) -> R<Value> {
+        if e.borrow.get() {
+            // `ref` の引数に `ref` なしで渡した場所は、自動で借りる（型検査が決めた）
+            return self.make_ref(e, false, e.span);
+        }
         let v = self.eval_kind(e)?;
         Ok(convert(e, v))
     }
@@ -1046,12 +1158,12 @@ impl Interp {
             ExprKind::Var(name) => {
                 let var = self.find_var(name).ok_or_else(|| undefined_var(name, e.span))?;
                 match var.state.clone() {
-                    // own を読む = ムーブ。元の変数は使えなくなる。
-                    VarState::Live(v) if v.moves() => {
-                        var.state = VarState::Moved(e.span);
-                        Ok(v)
+                    // own を読む = ムーブ。元の変数は使えなくなる（変数を借りた ref も無効になる）
+                    VarState::Live(slot) if self.heap.slots[slot].value.as_ref().expect("live slot").moves() => {
+                        self.find_var(name).expect("var").state = VarState::Moved(e.span);
+                        Ok(self.vacate(slot, e.span, &format!("`{}` がムーブされた", name)))
                     }
-                    VarState::Live(v) => Ok(v),
+                    VarState::Live(slot) => Ok(self.heap.slots[slot].value.clone().expect("live slot")),
                     VarState::Moved(sp) => Err(moved_error(name, sp, e.span)),
                 }
             }
@@ -1059,36 +1171,7 @@ impl Interp {
                 let v = self.eval(inner)?;
                 Ok(Value::Own(self.heap.alloc(v)))
             }
-            ExprKind::Ref(inner, mutable) => {
-                if !is_place(inner) {
-                    return Err(Diagnostic::new("借用できない式です")
-                        .primary(inner.span, "`ref` は変数か `*p` か `p.f` にだけ使えます")
-                        .note("`let x = own ...` で変数に入れてから `ref x` としてください"));
-                }
-                let (p, access) = if *mutable {
-                    let pl = self.place(inner)?;
-                    (self.place_mut(&pl).clone(), pl.access)
-                } else {
-                    (self.eval_borrow(inner)?.0, Access::Write)
-                };
-                if *mutable {
-                    // own を ref mut で借りるには持ち主が mut、ref から借り直すにはその ref が ref mut
-                    access.through(&p).require(e.span, "ref mut で借りようとした")?;
-                }
-                match p {
-                    Value::Own(slot) => Ok(Value::Ref(RefVal {
-                        slot,
-                        generation: self.heap.slots[slot].generation,
-                        borrowed_at: e.span,
-                        what: describe(inner),
-                        mutable: *mutable,
-                    })),
-                    Value::Ref(r) => Ok(Value::Ref(RefVal { mutable: *mutable, ..r })),
-                    other => Err(Diagnostic::new("借用できない値です")
-                        .primary(inner.span, format!("{} は own でも ref でもありません", other.type_name()))
-                        .note("値を借りたいときは、まず `own` に入れてください")),
-                }
-            }
+            ExprKind::Ref(inner, mutable) => self.make_ref(inner, *mutable, e.span),
             ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
                 if v.has_own() || v.moves() {
@@ -1317,9 +1400,9 @@ impl Interp {
         let seq_slot = match &rv {
             Value::Array(..) => Some(None),
             Value::Own(_) | Value::Ref(_) => {
-                let slot = self.check_ptr(&rv, recv.span, Check::Required)?;
-                match self.heap.slots[slot].value.as_ref().expect("live slot") {
-                    Value::Array(..) => Some(Some(slot)),
+                let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.at(slot, &path) {
+                    Value::Array(..) => Some(Some((slot, path))),
                     _ => None,
                 }
             }
@@ -1332,7 +1415,7 @@ impl Interp {
             }
             let mut vals = vals;
             let items = match (slot, &place) {
-                (Some(s), _) => self.heap.slots[s].value.as_mut().expect("live slot"),
+                (Some((s, path)), _) => self.at_mut(s, &path),
                 (None, Some(pl)) => self.place_mut(pl),
                 (None, None) => &mut rv,
             };
@@ -1362,8 +1445,8 @@ impl Interp {
         let sname = match &rv {
             Value::Struct(def, _) => def.name.clone(),
             Value::Own(_) | Value::Ref(_) => {
-                let slot = self.check_ptr(&rv, recv.span, Check::Required)?;
-                match self.heap.slots[slot].value.as_ref().expect("live slot") {
+                let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.at(slot, &path) {
                     Value::Struct(def, _) => def.name.clone(),
                     other => return Err(not_a_struct(other, recv.span)),
                 }
@@ -1380,7 +1463,7 @@ impl Interp {
             access.through(&rv).require(span, &format!("書き換えるメソッド `{}` を呼ぼうとした", name))?;
         }
         let this = |slot: usize, generation: u32, what: String| {
-            Value::Ref(RefVal { slot, generation, borrowed_at: recv.span, what, mutable })
+            Value::Ref(RefVal { slot, generation, path: Vec::new(), borrowed_at: recv.span, what, mutable })
         };
         let mut lent: Option<Lent> = None;
         let this_val = match rv {
@@ -1392,14 +1475,23 @@ impl Interp {
                 this(slot, self.heap.slots[slot].generation, describe(recv))
             }
             Value::Ref(r) => Value::Ref(RefVal { mutable, ..r }),
+            // 場所にある構造体は、その場所を借りて this にする（リストの中は場所が変わりうるので貸す）
+            _ if matches!(&place, Some(pl) if !self.through_list(pl.slot, &pl.path)) => {
+                let pl = place.expect("checked above");
+                Value::Ref(RefVal {
+                    slot: pl.slot,
+                    generation: self.heap.slots[pl.slot].generation,
+                    path: pl.path,
+                    borrowed_at: recv.span,
+                    what: describe(recv),
+                    mutable,
+                })
+            }
             v => {
                 let back = place.map(|pl| {
                     // 元の場所は空にしておく（呼び出しのあいだに別の道から触れても、古い値は見えない）
                     *self.place_mut(&pl) = Value::Unit;
-                    let owner = match pl.root {
-                        Root::Slot(s) => Some((s, self.heap.slots[s].generation)),
-                        Root::Var(_) => None,
-                    };
+                    let owner = Some((pl.slot, self.heap.slots[pl.slot].generation));
                     (pl, owner)
                 });
                 let slot = self.heap.alloc(v);
@@ -1439,7 +1531,7 @@ impl Interp {
             .params
             .iter()
             .zip(args)
-            .map(|(p, v)| Var { name: p.name.clone(), state: VarState::Live(v), mutable: p.mutable, decl: p.span })
+            .map(|(p, v)| Var { name: p.name.clone(), state: VarState::Live(self.heap.alloc(v)), mutable: p.mutable, decl: p.span })
             .collect();
         self.frames.push(Frame { scopes: vec![vars] });
 
