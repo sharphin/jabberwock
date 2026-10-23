@@ -247,6 +247,8 @@ struct Checker<'a> {
     interfaces: HashMap<&'a str, Vec<IMethod>>,
     /// 今調べている関数の、型の引数ごとの条件
     bounds: HashMap<String, Vec<String>>,
+    /// 今調べているメソッドの構造体のフィールド名（シャドーイングの禁止に使う）
+    fields: Vec<String>,
     warnings: Vec<Diagnostic>,
 }
 
@@ -271,6 +273,7 @@ pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
         enums: HashMap::new(),
         fns: HashMap::new(),
         scopes: Vec::new(),
+        fields: Vec::new(),
         ret: Ty::Unit,
         tparams: Vec::new(),
         interfaces: HashMap::new(),
@@ -716,7 +719,7 @@ impl<'a> Checker<'a> {
                         }
                     },
                 };
-                self.declare(b, VarInfo { ty: t, mutable: false, decl: *bspan });
+                self.declare(b, VarInfo { ty: t, mutable: false, decl: *bspan })?;
             }
         }
         Ok(())
@@ -727,12 +730,17 @@ impl<'a> Checker<'a> {
         self.ret = sig.ret.clone();
         self.tparams = f.tparams.clone();
         self.bounds = f.tparams.iter().cloned().zip(f.bounds.iter().cloned()).collect();
+        self.fields = match (sig.method, f.name.split_once('.')) {
+            (true, Some((owner, _))) => self.structs.get(owner).map(|(d, _)| d.fields.clone()).unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let mut params = HashMap::new();
         for (p, t) in f.params.iter().zip(sig.params.clone()) {
             if params.contains_key(&p.name) {
                 return Err(Diagnostic::new(format!("引数 `{}` が二回あります", p.name))
                     .primary(p.span, "同じ名前の引数がすでにある"));
             }
+            self.not_a_field(&p.name, p.span)?;
             params.insert(p.name.clone(), VarInfo { ty: t, mutable: p.mutable, decl: p.span });
         }
         self.scopes = vec![params];
@@ -761,8 +769,27 @@ impl<'a> Checker<'a> {
         self.scopes.iter().rev().find_map(|s| s.get(name))
     }
 
-    fn declare(&mut self, name: &str, info: VarInfo) {
+    /// 変数を宣言する。シャドーイングは禁止なので、見えている名前と同じならエラー
+    fn declare(&mut self, name: &str, info: VarInfo) -> R<()> {
+        if let Some(old) = self.lookup(name) {
+            return Err(Diagnostic::new(format!("`{}` はすでにある名前です", name))
+                .label(old.decl, "ここで宣言した")
+                .primary(info.decl, "同じ名前で宣言し直している")
+                .note("シャドーイング（同じ名前で宣言し直すこと）はできません。別の名前をつけてください"));
+        }
+        self.not_a_field(name, info.decl)?;
         self.scopes.last_mut().expect("scope").insert(name.to_string(), info);
+        Ok(())
+    }
+
+    /// メソッドの中では、フィールドと同じ名前の引数や変数を作れない
+    fn not_a_field(&self, name: &str, span: Span) -> R<()> {
+        if self.fields.iter().any(|f| f == name) {
+            return Err(Diagnostic::new(format!("`{}` はフィールドの名前です", name))
+                .primary(span, "メソッドの中では、フィールドと同じ名前の引数や変数を作れない")
+                .note(format!("フィールドは `{}` のまま使えます。引数や変数には別の名前をつけてください", name)));
+        }
+        Ok(())
     }
 
     /// ブロックの型。`want_value` なら最後の `;` のない式の型（なければ値なし）。
@@ -812,7 +839,7 @@ impl<'a> Checker<'a> {
                     }
                     _ => got,
                 };
-                self.declare(name, VarInfo { ty: t, mutable: *mutable, decl: *span });
+                self.declare(name, VarInfo { ty: t, mutable: *mutable, decl: *span })?;
                 Ok(false)
             }
             Stmt::Assign { target, value, .. } => {
@@ -860,7 +887,7 @@ impl<'a> Checker<'a> {
                     self.expect(step, &I64)?;
                 }
                 self.scopes.push(HashMap::new());
-                self.declare(var, VarInfo { ty: t, mutable: false, decl: *range_span });
+                self.declare(var, VarInfo { ty: t, mutable: false, decl: *range_span })?;
                 let r = self.block(body, false, None);
                 self.scopes.pop();
                 r?;
@@ -887,7 +914,7 @@ impl<'a> Checker<'a> {
                         .note("`for i in range(a.len())` と添字で回してください"));
                 };
                 self.scopes.push(HashMap::new());
-                self.declare(var, VarInfo { ty: vt, mutable: false, decl: *var_span });
+                self.declare(var, VarInfo { ty: vt, mutable: false, decl: *var_span })?;
                 let r = self.block(body, false, None);
                 self.scopes.pop();
                 r?;

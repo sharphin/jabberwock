@@ -11,8 +11,8 @@ struct Point {
         this.y = y + dy;
     }
 
-    fn i64 far(i64 x) {
-        x + this.x + len2()
+    fn i64 far(i64 d) {
+        d + x + len2()
     }
 }
 

@@ -225,15 +225,20 @@ fn main() {
 }
 
 #[test]
-fn shadowing_does_not_confuse_the_analysis() {
+fn same_names_in_sibling_scopes_do_not_confuse_the_analysis() {
+    // シャドーイングは禁止だが、別々のブロックで同じ名前を使うのはよい。二つの `a` は別の変数
     dangling(
         "
 fn main() {
-    let a = own 1;
-    let mut r = ref a;
+    let z = own 0;
+    let mut r = ref z;
+    if true {
+        let a = own 1;
+        r = ref a;
+    }
     if true {
         let a = own 2;
-        r = ref a;
+        print(*a);
     }
     print(*r)
 }",
@@ -277,8 +282,8 @@ fn all_examples_behave_the_same_with_and_without_elision() {
 }
 
 #[test]
-fn a_name_taken_in_a_case_shadows_the_outer_variable() {
-    // case の `r` は外の `r`（生きている ref）とは別の変数。外の事実を使って検査を消してはいけない
+fn a_name_taken_in_a_case_is_a_new_variable() {
+    // case の `r` は前の case の `r`（生きている ref）とは別の変数。前の事実を使って検査を消してはいけない
     dangling(
         "
 enum E {
@@ -292,8 +297,9 @@ fn ref i64 stale() {
 
 fn main() {
     let a = own 1;
-    let r = ref a;
-    print(*r);
+    match E.A(ref a) {
+        case A(r) -> print(*r);
+    }
     let e = E.A(stale());
     match e {
         case A(r) -> print(*r);

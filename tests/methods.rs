@@ -30,8 +30,8 @@ const POINT: &str = "struct Point {
         this.y = y + dy;
     }
 
-    fn i64 plus(i64 x) {
-        x + this.x + len2()
+    fn i64 plus(i64 d) {
+        d + x + len2()
     }
 }
 ";
@@ -50,13 +50,13 @@ fn main() {{
 }
 
 #[test]
-fn parameters_hide_fields_and_methods_call_each_other() {
+fn fields_and_methods_are_used_without_this() {
     let src = format!("{}
 fn main() {{
     let p = Point {{ x: 3, y: 4 }};
     print(p.plus(100));
 }}", POINT);
-    // x は引数の 100、this.x は 3、len2() は this.len2()
+    // d は引数の 100、x は this.x の 3、len2() は this.len2()
     assert_eq!(ok(&src), "128\n");
 }
 

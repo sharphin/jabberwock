@@ -61,6 +61,7 @@
   `ref mut` を通ると Write のまま、`ref` を通ると ReadOnlyRef になる。`RefVal.mutable` が「ref mut か」。
   同じ規則を `types.rs` が型から静的に決める（`Access::through` に型を渡す）。実行時の検査は念のため残している。
   二つの規則は必ずそろえる。
+- シャドーイングは禁止。types.rs の `declare` が、見えている名前と同じ名前の宣言をエラーにする。
 - 型検査は「前から順に決めるだけ」。`ref mut T` は `ref T` として渡せる（`assignable`）。必ず抜けるブロックは `Ty::Never`。
 - 戻り値の型がある関数では、本体の最後の `;` のない式が戻り値（`call_fn` が `exec_block_value(body, true)`）。
   戻り値のない関数では最後の式の値は捨てる。
@@ -89,7 +90,7 @@
 
 - メソッドは、パーサが `構造体名.名前` という普通の関数にする（最初の引数 `this` は `ref [mut] 構造体<T..>`、
   型の引数は構造体のもの＋メソッドのもの）。本体のフィールド名・メソッド名は `bind_this` が `this.名前` に書き換える
-  （引数・ローカル変数が同じ名前なら書き換えない）。呼び出しは `ExprKind::MethodCall`。
+  （引数・ローカル変数にフィールドと同じ名前はつけられない。types.rs の `not_a_field`）。呼び出しは `ExprKind::MethodCall`。
   interp の `eval_method`: 一時的な receiver は先に評価、場所の receiver は引数のあとで借りる（analyze も同じ順）。
   場所にある構造体の値の receiver はその場所を借りて this にする。一時的な値とリストの中の receiver だけヒープへ貸し（`Lent`）、呼び出し後に解放して元の場所へ戻す。
   analyze は receiver の型を知らないので、同じ名前のメソッドすべての呼び出しとして記録する（安全側）。

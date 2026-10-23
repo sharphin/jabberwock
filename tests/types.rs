@@ -237,3 +237,50 @@ fn constant_overflow_is_warned_but_runs() {
     // 範囲内なら警告なし
     assert!(run_source("fn main() {\n    print(-9223372036854775807 - 1);\n}", false).warnings.is_empty());
 }
+
+// ---------------------------------------------------------------- シャドーイングの禁止
+
+#[test]
+fn shadowing_is_an_error() {
+    let shadow = |d: ward::diag::Diagnostic| {
+        assert!(d.title.contains("すでにある名前"), "{}", d.title);
+        assert!(d.labels.iter().any(|l| l.text.contains("ここで宣言した")));
+    };
+    // 同じスコープ・内側のスコープ・ループの変数・case で受け取る名前・引数
+    shadow(main_err("    let a = 1;\n    let a = 2;"));
+    shadow(main_err("    let a = 1;\n    if true {\n        let a = 2;\n    }"));
+    shadow(main_err("    let i = 0;\n    for i in range(3) { }"));
+    shadow(main_err("    let x = 0;\n    for x in [1, 2] { }"));
+    shadow(main_err("    let v = 0;\n    match Some(1) {\n        case Some(v) -> print(v);\n        case None -> {}\n    }"));
+    shadow(type_err("fn f(i64 n) {\n    let n = 2;\n}\nfn main() {\n    print(0);\n}"));
+}
+
+#[test]
+fn same_names_in_separate_blocks_are_fine() {
+    let src = "
+fn main() {
+    if true {
+        let a = 1;
+        print(a);
+    }
+    if true {
+        let a = \"two\";
+        print(a);
+    }
+    for i in range(1) { print(i); }
+    for i in range(1) { print(i); }
+}";
+    assert_eq!(ok(src), "1\ntwo\n0\n0\n");
+}
+
+#[test]
+fn method_params_and_locals_cannot_use_field_names() {
+    let p = "struct P {\n    i64 x;\n";
+    let d = type_err(&format!("{p}    fn i64 f(i64 x) {{\n        x\n    }}\n}}\nfn main() {{\n    print(0);\n}}"));
+    assert!(d.title.contains("フィールドの名前"), "{}", d.title);
+    let d = type_err(&format!("{p}    fn i64 f() {{\n        let x = 1;\n        x\n    }}\n}}\nfn main() {{\n    print(0);\n}}"));
+    assert!(d.title.contains("フィールドの名前"), "{}", d.title);
+    // 静的メソッドには this がないので、フィールドと同じ名前の引数でよい
+    let src = format!("{p}    static fn P at(i64 x) {{\n        P {{ x: x }}\n    }}\n}}\nfn main() {{\n    print(P.at(5).x);\n}}");
+    assert_eq!(ok(&src), "5\n");
+}
