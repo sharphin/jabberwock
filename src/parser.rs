@@ -13,7 +13,7 @@ pub struct Parser {
     no_struct_lit: bool,
     /// いくつのループの中にいるか（break / continue を許すか）。値として使う if に入ると 0 に戻す
     loop_depth: usize,
-    /// 値として使う if の中か（return / 外への break を禁止する）
+    /// 値として使う if / match の中か（return / 外への break を禁止する）
     in_value_if: bool,
 }
 
@@ -174,6 +174,7 @@ impl Parser {
                 Ok(Stmt::Let { name, init })
             }
             Tok::If => Ok(Stmt::Expr(self.parse_if(false)?)),
+            Tok::Match => Ok(Stmt::Expr(self.parse_match(false)?)),
             Tok::While => {
                 self.bump();
                 let cond = self.parse_cond()?;
@@ -191,9 +192,9 @@ impl Parser {
                 let word = if t.tok == Tok::Break { "break" } else { "continue" };
                 if self.loop_depth == 0 {
                     let d = if self.in_value_if {
-                        Diagnostic::new(format!("値として使う if の中から、外のループへ {} できません", word))
+                        Diagnostic::new(format!("値として使う if / match の中から、外のループへ {} できません", word))
                             .primary(t.span, "ここ")
-                            .note("if を文として使うか、ループの中で値を決めてから使ってください")
+                            .note("文として使うか、ループの中で値を決めてから使ってください")
                     } else {
                         Diagnostic::new(format!("ループの外では {} は使えません", word))
                             .primary(t.span, "囲んでいる loop / while / for がない")
@@ -205,9 +206,9 @@ impl Parser {
             Tok::Return => {
                 let start = self.bump().span;
                 if self.in_value_if {
-                    return Err(Diagnostic::new("値として使う if の中では return できません")
+                    return Err(Diagnostic::new("値として使う if / match の中では return できません")
                         .primary(start, "ここ")
-                        .note("if を文として使ってください"));
+                        .note("文として使ってください"));
                 }
                 let value = match self.peek().clone() {
                     Tok::Newline | Tok::Semi | Tok::RBrace | Tok::Eof => None,
@@ -238,15 +239,115 @@ impl Parser {
     /// `if`。`as_value` なら値として使う位置なので else が必須で、中から return / 外への break はできない。
     fn parse_if(&mut self, as_value: bool) -> R<Expr> {
         let start = self.expect(Tok::If, "`if`")?;
+        self.value_context(as_value, |p| p.parse_if_rest(as_value, start))
+    }
+
+    /// 値として使う位置なら、中から return / 外への break をできなくする
+    fn value_context<T>(&mut self, as_value: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         let saved = (self.loop_depth, self.in_value_if);
         if as_value {
             self.loop_depth = 0;
             self.in_value_if = true;
         }
-        let r = self.parse_if_rest(as_value, start);
+        let r = f(self);
         self.loop_depth = saved.0;
         self.in_value_if = saved.1;
         r
+    }
+
+    /// `match x { case 1, 2 -> ... default -> ... }`
+    fn parse_match(&mut self, as_value: bool) -> R<Expr> {
+        let start = self.expect(Tok::Match, "`match`")?;
+        let scrut = self.parse_cond()?;
+        self.value_context(as_value, |p| p.parse_match_rest(as_value, start, scrut))
+    }
+
+    fn parse_match_rest(&mut self, as_value: bool, start: Span, scrut: Expr) -> R<Expr> {
+        self.expect(Tok::LBrace, "`{`")?;
+        let mut arms: Vec<MatchArm> = Vec::new();
+        let mut default: Option<Block> = None;
+        loop {
+            self.skip_seps();
+            match self.peek().clone() {
+                Tok::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Tok::Case => {
+                    self.bump();
+                    let mut pats = Vec::new();
+                    loop {
+                        let (pat, span) = self.parse_pat()?;
+                        let seen = arms.iter().flat_map(|a| a.pats.iter()).chain(pats.iter());
+                        if let Some((_, first)) = seen.into_iter().find(|(p, _)| *p == pat) {
+                            return Err(Diagnostic::new("同じ値の case が二回あります")
+                                .label(*first, "最初はここ")
+                                .primary(span, "ここは決して選ばれない"));
+                        }
+                        pats.push((pat, span));
+                        if *self.peek() != Tok::Comma {
+                            break;
+                        }
+                        self.bump();
+                    }
+                    let body = self.parse_arm_body()?;
+                    arms.push(MatchArm { pats, body });
+                }
+                Tok::Default => {
+                    let span = self.bump().span;
+                    if default.is_some() {
+                        return Err(Diagnostic::new("default が二回あります").primary(span, "ここが二回目"));
+                    }
+                    default = Some(self.parse_arm_body()?);
+                }
+                _ => return Err(self.unexpected("`case` か `default` か `}`")),
+            }
+            match self.peek() {
+                Tok::Newline | Tok::Semi | Tok::RBrace => {}
+                _ => return Err(self.unexpected("改行（case の終わり）")),
+            }
+        }
+        if as_value && default.is_none() && !covers_both_bools(&arms) {
+            return Err(Diagnostic::new("値として使う match には default が必要です")
+                .primary(start.join(scrut.span), "どの case にも当てはまらないときの値がない")
+                .note("`default -> 値` を足してください"));
+        }
+        Ok(Expr { kind: ExprKind::Match { scrut: Box::new(scrut), arms, default }, span: start })
+    }
+
+    /// `case` に書く値。今のところリテラルだけ。
+    fn parse_pat(&mut self) -> R<(Pat, Span)> {
+        let start = self.span();
+        let pat = match self.peek().clone() {
+            Tok::Int(n) => Pat::Int(n),
+            Tok::Str(s) => Pat::Str(s),
+            Tok::True => Pat::Bool(true),
+            Tok::False => Pat::Bool(false),
+            Tok::Minus => {
+                self.bump();
+                match self.peek().clone() {
+                    Tok::Int(n) => Pat::Int(-n),
+                    _ => return Err(self.unexpected("整数")),
+                }
+            }
+            _ => {
+                return Err(Diagnostic::new("case に書けるのは、今のところ整数・真偽値・文字列の値だけです")
+                    .primary(start, format!("ここに {} があります", self.peek().describe())))
+            }
+        };
+        self.bump();
+        Ok((pat, start.join(self.prev_span())))
+    }
+
+    /// `-> 式`、`-> 文`、`-> { ... }`。どれもブロックにそろえる
+    fn parse_arm_body(&mut self) -> R<Block> {
+        self.expect(Tok::Arrow, "`->`")?;
+        self.skip_newlines();
+        if *self.peek() == Tok::LBrace {
+            return self.parse_block();
+        }
+        let stmt = self.parse_stmt()?;
+        Ok(Block { stmts: vec![stmt], end: self.prev_span() })
     }
 
     fn parse_if_rest(&mut self, as_value: bool, start: Span) -> R<Expr> {
@@ -411,6 +512,7 @@ impl Parser {
     fn parse_primary(&mut self) -> R<Expr> {
         match self.peek().clone() {
             Tok::If => self.parse_if(true),
+            Tok::Match => self.parse_match(true),
             Tok::Int(n) => {
                 let span = self.bump().span;
                 Ok(Expr { kind: ExprKind::Int(n), span })
@@ -488,6 +590,12 @@ impl Parser {
         let end = self.expect(Tok::RBrace, "`}`")?;
         Ok(Expr { kind: ExprKind::StructLit(name, fields), span: start.join(end) })
     }
+}
+
+/// true と false の両方に case があるか（それなら default がなくても必ずどれかに当たる）
+fn covers_both_bools(arms: &[MatchArm]) -> bool {
+    let has = |b| arms.iter().any(|a| a.pats.iter().any(|(p, _)| *p == Pat::Bool(b)));
+    has(true) && has(false)
 }
 
 fn binop_info(t: &Tok) -> Option<(BinOp, u8)> {

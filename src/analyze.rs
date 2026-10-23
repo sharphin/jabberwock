@@ -336,13 +336,12 @@ impl<'a> FnAnalyzer<'a> {
             }
             ExprKind::If { cond, then, els } => {
                 self.expr(cond, false);
-                let before = self.facts.clone();
-                self.block(then);
-                let after_then = std::mem::replace(&mut self.facts, before);
-                if let Some(els) = els {
-                    self.block(els);
-                }
-                self.facts = meet(&after_then, &self.facts);
+                self.branches(std::iter::once(then), els.as_ref());
+                None
+            }
+            ExprKind::Match { scrut, arms, default } => {
+                self.expr(scrut, false);
+                self.branches(arms.iter().map(|a| &a.body), default.as_ref());
                 None
             }
             ExprKind::Unary(_, inner) => {
@@ -389,6 +388,21 @@ impl<'a> FnAnalyzer<'a> {
                 None
             }
         }
+    }
+
+    /// どれか 1 つのブロックが実行される分岐。`otherwise` がなければ、どれも実行されない道もある。
+    fn branches<'b>(&mut self, blocks: impl Iterator<Item = &'b Block>, otherwise: Option<&'b Block>) {
+        let before = self.facts.clone();
+        let mut acc: Option<Facts> = None;
+        for b in blocks.chain(otherwise) {
+            self.facts = before.clone();
+            self.block(b);
+            acc = meet_opt(acc, &self.facts);
+        }
+        if otherwise.is_none() {
+            acc = meet_opt(acc, &before);
+        }
+        self.facts = acc.unwrap_or(before);
     }
 
     /// `*inner` か `inner.f` の検査を消せるか判定する。`inner` は読んでもムーブしない。
@@ -464,6 +478,15 @@ fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
             for_each_check(then, f);
             if let Some(els) = els {
                 for_each_check(els, f);
+            }
+        }
+        ExprKind::Match { scrut, arms, default } => {
+            expr_checks(scrut, f);
+            for a in arms {
+                for_each_check(&a.body, f);
+            }
+            if let Some(d) = default {
+                for_each_check(d, f);
             }
         }
         ExprKind::Binary(_, l, r) => {

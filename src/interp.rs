@@ -368,6 +368,13 @@ impl Interp {
                     None => Ok((Flow::Normal, Value::Unit)),
                 }
             }
+            ExprKind::Match { scrut, arms, default } => {
+                let v = self.eval(scrut)?;
+                match select_arm(&v, scrut.span, arms)?.or(default.as_ref()) {
+                    Some(blk) => self.exec_block_value(blk, want_value),
+                    None => Ok((Flow::Normal, Value::Unit)),
+                }
+            }
             _ => Ok((Flow::Normal, self.eval(e)?)),
         }
     }
@@ -753,9 +760,9 @@ impl Interp {
                 binary(*op, lv, rv, e.span)
             }
             ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
-            ExprKind::If { .. } => {
+            ExprKind::If { .. } | ExprKind::Match { .. } => {
                 let (flow, v) = self.eval_flow(e, true)?;
-                // 値として使う if の中では return / break / continue をパーサが禁止している
+                // 値として使う if / match の中では return / break / continue をパーサが禁止している
                 debug_assert!(matches!(flow, Flow::Normal));
                 Ok(v)
             }
@@ -876,6 +883,32 @@ fn is_place(e: &Expr) -> bool {
 fn not_a_struct(v: &Value, span: Span) -> Diagnostic {
     Diagnostic::new("フィールドを持たない値です")
         .primary(span, format!("{} は構造体ではありません", v.type_name()))
+}
+
+/// match で当てはまる case のブロックを探す（なければ None）
+fn select_arm<'a>(v: &Value, scrut_span: Span, arms: &'a [MatchArm]) -> R<Option<&'a Block>> {
+    if !matches!(v, Value::Int(_) | Value::Bool(_) | Value::Str(_)) {
+        return Err(Diagnostic::new("match できるのは、今のところ整数・真偽値・文字列だけです")
+            .primary(scrut_span, format!("ここは {} です", v.type_name())));
+    }
+    for arm in arms {
+        for (pat, span) in &arm.pats {
+            let hit = match (pat, v) {
+                (Pat::Int(a), Value::Int(b)) => a == b,
+                (Pat::Bool(a), Value::Bool(b)) => a == b,
+                (Pat::Str(a), Value::Str(b)) => a.as_str() == &**b,
+                _ => {
+                    return Err(Diagnostic::new("case の値と match する値の型が合いません")
+                        .label(scrut_span, format!("これは {}", v.type_name()))
+                        .primary(*span, "この case は型が違う"))
+                }
+            };
+            if hit {
+                return Ok(Some(&arm.body));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn undefined_var(name: &str, span: Span) -> Diagnostic {

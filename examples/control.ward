@@ -21,4 +21,14 @@ fn main() {
         if n > 7 { break }
         print("奇数", n)
     }
+
+    // match（Java の switch の矢印形式）。値にも文にもなる
+    for i in range(4) {
+        let name = match i {
+            case 0 -> "zero"
+            case 1, 2 -> "small"
+            default -> "many"
+        }
+        print(i, name)
+    }
 }

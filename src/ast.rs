@@ -61,6 +61,9 @@ pub enum ExprKind {
     /// `if c { ... } else { ... }`。文としても値としても使える。値はブロックの最後の行。
     /// 値として使う位置では else が必須（パーサが確かめる）。
     If { cond: Box<Expr>, then: Block, els: Option<Block> },
+    /// `match x { case 1, 2 -> ... default -> ... }`（Java の switch の矢印形式）。
+    /// 上から順に調べ、当てはまる case がなければ default。値として使う位置では default が必須。
+    Match { scrut: Box<Expr>, arms: Vec<MatchArm>, default: Option<Block> },
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
@@ -71,6 +74,21 @@ pub struct FieldInit {
     pub name: String,
     pub span: Span,
     pub value: Expr,
+}
+
+/// `case` に書ける値（今のところリテラルだけ）
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pat {
+    Int(i64),
+    Bool(bool),
+    Str(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pats: Vec<(Pat, Span)>,
+    /// `-> 式` も `-> { ... }` もブロックにそろえる。値はブロックの最後の行
+    pub body: Block,
 }
 
 #[derive(Debug, Clone)]

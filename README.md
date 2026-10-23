@@ -30,7 +30,7 @@ fn main() {
 - `own x` を読むと **ムーブ**。元の変数はそれ以降使えない。
 - `ref p` は **世代付き参照**。所有者が解放されると、使った瞬間に確実に検出される。
 - スコープを抜ける・`drop(x)`・再代入で `own` は解放される。中の `own` も連鎖して解放。
-- 値は整数・真偽値・文字列・構造体。`let` / `=` / `if` / `else` / `loop` / `while` / `for` / `break` / `continue` / `return` / `fn` / `struct`。組み込みは `print` `drop` `assert`。
+- 値は整数・真偽値・文字列・構造体。`let` / `=` / `if` / `else` / `match` / `loop` / `while` / `for` / `break` / `continue` / `return` / `fn` / `struct`。組み込みは `print` `drop` `assert`。
 
 ## ループと if 式
 
@@ -53,6 +53,14 @@ loop {                                // 無限ループ。break / continue が�
 - 条件は `( )` で囲まない。`{ }` は必須。
 - 値として使う if には else が必要。値はブロックの最後の行。
 - do-while と三項演算子 `? :` はない。
+
+```
+let name = match n {                  // Java の switch の矢印形式。値にも文にもなる
+    case 0 -> "zero"
+    case 1, 2 -> "small"
+    default -> "many"
+}
+```
 
 言語仕様の決めごとは [docs/design-decisions.md](docs/design-decisions.md) にまとめている。
 

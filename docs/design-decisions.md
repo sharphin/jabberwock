@@ -57,13 +57,24 @@ let y = 5                           // 普段は省略して推論（i64）
 - **while は残す。** ループは `loop`（無限）・`while`（条件つき）・`for`（範囲）の 3 つ。
 - **break / continue を入れる。**
   - 値として使う if の中からは、return と外のループへの break / continue はできない（今のところ）。
-- **match は switch 式のように値を返す式。** 矢印の記号は仮（`=>`）で、差し替えるかもしれない。
+- **match は Java の switch（矢印形式）にそろえる。** 文としても値としても使える。
   ```
-  let name = match n {
-      0 => "zero"
-      1 | 2 => "small"
-      _ => "many"
+  match n {                          // 文として（default がなくてもよい）
+      case 0 -> print("zero")
+      case 1, 2 -> print("small")
+      case 3 -> {
+          print("three")
+      }
+  }
+  let name = match n {               // 値として（default が必須）
+      case 0 -> "zero"
+      case 1, 2 -> "small"
+      default -> "many"
   }
   ```
+  - fall-through はない（Java の矢印形式と同じ）。値はブロックの最後の行（if 式と同じ。Java の `yield` は不要）。
+  - case に書けるのは今のところ整数・真偽値・文字列のリテラル。同じ値の case が二回あるとエラー。
+  - 値として使う match には default が必須（true と false を両方書いた場合を除く）。中から return / 外への break はできない。
+  - 矢印の記号 `->` は仮。差し替えるかもしれない。
 
-実装状況: loop・while・for in range・for-else・break / continue・if 式は実装済み。match と型は未着手。
+実装状況: loop・while・for in range・for-else・break / continue・if 式・match は実装済み。型は未着手。
