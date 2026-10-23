@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::diag::Span;
 
 #[derive(Debug, Clone)]
@@ -29,6 +31,17 @@ pub enum BinOp {
     Or,
 }
 
+/// `*p` で ref の世代チェックが要るかどうか。静的解析（`analyze`）が書き込む。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// 解析がまだ見ていない（実行時に検査する）
+    Unvisited,
+    /// 「借りた先は必ず生きている」と証明できた。実行時の検査を消す
+    Elided,
+    /// 証明できなかった。実行時に検査する
+    Required,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     Int(i64),
@@ -39,8 +52,8 @@ pub enum ExprKind {
     Own(Box<Expr>),
     /// `ref p` : 所有者（変数か `*p`）を世代付き参照として借りる
     Ref(Box<Expr>),
-    /// `*p` : own / ref の先を読む
-    Deref(Box<Expr>),
+    /// `*p` : own / ref の先を読む。2つ目は静的解析の結論（世代チェックを消せるか）。
+    Deref(Box<Expr>, Cell<Check>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
