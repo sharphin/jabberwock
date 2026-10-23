@@ -120,11 +120,18 @@ struct Checker<'a> {
     scopes: Vec<HashMap<String, VarInfo>>,
     /// 今調べている関数の戻り値の型
     ret: Ty,
+    warnings: Vec<Diagnostic>,
 }
 
-/// プログラム全体の型を調べる
-pub fn check(prog: &Program) -> R<()> {
-    let mut c = Checker { structs: HashMap::new(), fns: HashMap::new(), scopes: Vec::new(), ret: Ty::Unit };
+/// プログラム全体の型を調べる。よければ警告（実行は止めない）を返す
+pub fn check(prog: &Program) -> R<Vec<Diagnostic>> {
+    let mut c = Checker {
+        structs: HashMap::new(),
+        fns: HashMap::new(),
+        scopes: Vec::new(),
+        ret: Ty::Unit,
+        warnings: Vec::new(),
+    };
     for s in &prog.structs {
         if c.structs.contains_key(s.name.as_str()) {
             return Err(Diagnostic::new(format!("構造体 `{}` が二重に定義されています", s.name))
@@ -163,7 +170,7 @@ pub fn check(prog: &Program) -> R<()> {
     for f in &prog.fns {
         c.check_fn(f)?;
     }
-    Ok(())
+    Ok(c.warnings)
 }
 
 impl<'a> Checker<'a> {
@@ -493,6 +500,9 @@ impl<'a> Checker<'a> {
             ExprKind::Unary(op, inner) => {
                 let want = if *op == UnOp::Neg { Ty::I64 } else { Ty::Bool };
                 self.expect(inner, &want)?;
+                if *op == UnOp::Neg && const_int(inner).is_some() && const_int(e).is_none() {
+                    self.warn_overflow(e.span);
+                }
                 Ok(want)
             }
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, e.span),
@@ -557,6 +567,16 @@ impl<'a> Checker<'a> {
             BinOp::Add if lt == Ty::Str && rt == Ty::Str => Ok(Ty::Str),
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
                 if lt == Ty::I64 && rt == Ty::I64 {
+                    if let (Some(a), Some(b)) = (const_int(l), const_int(r)) {
+                        if matches!(op, BinOp::Div | BinOp::Rem) && b == 0 {
+                            self.warnings.push(
+                                Diagnostic::warning("0 で割っています")
+                                    .primary(span, "実行するとここでエラーになる"),
+                            );
+                        } else if const_op(op, a, b).is_none() {
+                            self.warn_overflow(span);
+                        }
+                    }
                     Ok(Ty::I64)
                 } else {
                     Err(bad())
@@ -615,6 +635,14 @@ impl<'a> Checker<'a> {
         Ok(ret)
     }
 
+    fn warn_overflow(&mut self, span: Span) {
+        self.warnings.push(
+            Diagnostic::warning("整数があふれます")
+                .primary(span, "この計算は i64 の範囲を超える")
+                .note("実行すると値は一周します（i64 の最大値 + 1 は最小値になる）"),
+        );
+    }
+
     /// 場所 `e` に書き込めるか
     fn access(&mut self, e: &Expr) -> R<Access> {
         Ok(match &e.kind {
@@ -646,6 +674,27 @@ impl<'a> Checker<'a> {
             ExprKind::Var(n) => self.lookup(n).map_or(e.span, |v| v.decl),
             _ => e.span,
         }
+    }
+}
+
+/// コンパイルの時点で値が決まる整数の式なら、その値。途中であふれる・0 で割るなら None
+fn const_int(e: &Expr) -> Option<i64> {
+    match &e.kind {
+        ExprKind::Int(n) => Some(*n),
+        ExprKind::Unary(UnOp::Neg, inner) => const_int(inner)?.checked_neg(),
+        ExprKind::Binary(op, l, r) => const_op(*op, const_int(l)?, const_int(r)?),
+        _ => None,
+    }
+}
+
+fn const_op(op: BinOp, a: i64, b: i64) -> Option<i64> {
+    match op {
+        BinOp::Add => a.checked_add(b),
+        BinOp::Sub => a.checked_sub(b),
+        BinOp::Mul => a.checked_mul(b),
+        BinOp::Div => a.checked_div(b),
+        BinOp::Rem => a.checked_rem(b),
+        _ => None,
     }
 }
 

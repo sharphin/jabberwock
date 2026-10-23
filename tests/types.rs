@@ -214,3 +214,26 @@ fn definition_errors() {
     assert!(type_err("fn main() {\n    print(nope);\n}").title.contains("未定義の変数"));
     assert!(type_err("fn main() {\n    nope();\n}").title.contains("未定義の関数"));
 }
+
+// ---------------------------------------------------------------- 警告
+
+#[test]
+fn constant_overflow_is_warned_but_runs() {
+    let src = "fn main() {\n    let x = 9223372036854775807 + 1;\n    print(x);\n}";
+    let o = run_source(src, false);
+    assert!(o.error.is_none());
+    assert_eq!(o.output, "-9223372036854775808\n");
+    assert_eq!(o.warnings.len(), 1);
+    let w = &o.warnings[0];
+    assert!(w.title.contains("整数があふれます"));
+    assert!(w.render("t.ward", src).starts_with("warning:"));
+    // 定数どうしの計算なら、式の途中でも見つかる。一度だけ警告する
+    let o = run_source("fn main() {\n    print((4611686018427387904 * 2 - 1) + 5);\n}", false);
+    assert_eq!(o.warnings.len(), 1);
+    // 0 で割る定数も警告（実行するとエラー）
+    let o = run_source("fn main() {\n    print(1 % 0);\n}", false);
+    assert!(o.warnings[0].title.contains("0 で割"));
+    assert!(o.error.is_some());
+    // 範囲内なら警告なし
+    assert!(run_source("fn main() {\n    print(-9223372036854775807 - 1);\n}", false).warnings.is_empty());
+}

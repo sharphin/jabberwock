@@ -47,6 +47,8 @@
 - 型検査は「前から順に決めるだけ」。`ref mut T` は `ref T` として渡せる（`assignable`）。必ず抜けるブロックは `Ty::Never`。
 - 戻り値の型がある関数では、本体の最後の `;` のない式が戻り値（`call_fn` が `exec_block_value(body, true)`）。
   戻り値のない関数では最後の式の値は捨てる。
+- 整数のあふれは一周する（interp は `wrapping_*`）。定数どうしの計算があふれるときだけ `types.rs` が警告を出す（`const_int`）。
+  警告は `Diagnostic::warning` で、実行は止めない（`Outcome.warnings`、CLI は実行前に表示）。
 - ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
 
 ## 設計の決めごと

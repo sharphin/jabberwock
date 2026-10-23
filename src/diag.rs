@@ -38,6 +38,8 @@ pub struct Diagnostic {
     pub title: String,
     pub labels: Vec<Label>,
     pub note: Option<String>,
+    /// 警告か（実行は止めない）
+    pub warning: bool,
 }
 
 impl Diagnostic {
@@ -46,7 +48,13 @@ impl Diagnostic {
             title: title.into(),
             labels: Vec::new(),
             note: None,
+            warning: false,
         }
+    }
+
+    /// 警告（実行は止めない）
+    pub fn warning(title: impl Into<String>) -> Self {
+        Diagnostic { warning: true, ..Diagnostic::new(title) }
     }
 
     /// 補足の位置（過去の出来事など）
@@ -76,7 +84,8 @@ impl Diagnostic {
 
     pub fn render(&self, file: &str, src: &str) -> String {
         let lines: Vec<&str> = src.lines().collect();
-        let mut out = format!("error: {}\n", self.title);
+        let kind = if self.warning { "warning" } else { "error" };
+        let mut out = format!("{}: {}\n", kind, self.title);
 
         let mut labels: Vec<&Label> = self.labels.iter().collect();
         labels.sort_by_key(|l| (l.span.line, l.span.col));

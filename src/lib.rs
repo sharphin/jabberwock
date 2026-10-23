@@ -16,6 +16,8 @@ pub struct Outcome {
     pub output: String,
     /// エラーがあれば診断
     pub error: Option<Diagnostic>,
+    /// 警告（実行は止めない）
+    pub warnings: Vec<Diagnostic>,
     /// 実行後に解放されずに残ったヒープオブジェクト数（0 ならリークなし）
     pub live_objects: usize,
     /// 静的解析の結果（`*p` のうち検査を消せた箇所・残った箇所）
@@ -24,6 +26,13 @@ pub struct Outcome {
     pub ref_checks: usize,
     /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
     pub ref_checks_elided: usize,
+}
+
+/// 実行せずに型検査だけして、警告を返す（エラーがあれば空。エラーは実行時に返る）
+pub fn warnings(src: &str) -> Vec<Diagnostic> {
+    let Ok(toks) = lexer::lex(src) else { return Vec::new() };
+    let Ok(prog) = parser::Parser::new(toks).parse_program() else { return Vec::new() };
+    types::check(&prog).unwrap_or_default()
 }
 
 /// ソースを実行する。静的解析で証明できた箇所の検査は消す。
@@ -48,6 +57,7 @@ fn run_inner(src: &str, echo: bool, elide: bool) -> Outcome {
     let fail = |d: Diagnostic| Outcome {
         output: String::new(),
         error: Some(d),
+        warnings: Vec::new(),
         live_objects: 0,
         analysis: analyze::Stats::default(),
         ref_checks: 0,
@@ -62,15 +72,17 @@ fn run_inner(src: &str, echo: bool, elide: bool) -> Outcome {
         Ok(p) => p,
         Err(d) => return fail(d),
     };
-    if let Err(d) = types::check(&prog) {
-        return fail(d);
-    }
+    let warnings = match types::check(&prog) {
+        Ok(w) => w,
+        Err(d) => return fail(d),
+    };
     let analysis = if elide { analyze::analyze(&prog) } else { analyze::Stats::default() };
     let mut it = interp::Interp::new(echo);
     let res = it.run(prog);
     Outcome {
         output: it.output.clone(),
         error: res.err(),
+        warnings,
         live_objects: it.live_objects(),
         analysis,
         ref_checks: it.ref_checks,

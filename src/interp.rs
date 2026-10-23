@@ -801,9 +801,8 @@ impl Interp {
             ExprKind::Unary(op, inner) => {
                 let v = self.eval(inner)?;
                 match (op, v) {
-                    (UnOp::Neg, Value::Int(n)) => n.checked_neg().map(Value::Int).ok_or_else(|| {
-                        Diagnostic::new("整数オーバーフロー").primary(e.span, "符号反転で範囲を超えた")
-                    }),
+                    // あふれたら一周する（決まった結果になる。定数なら型検査が警告を出す）
+                    (UnOp::Neg, Value::Int(n)) => Ok(Value::Int(n.wrapping_neg())),
                     (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
                     (_, other) => Err(Diagnostic::new("型が合わない演算です")
                         .primary(e.span, format!("{} にはこの演算を使えません", other.type_name()))),
@@ -1015,26 +1014,25 @@ fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             Ok(Value::Str(Rc::from(s.as_str())))
         }
         (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem, Value::Int(a), Value::Int(b)) => {
+            // あふれたら一周する（決まった結果になる。定数なら型検査が警告を出す）
             let res = match op {
-                BinOp::Add => a.checked_add(*b),
-                BinOp::Sub => a.checked_sub(*b),
-                BinOp::Mul => a.checked_mul(*b),
+                BinOp::Add => a.wrapping_add(*b),
+                BinOp::Sub => a.wrapping_sub(*b),
+                BinOp::Mul => a.wrapping_mul(*b),
                 BinOp::Div | BinOp::Rem => {
                     if *b == 0 {
                         return Err(Diagnostic::new("0 で割りました")
                             .primary(span, "右辺が 0 です"));
                     }
                     if op == BinOp::Div {
-                        a.checked_div(*b)
+                        a.wrapping_div(*b)
                     } else {
-                        a.checked_rem(*b)
+                        a.wrapping_rem(*b)
                     }
                 }
                 _ => unreachable!(),
             };
-            res.map(Value::Int).ok_or_else(|| {
-                Diagnostic::new("整数オーバーフロー").primary(span, "結果が i64 の範囲を超えました")
-            })
+            Ok(Value::Int(res))
         }
         (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Value::Int(a), Value::Int(b)) => {
             Ok(Value::Bool(match op {

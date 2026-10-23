@@ -215,11 +215,14 @@ fn main() {
 }
 
 #[test]
-fn integer_overflow_and_div_zero_are_errors() {
+fn div_zero_is_an_error_and_overflow_wraps() {
     assert!(err("fn main() {\n print(1 / 0)\n}").title.contains("0 で割"));
-    assert!(err("fn main() {\n print(9223372036854775807 + 1)\n}")
-        .title
-        .contains("オーバーフロー"));
+    // あふれは一周する（C++ の未定義動作と違い、結果は決まっている）
+    let src = "fn i64 big() {\n 9223372036854775807\n}\nfn main() {\n print(big() + 1, -(big() + 1) == big() + 1, big() * 2);\n}";
+    let o = ward::run_source(src, false);
+    assert!(o.error.is_none());
+    assert!(o.warnings.is_empty(), "values unknown before running give no warning");
+    assert_eq!(o.output, "-9223372036854775808 true -2\n");
 }
 
 #[test]

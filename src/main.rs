@@ -34,6 +34,10 @@ fn main() {
         }
     };
 
+    // 警告は実行の前に出す（Rust と同じ）
+    for w in ward::warnings(&src) {
+        eprint!("{}", w.render(&path, &src));
+    }
     let outcome = ward::run_source_with(&src, true, elide);
     if stats {
         let a = outcome.analysis;
