@@ -1,5 +1,5 @@
 // ref mut を渡して、相手の中身を書き換える
-fn inc(r) {
+fn inc(ref mut i64 r) {
     *r += 1;
 }
 

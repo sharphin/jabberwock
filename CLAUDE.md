@@ -17,6 +17,7 @@
 | `src/lexer.rs` | 字句解析。改行はただの空白（文の区切りは `;`） |
 | `src/parser.rs` | 構文解析。`if`/`while` の条件では構造体リテラルを禁止（`{` があいまいになるため）。`x += e` は `x = x + e`、`x++` は `x = x + 1` に書き換える（左辺は複製） |
 | `src/ast.rs` | 構文木。`Deref` と `Field` は静的解析の結論 `Cell<Check>` を持つ |
+| `src/types.rs` | 型検査。実行前に型と `mut` / `ref mut` の違反を見つける（`lib.rs` で解析・実行の前に呼ぶ） |
 | `src/analyze.rs` | 静的解析。証明できた `*p` / `p.f` の ref 世代チェックを消す |
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
@@ -26,6 +27,7 @@
 | `tests/structs.rs` | 構造体 |
 | `tests/control.rs` | loop / while / for / break / continue / if 式 |
 | `tests/match.rs` | match（Java の switch の矢印形式） |
+| `tests/types.rs` | 型検査 |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 
 ## 大事な不変条件
@@ -40,7 +42,11 @@
   値として使うときの中の return / 外への break はパーサが禁止しているので（`value_context`）、`eval` では `Flow` を気にしなくてよい。
 - 書き換えの可否は `Access`（Write / ImmutVar / ReadOnlyRef）で表す。`place()` が持ち主から順にたどって決め、
   `ref mut` を通ると Write のまま、`ref` を通ると ReadOnlyRef になる。`RefVal.mutable` が「ref mut か」。
-  今は実行時に検査（型検査を入れたら静的に移す）。
+  同じ規則を `types.rs` が型から静的に決める（`Access::through` に型を渡す）。実行時の検査は念のため残している。
+  二つの規則は必ずそろえる。
+- 型検査は「前から順に決めるだけ」。`ref mut T` は `ref T` として渡せる（`assignable`）。必ず抜けるブロックは `Ty::Never`。
+- 戻り値の型がある関数では、本体の最後の `;` のない式が戻り値（`call_fn` が `exec_block_value(body, true)`）。
+  戻り値のない関数では最後の式の値は捨てる。
 - ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
 
 ## 設計の決めごと

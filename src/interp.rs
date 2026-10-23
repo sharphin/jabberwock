@@ -436,7 +436,7 @@ impl Interp {
 
     fn exec_stmt(&mut self, s: &Stmt) -> R<Flow> {
         match s {
-            Stmt::Let { name, mutable, span, init } => {
+            Stmt::Let { name, mutable, span, init, .. } => {
                 let v = self.eval(init)?;
                 self.declare(name, v, *mutable, *span);
                 Ok(Flow::Normal)
@@ -912,13 +912,14 @@ impl Interp {
             .collect();
         self.frames.push(Frame { scopes: vec![vars] });
 
-        let flow = self.exec_block(&f.body)?;
+        // 戻り値の型がある関数では、本体の最後の `;` のない式が戻り値になる
+        let (flow, tail) = self.exec_block_value(&f.body, f.ret.is_some())?;
 
         let frame = self.frames.pop().expect("frame");
         self.depth -= 1;
         let (value, span, how) = match flow {
             Flow::Return(v, sp) => (v, sp, "関数から return した"),
-            Flow::Normal => (Value::Unit, f.body.end, "スコープを抜けた"),
+            Flow::Normal => (tail, f.body.end, "スコープを抜けた"),
             Flow::Break(_) | Flow::Continue(_) => unreachable!("parser rejects break/continue outside loops"),
         };
         for scope in frame.scopes {

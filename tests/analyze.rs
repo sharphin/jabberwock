@@ -66,7 +66,7 @@ fn ref_param_is_elided_when_every_caller_passes_a_live_ref() {
 #[test]
 fn pinned_ref_survives_being_passed_on_and_recursion() {
     let src = "
-fn add(r, n) {
+fn add(ref mut i64 r, i64 n) {
     if n > 0 {
         *r = *r + 1;
         add(ref mut r, n - 1)
@@ -127,7 +127,7 @@ fn main() {
 fn moving_the_owner_keeps_the_check() {
     dangling(
         "
-fn eat(c) {
+fn eat(own i64 c) {
 }
 
 fn main() {
@@ -191,7 +191,7 @@ fn ref_and_its_owner_passed_together_keeps_the_check() {
     // ref を作った後、同じ呼び出しの中で own もムーブして関数側で解放する
     dangling(
         "
-fn f(r, c) {
+fn f(ref i64 r, own i64 c) {
     drop(c);
     print(*r)
 }
@@ -207,11 +207,11 @@ fn main() {
 fn one_bad_caller_keeps_the_param_checked() {
     dangling(
         "
-fn show(r) {
+fn show(ref i64 r) {
     print(*r)
 }
 
-fn stale() {
+fn ref i64 stale() {
     let a = own 1;
     return ref a;
 }
@@ -244,7 +244,7 @@ fn main() {
 fn stale_ref_passed_through_ref_of_ref_keeps_the_check() {
     dangling(
         "
-fn show(r) {
+fn show(ref i64 r) {
     print(*r)
 }
 
@@ -253,7 +253,7 @@ fn main() {
     show(ref r)
 }
 
-fn r0() {
+fn ref i64 r0() {
     let x = own 5;
     return ref x;
 }",
@@ -261,15 +261,10 @@ fn r0() {
 }
 
 #[test]
-fn self_reassignment_through_its_own_ref_keeps_the_check() {
-    dangling(
-        "
-fn main() {
-    let mut a = own 1;
-    a = ref a;
-    print(*a)
-}",
-    );
+fn self_reassignment_through_its_own_ref_is_a_type_error() {
+    // 型がなかったころは実行時に検出していた。今は own と ref の型が違うので実行前に止まる
+    let d = run_source("fn main() {\n    let mut a = own 1;\n    a = ref a;\n}", false).error.expect("error");
+    assert!(d.title.contains("型が合いません"), "{}", d.title);
 }
 
 // ---------------------------------------------------------------- 全体

@@ -2,6 +2,21 @@ use std::cell::Cell;
 
 use crate::diag::Span;
 
+/// ソースに書いた型。`i64`、`Player`、`own T`、`ref T`、`ref mut T`
+#[derive(Debug, Clone)]
+pub struct TypeExpr {
+    pub kind: TypeKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeKind {
+    Name(String),
+    Own(Box<TypeExpr>),
+    /// bool は `mut`
+    Ref(Box<TypeExpr>, bool),
+}
+
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
@@ -103,7 +118,8 @@ pub struct Block {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Let { name: String, mutable: bool, span: Span, init: Expr },
+    /// `let 型 mut 名前 = 式`。型は省略できる（初期値から決める）
+    Let { name: String, ty: Option<TypeExpr>, mutable: bool, span: Span, init: Expr },
     Assign { target: Expr, value: Expr, span: Span },
     /// 式文。`if` もここに入る（文として使う if）
     Expr(Expr),
@@ -118,6 +134,7 @@ pub enum Stmt {
 
 #[derive(Debug, Clone)]
 pub struct Param {
+    pub ty: TypeExpr,
     pub name: String,
     pub mutable: bool,
     pub span: Span,
@@ -126,16 +143,20 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
+    /// 戻り値の型。なければ値を返さない関数
+    pub ret: Option<TypeExpr>,
     pub params: Vec<Param>,
     pub body: Block,
     pub span: Span,
 }
 
-/// `struct Name { a, b }`。フィールドに型はまだない。
+/// `struct Name { i64 a; own Point b; }`
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<String>,
+    /// `fields` と同じ順のフィールドの型
+    pub field_types: Vec<TypeExpr>,
     pub span: Span,
 }
 

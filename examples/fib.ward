@@ -1,4 +1,4 @@
-fn fib(n) {
+fn i64 fib(i64 n) {
     if n < 2 {
         return n;
     }

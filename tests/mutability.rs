@@ -23,6 +23,13 @@ fn err_in_main(body: &str) -> ward::diag::Diagnostic {
 // ---------------------------------------------------------------- mut
 
 #[test]
+fn mut_errors_are_found_before_running() {
+    let o = run_source("fn main() {\n    print(1);\n    let x = 1;\n    x = 2;\n}", false);
+    assert!(o.error.unwrap().title.contains("mut ではない"));
+    assert_eq!(o.output, "", "nothing runs when the program has a type error");
+}
+
+#[test]
 fn variables_are_read_only_unless_mut() {
     let src = "fn main() {\n    let x = 1;\n    x = 2;\n}";
     let d = err(src);
@@ -35,15 +42,15 @@ fn variables_are_read_only_unless_mut() {
 
 #[test]
 fn params_and_loop_variables_are_read_only_unless_mut() {
-    assert!(err("fn f(a) {\n a = 1;\n}\nfn main() {\n f(0);\n}").title.contains("`a` は mut ではない"));
-    let o = run_source("fn f(mut a) {\n a += 1;\n print(a);\n}\nfn main() {\n f(1);\n}", false);
+    assert!(err("fn f(i64 a) {\n a = 1;\n}\nfn main() {\n f(0);\n}").title.contains("`a` は mut ではない"));
+    let o = run_source("fn f(i64 mut a) {\n a += 1;\n print(a);\n}\nfn main() {\n f(1);\n}", false);
     assert_eq!(o.output, "2\n");
     assert!(err_in_main("for i in range(3) {\n i = 5;\n}").title.contains("`i` は mut ではない"));
 }
 
 #[test]
 fn struct_fields_follow_the_owner() {
-    let p = "struct P { x }\n";
+    let p = "struct P { i64 x; }\n";
     assert!(err(&format!("{p}fn main() {{\n let a = P {{ x: 1 }};\n a.x = 2;\n}}")).title.contains("`a` は mut ではない"));
     // own の先も持ち主が mut でないと書き換えられない
     assert!(err(&format!("{p}fn main() {{\n let a = own P {{ x: 1 }};\n a.x = 2;\n}}")).title.contains("`a` は mut ではない"));
@@ -58,7 +65,7 @@ fn writing_through_a_plain_ref_is_an_error() {
     let d = err(src);
     assert!(d.title.contains("読むだけの ref"), "{}", d.title);
     let r = d.render("t.ward", src);
-    assert!(r.contains("ここで `a` を ref で借りた（mut がない）"), "{}", r);
+    assert!(r.contains("`r` は読むだけの ref（mut がない）"), "{}", r);
     assert!(r.contains("ref mut"), "{}", r);
 }
 
@@ -79,7 +86,7 @@ fn a_plain_ref_cannot_be_upgraded_to_ref_mut() {
 
 #[test]
 fn ref_mut_into_a_field() {
-    let src = "struct B { inner }
+    let src = "struct B { own i64 inner; }
 fn main() {
     let mut b = own B { inner: own 1 };
     let r = ref mut b.inner;

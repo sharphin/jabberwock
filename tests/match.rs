@@ -73,7 +73,7 @@ fn match_on_strings_and_bools() {
 #[test]
 fn statement_match_passes_break_and_return_through() {
     let src = "
-fn first_even(limit) {
+fn i64 first_even(i64 limit) {
     for i in range(1, limit) {
         match i % 2 {
             case 0 -> return i;

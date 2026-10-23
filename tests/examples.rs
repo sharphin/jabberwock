@@ -62,9 +62,9 @@ fn main() {
 #[test]
 fn early_return_inside_loop_frees_locals() {
     let src = "
-fn find() {
+fn i64 find() {
     let mut i = 0;
-    while true {
+    loop {
         let tmp = own i;
         if *tmp == 3 { return i; }
         i = i + 1;
@@ -104,7 +104,7 @@ fn main() {
 #[test]
 fn else_if_chain() {
     let src = "
-fn sign(n) {
+fn i64 sign(i64 n) {
     if n < 0 {
         return -1;
     } else if n == 0 {
@@ -173,7 +173,7 @@ fn use_after_move_is_detected() {
 #[test]
 fn moving_inside_a_loop_is_detected_on_second_iteration() {
     let src = "
-fn eat(c) {
+fn eat(own i64 c) {
 }
 fn main() {
     let a = own 1;
@@ -204,7 +204,7 @@ fn main() {
 #[test]
 fn runaway_recursion_is_an_error_not_a_crash() {
     let src = "
-fn f(n) {
+fn i64 f(i64 n) {
     return f(n + 1);
 }
 fn main() {

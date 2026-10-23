@@ -1,4 +1,4 @@
-fn consume(c) {
+fn consume(own i64 c) {
     print(*c)
 }
 

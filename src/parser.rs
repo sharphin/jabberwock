@@ -26,6 +26,11 @@ impl Parser {
         &self.toks[self.pos].tok
     }
 
+    /// 1 つ先のトークン
+    fn peek2(&self) -> &Tok {
+        &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok
+    }
+
     fn span(&self) -> Span {
         self.toks[self.pos].span
     }
@@ -101,7 +106,18 @@ impl Parser {
         let span = start.join(self.prev_span());
         self.expect(Tok::LBrace, "`{`")?;
         let mut fields: Vec<String> = Vec::new();
-        while *self.peek() != Tok::RBrace {
+        let mut field_types = Vec::new();
+        loop {
+            self.skip_semis();
+            if self.eat(Tok::RBrace) {
+                break;
+            }
+            if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Semi | Tok::Comma | Tok::RBrace) {
+                return Err(Diagnostic::new("フィールドには型が必要です")
+                    .primary(self.span(), "型がない")
+                    .note("`struct Point { i64 x; i64 y; }` のように「型 名前;」で書いてください"));
+            }
+            let ty = self.parse_type()?;
             let fspan = self.span();
             let f = self.expect_ident("フィールド名")?;
             if fields.contains(&f) {
@@ -109,26 +125,42 @@ impl Parser {
                     .primary(fspan, "同じ名前のフィールドがすでにある"));
             }
             fields.push(f);
+            field_types.push(ty);
             if *self.peek() == Tok::Comma {
-                self.bump();
-            } else {
-                break;
+                return Err(Diagnostic::new("構文エラー: フィールドの区切りは `;` です")
+                    .primary(self.span(), "ここを `;` にしてください"));
+            }
+            if *self.peek() != Tok::RBrace {
+                self.expect(Tok::Semi, "`;`（フィールドの終わり）")?;
             }
         }
-        self.expect(Tok::RBrace, "`}`")?;
-        Ok(StructDef { name, fields, span })
+        Ok(StructDef { name, fields, field_types, span })
     }
 
     fn parse_fn(&mut self) -> R<FnDef> {
         let start = self.expect(Tok::Fn, "`fn` か `struct`（トップレベルには関数と構造体の定義だけ書けます）")?;
+        // `fn 名前(` なら戻り値なし、`fn 型 名前(` なら戻り値あり
+        let ret = if matches!(self.peek(), Tok::Ident(_)) && *self.peek2() == Tok::LParen {
+            None
+        } else {
+            Some(self.parse_type()?)
+        };
         let name = self.expect_ident("関数名")?;
         self.expect(Tok::LParen, "`(`")?;
         let mut params = Vec::new();
         while *self.peek() != Tok::RParen {
+            if matches!(self.peek(), Tok::Mut)
+                || (matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Comma | Tok::RParen))
+            {
+                return Err(Diagnostic::new("引数には型が必要です")
+                    .primary(self.span(), "型がない")
+                    .note("`fn f(i64 a, ref mut Point p)` のように「型 名前」で書いてください"));
+            }
+            let ty = self.parse_type()?;
             let mutable = self.eat(Tok::Mut);
             let span = self.span();
             let name = self.expect_ident("引数名")?;
-            params.push(Param { name, mutable, span });
+            params.push(Param { ty, name, mutable, span });
             if *self.peek() == Tok::Comma {
                 self.bump();
             } else {
@@ -138,7 +170,7 @@ impl Parser {
         self.expect(Tok::RParen, "`)`")?;
         let header = start.join(self.prev_span());
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, body, span: header })
+        Ok(FnDef { name, ret, params, body, span: header })
     }
 
     /// `{ 文; 文; 式 }`。文の終わりには `;` が要る（`{ }` で終わる if / while などは不要）。
@@ -189,12 +221,16 @@ impl Parser {
         match self.peek().clone() {
             Tok::Let => {
                 self.bump();
+                // `let 型 mut 名前 = 式`。すぐ後ろに `=` が来る名前が変数名で、その手前が型
+                let named_now = matches!(self.peek(), Tok::Mut)
+                    || (matches!(self.peek(), Tok::Ident(_)) && *self.peek2() == Tok::Assign);
+                let ty = if named_now { None } else { Some(self.parse_type()?) };
                 let mutable = self.eat(Tok::Mut);
                 let span = self.span();
                 let name = self.expect_ident("変数名")?;
                 self.expect(Tok::Assign, "`=`")?;
                 let init = self.parse_expr()?;
-                Ok(Stmt::Let { name, mutable, span, init })
+                Ok(Stmt::Let { name, ty, mutable, span, init })
             }
             Tok::If => Ok(Stmt::Expr(self.parse_if(false)?)),
             Tok::Match => Ok(Stmt::Expr(self.parse_match(false)?)),
@@ -472,6 +508,28 @@ impl Parser {
             None
         };
         Ok(Stmt::For { var, range, range_span: call.span, body, els })
+    }
+
+    /// 型: `i64`、`Player`、`own T`、`ref T`、`ref mut T`
+    fn parse_type(&mut self) -> R<TypeExpr> {
+        let start = self.span();
+        let kind = match self.peek().clone() {
+            Tok::Own => {
+                self.bump();
+                TypeKind::Own(Box::new(self.parse_type()?))
+            }
+            Tok::Ref => {
+                self.bump();
+                let mutable = self.eat(Tok::Mut);
+                TypeKind::Ref(Box::new(self.parse_type()?), mutable)
+            }
+            Tok::Ident(name) => {
+                self.bump();
+                TypeKind::Name(name)
+            }
+            _ => return Err(self.unexpected("型")),
+        };
+        Ok(TypeExpr { kind, span: start.join(self.prev_span()) })
     }
 
     pub fn parse_expr(&mut self) -> R<Expr> {

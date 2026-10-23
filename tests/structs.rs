@@ -27,7 +27,7 @@ fn err(src: &str) -> ward::diag::Diagnostic {
     d
 }
 
-const POINT: &str = "struct Point { x, y }\n";
+const POINT: &str = "struct Point { i64 x; i64 y; }\n";
 
 // ---------------------------------------------------------------- 正常系
 
@@ -54,7 +54,7 @@ fn main() {{
 #[test]
 fn field_assignment_frees_the_old_own() {
     let src = "
-struct Box2 { inner }
+struct Box2 { own i64 inner; }
 
 fn main() {
     let mut b = Box2 { inner: own 1 };
@@ -68,18 +68,18 @@ fn main() {
 #[test]
 fn own_fields_are_freed_with_their_struct() {
     let src = "
-struct Pair { a, b }
+struct Pair { own i64 a; own own i64 b; }
 
-fn make() {
+fn own Pair make() {
     return own Pair { a: own 1, b: own own 2 };
 }
 
 fn main() {
     let p = make();
     print(*p.a, **p.b);
-    let q = Pair { a: own 3, b: own 4 };
+    let q = Pair { a: own 3, b: own own 4 };
     drop(q);
-    print(Pair { a: own 5, b: 6 })
+    print(Pair { a: own 5, b: own own 6 })
 }";
     // print の一時的な構造体の中の own も解放される（リークしない）
     let o = ok(src);
@@ -89,7 +89,7 @@ fn main() {
 #[test]
 fn field_of_a_temporary_does_not_leak() {
     let src = format!("{POINT};
-fn make() {{
+fn own Point make() {{
     return own Point {{ x: 7, y: 8 }};
 }}
 
@@ -120,7 +120,7 @@ fn main() {{
 #[test]
 fn ref_to_a_struct_lets_a_function_update_it() {
     let src = format!("{POINT};
-fn shift(p) {{
+fn shift(ref mut Point p) {{
     p.x = p.x + 10;
 }}
 
@@ -151,7 +151,7 @@ fn main() {{
 #[test]
 fn ref_into_a_field_dangles_after_overwrite() {
     let src = "
-struct Box2 { inner }
+struct Box2 { own i64 inner; }
 
 fn main() {
     let mut b = own Box2 { inner: own 1 };
@@ -172,7 +172,7 @@ fn main() {
 #[test]
 fn field_through_a_dangling_ref_is_detected() {
     let d = err(&format!("{POINT};
-fn leak() {{
+fn ref Point leak() {{
     let p = own Point {{ x: 1, y: 2 }};
     return ref p;
 }}
@@ -187,7 +187,7 @@ fn main() {{
 #[test]
 fn cannot_move_an_own_out_of_a_field() {
     let d = err("
-struct Box2 { inner }
+struct Box2 { own i64 inner; }
 
 fn main() {
     let b = Box2 { inner: own 1 };
@@ -227,8 +227,8 @@ fn literal_errors() {
 
 #[test]
 fn definition_errors() {
-    assert!(err("struct A { x, x }\nfn main() {\n}").title.contains("二重"));
-    assert!(err("struct A { x }\nstruct A { y }\nfn main() {\n}").title.contains("二重"));
+    assert!(err("struct A { i64 x; bool x; }\nfn main() {\n}").title.contains("二重"));
+    assert!(err("struct A { i64 x; }\nstruct A { i64 y; }\nfn main() {\n}").title.contains("二重"));
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn field_access_on_a_non_struct() {
 #[test]
 fn temporary_own_cannot_be_used_as_a_place() {
     let d = err(&format!("{POINT};
-fn make() {{
+fn own Point make() {{
     return own Point {{ x: 1, y: 2 }};
 }}
 

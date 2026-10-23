@@ -120,7 +120,7 @@ fn locals_are_freed_on_break_and_continue() {
 #[test]
 fn return_from_inside_a_loop() {
     let src = "
-fn find(n) {
+fn i64 find(i64 n) {
     for i in range(100) {
         if i * i >= n { return i; }
     }
@@ -169,7 +169,7 @@ fn nested_if_as_the_last_line_gives_the_value() {
 #[test]
 fn if_value_can_be_an_own_and_is_freed() {
     let src = "
-fn pick(c) {
+fn own i64 pick(bool c) {
     return if c { own 1 } else { own 2 };
 }
 
@@ -210,7 +210,7 @@ fn no_return_or_outer_break_inside_a_value_if() {
 #[test]
 fn range_errors() {
     assert!(err_in_main("for i in range(1, 5, 0) { }").title.contains("刻みが 0"));
-    assert!(err_in_main("for i in range(\"a\") { }").title.contains("整数"));
+    assert!(err_in_main("for i in range(\"a\") { }").title.contains("型が合いません"));
     assert!(err_in_main("for i in range() { }").title.contains("1〜3"));
     assert!(err_in_main("for i in range(1, 2, 3, 4) { }").title.contains("1〜3"));
     let d = err_in_main("let x = 3;\nfor i in x { }");

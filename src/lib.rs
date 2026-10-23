@@ -6,6 +6,7 @@ pub mod diag;
 pub mod interp;
 pub mod lexer;
 pub mod parser;
+pub mod types;
 
 use diag::Diagnostic;
 
@@ -61,6 +62,9 @@ fn run_inner(src: &str, echo: bool, elide: bool) -> Outcome {
         Ok(p) => p,
         Err(d) => return fail(d),
     };
+    if let Err(d) = types::check(&prog) {
+        return fail(d);
+    }
     let analysis = if elide { analyze::analyze(&prog) } else { analyze::Stats::default() };
     let mut it = interp::Interp::new(echo);
     let res = it.run(prog);

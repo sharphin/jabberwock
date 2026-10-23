@@ -1,14 +1,14 @@
 // 構造体: フィールドごとに所有する。own / ref の先のフィールドは自動でたどる。
-struct Point { x, y }
+struct Point { i64 x; i64 y; }
 
 struct Player {
-    name,
-    pos,    // own Point
-    score,
+    str name;
+    own Point pos;
+    i64 score;
 }
 
-fn move_by(p, dx, dy) {
-    p.pos.x += dx; // p は ref。p.pos は own。どちらも自動でたどる
+fn move_by(ref mut Player p, i64 dx, i64 dy) {
+    p.pos.x += dx; // p は ref mut。p.pos は own。どちらも自動でたどる
     p.pos.y += dy;
 }
 
