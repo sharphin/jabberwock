@@ -273,3 +273,52 @@ fn own_in_a_view_gives_the_same_error_on_every_path() {
         same_as_interp(name, &src);
     }
 }
+
+#[test]
+fn own_in_a_view_through_generics_and_builtins() {
+    // 型の引数 T を通っても（interp は値の `RefVal.view` で見る）、組み込みの操作・関数やクロージャを通しても、写しの own は取り出せない
+    let runs = [
+        ("g_field", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nfn T get<T>(ref Box<T> b) { b.v }\nfn main() {\n    let Box<own P>[] bs = [Box { v: own P { x: 1 } }];\n    for b in bs { let q = get(b); print(q.x); }\n}"),
+        ("g_elem_view", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nstruct L { (own P)[] ps; }\nfn T first<T>(ref T[] a) { a[0] }\nfn main() {\n    let L[] ls = [L { ps: [own P { x: 1 }] }];\n    for l in ls { let q = first(l.ps); print(q.x); }\n}"),
+        ("g_struct_view", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { Box<own P> bx; }\nfn main() {\n    let H[] hs = [H { bx: Box { v: own P { x: 1 } } }];\n    for h in hs { let q = get(h.bx); print(q.x); }\n}"),
+        ("g_closure", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nfn T get<T>(ref Box<T> b) { b.v }\nfn main() {\n    let bx = Box { v: own P { x: 1 } };\n    let f = () -> get(bx);\n    let q = f();\n    print(q.x);\n}"),
+        ("g_arr", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { Box<(own P)[2]> bx; }\nfn main() {\n    let H[] hs = [H { bx: Box { v: [own P { x: 1 }, own P { x: 2 }] } }];\n    for h in hs { let a = get(h.bx); print(a[1].x); }\n}"),
+        ("g_opt", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { Box<Option<own P>> bx; }\nfn main() {\n    let H[] hs = [H { bx: Box { v: Some(own P { x: 1 }) } }];\n    for h in hs { let a = get(h.bx); print(a.is_some()); }\n}"),
+        ("ok_ref", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nfn main() {\n    let S[] ss = [S { b: own P { x: 4 } }];\n    for s in ss {\n        let r = ref s.b;\n        let bx = Box { v: r };\n        let q = get(ref bx);\n        print(q.x);\n        let bs = [Box { v: ref s.b }];\n        for b in bs { print(get(b).x); }\n    }\n}"),
+        ("ok_refelem", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nfn main() {\n    let (own P)[] ps = [own P { x: 6 }];\n    for p in ps { let bx = Box { v: p }; print(get(ref bx).x); }\n}"),
+        ("l_map", "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { let k = s.ps.map((p) -> p); print(k.len()); }\n}"),
+        ("m_for", "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nstruct M { (own P)[str] m; }\nfn main() {\n    let M[] ms = [M { m: [\"a\": own P { x: 1 }] }];\n    for x in ms { for (k, v) in x.m { let q = v; print(k, q.x); } }\n}"),
+        ("l_whole", "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { let k = s.ps; print(k.len()); }\n}"),
+        ("l_elem", "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { let q = s.ps[0]; print(q.x); }\n}"),
+        ("c_whole", "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let (own P)[] ps = [own P { x: 1 }];\n    let f = () -> ps;\n    let k = f();\n    print(k.len());\n}"),
+        ("m_index", "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nstruct M { (own P)[str] m; }\nfn main() {\n    let M[] ms = [M { m: [\"a\": own P { x: 1 }] }];\n    for x in ms { let q = x.m[\"a\"]; print(q.x); }\n}"),
+        ("ret_view", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nfn ref S keep(ref S s) { s }\nfn own P take(ref S s) { s.b }\nfn main() {\n    let S[] ss = [S { b: own P { x: 1 } }];\n    for s in ss { let r = keep(s); let q = take(r); print(q.x); }\n}"),
+        ("clo_out", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nfn own P take(ref S s) { s.b }\nfn main() {\n    let s = S { b: own P { x: 1 } };\n    let f = () -> take(s);\n    let q = f();\n    print(q.x);\n}"),
+        ("clo_param", "struct P { i64 x; }\nstruct S { own P b; }\nstruct Box<T> { T v; }\ninterface HasX { fn i64 getx(); }\nstruct Q { i64 x; fn i64 getx() { x } }\nfn main() {\n    let S[] ss = [S { b: own P { x: 1 } }];\n    let g = (ref S s) -> s.b;\n    for s in ss { let q = g(s); print(q.x); }\n}"),
+    ];
+    for (name, src) in runs.iter() {
+        let o = jabberwock::run_source(src, false);
+        let ok = name.starts_with("ok_") || *name == "l_map" || *name == "m_for";
+        assert_eq!(o.error.is_none(), ok, "{}", name);
+        if let Some(d) = &o.error {
+            assert!(d.title.contains("は取り出せません"), "{}: {}", name, d.title);
+        }
+        same_as_interp(name, src);
+    }
+    // 書き換える組み込みの操作は、読むだけの写しには実行前のエラー
+    let rejected = [
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { let o = s.ps.pop(); print(o.is_some()); }\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { let q = s.ps.remove(0); print(q.x); }\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { for q in s.ps.drain() { print(q.x); } }\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 1 }] }];\n    for s in ss { let k = s.ps.filter((p) -> true); print(k.len()); }\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 2 }, own P { x: 1 }] }];\n    for s in ss { s.ps.sort_by((a, b) -> a.x < b.x); }\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let (own P)[] mut ps = [own P { x: 1 }];\n    let f = () -> { let o = ps.pop(); o.is_some() };\n    print(f());\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let (own P)[] ps = [own P { x: 1 }];\n    let f = () -> ps.filter((p) -> true);\n    let k = f();\n    print(k.len());\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nfn main() {\n    let (own P)[str] m = [\"a\": own P { x: 1 }];\n    let o = m.get(\"a\");\n    print(o.is_some());\n}",
+        "struct P { i64 x; }\nstruct S { (own P)[] ps; }\nstruct M { (own P)[str] m; }\nfn main() {\n    let M[] ms = [M { m: [\"a\": own P { x: 1 }] }];\n    for x in ms { let o = x.m.remove(\"a\"); print(o.is_some()); }\n}",
+    ];
+    for src in rejected.iter() {
+        let o = jabberwock::run_source(src, false);
+        assert!(o.error.is_some() && o.output.is_empty(), "{}", src);
+    }
+}

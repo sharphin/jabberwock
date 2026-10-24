@@ -141,14 +141,27 @@ pub struct RefVal {
     pub(crate) what: String,
     /// `ref mut` で借りたか（書き換えられるか）
     pub(crate) mutable: bool,
+    /// own の読むだけの写し（`view_of`）か。型が own の場所にあるので、値として取り出せない（型の引数 `T` を通っても）
+    pub(crate) view: bool,
 }
 
 /// 取り出せない値の名前。own の型の場所にある読むだけの写し（for の要素の中など）は ref の値だが、own として言う
 fn taken_name(v: &Value, e: &Expr) -> &'static str {
-    if e.takes_own.get() && matches!(v, Value::Ref(_)) {
+    if (e.takes_own.get() || is_view(v)) && matches!(v, Value::Ref(_)) {
         "own"
     } else {
         v.type_name()
+    }
+}
+
+/// own の読むだけの写しを含むか。型の引数 `T` の場所では型検査が `takes_own` を立てられないので、値で見る
+fn is_view(v: &Value) -> bool {
+    match v {
+        Value::Ref(r) => r.view,
+        Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
+            fields.iter().any(is_view)
+        }
+        _ => false,
     }
 }
 
@@ -1010,6 +1023,7 @@ impl Interp {
                 borrowed_at: span,
                 what: what.to_string(),
                 mutable: false,
+                view: true,
             }),
             Value::Struct(def, fields) => {
                 Value::Struct(def, fields.into_iter().map(|f| self.view_of(f, span, what)).collect())
@@ -1356,6 +1370,7 @@ impl Interp {
                         borrowed_at: *bspan,
                         what: format!("{} の中身 {}", r.what, b),
                         mutable: r.mutable,
+                        view: false,
                     }),
                     other => other,
                 },
@@ -1425,6 +1440,7 @@ impl Interp {
                     borrowed_at: var_span,
                     what: what.clone(),
                     mutable: false,
+                    view: false,
                 }),
                 other if other.moves() => self.view_of(other, var_span, &what),
                 other => other,
@@ -1444,6 +1460,7 @@ impl Interp {
                     borrowed_at: var_span,
                     what: what.clone(),
                     mutable: false,
+                    view: false,
                 };
                 (Value::Ref(r), Some(slot))
             } else {
@@ -1947,6 +1964,7 @@ impl Interp {
             borrowed_at: e.span,
             what: "一時的な値".to_string(),
             mutable: false,
+            view: false,
         }))
     }
 
@@ -1990,8 +2008,9 @@ impl Interp {
                 borrowed_at: span,
                 what: describe(inner),
                 mutable,
+                view: false,
             })),
-            Some(Value::Ref(r)) => Ok(Value::Ref(RefVal { mutable, ..r })),
+            Some(Value::Ref(r)) => Ok(Value::Ref(RefVal { mutable, view: false, ..r })),
             _ => {
                 if self.through_map(pl.slot, &pl.path) {
                     return Err(map_borrow_error(inner.span));
@@ -2003,6 +2022,7 @@ impl Interp {
                     borrowed_at: span,
                     what: describe(inner),
                     mutable,
+                    view: false,
                 }))
             }
         }
@@ -2090,7 +2110,7 @@ impl Interp {
             ExprKind::Ref(inner, mutable) => self.make_ref(inner, *mutable, e.span),
             ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if self.has_own(&v) || v.moves() || e.takes_own.get() {
+                if self.has_own(&v) || v.moves() || e.takes_own.get() || is_view(&v) {
                     return Err(Diagnostic::new(format!("ポインタの先にある {} は取り出せません", taken_name(&v, e)))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`*p = ...` で置き換えてください"));
@@ -2099,7 +2119,7 @@ impl Interp {
             }
             ExprKind::Field(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if self.has_own(&v) || v.moves() || e.takes_own.get() {
+                if self.has_own(&v) || v.moves() || e.takes_own.get() || is_view(&v) {
                     return Err(Diagnostic::new(format!("フィールドにある {} は取り出せません", taken_name(&v, e)))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`p.f = ...` で置き換えてください"));
@@ -2172,7 +2192,7 @@ impl Interp {
             }
             ExprKind::Index(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if self.has_own(&v) || v.moves() || e.takes_own.get() {
+                if self.has_own(&v) || v.moves() || e.takes_own.get() || is_view(&v) {
                     return Err(Diagnostic::new(format!("配列の中にある {} は取り出せません", taken_name(&v, e)))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref a[i]` で借りるか、`a[i] = ...` で置き換えてください"));
@@ -2686,7 +2706,7 @@ impl Interp {
             access.through(&rv).require(span, &format!("書き換えるメソッド `{}` を呼ぼうとした", name))?;
         }
         let this = |slot: usize, generation: u64, what: String| {
-            Value::Ref(RefVal { slot, generation, path: Vec::new(), borrowed_at: recv.span, what, mutable })
+            Value::Ref(RefVal { slot, generation, path: Vec::new(), borrowed_at: recv.span, what, mutable, view: false })
         };
         let mut lent: Option<Lent> = None;
         let this_val = match rv {
@@ -2697,7 +2717,7 @@ impl Interp {
                 }
                 this(slot, self.heap.slots[slot].generation, describe(recv))
             }
-            Value::Ref(r) => Value::Ref(RefVal { mutable, ..r }),
+            Value::Ref(r) => Value::Ref(RefVal { mutable, view: false, ..r }),
             // 場所にある構造体は、その場所を借りて this にする（リストの中は場所が変わりうるので貸す）
             _ if matches!(&place, Some(pl) if !self.through_map(pl.slot, &pl.path)) => {
                 let pl = place.expect("checked above");
@@ -2708,6 +2728,7 @@ impl Interp {
                     borrowed_at: recv.span,
                     what: describe(recv),
                     mutable,
+                    view: false,
                 })
             }
             v => {
@@ -2786,6 +2807,7 @@ impl Interp {
                     borrowed_at: span,
                     what: what.clone(),
                     mutable: false,
+                    view: false,
                 }),
                 other if other.moves() => self.view_of(other, span, &what),
                 other => other,
@@ -2802,6 +2824,7 @@ impl Interp {
                     borrowed_at: span,
                     what: what.clone(),
                     mutable: false,
+                    view: false,
                 };
                 (Value::Ref(r), Some(slot))
             } else {
@@ -2861,6 +2884,7 @@ impl Interp {
                     borrowed_at: span,
                     what: what.clone(),
                     mutable: false,
+                    view: false,
                 })
             })
             .collect();

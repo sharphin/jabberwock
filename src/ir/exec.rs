@@ -294,9 +294,10 @@ impl<'a> Machine<'a> {
                             borrowed_at: *span,
                             what: what.clone(),
                             mutable: *mutable,
+                            view: false,
                         })
                     }
-                    Value::Ref(r) => Value::Ref(RefVal { mutable: *mutable, ..r.clone() }),
+                    Value::Ref(r) => Value::Ref(RefVal { mutable: *mutable, view: false, ..r.clone() }),
                     _ => {
                         if self.it.through_map(slot, &path) {
                             return Err(map_borrow_error(*span));
@@ -308,6 +309,7 @@ impl<'a> Machine<'a> {
                             borrowed_at: *span,
                             what: what.clone(),
                             mutable: *mutable,
+                            view: false,
                         })
                     }
                 })
@@ -389,6 +391,7 @@ impl<'a> Machine<'a> {
                     borrowed_at: this.span,
                     what: what.clone(),
                     mutable: *mutable,
+                    view: false,
                 };
                 vals.insert(0, Value::Ref(r));
                 self.call(fi, vals, Vec::new(), *span)
@@ -643,6 +646,7 @@ impl<'a> Machine<'a> {
                     borrowed_at: span,
                     what: what.to_string(),
                     mutable: false,
+                    view: false,
                 })
             })
             .collect();

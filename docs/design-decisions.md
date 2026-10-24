@@ -499,3 +499,12 @@ let x = pick(true, 1, 2);
 - 将来の課題（優先度高め）: スレッドを作れなかったとき（pthread_create / CreateThread の失敗）、今は何も知らせずに、
   join が永久に待つ（生きているスレッドの数に入ったまま。送った own は解放されないまま残る。二重解放にはならない）。
   spawn の位置で実行時エラーにする（interp の `std::thread::Builder::spawn` の失敗も同じ文に）。
+- 2 回目の確認（別の発想で。tests/native.rs の `own_in_a_view_through_generics_and_builtins`）で、**型の引数を通る穴**が見つかった:
+  `fn T get<T>(ref Box<T> b) { b.v }` に写しの `Box<own P>` を渡すと、関数の中の `b.v` の型は `T` なので型検査が `takes_own` を立てられず、
+  interp だけ写しを取り出せた（実行ファイルと IR は型の引数ごとに作り分けるので、もともとエラー）。interp は型を見ないので、
+  写しの ref に印 `RefVal.view` を付け（`view_of` が作るときだけ。`ref s.b` で借り直すと消える）、値として取り出すときに値の中に印があればエラーにした。
+  `Box<ref P>` に本物の ref を入れたものは今まで通り取り出せる。
+- 組み込みの操作は、取り出す操作（pop・remove・drain・sort・辞書の remove）はどれも書き換えなので、読むだけの写しには型検査がエラーにする。
+  `filter` と辞書の `get` はコピーできない要素には使えない。`map` の要素と `for (k, v) in m` の v は ref なので、取り出しにならない。
+- 将来の課題: interp と実行ファイルの差分を自動で探す（ランダムにプログラムを作って両方で動かし、出力とエラーを比べる）。突き合わせの土台（`same_as_interp`・`JW_NATIVE=1`）はある。
+

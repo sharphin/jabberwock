@@ -166,7 +166,8 @@
   逆順にして後ろから pop する。analyze はその iter を eval で読む）。
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
   写しの中の own（own の配列）を値として取り出すのはエラー（型は own なのに中身が写しになるため）。型検査が `p.f` / `a[i]` / `*p` の型を見て `Expr.takes_own` を立て、
-  interp はそれを値として読むとエラー。IR の exec は copy_out の行き先の型（`holds_own`）、llvm.rs / jwc の Hazard は own なら必ず真。
+  interp はそれを値として読むとエラー（型の引数 `T` の場所は型で分からないので、`view_of` が写しの ref に付ける印 `RefVal.view` を `is_view` で見る。
+  借り直した ref（`make_ref`）は印を消す）。IR の exec は copy_out の行き先の型（`holds_own`）、llvm.rs / jwc の Hazard は own なら必ず真。
 
 - モジュール: `modules::Loader` が `use` をたどってファイルを読み（使われる側が先。輪はエラー）、各ファイルを
   `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー。`.` のすぐあとの名前はフィールドなのでまとめない）、
