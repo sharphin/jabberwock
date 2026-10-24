@@ -5,17 +5,17 @@
 
 use std::fs;
 
-use ward::{run_source, run_source_with, Outcome};
+use jabberwock::{run_source, run_source_with, Outcome};
 
 fn example(name: &str) -> String {
-    let path = format!("{}/examples/{}.ward", env!("CARGO_MANIFEST_DIR"), name);
+    let path = format!("{}/examples/{}.jw", env!("CARGO_MANIFEST_DIR"), name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {}", path, e))
 }
 
 fn ok(src: &str) -> Outcome {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     o

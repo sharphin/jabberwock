@@ -1,22 +1,22 @@
 //! `;`・`mut`・`ref mut`・複合代入・`++` のテスト
 
-use ward::run_source;
+use jabberwock::run_source;
 
 fn out(body: &str) -> String {
     let src = format!("fn main() {{\n{}\n}}", body);
     let o = run_source(&src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", &src));
+        panic!("unexpected error:\n{}", d.render("test.jw", &src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     o.output
 }
 
-fn err(src: &str) -> ward::diag::Diagnostic {
+fn err(src: &str) -> jabberwock::diag::Diagnostic {
     run_source(src, false).error.expect("expected an error")
 }
 
-fn err_in_main(body: &str) -> ward::diag::Diagnostic {
+fn err_in_main(body: &str) -> jabberwock::diag::Diagnostic {
     err(&format!("fn main() {{\n{}\n}}", body))
 }
 
@@ -34,7 +34,7 @@ fn variables_are_read_only_unless_mut() {
     let src = "fn main() {\n    let x = 1;\n    x = 2;\n}";
     let d = err(src);
     assert!(d.title.contains("`x` は mut ではない"), "{}", d.title);
-    let r = d.render("t.ward", src);
+    let r = d.render("t.jw", src);
     assert!(r.contains("ここで `x` を宣言した（mut がない）"), "{}", r);
     assert!(r.contains("let mut x"), "{}", r);
     assert_eq!(out("let mut x = 1;\nx = 2;\nprint(x);"), "2\n");
@@ -64,7 +64,7 @@ fn writing_through_a_plain_ref_is_an_error() {
     let src = "fn main() {\n    let mut a = own 1;\n    let r = ref a;\n    *r = 2;\n}";
     let d = err(src);
     assert!(d.title.contains("読むだけの ref"), "{}", d.title);
-    let r = d.render("t.ward", src);
+    let r = d.render("t.jw", src);
     assert!(r.contains("`r` は読むだけの ref（mut がない）"), "{}", r);
     assert!(r.contains("ref mut"), "{}", r);
 }

@@ -1,13 +1,13 @@
 //! 型検査が、式ごとの型と型の引数を記録すること（IR への書き出しの土台）
 
-use ward::ast::{walk_block, Expr, ExprKind};
-use ward::types::{is_const_tree, Ty};
+use jabberwock::ast::{walk_block, Expr, ExprKind};
+use jabberwock::types::{is_const_tree, Ty};
 
 /// 型の記録がない式（数だけの式の中は、根だけ記録すればよい）
 fn untyped(src: &str) -> Vec<String> {
-    let (prog, info) = match ward::typed(src, &ward::no_modules) {
+    let (prog, info) = match jabberwock::typed(src, &jabberwock::no_modules) {
         Ok(x) => x,
-        Err(d) => panic!("{}", d.render("t.ward", src)),
+        Err(d) => panic!("{}", d.render("t.jw", src)),
     };
     let mut missing = Vec::new();
     for f in &prog.fns {
@@ -27,7 +27,7 @@ fn every_expression_in_the_examples_is_typed() {
     let mut n = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
-        if !matches!(path.extension(), Some(x) if x == "ward") {
+        if !matches!(path.extension(), Some(x) if x == "jw") {
             continue;
         }
         let src = std::fs::read_to_string(&path).unwrap();
@@ -57,14 +57,14 @@ fn main() {
     print(x);
 }";
     assert!(untyped(src).is_empty(), "{:#?}", untyped(src));
-    let (prog, info) = ward::typed(src, &ward::no_modules).unwrap();
+    let (prog, info) = jabberwock::typed(src, &jabberwock::no_modules).unwrap();
     let main = prog.fns.iter().find(|f| f.name == "main").unwrap();
     let mut found = false;
     walk_block(&main.body, &mut |e: &Expr| {
         if let ExprKind::Call(name, _) = &e.kind {
             if name == "first" {
-                assert_eq!(info.ty(e), Some(&Ty::Int(ward::ast::IntTy::I64)));
-                assert_eq!(info.targs[&(e as *const Expr)]["T"], Ty::Int(ward::ast::IntTy::I64));
+                assert_eq!(info.ty(e), Some(&Ty::Int(jabberwock::ast::IntTy::I64)));
+                assert_eq!(info.targs[&(e as *const Expr)]["T"], Ty::Int(jabberwock::ast::IntTy::I64));
                 found = true;
             }
         }

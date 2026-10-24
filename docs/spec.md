@@ -1,4 +1,4 @@
-# ward 言語仕様（作成中）
+# jabberwock 言語仕様（作成中）
 
 いま実装されている言語の決まりをまとめたもの。なぜそう決めたかは [design-decisions.md](design-decisions.md) にある。
 名前は jabberwock に変える予定（時期は未定）。
@@ -32,20 +32,20 @@ fn main() {
 ### 1.1 モジュール
 
 ```
-// geom.ward
+// geom.jw
 pub struct Point { i64 x; i64 y; }
 pub fn i64 dist2(ref Point p) { sq(p.x) + sq(p.y) }
 fn i64 sq(i64 x) { x * x }          // pub がないので geom の中だけで使える
 
-// main.ward
-use geom;                           // 同じフォルダの geom.ward を使う
+// main.jw
+use geom;                           // 同じフォルダの geom.jw を使う
 fn main() {
     let p = geom.Point { x: 3, y: 4 };
     print(geom.dist2(p));           // 25
 }
 ```
 
-- 1 ファイルが 1 モジュール。`use 名前;` で、最初のファイルと同じフォルダの `名前.ward` を使う。
+- 1 ファイルが 1 モジュール。`use 名前;` で、最初のファイルと同じフォルダの `名前.jw` を使う。
 - ほかのモジュールの名前は、いつも `モジュール名.名前` と書く（関数・構造体・enum・interface・静的メソッド `geom.Point.at(1, 2)`・enum の値 `geom.Shape.Box(1, 2)`・型 `geom.Point[]`）。
 - ほかのファイルから使えるのは `pub` をつけた定義だけ。構造体のメソッド・フィールド、enum の種類は、型が `pub` なら使える。
 - モジュールの中では、自分の定義は名前だけで書ける。`use` は書いたファイルの中でだけ効く（使うモジュールが使っているモジュールは見えない）。
@@ -797,7 +797,7 @@ let (own Node)[i64] mut nodes = [];  // own を値に持つ辞書
 | `drop(x)` | x を今すぐ解放する（x はムーブされる） |
 | `assert(条件)` | 条件が false なら実行時エラー |
 | `read_line()` | 標準入力から 1 行読む（`Option<str>`。改行は含まない）。入力が終わっていれば `None` |
-| `args()` | コマンドライン引数（`str[]`）。`ward prog.ward a b` なら `["a", "b"]` |
+| `args()` | コマンドライン引数（`str[]`）。`jabberwock prog.jw a b` なら `["a", "b"]` |
 | `spawn(f)` | f を新しいスレッドで動かし、`task<R>` を返す（[9.1](#91-スレッド)） |
 | `chan()` | 新しいチャンネル。型は入れる先から決める（`let chan<i64> c = chan();`） |
 

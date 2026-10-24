@@ -5,7 +5,7 @@
 #include <condition_variable>
 #include <thread>
 #include <optional>
-// ward と同じ「上限なし」のチャンネル
+// jabberwock と同じ「上限なし」のチャンネル
 struct Chan {
     std::mutex m; std::condition_variable cv; std::deque<int64_t> q; bool closed = false;
     void send(int64_t v) { { std::lock_guard<std::mutex> g(m); q.push_back(v); } cv.notify_one(); }

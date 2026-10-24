@@ -1,11 +1,11 @@
 //! enum と Option のテスト
 
-use ward::{run_source, run_source_with};
+use jabberwock::{run_source, run_source_with};
 
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     let off = run_source_with(src, false, false);
@@ -13,7 +13,7 @@ fn ok(src: &str) -> String {
     o.output
 }
 
-fn err(src: &str) -> ward::diag::Diagnostic {
+fn err(src: &str) -> jabberwock::diag::Diagnostic {
     run_source(src, false).error.expect("expected an error")
 }
 
@@ -164,7 +164,7 @@ fn main() {
 }";
     let d = err(src);
     assert!(d.title.contains("dangling"), "{}", d.title);
-    let out = d.render("t.ward", src);
+    let out = d.render("t.jw", src);
     assert!(out.contains("`s の中身 v` を借りた"), "{}", out);
 }
 

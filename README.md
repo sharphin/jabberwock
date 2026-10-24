@@ -1,19 +1,18 @@
-# ward
+# jabberwock
 
-`own` と世代付き `ref` だけで「速い・簡単・安全」の隙間を狙う、小さな言語。インタプリタと、clang を使って実行ファイルを作るコンパイラ（`ward build`）がある。
-名前は jabberwock に変える予定（時期は未定）。
+`own` と世代付き `ref` だけで「速い・簡単・安全」の隙間を狙う、小さな言語。インタプリタと、clang を使って実行ファイルを作るコンパイラ（`jabberwock build`）がある。
 
 ## 動かす
 
 ```
-cargo run -- examples/counter.ward
-cargo run -- --stats examples/counter.ward     # ref の検査をどれだけ消せたか表示
-cargo run -- --no-elide examples/counter.ward  # 静的解析なし（全部実行時に検査）
-cargo run -- --ir examples/fib.ward            # 実行せず IR（中間表現）を表示
-cargo run -- --ll examples/fib.ward            # 実行せず LLVM IR を表示（clang でコンパイルできる）
-cargo run -- build examples/fib.ward           # 実行ファイル fib を作る（clang が要る。docs/native.md）
-cargo run -- build --release examples/fib.ward # 実行時エラーは使った位置だけ出す
-cargo run -- examples/words.ward "a b a"        # ファイル名のあとの引数は args() で受け取れる
+cargo run -- examples/counter.jw
+cargo run -- --stats examples/counter.jw     # ref の検査をどれだけ消せたか表示
+cargo run -- --no-elide examples/counter.jw  # 静的解析なし（全部実行時に検査）
+cargo run -- --ir examples/fib.jw            # 実行せず IR（中間表現）を表示
+cargo run -- --ll examples/fib.jw            # 実行せず LLVM IR を表示（clang でコンパイルできる）
+cargo run -- build examples/fib.jw           # 実行ファイル fib を作る（clang が要る。docs/native.md）
+cargo run -- build --release examples/fib.jw # 実行時エラーは使った位置だけ出す
+cargo run -- examples/words.jw "a b a"        # ファイル名のあとの引数は args() で受け取れる
 cargo test
 ```
 
@@ -188,7 +187,7 @@ let Pair<str> q = Pair { a: "x", b: "y" };
 
 ```
 error: 無効になった参照を使いました (dangling reference)
- --> examples/dangling_scope.ward:9:11
+ --> examples/dangling_scope.jw:9:11
   |
 7 |         r = ref a;
   |             ----- ここで `a` を借りた
@@ -213,7 +212,7 @@ error: 無効になった参照を使いました (dangling reference)
 - デバッグビルドでは、消した検査も念のため確かめ、解析の誤りがあれば panic する。
 
 ```
-$ cargo run -- --stats examples/counter.ward
+$ cargo run -- --stats examples/counter.jw
 count = 3
 [stats] `*p` と `p.f` の箇所: 検査を消せた 3 / 実行時に残る 0
 [stats] ref の世代チェック: 実行 0 回 / 省略 6 回

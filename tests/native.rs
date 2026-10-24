@@ -1,9 +1,9 @@
 //! LLVM に書き出して clang で作った実行ファイル。clang がなければ何もしない。
-//! テスト全体を実行ファイルでも突き合わせるには `WARD_NATIVE=1 cargo test`（`lib.rs` の `native_mismatch`）
+//! テスト全体を実行ファイルでも突き合わせるには `JW_NATIVE=1 cargo test`（`lib.rs` の `native_mismatch`）
 
 use std::process::Command;
 
-use ward::{llvm_build, native, no_modules};
+use jabberwock::{llvm_build, native, no_modules};
 
 fn have_clang() -> bool {
     Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
@@ -15,10 +15,10 @@ fn run(name: &str, src: &str) -> (Option<i32>, String, String) {
 }
 
 fn run_with(name: &str, src: &str, release: bool) -> (Option<i32>, String, String) {
-    let ll = llvm_build(src, &no_modules, "main.ward", release).expect("lowers to LLVM");
-    let dir = std::env::temp_dir().join(format!("ward-native-test-{}", std::process::id()));
+    let ll = llvm_build(src, &no_modules, "main.jw", release).expect("lowers to LLVM");
+    let dir = std::env::temp_dir().join(format!("jw-native-test-{}", std::process::id()));
     let exe = native::compile(&ll, &dir, name, "-O1").expect("clang compiles");
-    let out = Command::new(&exe).env("WARD_LEAKS", "1").output().expect("runs");
+    let out = Command::new(&exe).env("JW_LEAKS", "1").output().expect("runs");
     (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
 }
 
@@ -48,7 +48,7 @@ fn compiled_programs_catch_dangling_refs() {
     assert_eq!(out, "");
     // インタプリタと同じ、時系列のエラー表示
     let want = "error: 無効になった参照を使いました (dangling reference)
- --> main.ward:5:11
+ --> main.jw:5:11
   |
 3 |     let r = ref a;
   |             ----- ここで `a` を借りた
@@ -65,7 +65,7 @@ fn compiled_programs_catch_dangling_refs() {
     assert_eq!(code, Some(1));
     assert_eq!(
         err,
-        "error: 無効になった参照を使いました (dangling reference)\n --> main.ward:5:11\n  = ここで使ったが、借りた先はもう存在しない\n"
+        "error: 無効になった参照を使いました (dangling reference)\n --> main.jw:5:11\n  = ここで使ったが、借りた先はもう存在しない\n"
     );
 }
 
@@ -84,26 +84,26 @@ fn compiled_programs_run_threads() {
     // 最後の recv は、送るスレッドがもうないのでデッドロック（main の位置で知らせる）
     assert_eq!(code, Some(1), "{}", err);
     assert_eq!(out, "27060 4\n");
-    assert!(err.starts_with("error: すべてのスレッドが待ちのまま止まりました (deadlock)\n  --> main.ward:11:11\n"), "{}", err);
+    assert!(err.starts_with("error: すべてのスレッドが待ちのまま止まりました (deadlock)\n  --> main.jw:11:11\n"), "{}", err);
 }
 
 // ---------------------------------------------------------------- 区画の確保（実行時ライブラリ）
 // 小さい区画は塊から切り出して使い回し、頭は世代だけ。解放の位置は解放した区画の中身・使い回しの輪の表・送った区画の輪の表にある。
-// どれもインタプリタと同じ出力・同じエラー表示・残った区画 0 になることを、-O1 と、ward build と同じ -O2（LTO）で確かめる
+// どれもインタプリタと同じ出力・同じエラー表示・残った区画 0 になることを、-O1 と、jabberwock build と同じ -O2（LTO）で確かめる
 
 /// インタプリタと実行ファイルの結果が同じか（出力・エラー表示の全文・終了コード・残った区画の数）
 fn same_as_interp(name: &str, src: &str) {
     if !have_clang() {
         return;
     }
-    let o = ward::run_source(src, false);
-    let want_err = o.error.as_ref().map(|d| ward::render(d, "main.ward", &o.files));
+    let o = jabberwock::run_source(src, false);
+    let want_err = o.error.as_ref().map(|d| jabberwock::render(d, "main.jw", &o.files));
     for opt in ["-O1", "-O2"] {
-        let ll = llvm_build(src, &no_modules, "main.ward", false).expect("lowers to LLVM");
+        let ll = llvm_build(src, &no_modules, "main.jw", false).expect("lowers to LLVM");
         // テストは並んで走るので、フォルダはテストごと（実行時ライブラリのソースを同じ場所に書く）
-        let dir = std::env::temp_dir().join(format!("ward-native-test-{}-{}", std::process::id(), name));
+        let dir = std::env::temp_dir().join(format!("jw-native-test-{}-{}", std::process::id(), name));
         let exe = native::compile(&ll, &dir, &format!("{}{}", name, opt), opt).expect("clang compiles");
-        let out = Command::new(&exe).env("WARD_LEAKS", "1").output().expect("runs");
+        let out = Command::new(&exe).env("JW_LEAKS", "1").output().expect("runs");
         let _ = std::fs::remove_dir_all(&dir);
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -206,7 +206,7 @@ fn freed_site_is_forgotten_after_4096_reuses() {
     assert_eq!(code, Some(1));
     assert_eq!(out, "");
     let want = "error: 無効になった参照を使いました (dangling reference)
- --> main.ward:8:11
+ --> main.jw:8:11
   |
 3 |     let r = ref a;
   |             ----- ここで `a` を借りた

@@ -1,15 +1,15 @@
 [package]
-name = "ward"
+name = "jabberwock"
 version = "0.1.0"
 edition = "2021"
 description = "own と世代付き ref だけで安全を目指す小さな言語の核"
 
 [lib]
-name = "ward"
+name = "jabberwock"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ward"
+name = "jabberwock"
 path = "src/main.rs"
 
 [profile.release]

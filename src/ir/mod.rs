@@ -210,7 +210,7 @@ impl Place {
     }
 }
 
-// ---------------------------------------------------------------- 表示（`ward --ir`）
+// ---------------------------------------------------------------- 表示（`jabberwock --ir`）
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

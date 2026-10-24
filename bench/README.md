@@ -1,8 +1,8 @@
-# ベンチマーク（ward build・Go・C++）
+# ベンチマーク（jabberwock build・Go・C++）
 
-同じ処理を `ward/`・`go/`・`cpp/` に書いたもの。`./bench/run.sh [名前...]` で、3 つを作って走らせ、いちばん速かった回の秒数を出す
-（`RUNS=5` で回数、`WARD=...` で ward の場所を変える）。出力が C++ と違えば `!!` の行が出る。
-要るもの: `cargo build --release` 済みの ward・clang（clang++）・go・bc。
+同じ処理を `jabberwock/`・`go/`・`cpp/` に書いたもの。`./bench/run.sh [名前...]` で、3 つを作って走らせ、いちばん速かった回の秒数を出す
+（`RUNS=5` で回数、`JW=...` で jabberwock の場所を変える）。出力が C++ と違えば `!!` の行が出る。
+要るもの: `cargo build --release` 済みの jabberwock・clang（clang++）・go・bc。
 
 | 名前 | 中身 | 主に見るもの |
 |---|---|---|
@@ -16,10 +16,10 @@
 | chan | 500 万個の i64 をチャンネルで送る | スレッドとチャンネル |
 
 - Go と C++ は、それぞれの普通の書き方（Go の `map`・`slices.Sort`・バッファつきチャンネル、C++ の `unique_ptr`・`std::sort`・`unordered_map`）。
-  C++ のチャンネルは ward と同じ「上限なし」を錠と条件変数で書いたもの。C++ の `vector<bool>` はビットで詰めるので、sieve は C++ に有利。
+  C++ のチャンネルは jabberwock と同じ「上限なし」を錠と条件変数で書いたもの。C++ の `vector<bool>` はビットで詰めるので、sieve は C++ に有利。
 - 計ったときの結果（2026-10-23、Linux・4 コア、clang 18・Go 1.24。秒、5 回の最速）:
 
-| | ward（前） | ward | Go | C++ |
+| | jabberwock（前） | jabberwock | Go | C++ |
 |---|---|---|---|---|
 | fib | 0.82 | 0.25 | 0.45 | 0.19 |
 | bst | 4.58 | 2.65 | 2.15 | 2.85 |

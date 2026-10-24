@@ -1,7 +1,7 @@
 //! IR（中間表現）への書き出し。実行結果の突き合わせは、デバッグビルドのすべてのテストで
 //! `run_source` などが自動でしている（`lib.rs` の `ir_mismatch`）。ここでは表示と、書き出せる範囲を確かめる
 
-use ward::{ir_text, no_modules, run_source};
+use jabberwock::{ir_text, no_modules, run_source};
 
 fn ir(src: &str) -> String {
     ir_text(src, &no_modules).expect("lowers to IR")

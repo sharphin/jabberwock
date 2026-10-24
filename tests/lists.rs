@@ -1,11 +1,11 @@
 //! リスト `i64[]` と `for x in a` のテスト
 
-use ward::{run_source, run_source_with};
+use jabberwock::{run_source, run_source_with};
 
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     let off = run_source_with(src, false, false);
@@ -13,7 +13,7 @@ fn ok(src: &str) -> String {
     o.output
 }
 
-fn err(src: &str) -> ward::diag::Diagnostic {
+fn err(src: &str) -> jabberwock::diag::Diagnostic {
     run_source(src, false).error.expect("expected an error")
 }
 
@@ -293,7 +293,7 @@ fn main() {
         ok(src),
         "[4, 5] [1, 4, 9, 16, 25] [2, 4, 6, 8, 10]\n[a, b] [35, 27]\n[11, 12]\n[A, B, C]\n[30, 20]\n[2, 3, 4, 5, 6] [x: 1]\n"
     );
-    let d = ward::run_source("
+    let d = jabberwock::run_source("
 struct P { i64 a; }
 fn main() {
     let P[] ps = [P { a: 1 }];

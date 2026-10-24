@@ -1,4 +1,4 @@
-//! モジュール: 1 ファイルが 1 モジュール。`use geom;` で同じフォルダの geom.ward を読む。
+//! モジュール: 1 ファイルが 1 モジュール。`use geom;` で同じフォルダの geom.jw を読む。
 //!
 //! モジュールの中のトップレベルの名前（関数・構造体・enum・interface）は、`geom.area` のように
 //! モジュール名をつけた名前に書き換える（`qualify`）。使う側の `geom.area` はパーサが 1 つの名前にまとめる
@@ -77,7 +77,7 @@ impl<'a> Loader<'a> {
             }
             let Some(text) = (self.read)(u) else {
                 return Err(Diagnostic::new(format!("モジュール `{}` が見つかりません", u))
-                    .primary(*span, format!("同じフォルダに {}.ward がない", u)));
+                    .primary(*span, format!("同じフォルダに {}.jw がない", u)));
             };
             self.files.push((u.clone(), text));
             let info = self.module(u, self.files.len() - 1)?;

@@ -1,4 +1,4 @@
-// ward の実行時ライブラリ。`ward build` が LLVM の書き出し（src/ir/llvm.rs）と一緒に clang でコンパイルする。
+// jabberwock の実行時ライブラリ。`jabberwock build` が LLVM の書き出し（src/ir/llvm.rs）と一緒に clang でコンパイルする。
 //
 // - own の先は「区画」。区画の頭（16 バイト）に世代と「最後に解放された場所」を置く。解放しても OS には返さず、
 //   同じ大きさの区画の置き場に戻すだけ（世代は進めたまま残るので、古い ref は必ず見つかる）。
@@ -108,7 +108,7 @@ static void flush_locked(void) {
     fflush(stdout);
 }
 
-void ward_flush(void) {
+void jw_flush(void) {
     if (g_threaded) lock(&out_lock);
     flush_locked();
     if (g_threaded) unlock(&out_lock);
@@ -127,17 +127,17 @@ static void out_write(const char *p, size_t n) {
 }
 
 // 1 回の print のあいだ出力の錠を持つ（行が混ざらない）
-void ward_print_begin(void) {
+void jw_print_begin(void) {
     if (g_threaded) lock(&out_lock);
 }
 
 // print の 1 つ分（first でなければ前に空白）
-void ward_print_part(WStr *s, int32_t first) {
+void jw_print_part(WStr *s, int32_t first) {
     if (!first) out_write(" ", 1);
     out_write(s->data, (size_t)s->len);
 }
 
-void ward_print_end(void) {
+void jw_print_end(void) {
     out_write("\n", 1);
     if (g_threaded) unlock(&out_lock);
 }
@@ -151,8 +151,8 @@ typedef struct WSrc {
     const char *name;
     const char *text;
 } WSrc;
-extern const WSrc ward_files[];
-extern const int32_t ward_nfiles;
+extern const WSrc jw_files[];
+extern const int32_t jw_nfiles;
 
 // エラーの位置を集めてから、`Diagnostic::render_in` と同じ形で出す
 #define MAXL 8
@@ -169,7 +169,7 @@ static WLock err_lock = WLOCK_INIT;
 static void begin_error(const char *title) {
     // エラーを出すのは 1 つのスレッドだけ（出したら終わる。錠は返さない）
     if (g_threaded) lock(&err_lock);
-    ward_flush();
+    jw_flush();
     snprintf(err_title, sizeof err_title, "%s", title);
     nlabels = 0;
 }
@@ -219,7 +219,7 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
     put_site(at, label);
     labels[nlabels - 1].primary = 1;
     fprintf(stderr, "error: %s\n", err_title);
-    if (ward_nfiles == 0) {
+    if (jw_nfiles == 0) {
         // --release: 使った位置だけ
         fprintf(stderr, " --> %s:%d:%d\n", at->file, at->line, at->col);
         fprintf(stderr, "  = %s\n", label ? label : "");
@@ -248,7 +248,7 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
             last = 0;
             arrow(width, s);
         }
-        const char *src = cur < ward_nfiles ? ward_files[cur].text : ward_files[0].text;
+        const char *src = cur < jw_nfiles ? jw_files[cur].text : jw_files[0].text;
         int64_t n;
         const char *line = line_of(src, s->line, &n);
         if (s->line != last) {
@@ -286,14 +286,14 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
     exit(1);
 }
 
-_Noreturn void ward_fail(const char *title, const WSite *at, const char *label, const char *note) {
+_Noreturn void jw_fail(const char *title, const WSite *at, const char *label, const char *note) {
     begin_error(title);
     finish_error(at, label, note);
 }
 
 // IR では来ないはずの場所（書き出しの誤り）
-_Noreturn void ward_bug(const char *what) {
-    ward_flush();
+_Noreturn void jw_bug(const char *what) {
+    jw_flush();
     fprintf(stderr, "内部エラー: %s\n", what);
     exit(2);
 }
@@ -302,7 +302,7 @@ static int same_site(const WSite *a, const WSite *b) {
     return a->line == b->line && a->col == b->col && a->len == b->len && strcmp(a->file, b->file) == 0;
 }
 
-_Noreturn void ward_fail_moved(const char *name, const WSite *moved, const WSite *use) {
+_Noreturn void jw_fail_moved(const char *name, const WSite *moved, const WSite *use) {
     char title[512], label[512];
     snprintf(title, sizeof title, "ムーブ済みの値 `%s` を使いました (use after move)", name);
     begin_error(title);
@@ -355,7 +355,7 @@ static const WSite *freed_at(void *block, uint64_t gen) {
     return NULL;
 }
 
-_Noreturn void ward_fail_dangling(const WSite *use, const WSite *borrowed, void *block, uint64_t gen) {
+_Noreturn void jw_fail_dangling(const WSite *use, const WSite *borrowed, void *block, uint64_t gen) {
     char label[512];
     begin_error("無効になった参照を使いました (dangling reference)");
     snprintf(label, sizeof label, "ここで `%s` を借りた", borrowed->text);
@@ -386,7 +386,7 @@ static int fmt_int(char *buf, size_t n, int64_t v, int32_t is_unsigned) {
     return len;
 }
 
-_Noreturn void ward_fail_bounds(int64_t i, int32_t is_unsigned, int64_t len, const WSite *at) {
+_Noreturn void jw_fail_bounds(int64_t i, int32_t is_unsigned, int64_t len, const WSite *at) {
     char title[256], label[256], num[32];
     fmt_int(num, sizeof num, i, is_unsigned);
     snprintf(title, sizeof title, "添字 %s は配列の範囲の外です", num);
@@ -395,13 +395,13 @@ _Noreturn void ward_fail_bounds(int64_t i, int32_t is_unsigned, int64_t len, con
     finish_error(at, label, NULL);
 }
 
-_Noreturn void ward_fail_depth(const WSite *at) {
+_Noreturn void jw_fail_depth(const WSite *at) {
     begin_error("関数呼び出しが深すぎます");
     finish_error(at, "呼び出しの深さが 5000 を超えました", NULL);
 }
 
 // 辞書にキーがない（kind: 0 整数・1 文字列・2 真偽値）
-_Noreturn void ward_fail_nokey(int32_t kind, int64_t key, int32_t is_unsigned, const WSite *at) {
+_Noreturn void jw_fail_nokey(int32_t kind, int64_t key, int32_t is_unsigned, const WSite *at) {
     char title[1024], shown[900];
     if (kind == 1) {
         WStr *s = (WStr *)(intptr_t)key;
@@ -416,7 +416,7 @@ _Noreturn void ward_fail_nokey(int32_t kind, int64_t key, int32_t is_unsigned, c
     finish_error(at, "このキーの値は入っていない", "ないかもしれないなら `m.get(k)`（Option）か `m.contains(k)` を使ってください");
 }
 
-_Noreturn void ward_fail_insert(int64_t i, int64_t len, const WSite *at) {
+_Noreturn void jw_fail_insert(int64_t i, int64_t len, const WSite *at) {
     char label[256];
     snprintf(label, sizeof label, "位置は %lld ですが、長さは %lld です", (long long)i, (long long)len);
     begin_error("insert の位置が範囲の外です");
@@ -426,8 +426,8 @@ _Noreturn void ward_fail_insert(int64_t i, int64_t len, const WSite *at) {
 // ---------------------------------------------------------------- 区画
 
 // 生きている区画の数と呼び出しの深さは、スレッドごと（区画は別のスレッドで解放されうるので、数は全スレッドの合計で見る）
-_Thread_local int64_t ward_live;
-_Thread_local int64_t ward_depth;
+_Thread_local int64_t jw_live;
+_Thread_local int64_t jw_depth;
 
 // 小さい区画は 8 バイト刻みの大きさごとに空き区画の鎖を持ち、まとめて確保した塊から切り出す（OS には返さない）
 #define NCLASS 256
@@ -447,7 +447,7 @@ static void *slab_take(size_t n) {
     if ((size_t)(slab_end - slab_cur) < n) {
         size_t sz = 256 * 1024;
         slab_cur = malloc(sz);
-        if (!slab_cur) ward_bug("メモリが足りません");
+        if (!slab_cur) jw_bug("メモリが足りません");
         slab_end = slab_cur + sz;
     }
     void *r = slab_cur;
@@ -463,7 +463,7 @@ static void remember_reuse(void *p) {
     HDR(p)->gen++;
 }
 
-void *ward_alloc(int64_t size) {
+void *jw_alloc(int64_t size) {
     size_t s = round8(size);
     void *p = NULL;
     if (s / 8 <= NCLASS) {
@@ -489,21 +489,21 @@ void *ward_alloc(int64_t size) {
         }
         if (!p) {
             WHdr *h = malloc(sizeof(WHdr) + s);
-            if (!h) ward_bug("メモリが足りません");
+            if (!h) jw_bug("メモリが足りません");
             h->gen = 0;
             p = h + 1;
         }
     }
-    ward_live++;
+    jw_live++;
     return p;
 }
 
 // 区画を解放する（中身の own は書き出したコードが先に解放する）。世代が進むので、ここを指す ref は無効になる
-void ward_free(void *p, int64_t size, const WSite *why) {
+void jw_free(void *p, int64_t size, const WSite *why) {
     WHdr *h = HDR(p);
     h->gen++;
     FREED_SITE(p) = why;
-    ward_live--;
+    jw_live--;
     size_t s = round8(size);
     if (s / 8 <= NCLASS) {
         *(void **)p = free_small[s / 8];
@@ -517,7 +517,7 @@ void ward_free(void *p, int64_t size, const WSite *why) {
     }
 }
 
-uint64_t ward_gen(void *p) { return HDR(p)->gen; }
+uint64_t jw_gen(void *p) { return HDR(p)->gen; }
 
 // ---------------------------------------------------------------- own の読むだけの写し
 
@@ -533,7 +533,7 @@ typedef struct WCell {
 // own（または写し）の写しを作る。写しの写しは同じ先・同じ借りた場所
 static _Thread_local WCell *free_cells;
 
-void *ward_view(void *own, const WSite *site) {
+void *jw_view(void *own, const WSite *site) {
     WCell *c = free_cells;
     if (c) free_cells = *(WCell **)c;
     else c = slab_take(sizeof(WCell));
@@ -547,22 +547,22 @@ void *ward_view(void *own, const WSite *site) {
     return (void *)((uintptr_t)c | 1);
 }
 
-void ward_view_free(void *v) {
+void jw_view_free(void *v) {
     WCell *c = CELL(v);
     *(WCell **)c = free_cells;
     free_cells = c;
 }
 
 // 写しの先（世代を確かめる）
-void *ward_view_target(void *v, const WSite *use) {
+void *jw_view_target(void *v, const WSite *use) {
     WCell *c = CELL(v);
-    if (HDR(c->target)->gen != c->gen) ward_fail_dangling(use, c->site, c->target, c->gen);
+    if (HDR(c->target)->gen != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
     return c->target;
 }
 
-void *ward_view_target_nocheck(void *v) { return CELL(v)->target; }
-uint64_t ward_view_gen(void *v) { return CELL(v)->gen; }
-const WSite *ward_view_site(void *v) { return CELL(v)->site; }
+void *jw_view_target_nocheck(void *v) { return CELL(v)->target; }
+uint64_t jw_view_gen(void *v) { return CELL(v)->gen; }
+const WSite *jw_view_site(void *v) { return CELL(v)->site; }
 
 // ---------------------------------------------------------------- 文字列
 
@@ -574,7 +574,7 @@ static void *bytes_alloc(size_t n) {
     size_t c = (n + 15) >> 4;
     if (c > SCLASS) {
         void *p = malloc(n);
-        if (!p) ward_bug("メモリが足りません");
+        if (!p) jw_bug("メモリが足りません");
         return p;
     }
     void *p = free_bytes[c];
@@ -605,7 +605,7 @@ static WStr *str_alloc(int64_t len) {
     return s;
 }
 
-WStr *ward_str_new(const char *p, int64_t n) {
+WStr *jw_str_new(const char *p, int64_t n) {
     WStr *s = bytes_alloc(str_bytes(n));
     s->rc = 1;
     s->len = n;
@@ -614,15 +614,15 @@ WStr *ward_str_new(const char *p, int64_t n) {
     return s;
 }
 
-void ward_str_retain(WStr *s) {
+void jw_str_retain(WStr *s) {
     if (s->rc > 0) s->rc++;
 }
 
-void ward_str_release(WStr *s) {
+void jw_str_release(WStr *s) {
     if (s->rc > 0 && --s->rc == 0) bytes_free(s, str_bytes(s->len));
 }
 
-WStr *ward_str_concat(WStr *a, WStr *b) {
+WStr *jw_str_concat(WStr *a, WStr *b) {
     WStr *s = str_alloc(a->len + b->len);
     memcpy(s->data, a->data, (size_t)a->len);
     memcpy(s->data + a->len, b->data, (size_t)b->len);
@@ -630,18 +630,18 @@ WStr *ward_str_concat(WStr *a, WStr *b) {
 }
 
 // バイトの辞書順（Rust の str の比較と同じ）
-int32_t ward_str_cmp(WStr *a, WStr *b) {
+int32_t jw_str_cmp(WStr *a, WStr *b) {
     int64_t n = a->len < b->len ? a->len : b->len;
     int c = memcmp(a->data, b->data, (size_t)n);
     if (c) return c < 0 ? -1 : 1;
     return a->len < b->len ? -1 : a->len > b->len ? 1 : 0;
 }
 
-int32_t ward_str_eq(WStr *a, WStr *b) { return a->len == b->len && memcmp(a->data, b->data, (size_t)a->len) == 0; }
+int32_t jw_str_eq(WStr *a, WStr *b) { return a->len == b->len && memcmp(a->data, b->data, (size_t)a->len) == 0; }
 
 // ---------------------------------------------------------------- 文字にする
 
-WSb *ward_sb_new(void) {
+WSb *jw_sb_new(void) {
     WSb *b = bytes_alloc(sizeof(WSb));
     b->cap = sizeof b->inline_buf;
     b->len = 0;
@@ -654,7 +654,7 @@ static void sb_drop(WSb *b) {
     bytes_free(b, sizeof(WSb));
 }
 
-void ward_sb_push(WSb *b, const char *p, int64_t n) {
+void jw_sb_push(WSb *b, const char *p, int64_t n) {
     if (b->len + n > b->cap) {
         int64_t cap = b->cap;
         while (b->len + n > cap) cap *= 2;
@@ -668,20 +668,20 @@ void ward_sb_push(WSb *b, const char *p, int64_t n) {
     b->len += n;
 }
 
-void ward_sb_cstr(WSb *b, const char *s) { ward_sb_push(b, s, (int64_t)strlen(s)); }
-void ward_sb_str(WSb *b, WStr *s) { ward_sb_push(b, s->data, s->len); }
+void jw_sb_cstr(WSb *b, const char *s) { jw_sb_push(b, s, (int64_t)strlen(s)); }
+void jw_sb_str(WSb *b, WStr *s) { jw_sb_push(b, s->data, s->len); }
 
-void ward_sb_int(WSb *b, int64_t v, int32_t is_unsigned) {
+void jw_sb_int(WSb *b, int64_t v, int32_t is_unsigned) {
     char buf[32];
     int n = fmt_int(buf, sizeof buf, v, is_unsigned);
-    ward_sb_push(b, buf, n);
+    jw_sb_push(b, buf, n);
 }
 
 // 整数を文字列にする（`"{n}"` の n だけのとき）
-WStr *ward_str_int(int64_t v, int32_t is_unsigned) {
+WStr *jw_str_int(int64_t v, int32_t is_unsigned) {
     char buf[32];
     int n = fmt_int(buf, sizeof buf, v, is_unsigned);
-    return ward_str_new(buf, n);
+    return jw_str_new(buf, n);
 }
 
 // Rust の `{:?}` と同じ形（いちばん短く元に戻る桁。1e16 以上と 1e-4 未満は指数の形）
@@ -794,14 +794,14 @@ static void fmt_f64(char *out, double x) {
     }
 }
 
-void ward_sb_float(WSb *b, double x) {
+void jw_sb_float(WSb *b, double x) {
     char buf[64];
     fmt_f64(buf, x);
-    ward_sb_cstr(b, buf);
+    jw_sb_cstr(b, buf);
 }
 
-WStr *ward_sb_finish(WSb *b) {
-    WStr *s = ward_str_new(b->p, b->len);
+WStr *jw_sb_finish(WSb *b) {
+    WStr *s = jw_str_new(b->p, b->len);
     sb_drop(b);
     return s;
 }
@@ -809,7 +809,7 @@ WStr *ward_sb_finish(WSb *b) {
 // ---------------------------------------------------------------- 数
 
 // 小数 → 整数（Rust の `trunc().clamp(i128) as i128` を型の幅で一周させたもの）
-int64_t ward_f2i(double x, int32_t bits, int32_t is_signed) {
+int64_t jw_f2i(double x, int32_t bits, int32_t is_signed) {
     uint64_t u;
     if (isnan(x)) return 0;
     double t = trunc(x);
@@ -834,7 +834,7 @@ int64_t ward_f2i(double x, int32_t bits, int32_t is_signed) {
 
 // ---------------------------------------------------------------- リスト
 
-void ward_list_reserve(WList *l, int64_t esize, int64_t n) {
+void jw_list_reserve(WList *l, int64_t esize, int64_t n) {
     if (n <= l->cap) return;
     int64_t cap = l->cap ? l->cap : 4;
     while (cap < n) cap *= 2;
@@ -843,27 +843,27 @@ void ward_list_reserve(WList *l, int64_t esize, int64_t n) {
 }
 
 // 終わりに 1 つ場所を足して、その場所を返す
-char *ward_list_push_slot(WList *l, int64_t esize) {
-    ward_list_reserve(l, esize, l->len + 1);
+char *jw_list_push_slot(WList *l, int64_t esize) {
+    jw_list_reserve(l, esize, l->len + 1);
     return l->data + (l->len++) * esize;
 }
 
 // i 番目に場所を空けて、その場所を返す
-char *ward_list_insert_slot(WList *l, int64_t esize, int64_t i) {
-    ward_list_reserve(l, esize, l->len + 1);
+char *jw_list_insert_slot(WList *l, int64_t esize, int64_t i) {
+    jw_list_reserve(l, esize, l->len + 1);
     memmove(l->data + (i + 1) * esize, l->data + i * esize, (size_t)((l->len - i) * esize));
     l->len++;
     return l->data + i * esize;
 }
 
 // i 番目を out へ移して詰める
-void ward_list_remove(WList *l, int64_t esize, int64_t i, void *out) {
+void jw_list_remove(WList *l, int64_t esize, int64_t i, void *out) {
     memcpy(out, l->data + i * esize, (size_t)esize);
     memmove(l->data + i * esize, l->data + (i + 1) * esize, (size_t)((l->len - i - 1) * esize));
     l->len--;
 }
 
-void ward_list_reverse(WList *l, int64_t esize) {
+void jw_list_reverse(WList *l, int64_t esize) {
     char tmp[256];
     char *big = esize > (int64_t)sizeof tmp ? malloc((size_t)esize) : tmp;
     for (int64_t i = 0, j = l->len - 1; i < j; i++, j--) {
@@ -874,7 +874,7 @@ void ward_list_reverse(WList *l, int64_t esize) {
     if (big != tmp) free(big);
 }
 
-void ward_list_free(WList *l) { free(l->data); }
+void jw_list_free(WList *l) { free(l->data); }
 
 // 並べ替え（安定）。less(a, b, env) で比べる
 typedef int32_t (*WLess)(void *a, void *b, void *env);
@@ -894,7 +894,7 @@ static void msort(char *a, char *tmp, int64_t n, int64_t es, WLess less, void *e
     memcpy(a, tmp, (size_t)(n * es));
 }
 
-void ward_sort(char *data, int64_t n, int64_t es, WLess less, void *env) {
+void jw_sort(char *data, int64_t n, int64_t es, WLess less, void *env) {
     if (n < 2) return;
     char *tmp = malloc((size_t)(n * es));
     msort(data, tmp, n, es, less, env);
@@ -924,7 +924,7 @@ static uint64_t key_hash(WMap *m, int64_t k) {
 }
 
 static int key_eq(WMap *m, int64_t a, int64_t b) {
-    if (m->kind == 1) return ward_str_eq((WStr *)(intptr_t)a, (WStr *)(intptr_t)b);
+    if (m->kind == 1) return jw_str_eq((WStr *)(intptr_t)a, (WStr *)(intptr_t)b);
     return a == b;
 }
 
@@ -946,14 +946,14 @@ static void reindex(WMap *m) {
     for (int64_t i = 0; i < m->len; i++) index_put(m, i);
 }
 
-WMap *ward_map_new(int64_t vsize, int32_t kind) {
+WMap *jw_map_new(int64_t vsize, int32_t kind) {
     WMap *m = calloc(1, sizeof(WMap));
     m->esize = 8 + ((vsize + 7) & ~(int64_t)7);
     m->kind = kind;
     return m;
 }
 
-int64_t ward_map_find(WMap *m, int64_t key) {
+int64_t jw_map_find(WMap *m, int64_t key) {
     if (!m->icap) return -1;
     uint64_t mask = (uint64_t)m->icap - 1;
     uint64_t h = key_hash(m, key) & mask;
@@ -966,7 +966,7 @@ int64_t ward_map_find(WMap *m, int64_t key) {
 }
 
 // キーを終わりに足して、その位置を返す（値の場所は書き出したコードが埋める）
-int64_t ward_map_add(WMap *m, int64_t key) {
+int64_t jw_map_add(WMap *m, int64_t key) {
     if (m->len == m->cap) {
         m->cap = m->cap ? m->cap * 2 : 4;
         m->e = realloc(m->e, (size_t)(m->cap * m->esize));
@@ -978,18 +978,18 @@ int64_t ward_map_add(WMap *m, int64_t key) {
     return i;
 }
 
-char *ward_map_val(WMap *m, int64_t i) { return m->e + i * m->esize + 8; }
-int64_t ward_map_key(WMap *m, int64_t i) { return map_key(m, i); }
-int64_t ward_map_len(WMap *m) { return m->len; }
+char *jw_map_val(WMap *m, int64_t i) { return m->e + i * m->esize + 8; }
+int64_t jw_map_key(WMap *m, int64_t i) { return map_key(m, i); }
+int64_t jw_map_len(WMap *m) { return m->len; }
 
 // i 番目を取り除いて後ろを詰める（キーと値の解放は書き出したコードがする）
-void ward_map_remove_at(WMap *m, int64_t i) {
+void jw_map_remove_at(WMap *m, int64_t i) {
     memmove(m->e + i * m->esize, m->e + (i + 1) * m->esize, (size_t)((m->len - i - 1) * m->esize));
     m->len--;
     reindex(m);
 }
 
-void ward_map_free(WMap *m) {
+void jw_map_free(WMap *m) {
     free(m->e);
     free(m->idx);
     free(m);
@@ -999,33 +999,33 @@ void ward_map_free(WMap *m) {
 
 static int is_cont(unsigned char c) { return (c & 0xC0) == 0x80; }
 
-int64_t ward_str_chars(WStr *s) {
+int64_t jw_str_chars(WStr *s) {
     int64_t n = 0;
     for (int64_t i = 0; i < s->len; i++) n += !is_cont((unsigned char)s->data[i]);
     return n;
 }
 
-static void push_str(WList *out, WStr *x) { *(WStr **)ward_list_push_slot(out, 8) = x; }
+static void push_str(WList *out, WStr *x) { *(WStr **)jw_list_push_slot(out, 8) = x; }
 
-void ward_str_chars_list(WStr *s, WList *out) {
+void jw_str_chars_list(WStr *s, WList *out) {
     int64_t i = 0;
     while (i < s->len) {
         int64_t j = i + 1;
         while (j < s->len && is_cont((unsigned char)s->data[j])) j++;
-        push_str(out, ward_str_new(s->data + i, j - i));
+        push_str(out, jw_str_new(s->data + i, j - i));
         i = j;
     }
 }
 
 // Rust の `lines()`: \n で分け、行末の \r を除く。最後の \n のあとの空の行は数えない
-void ward_str_lines(WStr *s, WList *out) {
+void jw_str_lines(WStr *s, WList *out) {
     int64_t i = 0;
     while (i < s->len) {
         int64_t j = i;
         while (j < s->len && s->data[j] != '\n') j++;
         int64_t end = j;
         if (end > i && s->data[end - 1] == '\r') end--;
-        push_str(out, ward_str_new(s->data + i, end - i));
+        push_str(out, jw_str_new(s->data + i, end - i));
         i = j + 1;
     }
 }
@@ -1037,15 +1037,15 @@ static int64_t find_from(WStr *s, WStr *pat, int64_t from) {
     return -1;
 }
 
-void ward_str_split(WStr *s, WStr *sep, WList *out) {
+void jw_str_split(WStr *s, WStr *sep, WList *out) {
     int64_t i = 0;
     for (;;) {
         int64_t j = find_from(s, sep, i);
         if (j < 0) break;
-        push_str(out, ward_str_new(s->data + i, j - i));
+        push_str(out, jw_str_new(s->data + i, j - i));
         i = j + sep->len;
     }
-    push_str(out, ward_str_new(s->data + i, s->len - i));
+    push_str(out, jw_str_new(s->data + i, s->len - i));
 }
 
 // UTF-8 の 1 文字を読む（*len に長さ）
@@ -1097,34 +1097,34 @@ static void trim_range(WStr *s, int64_t *a, int64_t *b) {
     *b = j;
 }
 
-WStr *ward_str_trim(WStr *s) {
+WStr *jw_str_trim(WStr *s) {
     int64_t a, b;
     trim_range(s, &a, &b);
-    return ward_str_new(s->data + a, b - a);
+    return jw_str_new(s->data + a, b - a);
 }
 
-WStr *ward_str_upper(WStr *s) {
-    WStr *r = ward_str_new(s->data, s->len);
+WStr *jw_str_upper(WStr *s) {
+    WStr *r = jw_str_new(s->data, s->len);
     for (int64_t i = 0; i < r->len; i++)
         if (r->data[i] >= 'a' && r->data[i] <= 'z') r->data[i] -= 32;
     return r;
 }
 
-WStr *ward_str_lower(WStr *s) {
-    WStr *r = ward_str_new(s->data, s->len);
+WStr *jw_str_lower(WStr *s) {
+    WStr *r = jw_str_new(s->data, s->len);
     for (int64_t i = 0; i < r->len; i++)
         if (r->data[i] >= 'A' && r->data[i] <= 'Z') r->data[i] += 32;
     return r;
 }
 
-int32_t ward_str_contains(WStr *s, WStr *p) { return find_from(s, p, 0) >= 0; }
-int32_t ward_str_starts(WStr *s, WStr *p) { return p->len <= s->len && memcmp(s->data, p->data, (size_t)p->len) == 0; }
-int32_t ward_str_ends(WStr *s, WStr *p) {
+int32_t jw_str_contains(WStr *s, WStr *p) { return find_from(s, p, 0) >= 0; }
+int32_t jw_str_starts(WStr *s, WStr *p) { return p->len <= s->len && memcmp(s->data, p->data, (size_t)p->len) == 0; }
+int32_t jw_str_ends(WStr *s, WStr *p) {
     return p->len <= s->len && memcmp(s->data + s->len - p->len, p->data, (size_t)p->len) == 0;
 }
 
 // 見つかった位置（文字単位）。なければ -1
-int64_t ward_str_find(WStr *s, WStr *p) {
+int64_t jw_str_find(WStr *s, WStr *p) {
     int64_t b = find_from(s, p, 0);
     if (b < 0) return -1;
     int64_t n = 0;
@@ -1145,8 +1145,8 @@ static int64_t byte_at(WStr *s, int64_t ch) {
     return s->len;
 }
 
-WStr *ward_str_slice(WStr *s, int64_t a, int64_t b, const WSite *at) {
-    int64_t n = ward_str_chars(s);
+WStr *jw_str_slice(WStr *s, int64_t a, int64_t b, const WSite *at) {
+    int64_t n = jw_str_chars(s);
     if (a < 0 || b < a || b > n) {
         char label[256];
         snprintf(label, sizeof label, "slice(%lld, %lld) ですが、長さは %lld です", (long long)a, (long long)b, (long long)n);
@@ -1154,50 +1154,50 @@ WStr *ward_str_slice(WStr *s, int64_t a, int64_t b, const WSite *at) {
         finish_error(at, label, "0 <= 始め <= 終わり <= 長さ にしてください");
     }
     int64_t x = byte_at(s, a), y = byte_at(s, b);
-    return ward_str_new(s->data + x, y - x);
+    return jw_str_new(s->data + x, y - x);
 }
 
-WStr *ward_str_replace(WStr *s, WStr *from, WStr *to) {
-    WSb *b = ward_sb_new();
+WStr *jw_str_replace(WStr *s, WStr *from, WStr *to) {
+    WSb *b = jw_sb_new();
     if (from->len == 0) {
         // Rust と同じく、文字の境目すべてに入れる
         int64_t i = 0;
-        ward_sb_str(b, to);
+        jw_sb_str(b, to);
         while (i < s->len) {
             int64_t j = i + 1;
             while (j < s->len && is_cont((unsigned char)s->data[j])) j++;
-            ward_sb_push(b, s->data + i, j - i);
-            ward_sb_str(b, to);
+            jw_sb_push(b, s->data + i, j - i);
+            jw_sb_str(b, to);
             i = j;
         }
-        return ward_sb_finish(b);
+        return jw_sb_finish(b);
     }
     int64_t i = 0;
     for (;;) {
         int64_t j = find_from(s, from, i);
         if (j < 0) break;
-        ward_sb_push(b, s->data + i, j - i);
-        ward_sb_str(b, to);
+        jw_sb_push(b, s->data + i, j - i);
+        jw_sb_str(b, to);
         i = j + from->len;
     }
-    ward_sb_push(b, s->data + i, s->len - i);
-    return ward_sb_finish(b);
+    jw_sb_push(b, s->data + i, s->len - i);
+    return jw_sb_finish(b);
 }
 
-WStr *ward_str_repeat(WStr *s, int64_t k, const WSite *at) {
+WStr *jw_str_repeat(WStr *s, int64_t k, const WSite *at) {
     if (k < 0) {
         char label[64];
         snprintf(label, sizeof label, "repeat(%lld)", (long long)k);
         begin_error("負の回数はくり返せません");
         finish_error(at, label, NULL);
     }
-    WSb *b = ward_sb_new();
-    for (int64_t i = 0; i < k; i++) ward_sb_str(b, s);
-    return ward_sb_finish(b);
+    WSb *b = jw_sb_new();
+    for (int64_t i = 0; i < k; i++) jw_sb_str(b, s);
+    return jw_sb_finish(b);
 }
 
 // Rust の `trim().parse::<i64>()`
-int32_t ward_str_to_int(WStr *s, int64_t *out) {
+int32_t jw_str_to_int(WStr *s, int64_t *out) {
     int64_t a, b;
     trim_range(s, &a, &b);
     const char *p = s->data + a;
@@ -1227,7 +1227,7 @@ int32_t ward_str_to_int(WStr *s, int64_t *out) {
 }
 
 // order の順に要素を並べ直す（sort_by）
-void ward_permute(char *data, int64_t n, int64_t es, const int64_t *order) {
+void jw_permute(char *data, int64_t n, int64_t es, const int64_t *order) {
     if (n < 2) return;
     char *tmp = malloc((size_t)(n * es));
     for (int64_t k = 0; k < n; k++) memcpy(tmp + k * es, data + order[k] * es, (size_t)es);
@@ -1251,16 +1251,16 @@ typedef struct WEnv {
     int64_t flags;
 } WEnv;
 
-void *ward_env_new(int64_t size, const WEnvVt *vt) {
+void *jw_env_new(int64_t size, const WEnvVt *vt) {
     WEnv *e = calloc(1, (size_t)size);
     e->rc = 1;
     e->vt = vt;
     return e;
 }
 
-void ward_env_retain(WEnv *e) { e->rc++; }
+void jw_env_retain(WEnv *e) { e->rc++; }
 
-void ward_env_release(WEnv *e, const WSite *site) {
+void jw_env_release(WEnv *e, const WSite *site) {
     if (--e->rc == 0) {
         e->vt->drop(e, site);
         free(e);
@@ -1330,7 +1330,7 @@ typedef struct WChan {
     int closed;
 } WChan;
 
-WChan *ward_chan_new(int64_t esize, WDrop drop) {
+WChan *jw_chan_new(int64_t esize, WDrop drop) {
     WChan *c = calloc(1, sizeof(WChan));
     c->rc = 1;
     c->esize = esize > 0 ? esize : 1;
@@ -1338,9 +1338,9 @@ WChan *ward_chan_new(int64_t esize, WDrop drop) {
     return c;
 }
 
-void ward_chan_retain(WChan *c) { __atomic_fetch_add(&c->rc, 1, __ATOMIC_RELAXED); }
+void jw_chan_retain(WChan *c) { __atomic_fetch_add(&c->rc, 1, __ATOMIC_RELAXED); }
 
-void ward_chan_release(WChan *c, const WSite *site) {
+void jw_chan_release(WChan *c, const WSite *site) {
     if (__atomic_sub_fetch(&c->rc, 1, __ATOMIC_ACQ_REL) > 0) return;
     // 受け取られずに残った値を捨てる
     for (int64_t i = 0; i < c->len; i++) {
@@ -1350,7 +1350,7 @@ void ward_chan_release(WChan *c, const WSite *site) {
     free(c);
 }
 
-void ward_chan_send(WChan *c, void *v, const WSite *at) {
+void jw_chan_send(WChan *c, void *v, const WSite *at) {
     lock(&g_lock);
     if (c->closed) {
         unlock(&g_lock);
@@ -1379,7 +1379,7 @@ static int chan_ready(void *p) {
 }
 
 // 値が来るまで待つ。閉じて空なら 0
-int32_t ward_chan_recv(WChan *c, void *out, const WSite *at) {
+int32_t jw_chan_recv(WChan *c, void *out, const WSite *at) {
     lock(&g_lock);
     wait_until(chan_ready, c, at);
     int32_t got = 0;
@@ -1393,7 +1393,7 @@ int32_t ward_chan_recv(WChan *c, void *out, const WSite *at) {
     return got;
 }
 
-void ward_chan_close(WChan *c, const WSite *at) {
+void jw_chan_close(WChan *c, const WSite *at) {
     lock(&g_lock);
     if (c->closed) {
         unlock(&g_lock);
@@ -1432,14 +1432,14 @@ static void *thread_start(void *arg) {
     lock(&g_lock);
     t->done = 1;
     g_alive--;
-    g_live_done += ward_live;
+    g_live_done += jw_live;
     changed();
     unlock(&g_lock);
     return 0;
 }
 
 // spawn: thunk(args, 戻り値の置き場) を新しいスレッドで動かす。args は malloc したもの（終わったら解放する）
-WTask *ward_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop) {
+WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop) {
     WTask *t = calloc(1, sizeof(WTask));
     t->thunk = thunk;
     t->args = args;
@@ -1455,11 +1455,11 @@ WTask *ward_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop) {
     return t;
 }
 
-void *ward_spawn_args(int64_t size) { return calloc(1, (size_t)(size > 0 ? size : 1)); }
+void *jw_spawn_args(int64_t size) { return calloc(1, (size_t)(size > 0 ? size : 1)); }
 
 static int task_ready(void *p) { return ((WTask *)p)->done; }
 
-void ward_task_join(void *h, void *out, const WSite *at) {
+void jw_task_join(void *h, void *out, const WSite *at) {
     WTask *t = TASK(h);
     lock(&g_lock);
     if (t->joined) {
@@ -1474,7 +1474,7 @@ void ward_task_join(void *h, void *out, const WSite *at) {
 }
 
 // task を捨てる: join していなければ終わるのを待ち、戻り値を捨てる
-void ward_task_drop(void *h, const WSite *site) {
+void jw_task_drop(void *h, const WSite *site) {
     if ((uintptr_t)h & 1) return;
     WTask *t = h;
     lock(&g_lock);
@@ -1488,7 +1488,7 @@ void ward_task_drop(void *h, const WSite *site) {
     free(t);
 }
 
-void *ward_task_view(void *h) { return (void *)((uintptr_t)h | 1); }
+void *jw_task_view(void *h) { return (void *)((uintptr_t)h | 1); }
 
 static int all_done(void *p) {
     (void)p;
@@ -1496,7 +1496,7 @@ static int all_done(void *p) {
 }
 
 // main の終わり: ほかのスレッドが終わるのを待つ
-void ward_wait_all(const WSite *at) {
+void jw_wait_all(const WSite *at) {
     if (!g_threaded) return;
     lock(&g_lock);
     wait_until(all_done, NULL, at);
@@ -1504,7 +1504,7 @@ void ward_wait_all(const WSite *at) {
 }
 
 // ほかのスレッドへ送る区画: 世代を進める（送った側に残った ref は、使うとダングリングとして見つかる）
-void ward_send_block(void *p, const WSite *why) {
+void jw_send_block(void *p, const WSite *why) {
     WHdr *h = HDR(p);
     h->gen += 2;
     unsigned i = sent_n++ % NREUSED;
@@ -1514,19 +1514,19 @@ void ward_send_block(void *p, const WSite *why) {
 }
 
 // ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）
-WStr *ward_str_unshare(WStr *s) {
+WStr *jw_str_unshare(WStr *s) {
     if (s->rc < 0) return s;
-    WStr *c = ward_str_new(s->data, s->len);
-    ward_str_release(s);
+    WStr *c = jw_str_new(s->data, s->len);
+    jw_str_release(s);
     return c;
 }
 
 // ほかのスレッドへ送る辞書: 文字列のキーを複製する（並びの位置は変わらないので、引く表はそのまま）
-void ward_map_unshare_keys(WMap *m) {
+void jw_map_unshare_keys(WMap *m) {
     if (m->kind != 1) return;
     for (int64_t i = 0; i < m->len; i++) {
         WStr **k = (WStr **)(m->e + i * m->esize);
-        *k = ward_str_unshare(*k);
+        *k = jw_str_unshare(*k);
     }
 }
 
@@ -1536,33 +1536,33 @@ static int g_argc;
 static char **g_argv;
 
 // 1 行読む（終わりの改行は取る）。入力が終わっていれば 0
-int32_t ward_read_line(WStr **out) {
-    ward_flush();
-    WSb *b = ward_sb_new();
+int32_t jw_read_line(WStr **out) {
+    jw_flush();
+    WSb *b = jw_sb_new();
     int c, any = 0;
     while ((c = getchar()) != EOF) {
         any = 1;
         if (c == '\n') break;
         char ch = (char)c;
-        ward_sb_push(b, &ch, 1);
+        jw_sb_push(b, &ch, 1);
     }
     if (!any) {
         sb_drop(b);
         return 0;
     }
     if (b->len > 0 && b->p[b->len - 1] == '\r') b->len--;
-    *out = ward_sb_finish(b);
+    *out = jw_sb_finish(b);
     return 1;
 }
 
 // コマンドライン引数（プログラムの名前は除く）
-void ward_args(WList *out) {
-    for (int i = 1; i < g_argc; i++) push_str(out, ward_str_new(g_argv[i], (int64_t)strlen(g_argv[i])));
+void jw_args(WList *out) {
+    for (int i = 1; i < g_argc; i++) push_str(out, jw_str_new(g_argv[i], (int64_t)strlen(g_argv[i])));
 }
 
 // ---------------------------------------------------------------- 入口
 
-void ward_main(void);
+void jw_main(void);
 
 #ifdef _WIN32
 // Windows: 端末の文字コードを UTF-8 にし、引数は UTF-16 から UTF-8 に直す（windows.h なしで宣言する）
@@ -1597,8 +1597,8 @@ int main(int argc, char **argv) {
 #endif
     g_argc = argc;
     g_argv = argv;
-    ward_main();
-    ward_flush();
-    if (getenv("WARD_LEAKS")) fprintf(stderr, "[live] %lld\n", (long long)(ward_live + g_live_done));
+    jw_main();
+    jw_flush();
+    if (getenv("JW_LEAKS")) fprintf(stderr, "[live] %lld\n", (long long)(jw_live + g_live_done));
     return 0;
 }

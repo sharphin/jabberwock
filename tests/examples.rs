@@ -1,22 +1,22 @@
 use std::fs;
 
-use ward::run_source;
+use jabberwock::run_source;
 
 fn example(name: &str) -> String {
-    let path = format!("{}/examples/{}.ward", env!("CARGO_MANIFEST_DIR"), name);
+    let path = format!("{}/examples/{}.jw", env!("CARGO_MANIFEST_DIR"), name);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {}", path, e))
 }
 
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     o.output
 }
 
-fn err(src: &str) -> ward::diag::Diagnostic {
+fn err(src: &str) -> jabberwock::diag::Diagnostic {
     run_source(src, false).error.expect("expected an error")
 }
 
@@ -126,7 +126,7 @@ fn dangling_via_return_is_detected_with_timeline() {
     let src = example("dangling_return");
     let d = err(&src);
     assert!(d.title.contains("dangling"));
-    let text = d.render("t.ward", &src);
+    let text = d.render("t.jw", &src);
     assert!(text.contains("ここで `a` を借りた"), "{}", text);
     assert!(text.contains("ここで解放された"), "{}", text);
     assert!(text.contains("ここで使ったが"), "{}", text);
@@ -219,7 +219,7 @@ fn div_zero_is_an_error_and_overflow_wraps() {
     assert!(err("fn main() {\n print(1 / 0)\n}").title.contains("0 で割"));
     // あふれは一周する（C++ の未定義動作と違い、結果は決まっている）
     let src = "fn i64 big() {\n 9223372036854775807\n}\nfn main() {\n print(big() + 1, -(big() + 1) == big() + 1, big() * 2);\n}";
-    let o = ward::run_source(src, false);
+    let o = jabberwock::run_source(src, false);
     assert!(o.error.is_none());
     assert!(o.warnings.is_empty(), "values unknown before running give no warning");
     assert_eq!(o.output, "-9223372036854775808 true -2\n");
@@ -236,7 +236,7 @@ fn parse_error_points_at_the_right_line() {
 fn renders_japanese_source_without_panicking() {
     let src = "fn main() {\n    let あ = own 1;\n    drop(あ);\n    print(*あ)\n}";
     let d = err(src);
-    let text = d.render("t.ward", src);
+    let text = d.render("t.jw", src);
     assert!(text.contains("use after move"));
 }
 

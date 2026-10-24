@@ -1,11 +1,11 @@
 //! 小数（f64）のテスト
 
-use ward::{run_source, run_source_with};
+use jabberwock::{run_source, run_source_with};
 
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     let off = run_source_with(src, false, false);
@@ -17,7 +17,7 @@ fn main_ok(body: &str) -> String {
     ok(&format!("fn main() {{\n{}\n}}", body))
 }
 
-fn err(body: &str) -> ward::diag::Diagnostic {
+fn err(body: &str) -> jabberwock::diag::Diagnostic {
     let o = run_source(&format!("fn main() {{\n{}\n}}", body), false);
     assert_eq!(o.output, "", "a program with a type error must not run");
     o.error.expect("expected an error")

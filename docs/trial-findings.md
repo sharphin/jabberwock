@@ -2,8 +2,8 @@
 
 ## 2 回目（スレッドのあと。2026-10-23）
 
-`examples/parallel_words.ward`（スレッドで単語を数える）、`examples/calc.ward`（電卓。再帰する enum と `?`）、
-`examples/shop.ward`（在庫と注文。構造体の辞書・interface のリスト・並べ替え）を書いた。3 本とも、インタプリタ・IR・実行ファイルで同じ結果になる。
+`examples/parallel_words.jw`（スレッドで単語を数える）、`examples/calc.jw`（電卓。再帰する enum と `?`）、
+`examples/shop.jw`（在庫と注文。構造体の辞書・interface のリスト・並べ替え）を書いた。3 本とも、インタプリタ・IR・実行ファイルで同じ結果になる。
 
 ### 結論
 
@@ -35,12 +35,12 @@
 
 1. **#1 クロージャの取り込み**。→ 引数にその場で書いたクロージャは外の変数を借りるようにした（オーナーがカードで A を選択）。
 2. #2 取り出しながら回す `for`。→ `for x in a.drain()` で要素を値として受け取る（オーナーがカードで A を選択）。
-3. #3 match の重ねた形。→ 実装済み（`calc.ward` も書き直した）。
+3. #3 match の重ねた形。→ 実装済み（`calc.jw` も書き直した）。
 4. #4〜#7 の小さいもの（`filter` / `map`、`ok_or`、値なしの型名、複数行の文字列）。→ すべて実装済み。
 
 ## 1 回目
 
-`examples/bst.ward`（二分探索木）、`examples/words.ward`（単語の数え上げ）、`examples/battle.ward`（interface のリストと構造体の中の ref）を書いて分かったこと。
+`examples/bst.jw`（二分探索木）、`examples/words.jw`（単語の数え上げ）、`examples/battle.jw`（interface のリストと構造体の中の ref）を書いて分かったこと。
 
 ### 結論
 

@@ -330,7 +330,7 @@ let x = pick(true, 1, 2);
 
 - 構造体のメソッドと同じ決まり（`fn` / `fn mut` / `static fn`、`this` は借りた ref）。enum の `{}` の中、種類のあとに書く。
 - `Shape.x(...)` は x が種類でなければ静的メソッド。どちらでもなければ「種類 x はありません」のエラー。
-- Option / Result に `is_some` / `is_none` / `is_ok` / `is_err` を足した（prelude に ward で書いたメソッド）。
+- Option / Result に `is_some` / `is_none` / `is_ok` / `is_err` を足した（prelude に jabberwock で書いたメソッド）。
 - まだしないこと:
   - this を値で受け取るメソッド（→ 下の `fn take` で対応した）。
   - enum を interface に当てはめること（enum の値は実行時に型の名前を持たないため。必要なら名前を持たせる）。
@@ -342,7 +342,7 @@ let x = pick(true, 1, 2);
 - 書き方は `fn take 戻り値の型 名前(...)`。`fn mut`（借りて書き換える）と並ぶ印で、「this を受け取って使い切る」意味。
   `take` は予約語にしない（`fn take(...)` は take という名前のメソッド）。
 - 呼ぶと receiver をムーブする（関数の引数に渡すのと同じ）。own / ref の先からは呼べない（取り出せないので型検査のエラー）。
-- これで Option / Result に `unwrap_or`・`ok_or`・`map`・`ok` を足した（prelude に ward で書いたメソッド）。
+- これで Option / Result に `unwrap_or`・`ok_or`・`map`・`ok` を足した（prelude に jabberwock で書いたメソッド）。
 - interface のメソッドには当てはまらない（interface のメソッドは借りて呼ぶため）。
 - 作り: 型検査が `MethodTarget.take` を立て、interp（`eval_take_method`）・analyze・lower は receiver を先に値として読む。
   関数の引数のクロージャの型の引数（`map<U>` の U）は、引数の型だけ渡して本体から決める（`instantiate`）。
@@ -380,19 +380,19 @@ let x = pick(true, 1, 2);
 
 ## モジュール（2026-10-23 に実装。書き方はカードの推奨 A で進めた）
 
-- 1 ファイル = 1 モジュール。`use geom;` で同じフォルダの geom.ward を使う（Go のパッケージに近い）。
+- 1 ファイル = 1 モジュール。`use geom;` で同じフォルダの geom.jw を使う（Go のパッケージに近い）。
 - **使う側はいつも `geom.area(p)` とモジュール名をつける。** 名前を見ればどこの定義か分かる（シャドーイング禁止・関数と同じ名前の変数の禁止と同じ考え）。
 - **外に見せる定義には `pub`。** メソッド・フィールド・enum の種類は、型の `pub` に従う（細かい指定はあとで）。
 - `use` の輪はエラー（読む順を決めるため。Go と同じ）。
 - 作り: モジュールの中の定義の名前を `geom.area` に書き換えて（`modules.rs` の `qualify`）、全部を 1 つのプログラムにまとめる。
   なので型検査・解析・実行はモジュールを知らなくてよい。IR でもそのまま 1 つのプログラムとして扱える。
 
-## 実行ファイル（`ward build`。2026-10-23）
+## 実行ファイル（`jabberwock build`。2026-10-23）
 
-- `ward build file.ward` で clang を呼んで実行ファイルを作る（`-O2`）。clang は利用者が入れる（Windows は llvm-mingw を勧める。docs/native.md）。
+- `jabberwock build file.jw` で clang を呼んで実行ファイルを作る（`-O2`）。clang は利用者が入れる（Windows は llvm-mingw を勧める。docs/native.md）。
 - **実行時エラーは、ふだんはインタプリタと同じ時系列の表示**（ソースの行つき）。そのためにソースを実行ファイルに入れる。
 - **`--release` では使った位置だけ**（オーナーの指示）。ソースは入れない。
-- 実行ファイルとインタプリタは、出力・エラー表示の全文・残った区画の数まで一致させる（`WARD_NATIVE=1 cargo test`）。
+- 実行ファイルとインタプリタは、出力・エラー表示の全文・残った区画の数まで一致させる（`JW_NATIVE=1 cargo test`）。
 
 ## スレッド（2026-10-23。カードで案 A に決定）
 
@@ -404,4 +404,4 @@ let x = pick(true, 1, 2);
 
 ## 名前
 
-- 言語名は **ward から jabberwock に変える予定**。時期は未定で、オーナーの指示を待つ（それまでは ward のまま）。
+- 言語名は **jabberwock から jabberwock に変える予定**。時期は未定で、オーナーの指示を待つ（それまでは jabberwock のまま）。

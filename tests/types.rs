@@ -1,24 +1,24 @@
 //! 型検査のテスト。型の違反は実行する前に見つかる。
 
-use ward::run_source;
+use jabberwock::run_source;
 
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     o.output
 }
 
 /// 型エラーになり、何も実行されないこと
-fn type_err(src: &str) -> ward::diag::Diagnostic {
+fn type_err(src: &str) -> jabberwock::diag::Diagnostic {
     let o = run_source(src, false);
     assert_eq!(o.output, "", "a program with a type error must not run");
     o.error.expect("expected a type error")
 }
 
-fn main_err(body: &str) -> ward::diag::Diagnostic {
+fn main_err(body: &str) -> jabberwock::diag::Diagnostic {
     type_err(&format!("fn main() {{\n    print(0);\n{}\n}}", body))
 }
 
@@ -226,7 +226,7 @@ fn constant_overflow_is_warned_but_runs() {
     assert_eq!(o.warnings.len(), 1);
     let w = &o.warnings[0];
     assert!(w.title.contains("整数があふれます"));
-    assert!(w.render("t.ward", src).starts_with("warning:"));
+    assert!(w.render("t.jw", src).starts_with("warning:"));
     // 定数どうしの計算なら、式の途中でも見つかる。一度だけ警告する
     let o = run_source("fn main() {\n    print((4611686018427387904 * 2 - 1) + 5);\n}", false);
     assert_eq!(o.warnings.len(), 1);
@@ -242,7 +242,7 @@ fn constant_overflow_is_warned_but_runs() {
 
 #[test]
 fn shadowing_is_an_error() {
-    let shadow = |d: ward::diag::Diagnostic| {
+    let shadow = |d: jabberwock::diag::Diagnostic| {
         assert!(d.title.contains("すでにある名前"), "{}", d.title);
         assert!(d.labels.iter().any(|l| l.text.contains("ここで宣言した")));
     };

@@ -1,6 +1,6 @@
 //! モジュール（`use geom;` と `geom.area(p)`、`pub`）のテスト
 
-use ward::run_with_modules;
+use jabberwock::run_with_modules;
 
 const GEOM: &str = "
 use util;
@@ -51,16 +51,16 @@ pub fn i64 sq(i64 x) { x * x }
 fn ok(src: &str) -> String {
     let o = run_with_modules(src, &[("geom", GEOM), ("util", UTIL)]);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", ward::render(d, "main.ward", &o.files));
+        panic!("unexpected error:\n{}", jabberwock::render(d, "main.jw", &o.files));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     o.output
 }
 
-fn err(src: &str) -> (ward::diag::Diagnostic, String) {
+fn err(src: &str) -> (jabberwock::diag::Diagnostic, String) {
     let o = run_with_modules(src, &[("geom", GEOM), ("util", UTIL)]);
     let d = o.error.expect("expected an error");
-    let shown = ward::render(&d, "main.ward", &o.files);
+    let shown = jabberwock::render(&d, "main.jw", &o.files);
     (d, shown)
 }
 
@@ -114,8 +114,8 @@ fn module_errors() {
 fn errors_point_into_the_module_file() {
     let o = run_with_modules("use bad;\nfn main() {\n    bad.f();\n}", &[("bad", "pub fn f() {\n    let x = 1 + true;\n}\n")]);
     let d = o.error.expect("type error in the module");
-    let shown = ward::render(&d, "main.ward", &o.files);
-    assert!(shown.contains("--> bad.ward:2:"), "{}", shown);
+    let shown = jabberwock::render(&d, "main.jw", &o.files);
+    assert!(shown.contains("--> bad.jw:2:"), "{}", shown);
     assert!(shown.contains("let x = 1 + true;"), "{}", shown);
 }
 

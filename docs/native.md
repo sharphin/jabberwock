@@ -1,15 +1,15 @@
-# 実行ファイルを作る（`ward build`）
+# 実行ファイルを作る（`jabberwock build`）
 
-ward のプログラムを LLVM に書き出し、clang で実行ファイルにする。インタプリタ（`ward file.ward`）と同じ動き・同じエラー表示で、ずっと速い（fib(32) で約 600 倍）。
+jabberwock のプログラムを LLVM に書き出し、clang で実行ファイルにする。インタプリタ（`jabberwock file.jw`）と同じ動き・同じエラー表示で、ずっと速い（fib(32) で約 600 倍）。
 
 ```
-ward build hello.ward              # hello（Windows では hello.exe）ができる
-ward build -o app hello.ward       # 名前を決める
-ward build --release hello.ward    # 実行時エラーは使った位置だけ出す（ソースを実行ファイルに入れない）
-ward --ll hello.ward               # 書き出した LLVM IR を見るだけ
+jabberwock build hello.jw              # hello（Windows では hello.exe）ができる
+jabberwock build -o app hello.jw       # 名前を決める
+jabberwock build --release hello.jw    # 実行時エラーは使った位置だけ出す（ソースを実行ファイルに入れない）
+jabberwock --ll hello.jw               # 書き出した LLVM IR を見るだけ
 ```
 
-- 最適化は `-O2`。clang は `PATH` の `clang` を使う。別のものは環境変数 `WARD_CLANG` で指定する（例 `WARD_CLANG=C:\LLVM\bin\clang.exe`）。
+- 最適化は `-O2`。clang は `PATH` の `clang` を使う。別のものは環境変数 `JW_CLANG` で指定する（例 `JW_CLANG=C:\LLVM\bin\clang.exe`）。
 - まだ書き出せない書き方があると、理由を出して止まる（インタプリタでは動く）。
 
 ## Windows で clang を入れる
@@ -36,13 +36,13 @@ ward --ll hello.ward               # 書き出した LLVM IR を見るだけ
 
 ```
 cargo build --release
-.\target\release\ward.exe build examples\fib.ward
+.\target\release\jabberwock.exe build examples\fib.jw
 .\fib.exe
 ```
 
 | 症状 | 直し方 |
 |---|---|
-| `clang を起動できません` | PATH に `bin` が入っていない。PowerShell を開き直す。だめなら `WARD_CLANG` にフルパス |
+| `clang を起動できません` | PATH に `bin` が入っていない。PowerShell を開き直す。だめなら `JW_CLANG` にフルパス |
 | `unable to find a Visual Studio installation` / `link.exe` が見つからない | B の手順 2 の Build Tools が入っていない（または A に切り替える） |
 | 日本語が文字化けする | 実行ファイルは起動時に端末を UTF-8 にする。古い「コマンド プロンプト」なら Windows Terminal を使う |
 
@@ -52,7 +52,7 @@ cargo build --release
 
 ```
 error: 無効になった参照を使いました (dangling reference)
- --> b.ward:7:11
+ --> b.jw:7:11
   |
 5 |     let r = ref a;
   |             ----- ここで `a` を借りた
@@ -68,7 +68,7 @@ error: 無効になった参照を使いました (dangling reference)
 
 ```
 error: 無効になった参照を使いました (dangling reference)
- --> b.ward:7:11
+ --> b.jw:7:11
   = ここで使ったが、借りた先はもう存在しない
 ```
 
