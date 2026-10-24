@@ -68,7 +68,7 @@ fn main() {
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false` `use` `pub`
 
-特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `drop` `assert` `read_line` `args`（組み込み関数）
+特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `eprint` `drop` `assert` `read_line` `args` `exit` `read_file` `write_file` `run_command` `spawn` `chan`（組み込み関数）
 
 ## 3. 型
 
@@ -93,7 +93,7 @@ fn main() {
 | `V[K]` | 辞書（キー K から値 V を引く）。K は整数・`str`・`bool`（[8.10](#810-辞書)） |
 | `fn R(A, B)` | 関数の値（引数 A, B を受け取り R を返す）。戻り値がなければ `fn(A, B)`（[5.1](#51-関数の値とクロージャ)） |
 | `task<R>` | `spawn` で動かしたスレッド。`join()` で R を受け取る（[9.1](#91-スレッド)）。値を返さないスレッドは `task<()>` |
-| `()` | 値なし。型の引数に書くときに使う（`task<()>`）。値なしの変数は作れない |
+| `()` | 値なし。型の引数に書くときに使う（`task<()>`・`Result<(), str>`）。値も `()` と書く（`Ok(())`）。値なしの変数は作れない |
 | `chan<T>` | スレッドのあいだで T を送るチャンネル（[9.1](#91-スレッド)） |
 
 - `own` / `ref` は右側の型全体にかかる（`ref i64[5]` は配列を借りた ref、`own i64[]` はリストの own）。
@@ -794,6 +794,11 @@ let (own Node)[i64] mut nodes = [];  // own を値に持つ辞書
 | 関数 | 動き |
 |---|---|
 | `print(a, b, ...)` | 値を空白区切りで 1 行に出す。引数はムーブしない。own と ref は指している中身を出す（無効な ref なら実行時エラー） |
+| `eprint(a, b, ...)` | print と同じだが、標準エラーへ出す |
+| `exit(n)` | プログラムをすぐ終わらせる（`i64` の終了コード。0〜255 にすること）。ほかのスレッドも止まる。後片づけはしない。型は「戻らない」なので、値が要る場所（match の case など）にも書ける |
+| `read_file(path)` | ファイルを読む（`Result<str, str>`）。読めない・UTF-8 でないなら `Err` |
+| `write_file(path, text)` | ファイルに書く（`Result<(), str>`。あれば上書き）。書けなければ `Err` |
+| `run_command(cmd, args)` | コマンドを動かして終わるのを待つ（`Result<i64, str>`。Ok は終了コード、シグナルで止まったら -1）。`args` は `str[]`（ムーブ）。起動できなければ `Err`。出力はそのまま画面へ |
 | `drop(x)` | x を今すぐ解放する（x はムーブされる） |
 | `assert(条件)` | 条件が false なら実行時エラー |
 | `read_line()` | 標準入力から 1 行読む（`Option<str>`。改行は含まない）。入力が終わっていれば `None` |
@@ -858,4 +863,3 @@ loop {
 | フォルダを分けたモジュール（`use a.b;`）・メソッドやフィールドごとの `pub` | これから |
 | 辞書のキーに構造体を使う | これから |
 | 構造体のフィールドに関数の値を置く・メソッドを値にする | これから |
-| ファイルの読み書き | これから（今は標準入力の `read_line()` だけ） |

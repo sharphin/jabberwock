@@ -142,6 +142,23 @@ void jw_print_end(void) {
     if (g_threaded) unlock(&out_lock);
 }
 
+// eprint: 標準エラーへ 1 行。先に標準出力を出しておく（端末で順番が入れ替わらないように）
+void jw_eprint_begin(void) {
+    if (g_threaded) lock(&out_lock);
+    flush_locked();
+}
+
+void jw_eprint_part(WStr *s, int32_t first) {
+    if (!first) fputc(' ', stderr);
+    fwrite(s->data, 1, (size_t)s->len, stderr);
+}
+
+void jw_eprint_end(void) {
+    fputc('\n', stderr);
+    fflush(stderr);
+    if (g_threaded) unlock(&out_lock);
+}
+
 // ---------------------------------------------------------------- エラー
 
 static int is_cont_b(unsigned char c) { return (c & 0xC0) == 0x80; }
@@ -1558,6 +1575,202 @@ int32_t jw_read_line(WStr **out) {
 // コマンドライン引数（プログラムの名前は除く）
 void jw_args(WList *out) {
     for (int i = 1; i < g_argc; i++) push_str(out, jw_str_new(g_argv[i], (int64_t)strlen(g_argv[i])));
+}
+
+// ---------------------------------------------------------------- ファイル・コマンド・終了
+// エラーの文は interp の `system` と同じにする（OS のエラーの文は使わない）
+
+#ifdef _WIN32
+#include <wchar.h>
+__declspec(dllimport) int __stdcall MultiByteToWideChar(unsigned, unsigned long, const char *, int, wchar_t *, int);
+FILE *_wfopen(const wchar_t *, const wchar_t *);
+intptr_t _wspawnvp(int, const wchar_t *, const wchar_t *const *);
+
+static wchar_t *to_wide(const char *s) {
+    int n = MultiByteToWideChar(65001, 0, s, -1, NULL, 0);
+    wchar_t *w = malloc(sizeof(wchar_t) * (size_t)(n > 0 ? n : 1));
+    if (n <= 0) w[0] = 0;
+    else MultiByteToWideChar(65001, 0, s, -1, w, n);
+    return w;
+}
+
+static FILE *open_file(const char *path, const wchar_t *mode) {
+    wchar_t *w = to_wide(path);
+    FILE *f = _wfopen(w, mode);
+    free(w);
+    return f;
+}
+#define MODE_READ L"rb"
+#define MODE_WRITE L"wb"
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#define open_file(path, mode) fopen(path, mode)
+#define MODE_READ "rb"
+#define MODE_WRITE "wb"
+#endif
+
+// 終わりに 0 のある写し（WStr は 0 で終わるとは限らない）
+static char *c_str(WStr *s) {
+    char *c = malloc((size_t)s->len + 1);
+    memcpy(c, s->data, (size_t)s->len);
+    c[s->len] = 0;
+    return c;
+}
+
+static WStr *message(const char *head, WStr *s) {
+    WSb *b = jw_sb_new();
+    jw_sb_push(b, head, (int64_t)strlen(head));
+    jw_sb_push(b, s->data, s->len);
+    return jw_sb_finish(b);
+}
+
+// Rust の String::from_utf8 と同じく、正しい UTF-8 か調べる（長すぎる形・サロゲートは不正）
+static int valid_utf8(const unsigned char *p, int64_t n) {
+    int64_t i = 0;
+    while (i < n) {
+        unsigned c = p[i];
+        int64_t k;
+        unsigned lo = 0x80, hi = 0xBF;
+        if (c < 0x80) { i++; continue; }
+        else if (c >= 0xC2 && c <= 0xDF) k = 1;
+        else if (c == 0xE0) { k = 2; lo = 0xA0; }
+        else if (c >= 0xE1 && c <= 0xEC) k = 2;
+        else if (c == 0xED) { k = 2; hi = 0x9F; }
+        else if (c >= 0xEE && c <= 0xEF) k = 2;
+        else if (c == 0xF0) { k = 3; lo = 0x90; }
+        else if (c >= 0xF1 && c <= 0xF3) k = 3;
+        else if (c == 0xF4) { k = 3; hi = 0x8F; }
+        else return 0;
+        if (i + k >= n) return 0;
+        if (p[i + 1] < lo || p[i + 1] > hi) return 0;
+        for (int64_t j = 2; j <= k; j++)
+            if (p[i + j] < 0x80 || p[i + j] > 0xBF) return 0;
+        i += k + 1;
+    }
+    return 1;
+}
+
+// read_file: 読めたら 1 で *out に中身、だめなら 0 で *out にエラーの文
+int32_t jw_read_file(WStr *path, WStr **out) {
+    char *cp = c_str(path);
+    FILE *f = open_file(cp, MODE_READ);
+    free(cp);
+    if (!f) {
+        *out = message("ファイルを読めません: ", path);
+        return 0;
+    }
+    WSb *b = jw_sb_new();
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) jw_sb_push(b, buf, (int64_t)n);
+    int bad = ferror(f);
+    fclose(f);
+    if (bad) {
+        sb_drop(b);
+        *out = message("ファイルを読めません: ", path);
+        return 0;
+    }
+    if (!valid_utf8((const unsigned char *)b->p, b->len)) {
+        sb_drop(b);
+        *out = message("ファイルが UTF-8 ではありません: ", path);
+        return 0;
+    }
+    *out = jw_sb_finish(b);
+    return 1;
+}
+
+// write_file: 書けたら 1、だめなら 0 で *err にエラーの文
+int32_t jw_write_file(WStr *path, WStr *text, WStr **err) {
+    char *cp = c_str(path);
+    FILE *f = open_file(cp, MODE_WRITE);
+    free(cp);
+    int ok = f != NULL;
+    if (f) {
+        if (fwrite(text->data, 1, (size_t)text->len, f) != (size_t)text->len) ok = 0;
+        if (fclose(f) != 0) ok = 0;
+    }
+    if (!ok) *err = message("ファイルに書けません: ", path);
+    return ok;
+}
+
+#ifdef _WIN32
+// 引数 1 つを、Windows の決まり（CommandLineToArgvW が元に戻せる形）でかっこむ
+static void quote_arg(WSb *b, const char *a) {
+    if (*a && !strpbrk(a, " \t\"")) {
+        jw_sb_push(b, a, (int64_t)strlen(a));
+        return;
+    }
+    jw_sb_push(b, "\"", 1);
+    for (const char *p = a;; p++) {
+        int64_t bs = 0;
+        while (*p == '\\') { bs++; p++; }
+        if (!*p) {
+            for (int64_t i = 0; i < bs * 2; i++) jw_sb_push(b, "\\", 1);
+            break;
+        }
+        if (*p == '"') {
+            for (int64_t i = 0; i < bs * 2 + 1; i++) jw_sb_push(b, "\\", 1);
+        } else {
+            for (int64_t i = 0; i < bs; i++) jw_sb_push(b, "\\", 1);
+        }
+        jw_sb_push(b, p, 1);
+    }
+    jw_sb_push(b, "\"", 1);
+}
+#endif
+
+// run_command: 動かして終わるのを待つ。動いたら 1 で *code に終了コード（シグナルで止まったら -1）、
+// 起動できなければ 0 で *err にエラーの文。args（str のリスト）はここで解放する
+int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
+    jw_flush();
+    int64_t n = args->len;
+    WStr **items = (WStr **)args->data;
+    char **argv = malloc(sizeof(char *) * (size_t)(n + 2));
+    argv[0] = c_str(cmd);
+    for (int64_t i = 0; i < n; i++) argv[i + 1] = c_str(items[i]);
+    argv[n + 1] = NULL;
+    int ok;
+#ifdef _WIN32
+    wchar_t **wargv = malloc(sizeof(wchar_t *) * (size_t)(n + 2));
+    for (int64_t i = 0; i <= n; i++) {
+        WSb *b = jw_sb_new();
+        quote_arg(b, argv[i]);
+        WStr *q = jw_sb_finish(b);
+        char *c = c_str(q);
+        jw_str_release(q);
+        wargv[i] = to_wide(c);
+        free(c);
+    }
+    wargv[n + 1] = NULL;
+    wchar_t *wcmd = to_wide(argv[0]);
+    intptr_t r = _wspawnvp(0 /* _P_WAIT */, wcmd, (const wchar_t *const *)wargv);
+    ok = r != -1;
+    if (ok) *code = (int64_t)(int32_t)r;
+    free(wcmd);
+    for (int64_t i = 0; i <= n; i++) free(wargv[i]);
+    free(wargv);
+#else
+    pid_t pid;
+    ok = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ) == 0;
+    if (ok) {
+        int st = 0;
+        while (waitpid(pid, &st, 0) < 0) {}
+        *code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    }
+#endif
+    for (int64_t i = 0; i <= n; i++) free(argv[i]);
+    free(argv);
+    if (!ok) *err = message("コマンドを起動できません: ", cmd);
+    for (int64_t i = 0; i < n; i++) jw_str_release(items[i]);
+    free(args->data);
+    return ok;
+}
+
+void jw_exit(int64_t code) {
+    jw_flush();
+    exit((int)code);
 }
 
 // ---------------------------------------------------------------- 入口

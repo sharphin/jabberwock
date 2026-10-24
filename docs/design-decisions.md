@@ -404,4 +404,13 @@ let x = pick(true, 1, 2);
 
 ## 名前
 
-- 言語名は **jabberwock から jabberwock に変える予定**。時期は未定で、オーナーの指示を待つ（それまでは jabberwock のまま）。
+- 言語名は ward から **jabberwock** に変えた（2026-10-24）。コマンドは `jabberwock`、拡張子は `.jw`、実行時ライブラリは `jw_rt.c`、環境変数は `JW_`。
+
+## ファイル・コマンド・終了（2026-10-24。自己ホストの準備）
+
+- コンパイラを jabberwock で書くのに要るものとして足した（docs/self-hosting.md の A1〜A3）。
+- `read_file` / `write_file` / `run_command` は失敗を `Result` で返す（`?` でつなげる）。エラーの文は OS の文を使わず、
+  jabberwock で決めた短い文（`ファイルを読めません: パス` など）。interp と実行ファイルで同じ文になるように。
+- `run_command(cmd, args)` はシェルを通さない（引数はそのまま渡る）。終了コードを返す。
+- `exit(n)` は後片づけせずにすぐ終わる（C や Go と同じ）。型は「戻らない」。
+- 値なしの値 `()` を足した。`Result<(), str>` を返す関数のため（`Ok(())`）。

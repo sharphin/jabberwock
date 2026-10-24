@@ -214,6 +214,8 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     Str(String),
+    /// `()`: 値なしの値（`Ok(())` のように型の引数が `()` の場所に書く）
+    Unit,
     Var(String),
     /// `e as T`。整数の型を明示的に変える（範囲の外は一周する）
     Cast(Box<Expr>, TypeExpr),
@@ -531,7 +533,7 @@ pub fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> bool) {
         return;
     }
     match &e.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit | ExprKind::Var(_) => {}
         ExprKind::Cast(x, _) | ExprKind::Try(x) | ExprKind::Own(x) | ExprKind::Ref(x, _) | ExprKind::Deref(x, _) => walk_expr(x, f),
         ExprKind::Field(x, ..) | ExprKind::Unary(_, x) | ExprKind::ArrayRepeat(x, ..) => walk_expr(x, f),
         ExprKind::Variant { args, .. } | ExprKind::Call(_, args) | ExprKind::ArrayLit(args, _) => {

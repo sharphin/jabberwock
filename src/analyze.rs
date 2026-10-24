@@ -337,7 +337,7 @@ impl<'a> FnAnalyzer<'a> {
 
     fn expr_kind(&mut self, e: &Expr, borrow: bool) -> Option<Fact> {
         match &e.kind {
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => None,
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit => None,
             ExprKind::Var(name) => {
                 let Some(id) = self.lookup(name) else {
                     // 名前のある関数を値として使う。どこから何が渡されるか分からないので、引数は何も仮定しない
@@ -462,12 +462,12 @@ impl<'a> FnAnalyzer<'a> {
             }
             ExprKind::Call(name, args) => {
                 match name.as_str() {
-                    "print" => {
+                    "print" | "eprint" => {
                         for a in args {
                             self.expr(a, true);
                         }
                     }
-                    "drop" | "assert" | "spawn" | "chan" => {
+                    "drop" | "assert" | "spawn" | "chan" | "exit" | "read_file" | "write_file" | "run_command" => {
                         for a in args {
                             self.expr(a, false);
                         }
@@ -644,7 +644,7 @@ fn for_each_check(b: &Block, f: &mut impl FnMut(&Cell<Check>)) {
 
 fn expr_checks(e: &Expr, f: &mut impl FnMut(&Cell<Check>)) {
     match &e.kind {
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit | ExprKind::Var(_) => {}
         ExprKind::Own(i) | ExprKind::Ref(i, _) | ExprKind::Unary(_, i) | ExprKind::Cast(i, _) | ExprKind::Try(i) => {
             expr_checks(i, f)
         }

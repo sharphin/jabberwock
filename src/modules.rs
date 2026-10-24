@@ -272,7 +272,7 @@ impl<'a> Qualify<'a> {
 
     fn expr(&self, e: &mut Expr, tps: &[String]) {
         match &mut e.kind {
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => {}
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit => {}
             // 名前のある関数を値として使う（変数に関数と同じ名前はつけられないので、関数の名前なら関数）
             ExprKind::Var(n) => {
                 if self.fns.contains(n.as_str()) {

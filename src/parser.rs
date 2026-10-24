@@ -1352,6 +1352,11 @@ impl Parser {
                 }
             }
             Tok::LParen if self.at_lambda() => self.parse_lambda(),
+            Tok::LParen if *self.peek2() == Tok::RParen => {
+                let start = self.bump().span;
+                let end = self.bump().span;
+                Ok(Expr::new(ExprKind::Unit, start.join(end)))
+            }
             Tok::LParen => {
                 let start = self.bump().span;
                 let inner = self.with_struct_lit(true, |p| p.parse_expr())?;
@@ -1607,7 +1612,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             let (n, args) = (n.clone(), std::mem::take(args));
             e.kind = ExprKind::MethodCall(this(e.span), n, args, RefCell::default());
         }
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit | ExprKind::Var(_) => {}
         ExprKind::Cast(i, _)
         | ExprKind::Try(i)
         | ExprKind::Own(i)

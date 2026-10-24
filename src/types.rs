@@ -14,7 +14,7 @@ use crate::diag::{Diagnostic, Span};
 
 type R<T> = Result<T, Diagnostic>;
 
-const BUILTINS: [&str; 7] = ["print", "drop", "assert", "read_line", "args", "spawn", "chan"];
+use crate::interp::BUILTINS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -178,7 +178,7 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
 /// 整数どうしは、欠けずにそろえられる広い方にする（`max(a_u8, b_i64)` の T は i64）
 fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String, Ty>) {
     match (pattern, actual) {
-        (_, Ty::Never) | (_, Ty::Unit) => {}
+        (_, Ty::Never) => {}
         (Ty::Param(p), _) if tparams.contains(p) => match map.get(p) {
             None => {
                 map.insert(p.clone(), actual.clone());
@@ -739,7 +739,7 @@ impl<'a> Checker<'a> {
                     _ => None,
                 };
                 let t = self.expr_h(a, hint.as_ref())?;
-                if t == Ty::Unit {
+                if t == Ty::Unit && !matches!(a.kind, ExprKind::Unit) {
                     return Err(Diagnostic::new("値のない式です").primary(a.span, "これは値を返さない"));
                 }
                 let t = if auto_ref { self.auto_borrow(a, t, p)? } else { t };
@@ -1602,6 +1602,7 @@ impl<'a> Checker<'a> {
                 Ok(target)
             }
             ExprKind::Bool(_) => Ok(Ty::Bool),
+            ExprKind::Unit => Ok(Ty::Unit),
             ExprKind::Str(_) => Ok(Ty::Str),
             ExprKind::Lambda(l) => self.lambda(l, hint),
             ExprKind::Var(name) => match self.use_var(name) {
@@ -1800,7 +1801,7 @@ impl<'a> Checker<'a> {
     /// 値として使う式。値なしならエラー
     fn value(&mut self, e: &Expr) -> R<Ty> {
         let t = self.expr(e)?;
-        if t == Ty::Unit {
+        if t == Ty::Unit && !matches!(e.kind, ExprKind::Unit) {
             return Err(Diagnostic::new("値のない式です").primary(e.span, "これは値を返さない"));
         }
         Ok(t)
@@ -2325,11 +2326,27 @@ impl<'a> Checker<'a> {
 
     fn call(&mut self, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
         match name {
-            "print" => {
+            "print" | "eprint" => {
                 for a in args {
                     self.value(a)?;
                 }
                 return Ok(Ty::Unit);
+            }
+            "exit" | "read_file" | "write_file" | "run_command" => {
+                let str_list = Ty::List(Box::new(Ty::Str));
+                let (params, ret) = match name {
+                    "exit" => (vec![Ty::Int(IntTy::I64)], Ty::Never),
+                    "read_file" => (vec![Ty::Str], Ty::Str),
+                    "write_file" => (vec![Ty::Str, Ty::Str], Ty::Unit),
+                    _ => (vec![Ty::Str, str_list], Ty::Int(IntTy::I64)),
+                };
+                if args.len() != params.len() {
+                    return Err(arity_error(name, params.len(), args.len(), span));
+                }
+                for (a, p) in args.iter().zip(&params) {
+                    self.expect(a, p)?;
+                }
+                return Ok(if ret == Ty::Never { ret } else { Ty::Enum("Result".to_string(), vec![ret, Ty::Str]) });
             }
             "read_line" | "args" => {
                 if !args.is_empty() {

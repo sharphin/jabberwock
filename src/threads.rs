@@ -67,6 +67,10 @@ pub struct State {
     pub abort: Option<Diagnostic>,
     /// 出力（print の行。行ごとにまとめて足すので混ざらない）
     pub output: String,
+    /// 標準エラーへの出力（eprint の行）
+    pub errput: String,
+    /// `exit(n)` で終わった（終了コード）
+    pub exit: Option<i32>,
     /// 終わったスレッドのヒープに残っていた数（リーク検査）
     pub leaked: usize,
     /// デッドロックを見つけた（main が自分の待っている位置で知らせる）
@@ -108,6 +112,11 @@ impl std::fmt::Debug for World {
     }
 }
 
+/// `exit(n)` で止まるときのエラー（表示はされない。終了コードは `State.exit`）
+pub fn exit_marker() -> Diagnostic {
+    Diagnostic::new("（exit で終わった）")
+}
+
 /// どれかのスレッドがエラーで止まったので、ほかのスレッドも止まるときのエラー（表示はされない）
 pub fn aborted_marker() -> Diagnostic {
     Diagnostic::new("（ほかのスレッドのエラーで止まった）")
@@ -116,7 +125,7 @@ pub fn aborted_marker() -> Diagnostic {
 impl World {
     pub fn new(echo: bool, load: Box<dyn Fn() -> Program + Send + Sync>) -> Arc<World> {
         Arc::new(World {
-            state: Mutex::new(State { alive: 1, blocked: 0, epoch: 0, abort: None, output: String::new(), leaked: 0, deadlock: false }),
+            state: Mutex::new(State { alive: 1, blocked: 0, epoch: 0, abort: None, output: String::new(), errput: String::new(), exit: None, leaked: 0, deadlock: false }),
             cv: Condvar::new(),
             aborted: AtomicBool::new(false),
             echo,
@@ -149,6 +158,27 @@ impl World {
         if self.echo {
             println!("{}", line);
         }
+    }
+
+    pub fn eprint_line(&self, line: &str) {
+        let mut st = self.lock();
+        st.errput.push_str(line);
+        st.errput.push('\n');
+        if self.echo {
+            eprintln!("{}", line);
+        }
+    }
+
+    /// `exit(code)`: ほかのスレッドも止めて、終了コードを覚える（先にエラーで止まっていればそちら）
+    pub fn exit(&self, code: i32) -> Diagnostic {
+        {
+            let mut st = self.lock();
+            if st.abort.is_none() {
+                st.exit = Some(code);
+            }
+        }
+        self.fail(exit_marker());
+        exit_marker()
     }
 
     /// エラーで止まった。最初のエラーだけ覚えて、ほかのスレッドを起こす

@@ -26,7 +26,8 @@ type R<T> = Result<T, Diagnostic>;
 pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 7] = ["print", "drop", "assert", "read_line", "args", "spawn", "chan"];
+pub(crate) const BUILTINS: [&str; 12] =
+    ["print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command"];
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -393,6 +394,62 @@ impl Interp {
             }
         }
         Ok(some(Value::Str(Rc::from(line.as_str()))))
+    }
+
+    /// ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）。IR の exec も使う。
+    /// エラーの文は jw_rt.c と同じにする（OS のエラーの文は使わない）
+    pub(crate) fn system(&mut self, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
+        let text = |v: &Value| match v {
+            Value::Str(s) => s.to_string(),
+            _ => unreachable!("type checked: str"),
+        };
+        let result = |ok: bool, v: Value| Value::Enum { variant: Rc::from(if ok { "Ok" } else { "Err" }), fields: vec![v], copy: true };
+        let msg = |m: String| Value::Str(Rc::from(m.as_str()));
+        match name {
+            "exit" => {
+                let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
+                Err(self.world.exit(n as i32))
+            }
+            "read_file" => {
+                let path = text(&vals[0]);
+                Ok(match std::fs::read(&path) {
+                    Ok(b) => match String::from_utf8(b) {
+                        Ok(t) => result(true, Value::Str(Rc::from(t.as_str()))),
+                        Err(_) => result(false, msg(format!("ファイルが UTF-8 ではありません: {}", path))),
+                    },
+                    Err(_) => result(false, msg(format!("ファイルを読めません: {}", path))),
+                })
+            }
+            "write_file" => {
+                let path = text(&vals[0]);
+                Ok(match std::fs::write(&path, text(&vals[1])) {
+                    Ok(()) => result(true, Value::Unit),
+                    Err(_) => result(false, msg(format!("ファイルに書けません: {}", path))),
+                })
+            }
+            "run_command" => {
+                let cmd = text(&vals[0]);
+                let Value::Array(items, _) = &vals[1] else { unreachable!("type checked: str[]") };
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                let status = std::process::Command::new(&cmd).args(items.iter().map(text)).status();
+                Ok(match status {
+                    Ok(st) => result(true, Value::Int(st.code().unwrap_or(-1) as i128, IntTy::I64)),
+                    Err(_) => result(false, msg(format!("コマンドを起動できません: {}", cmd))),
+                })
+            }
+            _ => unreachable!("not a system builtin: {} at {:?}", name, span),
+        }
+    }
+
+    /// `exit(n)` で終わったときの終了コード
+    pub fn exit_code(&self) -> Option<i32> {
+        self.world.lock().exit
+    }
+
+    /// eprint が出した内容
+    pub fn errput(&self) -> String {
+        self.world.lock().errput.clone()
     }
 
     /// `args()`: コマンドライン引数のリスト
@@ -1790,6 +1847,7 @@ impl Interp {
             }
             ExprKind::Float(x) => Ok(Value::Float(*x)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
+            ExprKind::Unit => Ok(Value::Unit),
             ExprKind::Str(s) => Ok(Value::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => self.read_var(name, e.span),
             ExprKind::Lambda(l) => {
@@ -1989,7 +2047,7 @@ impl Interp {
 
     fn eval_call(&mut self, name: &str, args: &[Expr], span: Span) -> R<Value> {
         match name {
-            "print" => {
+            "print" | "eprint" => {
                 let mut parts = Vec::new();
                 let mut temps = Vec::new();
                 for a in args {
@@ -2015,7 +2073,11 @@ impl Interp {
                     }
                 }
                 let line = parts.join(" ");
-                self.world.print_line(&line);
+                if name == "print" {
+                    self.world.print_line(&line);
+                } else {
+                    self.world.eprint_line(&line);
+                }
                 for (v, sp) in temps {
                     self.release(v, sp, "print の引数として使い終わった一時的な値");
                 }
@@ -2034,6 +2096,10 @@ impl Interp {
                 Ok(Value::Unit)
             }
             "read_line" => self.read_line(span),
+            "exit" | "read_file" | "write_file" | "run_command" => {
+                let vals = self.eval_all(args)?;
+                self.system(name, vals, span)
+            }
             "spawn" => self.spawn(&args[0], span),
             "chan" => Ok(Value::Chan(Arc::new(Chan::default()))),
             "args" => Ok(self.args_value()),

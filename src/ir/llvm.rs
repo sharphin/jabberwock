@@ -187,6 +187,13 @@ declare ptr @jw_str_replace(ptr, ptr, ptr)
 declare ptr @jw_str_repeat(ptr, i64, ptr)
 declare i32 @jw_str_to_int(ptr, ptr)
 declare i32 @jw_read_line(ptr)
+declare void @jw_eprint_begin()
+declare void @jw_eprint_part(ptr, i32)
+declare void @jw_eprint_end()
+declare i32 @jw_read_file(ptr, ptr)
+declare i32 @jw_write_file(ptr, ptr, ptr)
+declare i32 @jw_run_command(ptr, ptr, ptr, ptr)
+declare void @jw_exit(i64) noreturn
 declare void @jw_args(ptr)
 
 "#;
@@ -3221,6 +3228,26 @@ impl<'m, 'p> FnGen<'m, 'p> {
         Ok(name)
     }
 
+    /// `Result<T, str>` を作る。`ok` が 0 でなければ `Ok(ok_val)`、0 なら `Err(*err)`（err は文字列を指す場所）
+    fn result_of(&mut self, want: &Ty, ok: &str, err: &str, ok_val: impl FnOnce(&mut Self) -> G<(String, Ty)>) -> G<(String, Ty)> {
+        let lt = self.m.lt(want)?;
+        let res = self.b.alloca(&lt);
+        let failed = self.b.val(format!("icmp eq i32 {}, 0", ok));
+        let (_, fine) = self.b.if_true(&failed);
+        let msg = self.b.val(format!("load ptr, ptr {}", err));
+        let ev = self.make_enum(want, "Err", vec![(msg, Ty::Str)])?;
+        self.b.op(format!("store {} {}, ptr {}", lt, ev, res));
+        let done = self.b.l();
+        self.b.br(&done);
+        self.b.label(&fine);
+        let v = ok_val(self)?;
+        let ov = self.make_enum(want, "Ok", vec![v])?;
+        self.b.op(format!("store {} {}, ptr {}", lt, ov, res));
+        self.b.br(&done);
+        self.b.label(&done);
+        Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
+    }
+
     fn make_enum(&mut self, et: &Ty, variant: &str, vals: Vec<(String, Ty)>) -> G<String> {
         let vs = self.m.variants(et)?;
         let vi = vs.iter().position(|(n, _)| n == variant).ok_or_else(|| format!("enum の種類 {} がない", variant))?;
@@ -3476,14 +3503,41 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 }
                 Ok(r)
             }
-            "print" => {
-                self.b.op("call void @jw_print_begin()");
+            "print" | "eprint" => {
+                self.b.op(format!("call void @jw_{}_begin()", name));
                 for (i, (v, _)) in vals.iter().enumerate() {
-                    self.b.op(format!("call void @jw_print_part(ptr {}, i32 {})", v, (i == 0) as i32));
+                    self.b.op(format!("call void @jw_{}_part(ptr {}, i32 {})", name, v, (i == 0) as i32));
                 }
-                self.b.op("call void @jw_print_end()");
+                self.b.op(format!("call void @jw_{}_end()", name));
                 release(self, &vals);
                 Ok(("0".to_string(), Ty::Unit))
+            }
+            // 戻らない（IR のブロックは続けて unreachable で終わる）
+            "exit" => {
+                self.b.op(format!("call void @jw_exit(i64 {})", vals[0].0));
+                Ok(("0".to_string(), Ty::Unit))
+            }
+            "read_file" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_read_file(ptr {}, ptr {})", vals[0].0, out));
+                release(self, &vals);
+                self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load ptr, ptr {}", out)), Ty::Str)))
+            }
+            "write_file" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_write_file(ptr {}, ptr {}, ptr {})", vals[0].0, vals[1].0, out));
+                release(self, &vals);
+                self.result_of(want, &ok, &out, |_| Ok(("0".to_string(), Ty::Unit)))
+            }
+            // 引数のリストは jw_run_command が解放する
+            "run_command" => {
+                let list = self.b.alloca("%list");
+                self.b.op(format!("store %list {}, ptr {}", vals[1].0, list));
+                let code = self.b.alloca("i64");
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_run_command(ptr {}, ptr {}, ptr {}, ptr {})", vals[0].0, list, code, out));
+                release(self, &vals[..1]);
+                self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load i64, ptr {}", code)), Ty::Int(IntTy::I64))))
             }
             "concat" if vals.len() == 2 => {
                 let r = self.b.val(format!("call ptr @jw_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));

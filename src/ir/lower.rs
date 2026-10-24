@@ -1199,6 +1199,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             ExprKind::Int(n) => Operand::Const(Const::Int(*n, IntTy::I64)),
             ExprKind::Float(x) => Operand::Const(Const::Float(*x)),
             ExprKind::Bool(b) => Operand::Const(Const::Bool(*b)),
+            ExprKind::Unit => Operand::Const(Const::Unit),
             ExprKind::Str(s) => Operand::Const(Const::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => match self.lookup(name) {
                 Some(l) => {
@@ -1402,12 +1403,25 @@ impl<'a, 'p> FnLower<'a, 'p> {
     fn call(&mut self, e: &Expr, name: &str, args: &[Expr], ty: Ty) -> L<Operand> {
         let sp = e.span;
         match name {
-            "print" => {
+            "print" | "eprint" => {
                 let mut strs = Vec::new();
                 for a in args {
                     strs.push(self.show(a)?);
                 }
-                Ok(self.temp_of(Ty::Unit, Rvalue::Builtin("print".to_string(), strs, sp), sp))
+                Ok(self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), strs, sp), sp))
+            }
+            "exit" | "read_file" | "write_file" | "run_command" => {
+                let mut ops = Vec::new();
+                for a in args {
+                    ops.push(self.expr(a)?);
+                }
+                if name != "exit" {
+                    return Ok(self.temp_of(ty, Rvalue::Builtin(name.to_string(), ops, sp), sp));
+                }
+                // exit からは戻らない
+                let u = self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), ops, sp), sp);
+                self.terminate(Term::Unreachable);
+                Ok(u)
             }
             "assert" => {
                 let v = self.expr(&args[0])?;

@@ -18,6 +18,10 @@ use diag::Diagnostic;
 pub struct Outcome {
     /// `print` が出した内容
     pub output: String,
+    /// `eprint` が出した内容（標準エラー）
+    pub errput: String,
+    /// `exit(n)` で終わったときの終了コード（このとき error は None）
+    pub exit_code: Option<i32>,
     /// エラーがあれば診断
     pub error: Option<Diagnostic>,
     /// 警告（実行は止めない）
@@ -224,6 +228,8 @@ fn run_inner(
     let (prog, files) = parse(src, read);
     let fail = |d: Diagnostic| Outcome {
         output: String::new(),
+        errput: String::new(),
+        exit_code: None,
         error: Some(d),
         warnings: Vec::new(),
         live_objects: 0,
@@ -254,25 +260,39 @@ fn run_inner(
     let io = (replay, args.clone());
     it.set_io(input, args);
     let res = it.run(prog);
+    // exit で終わったのはエラーではない
+    let res = match res {
+        Err(d) if d.title == threads::exit_marker().title => Ok(()),
+        r => r,
+    };
+    let want = Expected {
+        output: it.output(),
+        errput: it.errput(),
+        error: res.as_ref().err().cloned(),
+        live: it.live_objects(),
+        exit: it.exit_code(),
+    };
     // 入力を使うプログラムは、同じ入力をもう一度渡せるときだけ突き合わせる
     let lowered = lowered.filter(|p| io.0.is_some() || !p.uses_input());
     if let Some(irp) = lowered {
         let input = io.0.clone().unwrap_or_default();
-        if let Some(diff) = ir_mismatch(&irp, &files, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
+        if let Some(diff) = ir_mismatch(&irp, &files, &want, &input, &io.1) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
         // JW_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
         if std::env::var_os("JW_NATIVE").is_some() {
-            if let Some(diff) = native_mismatch(&irp, &files, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
+            if let Some(diff) = native_mismatch(&irp, &files, &want, &input, &io.1) {
                 panic!("実行ファイルの結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
             }
         }
     }
     Outcome {
-        output: it.output(),
-        error: res.err(),
+        output: want.output,
+        errput: want.errput,
+        exit_code: want.exit,
+        error: want.error,
         warnings,
-        live_objects: it.live_objects(),
+        live_objects: want.live,
         analysis,
         ref_checks: it.ref_checks,
         ref_checks_elided: it.ref_checks_elided,
@@ -280,25 +300,39 @@ fn run_inner(
     }
 }
 
-/// IR を実行して、インタプリタの結果（出力・エラーの題と位置・残ったヒープの数）と違えばその説明を返す
-fn ir_mismatch(
-    irp: &ir::Program,
-    files: &[(String, String)],
-    output: &str,
-    error: Option<&Diagnostic>,
+/// インタプリタの実行結果（IR・実行ファイルと突き合わせる）
+struct Expected {
+    output: String,
+    errput: String,
+    error: Option<Diagnostic>,
     live: usize,
-    input: &[u8],
-    args: &[String],
-) -> Option<String> {
+    exit: Option<i32>,
+}
+
+/// IR を実行して、インタプリタの結果（出力・エラーの題と位置・残ったヒープの数・終了コード）と違えばその説明を返す
+fn ir_mismatch(irp: &ir::Program, files: &[(String, String)], want: &Expected, input: &[u8], args: &[String]) -> Option<String> {
     let mut it = interp::Interp::new(false);
     it.set_world(threads::World::new_ir(ir_reloader(files)));
     it.set_io(Box::new(std::io::Cursor::new(input.to_vec())), args.to_vec());
     let res = ir::exec::run(irp, &mut it);
-    if it.output() != output {
-        return Some(format!("出力が違う\ninterp:\n{}\nIR:\n{}", output, it.output()));
+    let res = match res {
+        Err(d) if d.title == threads::exit_marker().title => Ok(()),
+        r => r,
+    };
+    if it.output() != want.output {
+        return Some(format!("出力が違う\ninterp:\n{}\nIR:\n{}", want.output, it.output()));
     }
+    if it.errput() != want.errput {
+        return Some(format!("標準エラーへの出力が違う\ninterp:\n{}\nIR:\n{}", want.errput, it.errput()));
+    }
+    if it.exit_code() != want.exit {
+        return Some(format!("終了コードが違う（interp {:?}・IR {:?}）", want.exit, it.exit_code()));
+    }
+    let live = want.live;
     let key = |d: &Diagnostic| (d.title.clone(), d.labels.iter().find(|l| l.primary).map(|l| l.span));
-    match (error, res.as_ref().err()) {
+    match (want.error.as_ref(), res.as_ref().err()) {
+        // exit で終わったときは、片づけずに終わるので残りの数は比べない
+        (None, None) if want.exit.is_some() => None,
         (None, None) if live != it.live_objects() => {
             Some(format!("残ったヒープの数が違う（interp {}・IR {}）", live, it.live_objects()))
         }
@@ -309,15 +343,8 @@ fn ir_mismatch(
 }
 
 /// LLVM に書き出して clang で作った実行ファイルを走らせ、インタプリタの結果と違えばその説明を返す
-fn native_mismatch(
-    irp: &ir::Program,
-    files: &[(String, String)],
-    output: &str,
-    error: Option<&Diagnostic>,
-    live: usize,
-    input: &[u8],
-    args: &[String],
-) -> Option<String> {
+fn native_mismatch(irp: &ir::Program, files: &[(String, String)], want: &Expected, input: &[u8], args: &[String]) -> Option<String> {
+    let (output, live) = (&want.output, want.live);
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -359,10 +386,20 @@ fn native_mismatch(
     };
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let diff = if stdout != output {
+    // 標準エラーは eprint の出力のあとに、エラーか `[live]` の行が続く
+    let Some(stderr) = stderr.strip_prefix(want.errput.as_str()) else {
+        return Some(format!("標準エラーへの出力が違う\ninterp:\n{}\n実行ファイル:\n{}", want.errput, stderr));
+    };
+    let diff = if stdout != *output {
         Some(format!("出力が違う\ninterp:\n{}\n実行ファイル:\n{}\n{}", output, stdout, stderr))
+    } else if let Some(code) = want.exit {
+        if out.status.code() != Some(code) || !stderr.is_empty() {
+            Some(format!("終了が違う（interp exit {}・実行ファイル {:?}）\n{}", code, out.status.code(), stderr))
+        } else {
+            None
+        }
     } else {
-        match error {
+        match want.error.as_ref() {
             None => {
                 let got = stderr.lines().find_map(|l| l.strip_prefix("[live] ")).and_then(|n| n.trim().parse::<usize>().ok());
                 if !out.status.success() {

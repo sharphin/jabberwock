@@ -437,6 +437,12 @@ impl<'a> Machine<'a> {
                         self.it.world.print_line(&line);
                         Ok(Value::Unit)
                     }
+                    "eprint" => {
+                        let line = strs().join(" ");
+                        self.it.world.eprint_line(&line);
+                        Ok(Value::Unit)
+                    }
+                    "exit" | "read_file" | "write_file" | "run_command" => self.it.system(name, vals, *span),
                     "concat" => Ok(Value::Str(Rc::from(strs().concat().as_str()))),
                     "read_line" => self.it.read_line(*span),
                     "chan" => Ok(Value::Chan(std::sync::Arc::new(crate::threads::Chan::default()))),
