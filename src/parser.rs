@@ -1459,7 +1459,14 @@ fn merge_paths(toks: Vec<Token>, deps: &HashMap<String, ModuleInfo>) -> R<Vec<To
             }
         }
         let module = match &t.tok {
-            Tok::Ident(m) if deps.contains_key(m) && matches!(it.peek(), Some(d) if d.tok == Tok::Dot) => m.clone(),
+            // `x.geom.f` のようにフィールド名として書いたものはモジュールではない
+            Tok::Ident(m)
+                if deps.contains_key(m)
+                    && matches!(it.peek(), Some(d) if d.tok == Tok::Dot)
+                    && !matches!(out.last(), Some(p) if p.tok == Tok::Dot) =>
+            {
+                m.clone()
+            }
             _ => {
                 out.push(t);
                 continue;

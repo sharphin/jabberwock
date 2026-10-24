@@ -100,6 +100,21 @@ fn main() {
     assert_eq!(ok(src), "25 2\n10\n2\n14 2\n9\n6\n9 4 1\n1\n");
 }
 
+/// `x.geom` のように、フィールドの名前がモジュールと同じでもよい
+#[test]
+fn a_field_can_share_a_module_name() {
+    let src = "
+use geom;
+
+struct Box { geom.Point geom; }
+
+fn main() {
+    let b = Box { geom: geom.Point.at(3, 4) };
+    print(b.geom.x, b.geom.len2());
+}";
+    assert_eq!(ok(src), "3 25\n");
+}
+
 #[test]
 fn module_errors() {
     let (d, _) = err("use geom;\nfn main() {\n    print(geom.helper(1, 2));\n}");

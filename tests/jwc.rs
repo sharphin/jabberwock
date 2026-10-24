@@ -236,7 +236,7 @@ fn ast_with_modules() {
         ("loop1", "use loop2;\npub fn f() {}\n"),
         ("loop2", "use loop1;\npub fn g() {}\n"),
         ("bad", "fn main() { let x = ; }\n"),
-        ("ok_main", "use geom;\nuse util;\nfn main() { let p = geom.Point.at(1, 2); let s = geom.Shape.square(2); print(\"{geom.area(s)} {util.sq(3)}\", p.len2()); let q = geom.Point { x: 1, y: 2 }; let geom.Shape[] v = [geom.Shape.Box(1, 2)]; }\n"),
+        ("ok_main", "use geom;\nuse util;\nfn main() { let p = geom.Point.at(1, 2); let s = geom.Shape.square(2); print(\"{geom.area(s)} {util.sq(3)}\", p.len2()); let q = geom.Point { x: 1, y: 2 }; let geom.Shape[] v = [geom.Shape.Box(1, 2)]; let w = W { geom: p }; print(w.geom.x); }\nstruct W { geom.Point geom; }\n"),
         ("missing", "use nothere;\nfn main() {}\n"),
         ("cycle", "use loop1;\nfn main() {}\n"),
         ("not_pub", "use util;\nfn main() { util.hidden(); }\n"),
@@ -251,6 +251,7 @@ fn ast_with_modules() {
     for n in ["ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod"] {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));
+        same_ir_raw(&dir.join(format!("{}.jw", n)));
     }
 }
 
@@ -264,21 +265,33 @@ fn same_typed(path: &Path) {
     assert_eq!(run_jwc(&["--typed", name]), want, "{}", name);
 }
 
+/// 解析の前の IR（`--ir-raw`）が Rust 版と同じか
+fn same_ir_raw(path: &Path) {
+    let src = std::fs::read_to_string(path).unwrap();
+    let name = path.to_str().unwrap();
+    let dir = path.parent().unwrap().to_path_buf();
+    let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
+    let want = jabberwock::ir_dump(&src, &read, name, false);
+    let got = run_jwc(&["--ir-raw", name]);
+    assert_eq!(got.strip_suffix('\n').unwrap_or(&got), want.strip_suffix('\n').unwrap_or(&want), "{}", name);
+}
+
 #[test]
-fn typed_of_the_repository_files() {
+fn typed_and_ir_of_the_repository_files() {
     if !have_clang() {
         return;
     }
     for dir in ["examples", "jwc"] {
         for p in jw_files(&root().join(dir)) {
             same_typed(&p);
+            same_ir_raw(&p);
         }
     }
 }
 
 /// テストで動かすプログラム（tests/jwc_cases.txt に `#####` の行で区切って集めたもの。型のエラーも含む）
 #[test]
-fn ast_and_typed_of_the_test_programs() {
+fn ast_typed_and_ir_of_the_test_programs() {
     if !have_clang() {
         return;
     }
@@ -290,5 +303,6 @@ fn ast_and_typed_of_the_test_programs() {
         std::fs::write(&p, c).unwrap();
         same_ast(&p);
         same_typed(&p);
+        same_ir_raw(&p);
     }
 }

@@ -89,7 +89,9 @@ fn Result<lexer.Token[], diag.Diag> merge_paths(ref lexer.Token[] toks, ref str[
     let mut i = 0;
     while i < toks.len() {
         let mut m = -1;
-        if toks[i].kind == "ident" && i + 1 < toks.len() && toks[i + 1].kind == "." {
+        // `x.geom.f` のようにフィールド名として書いたものはモジュールではない
+        let after_dot = out.len() > 0 && out[out.len() - 1].kind == ".";
+        if toks[i].kind == "ident" && i + 1 < toks.len() && toks[i + 1].kind == "." && !after_dot {
             for (j, x) in mods {
                 if x == toks[i].text { m = j; }
             }

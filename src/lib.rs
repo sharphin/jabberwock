@@ -196,6 +196,29 @@ pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
         .map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))
 }
 
+/// jwc の `--ir` / `--ir-raw` と突き合わせる IR の表示。`analyze` なら検査を消す解析のあと。
+/// 構文・型のエラーは診断の表示、書き出せなければその理由
+pub fn ir_dump(src: &str, read: Reader, path: &str, analyze: bool) -> String {
+    let (r, files) = parse(src, read);
+    let prog = match r {
+        Ok(p) => p,
+        Err(d) => return render(&d, path, &files),
+    };
+    let info = match types::check_with_info(&prog) {
+        Ok((_, info)) => info,
+        Err(d) => return render(&d, path, &files),
+    };
+    match ir::lower::lower(&prog, &info) {
+        Ok(mut p) => {
+            if analyze {
+                ir::analyze::analyze(&mut p);
+            }
+            p.to_string()
+        }
+        Err(r) => format!("まだ IR に書き出せない書き方があります: {}\n", r),
+    }
+}
+
 /// LLVM のテキスト（`jabberwock --ll`）。`main` は最初のファイルの名前（エラーの位置に出す）
 pub fn llvm_text(src: &str, read: Reader, main: &str) -> Result<String, String> {
     llvm_build(src, read, main, false)

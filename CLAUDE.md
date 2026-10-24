@@ -23,7 +23,7 @@
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
-| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
+| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
 | `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
@@ -58,9 +58,9 @@
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
-| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（作りかけ。設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査） |
+| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（作りかけ。設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く） |
 | `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
-| `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump` と比べる。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
+| `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` は `ir_dump` と比べる。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件
@@ -167,7 +167,7 @@
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
 
 - モジュール: `modules::Loader` が `use` をたどってファイルを読み（使われる側が先。輪はエラー）、各ファイルを
-  `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー）、
+  `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー。`.` のすぐあとの名前はフィールドなのでまとめない）、
   モジュールの中の定義と参照は `qualify` が `geom.名前` に書き換える。全部を 1 つの `Program` にまとめるので、types / analyze / interp は
   モジュールを知らない（types だけ、モジュールの中で関数と同じ名前の変数を弾くために `Checker.module` を見る。メソッド名は `rsplit_once('.')` で分ける）。
   `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `jabberwock::render`。

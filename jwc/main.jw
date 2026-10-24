@@ -5,7 +5,9 @@
 use ast;
 use astdump;
 use diag;
+use ir;
 use lexer;
+use lower;
 use modules;
 use parser;
 use ty;
@@ -93,10 +95,15 @@ fn str dir_of(str path) {
     path.slice(0, cut)
 }
 
+/// エラーの表示。`--ir-raw` は Rust 版が末尾の改行を足さないので、print の改行と重ならないよう 1 つ削る
+fn str err_text(str mode, str text) {
+    if mode == "--ir-raw" && text.ends_with("\n") { text.slice(0, text.len() - 1) } else { text }
+}
+
 fn main() {
     let a = args();
-    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed") {
-        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw>");
+    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw") {
+        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw>");
         exit(2);
     }
     let path = a[1];
@@ -109,7 +116,7 @@ fn main() {
     };
     let str[] names = [path];
     let str[] srcs = [src];
-    if a[0] == "--ast" || a[0] == "--typed" {
+    if a[0] != "--tokens" {
         let mut l = modules.new_loader(dir_of(path));
         let str[] mut ns = [];
         let r = parse_all(ref mut l, src);
@@ -125,14 +132,24 @@ fn main() {
                 let q = ast.number(p);
                 match typeck.check(q) {
                     case Ok(c) -> {
+                        if a[0] == "--ir-raw" {
+                            match lower.lower(q, c) {
+                                case Ok(ip) -> {
+                                    let text = ir.show_program(ip);
+                                    print(text.slice(0, text.len() - 1));
+                                }
+                                case Err(why) -> print("まだ IR に書き出せない書き方があります: " + why);
+                            }
+                            return;
+                        }
                         let mut out = "";
                         for w in c.warns { out += diag.render(w, ns, l.srcs); }
                         print(out + astdump.dump_typed(q, c));
                     }
-                    case Err(d) -> print(diag.render(d, ns, l.srcs));
+                    case Err(d) -> print(err_text(a[0], diag.render(d, ns, l.srcs)));
                 }
             }
-            case Err(d) -> print(diag.render(d, ns, l.srcs));
+            case Err(d) -> print(err_text(a[0], diag.render(d, ns, l.srcs)));
         }
         return;
     }
