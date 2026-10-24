@@ -5,7 +5,7 @@
 //! own を取り出す・借りる・読む（docs/design-decisions.md の「写しの印」の表の部品）。
 //! 新しい取り出し経路や組み込みの操作を足したら、ここの部品にも足すこと。
 //! ふだんは `CASES` 本。`JW_FUZZ=1000` で本数、`JW_FUZZ_SEED=n` で始めの種を変えられる。
-//! `JW_FUZZ_JWC=jwc の実行ファイル` なら、jwc で作った実行ファイルとも比べる。clang がなければ何もしない。
+//! `JW_FUZZ_JWC=jwc の実行ファイル` なら、jwc で作った実行ファイルとも比べる。`JW_FUZZ_DUMP=フォルダ` なら、比べたプログラムを書き出す。clang がなければ何もしない。
 
 use std::process::Command;
 
@@ -57,7 +57,7 @@ fn S mk(i64 n) { S { b: own P { x: n }, n: n, ps: [own P { x: n + 1 }, own P { x
 
 /// main の始めに借りて、あとで使う ref（リストの要素・メソッドが返す ref）。(宣言, 使う文)。
 /// 辞書の値のメソッドはまだ実行ファイルに書き出せないので使わない
-const REFS: [(&str, &str); 8] = [
+const REFS: [(&str, &str); 11] = [
     ("let e0 = ref ss[0];", "print(e0.n, e0.b.x);"),
     ("let e1 = ref ss[1].b;", "print(e1.x);"),
     ("let e2 = ref ss[0].n;", "print(*e2);"),
@@ -66,6 +66,9 @@ const REFS: [(&str, &str); 8] = [
     ("let e5 = ss[1].nref();", "print(*e5);"),
     ("let e6 = ref ss[0].ps;", "print(e6.len());"),
     ("let e7 = ref mut ss[0];", "print(e7.n);"),
+    ("let e8 = ref ns[0];", "print(*e8);"),
+    ("let e9 = ref s0.b;", "print(e9.x);"),
+    ("let e10 = ref s0;", "print(e10.n);"),
 ];
 
 /// s（S の場所。写しのことも本物のこともある）について、1 つの文を作る。`muts` はリスト ss と辞書 m を書き換えてよいか、
@@ -75,7 +78,9 @@ fn action(r: &mut Rng, s: &str, muts: bool, refs: &[usize], k: usize) -> String 
     // 取り出す文・必ずダングリングになる文（たいていエラーで止まる）は 8 回に 1 回。ほかは借りる・読む・書き換える
     const RISKY: [usize; 8] = [4, 5, 6, 7, 9, 12, 23, 24];
     const SAFE: [usize; 17] = [0, 1, 2, 3, 8, 10, 11, 13, 14, 15, 19, 20, 21, 22, 25, 26, 27];
-    const MUTS: [usize; 11] = [16, 17, 18, 28, 29, 30, 31, 32, 33, 34, 35];
+    // 仕様（spec の 7.1・7.2）で ref を無効にする操作をすべて入れる: 要素が動く（push・pop・insert・remove・drain・sort・sort_by・reverse）、
+    // リストが解放される（再代入・drop・スレッドへ送る）、own が解放される（再代入・drop）。無効にしない操作（ムーブ・要素への代入）も入れる
+    const MUTS: [usize; 19] = [16, 17, 18, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43];
     let which = if r.below(8) == 0 {
         RISKY[r.below(RISKY.len())]
     } else if muts && r.below(3) == 0 {
@@ -124,7 +129,15 @@ fn action(r: &mut Rng, s: &str, muts: bool, refs: &[usize], k: usize) -> String 
         32 => format!("ss[0] = mk({});", 300 + k),
         33 => "ss.remove(0);".to_string(),
         34 => format!("ss.insert(0, mk({}));", 300 + k),
-        _ => "ss.reverse();".to_string(),
+        35 => "ss.reverse();".to_string(),
+        36 => format!("for d{k} in ss.drain() {{ print(d{k}.n); }}"),
+        37 => format!("ss = [mk({})];", 400 + k),
+        38 => "drop(ss);".to_string(),
+        39 => format!("let mv{k} = ss; print(mv{k}.len());"),
+        40 => format!("let tk{k} = spawn(() -> ss.len()); print(tk{k}.join());"),
+        41 => "ns.sort();".to_string(),
+        42 => format!("s0 = mk({});", 400 + k),
+        _ => "drop(s0);".to_string(),
     }
 }
 
@@ -136,7 +149,7 @@ fn body(r: &mut Rng, s: &str, muts: bool, refs: &[usize], base: usize) -> String
 fn program(seed: u64) -> String {
     let mut r = Rng::new(seed);
     let mut out = String::from(HEAD);
-    out.push_str("fn main() {\n    let S[] mut ss = [mk(1), mk(10)];\n    let S[str] mut m = [\"a\": mk(30)];\n    let s0 = mk(20);\n");
+    out.push_str("fn main() {\n    let S[] mut ss = [mk(1), mk(10)];\n    let S[str] mut m = [\"a\": mk(30)];\n    let mut s0 = mk(20);\n    let i64[] mut ns = [3, 1, 2];\n");
     let mut refs: Vec<usize> = Vec::new();
     for _ in 0..r.below(4) {
         let i = r.below(REFS.len());
@@ -241,6 +254,11 @@ fn interp_and_executables_agree_on_generated_programs() {
             Ok(None) => {}
             Ok(Some(Ok(kind))) => {
                 ran += 1;
+                // JW_FUZZ_DUMP=フォルダ なら、比べたプログラムを書き出す（どの部品が実際に走ったかを見るため）
+                if let Ok(d) = std::env::var("JW_FUZZ_DUMP") {
+                    let _ = std::fs::create_dir_all(&d);
+                    let _ = std::fs::write(std::path::Path::new(&d).join(format!("s{}.jw", seed)), &src);
+                }
                 *kinds.entry(kind).or_insert(0) += 1;
             }
             Ok(Some(Err(e))) => failed.push(format!("種 {}:\n{}\n{}", seed, src, e)),
