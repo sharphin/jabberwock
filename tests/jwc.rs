@@ -251,7 +251,7 @@ fn ast_with_modules() {
     for n in ["ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod"] {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));
-        same_ir_raw(&dir.join(format!("{}.jw", n)));
+        same_irs(&dir.join(format!("{}.jw", n)));
     }
 }
 
@@ -265,14 +265,19 @@ fn same_typed(path: &Path) {
     assert_eq!(run_jwc(&["--typed", name]), want, "{}", name);
 }
 
-/// 解析の前の IR（`--ir-raw`）が Rust 版と同じか
-fn same_ir_raw(path: &Path) {
+/// IR（`--ir-raw` は解析の前、`--ir` は検査を消す解析のあと）が Rust 版と同じか
+fn same_irs(path: &Path) {
+    same_ir(path, false);
+    same_ir(path, true);
+}
+
+fn same_ir(path: &Path, analyze: bool) {
     let src = std::fs::read_to_string(path).unwrap();
     let name = path.to_str().unwrap();
     let dir = path.parent().unwrap().to_path_buf();
     let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
-    let want = jabberwock::ir_dump(&src, &read, name, false);
-    let got = run_jwc(&["--ir-raw", name]);
+    let want = jabberwock::ir_dump(&src, &read, name, analyze);
+    let got = run_jwc(&[if analyze { "--ir" } else { "--ir-raw" }, name]);
     assert_eq!(got.strip_suffix('\n').unwrap_or(&got), want.strip_suffix('\n').unwrap_or(&want), "{}", name);
 }
 
@@ -284,7 +289,7 @@ fn typed_and_ir_of_the_repository_files() {
     for dir in ["examples", "jwc"] {
         for p in jw_files(&root().join(dir)) {
             same_typed(&p);
-            same_ir_raw(&p);
+            same_irs(&p);
         }
     }
 }
@@ -303,6 +308,6 @@ fn ast_typed_and_ir_of_the_test_programs() {
         std::fs::write(&p, c).unwrap();
         same_ast(&p);
         same_typed(&p);
-        same_ir_raw(&p);
+        same_irs(&p);
     }
 }
