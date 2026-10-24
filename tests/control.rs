@@ -92,6 +92,38 @@ fn for_else_runs_only_when_the_body_never_ran() {
 }
 
 #[test]
+fn for_else_with_break_in_the_body_warns() {
+    // Python の for-else と読み違えやすいので、本体に break があれば警告（実行は止めない）
+    let o = ok("fn main() {
+    for x in [1, 0, 2] {
+        if x == 0 {
+            break;
+        }
+    } else {
+        print(\"empty\");
+    }
+    print(\"done\");
+}");
+    assert_eq!(o.output, "done\n");
+    assert_eq!(o.warnings.len(), 1);
+    assert!(o.warnings[0].title.contains("1 回も回らなかったとき"), "{}", o.warnings[0].title);
+    // 内側のループの break・else のない for は警告しない
+    let o = ok("fn main() {
+    for i in range(2) {
+        while true {
+            break;
+        }
+    } else {
+        print(\"empty\");
+    }
+    for i in range(2) {
+        break;
+    }
+}");
+    assert!(o.warnings.is_empty(), "unexpected warning: {}", o.warnings[0].title);
+}
+
+#[test]
 fn nested_loops_break_only_the_inner_one() {
     let o = out("
     for i in range(3) {
