@@ -11,6 +11,7 @@ jabberwock --ll hello.jw               # 書き出した LLVM IR を見るだけ
 
 - 最適化は `-O2`。clang は `PATH` の `clang` を使う。別のものは環境変数 `JW_CLANG` で指定する（例 `JW_CLANG=C:\LLVM\bin\clang.exe`）。
 - まだ書き出せない書き方があると、理由を出して止まる（インタプリタでは動く）。
+- GitHub Actions（`.github/workflows/test.yml`）が main への push ごとに、Linux と Windows で全テストを実行ファイルとの突き合わせ（`JW_NATIVE=1`）つきで走らせる。Windows は公式の LLVM と Visual Studio（下の B）の組み合わせで確かめている（A の llvm-mingw はまだ確かめていない）。
 
 ## Windows で clang を入れる
 
