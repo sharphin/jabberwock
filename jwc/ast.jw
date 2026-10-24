@@ -24,6 +24,8 @@ pub enum TypeKind {
 pub struct Expr {
     ExprKind kind;
     i64 span;
+    // 式の番号（`number` がプログラム全体で 1 から振る。型検査の記録はこの番号で引く）
+    i64 id;
 }
 
 pub enum ExprKind {
@@ -175,11 +177,13 @@ pub struct Program {
     str[] consts;
     // 関数・メソッドの引数にその場で書いたクロージャ（ムーブする外の変数を借りて取り込む）の位置
     i64[] borrow_lambdas;
+    // 式の数（`number` が書く。番号は 1〜nodes）
+    i64 nodes;
 }
 
 // ---------------------------------------------------------------- 作る
 
-pub fn Expr mk(ExprKind k, i64 s) { Expr { kind: k, span: s } }
+pub fn Expr mk(ExprKind k, i64 s) { Expr { kind: k, span: s, id: 0 } }
 
 pub fn TypeExpr ty_name(str n, i64 s) { TypeExpr { kind: TypeKind.Name(n), span: s } }
 
@@ -314,7 +318,131 @@ pub fn Expr clone_expr(ref Expr e) {
         }
         case MethodCall(r, n, xs) -> ExprKind.MethodCall(own clone_expr(r), n, own clone_exprs(xs));
     };
-    Expr { kind: k, span: e.span }
+    Expr { kind: k, span: e.span, id: 0 }
+}
+
+// ---------------------------------------------------------------- 番号を振る
+
+/// 式に番号を振ったプログラムを作る（前から順に 1, 2, ...）
+pub fn Program number(Program p) {
+    let mut n = Numberer { next: 0 };
+    let mut q = p;
+    let FnDef[] mut fns = [];
+    for f in q.fns.drain() {
+        let mut g = f;
+        g.body = n.block(g.body);
+        fns.push(g);
+    }
+    let InterfaceDef[] mut ifs = [];
+    for i in q.interfaces.drain() {
+        let mut j = i;
+        let FnDef[] mut ms = [];
+        for m in j.methods.drain() {
+            let mut g = m;
+            g.body = n.block(g.body);
+            ms.push(g);
+        }
+        j.methods = ms;
+        ifs.push(j);
+    }
+    q.fns = fns;
+    q.interfaces = ifs;
+    q.nodes = n.next;
+    q
+}
+
+struct Numberer {
+    i64 next;
+
+    fn mut Expr[] exprs(ref Expr[] xs) {
+        let Expr[] mut out = [];
+        for x in xs { out.push(expr(x)); }
+        out
+    }
+
+    fn mut Block block(ref Block b) {
+        let Stmt[] mut ss = [];
+        for s in b.stmts { ss.push(stmt(s)); }
+        Block { stmts: ss, tail: b.tail, end: b.end }
+    }
+
+    fn mut Stmt stmt(ref Stmt s) {
+        match ref s {
+            case Let(name, has_ty, t, m, sp, init) -> Stmt.Let(name, has_ty, own clone_type(t), m, sp, own expr(init));
+            case Assign(t, v, sp) -> Stmt.Assign(own expr(t), own expr(v), sp);
+            case Ex(e) -> Stmt.Ex(own expr(e));
+            case While(c, b) -> Stmt.While(own expr(c), own block(b));
+            case Loop(b) -> Stmt.Loop(own block(b));
+            case For(var, range, rs, b, has_els, els) ->
+                Stmt.For(var, own exprs(range), rs, own block(b), has_els, own block(els));
+            case ForEach(has_key, key, ks, var, vs, iter, b, has_els, els) ->
+                Stmt.ForEach(has_key, key, ks, var, vs, own expr(iter), own block(b), has_els, own block(els));
+            case Break(sp) -> Stmt.Break(sp);
+            case Continue(sp) -> Stmt.Continue(sp);
+            case Return(has_value, v, sp) -> Stmt.Return(has_value, own expr(v), sp);
+        }
+    }
+
+    fn mut Expr expr(ref Expr e) {
+        next += 1;
+        let me = next;
+        let k = match ref e.kind {
+            case Int(n) -> ExprKind.Int(n);
+            case Float(v) -> ExprKind.Float(v);
+            case Bool(b) -> ExprKind.Bool(b);
+            case Str(s) -> ExprKind.Str(s);
+            case Unit -> ExprKind.Unit;
+            case Var(n) -> ExprKind.Var(n);
+            case Cast(x, t) -> ExprKind.Cast(own expr(x), own clone_type(t));
+            case Try(x) -> ExprKind.Try(own expr(x));
+            case Variant(en, vn, xs) -> ExprKind.Variant(en, vn, own exprs(xs));
+            case Own(x) -> ExprKind.Own(own expr(x));
+            case Ref(x, m) -> ExprKind.Ref(own expr(x), m);
+            case Deref(x) -> ExprKind.Deref(own expr(x));
+            case Field(x, n) -> ExprKind.Field(own expr(x), n);
+            case StructLit(n, inits) -> {
+                let FieldInit[] mut out = [];
+                for i in inits { out.push(FieldInit { name: i.name, span: i.span, value: expr(i.value) }); }
+                ExprKind.StructLit(n, own out)
+            }
+            case If(c, t, has_els, els) -> ExprKind.If(own expr(c), own block(t), has_els, own block(els));
+            case Match(sc, arms, has_default, d) -> {
+                let MatchArm[] mut out = [];
+                for a in arms {
+                    let Pat[] mut ps = [];
+                    for p in a.pats { ps.push(clone_pat(p)); }
+                    let i64[] mut sps = [];
+                    for s in a.spans { sps.push(s); }
+                    out.push(MatchArm { pats: ps, spans: sps, body: block(a.body) });
+                }
+                ExprKind.Match(own expr(sc), own out, has_default, own block(d))
+            }
+            case Unary(op, x) -> ExprKind.Unary(op, own expr(x));
+            case Binary(op, l, r) -> ExprKind.Binary(op, own expr(l), own expr(r));
+            case Call(n, xs) -> ExprKind.Call(n, own exprs(xs));
+            case Index(b, i) -> ExprKind.Index(own expr(b), own expr(i));
+            case ArrayLit(xs) -> ExprKind.ArrayLit(own exprs(xs));
+            case MapLit(kvs) -> ExprKind.MapLit(own exprs(kvs));
+            case ArrayRepeat(x, n) -> ExprKind.ArrayRepeat(own expr(x), n);
+            case Interp(parts) -> {
+                let InterpPart[] mut out = [];
+                for p in parts {
+                    match ref p {
+                        case Lit(s) -> out.push(InterpPart.Lit(s));
+                        case Code(x) -> out.push(InterpPart.Code(own expr(x)));
+                    }
+                }
+                ExprKind.Interp(own out)
+            }
+            case Lambda(l) -> {
+                let LambdaParam[] mut ps = [];
+                for p in l.params { ps.push(LambdaParam { has_ty: p.has_ty, ty: clone_type(p.ty), name: p.name, span: p.span }); }
+                ExprKind.Lambda(own Lambda { params: ps, body: block(l.body) })
+            }
+            case MethodCall(r, n, xs) -> ExprKind.MethodCall(own expr(r), n, own exprs(xs));
+        };
+        Expr { kind: k, span: e.span, id: me }
+    }
 }
 
 // ---------------------------------------------------------------- 式の中の変数（Rust 版の walk_expr と同じ順）

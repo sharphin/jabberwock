@@ -80,6 +80,8 @@
   `check_ptr` は (スロット, 道筋) を返し、`at` / `at_mut` で中の値をたどる。
 - `ref T` の引数に `ref` なしで場所を渡すと、types.rs の `auto_borrow` が `Expr.borrow` を立てる。interp（`eval` / `eval_borrow`）と
   analyze（`expr`）はそれを `ref e` と同じに扱う（`make_ref` / `ref_of`）。関数とメソッドの引数だけ（enum の中身・構造体のフィールドは対象外）。
+  場所でない式（一時的な値）にも立てる。interp は `auto_ref` でスロットに置いて借り、呼び出しを包む `with_lent` が終わったら解放する。
+  lower は一時的な変数に置いて `Rvalue::Ref` し、呼び出しのあとで drop（`lent` / `drop_lent`）。analyze は値として評価して事実なし。
 - 静的解析の根拠: own 変数 `a` のスロットを解放できるのは `a` という名前を使う操作（再代入・ムーブ・`drop`・スコープ終了）だけ。呼び出された関数は呼び出し元の変数に触れない。
 - 解析は安全側。分からないものは `Check::Required`（実行時検査）。デバッグビルドでは消した検査も `debug_assert!` で確かめる。
 - 解析とインタプリタの「評価順」と「ムーブする／しない（`eval` と `eval_borrow`）」は必ず一致させる。

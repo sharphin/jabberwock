@@ -145,7 +145,7 @@ pub struct Loader {
         }
         let mut all = ast.Program {
             structs: [], enums: [], interfaces: [], fns: [], uses: [], use_spans: [], public: [], modules: mods,
-            consts: [], borrow_lambdas: [],
+            consts: [], borrow_lambdas: [], nodes: 0,
         };
         for p in parts.drain() {
             let mut q = p;
@@ -275,7 +275,7 @@ fn ast.Program qualify(ast.Program p, str module, ref Info info) {
     for x in p.borrow_lambdas { bl.push(x); }
     ast.Program {
         structs: structs, enums: enums, interfaces: ifaces, fns: fns, uses: [], use_spans: [], public: strs(p.public),
-        modules: [], consts: consts, borrow_lambdas: bl,
+        modules: [], consts: consts, borrow_lambdas: bl, nodes: 0,
     }
 }
 

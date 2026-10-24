@@ -146,6 +146,23 @@ pub fn ast_dump(src: &str, read: Reader, path: &str) -> String {
     }
 }
 
+/// `jabberwock --typed`: 型検査の結果つきの構文木（jwc の型検査との突き合わせ用）。警告は前に、エラーなら診断の表示
+pub fn typed_dump(src: &str, read: Reader, path: &str) -> String {
+    let (r, files) = parse(src, read);
+    let prog = match r {
+        Ok(p) => p,
+        Err(d) => return render(&d, path, &files),
+    };
+    match types::check_with_info(&prog) {
+        Ok((warnings, info)) => {
+            let mut out: String = warnings.iter().map(|w| render(w, path, &files)).collect();
+            out += &astdump::dump_typed(&prog, &info);
+            out
+        }
+        Err(d) => render(&d, path, &files),
+    }
+}
+
 fn add_prelude(mut prog: ast::Program) -> ast::Program {
     let prelude = parser::Parser::new(lexer::lex(PRELUDE).expect("prelude lexes"))
         .parse_program()

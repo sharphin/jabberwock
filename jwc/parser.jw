@@ -385,7 +385,7 @@ struct Parser {
         }
         Ok(ast.Program {
             structs: structs, enums: enums, interfaces: interfaces, fns: fns, uses: uses, use_spans: use_spans,
-            public: public, modules: [], consts: cnames, borrow_lambdas: borrow_lambdas.drain(),
+            public: public, modules: [], consts: cnames, borrow_lambdas: borrow_lambdas.drain(), nodes: 0,
         })
     }
 

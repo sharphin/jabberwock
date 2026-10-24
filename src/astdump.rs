@@ -1,9 +1,12 @@
 //! 構文木を文字にする（`jabberwock --ast`）。jwc の構文解析と突き合わせるための形で、jwc/astdump.jw と同じものを出す。
 //!
 //! 1 行に 1 つの節。子は 2 つ下げて書く。位置は `@ファイル:行:列:長さ`。型は 1 行にまとめる（`list(own(i64@..)@..)@..`）。
+//! `--typed`（`dump_typed`）は、型検査が決めたこと（式の型・整数の変換の印・型の引数など）を行の後ろに足し、
+//! 変数の型・関数の戻り値・構造体と enum の型を最後に並べる（jwc の型検査との突き合わせ用）。
 
 use crate::ast::*;
 use crate::diag::Span;
+use crate::types::{Ty, TypeInfo};
 
 fn sp(s: Span) -> String {
     format!("@{}:{}:{}:{}", s.file, s.line, s.col, s.len)
@@ -43,11 +46,16 @@ pub fn ty(t: &TypeExpr) -> String {
     format!("{}{}", inner, sp(t.span))
 }
 
-struct Out {
+struct Out<'a> {
     lines: Vec<String>,
+    info: Option<&'a TypeInfo>,
 }
 
-impl Out {
+fn tys(ts: &[Ty]) -> String {
+    ts.iter().map(Ty::show).collect::<Vec<_>>().join(", ")
+}
+
+impl<'a> Out<'a> {
     fn line(&mut self, depth: usize, s: String) {
         self.lines.push(format!("{}{}", "  ".repeat(depth), s));
     }
@@ -95,9 +103,10 @@ impl Out {
                     self.block(d + 1, e);
                 }
             }
-            Stmt::ForEach { key, var, var_span, iter, body, els, .. } => {
+            Stmt::ForEach { key, var, var_span, iter, body, els, consume } => {
                 let k = key.as_ref().map(|(k, s)| format!(" key {}{}", k, sp(*s))).unwrap_or_default();
-                self.line(d, format!("foreach{} {}{}", k, var, sp(*var_span)));
+                let c = if self.info.is_some() && consume.get() { " consume" } else { "" };
+                self.line(d, format!("foreach{} {}{}{}", k, var, sp(*var_span), c));
                 self.expr(d + 1, iter);
                 self.block(d + 1, body);
                 if let Some(e) = els {
@@ -133,8 +142,60 @@ impl Out {
         }
     }
 
+    /// 型検査が決めたこと（`--typed` のときだけ）
+    fn typed(&self, e: &Expr) -> String {
+        let Some(info) = self.info else { return String::new() };
+        let mut out = String::new();
+        if let Some(t) = info.ty(e) {
+            out += &format!(" : {}", t.show());
+        }
+        if let Some(t) = e.int.get() {
+            out += &format!(" int={}", t.name());
+        }
+        if e.float.get() {
+            out += " float";
+        }
+        if e.borrow.get() {
+            out += " borrow";
+        }
+        match &e.kind {
+            ExprKind::Variant { copy, .. } => {
+                if let Some(c) = copy.get() {
+                    out += &format!(" copy={}", c);
+                }
+            }
+            ExprKind::ArrayLit(_, seq) => match seq.get() {
+                Seq::Array => {}
+                Seq::List => out += " seq=list",
+                Seq::Map => out += " seq=map",
+            },
+            ExprKind::ArrayRepeat(_, _, list) if list.get() => out += " list",
+            ExprKind::MethodCall(_, _, _, t) => {
+                let t = t.borrow();
+                if let Some(n) = &t.enum_name {
+                    out += &format!(" enum={}", n);
+                }
+                if t.take {
+                    out += " take";
+                }
+            }
+            ExprKind::Lambda(l) => {
+                let b: Vec<String> = l.borrowed.borrow().iter().map(|b| b.to_string()).collect();
+                out += &format!(" caps=[{}] borrowed=[{}] returns={}", l.captures.borrow().join(", "), b.join(", "), l.returns.get());
+            }
+            _ => {}
+        }
+        if let Some(m) = info.targs.get(&(e as *const Expr)) {
+            let mut ks: Vec<&String> = m.keys().collect();
+            ks.sort();
+            let ps: Vec<String> = ks.iter().map(|k| format!("{}={}", k, m[*k].show())).collect();
+            out += &format!(" targs={{{}}}", ps.join(", "));
+        }
+        out
+    }
+
     fn expr(&mut self, d: usize, e: &Expr) {
-        let s = sp(e.span);
+        let s = sp(e.span) + &self.typed(e);
         match &e.kind {
             ExprKind::Int(n) => self.line(d, format!("int {}{}", n, s)),
             ExprKind::Float(x) => self.line(d, format!("float {:?}{}", x, s)),
@@ -311,7 +372,38 @@ impl Out {
 }
 
 pub fn dump(p: &Program) -> String {
-    let mut o = Out { lines: Vec::new() };
+    dump_with(p, None)
+}
+
+/// 型検査の結果つき（`--typed`）
+pub fn dump_typed(p: &Program, info: &TypeInfo) -> String {
+    let mut out = dump_with(p, Some(info));
+    let mut vars: Vec<(&Span, &Ty)> = info.var_ty.iter().collect();
+    vars.sort_by_key(|(s, _)| (s.file, s.line, s.col, s.len));
+    for (s, t) in vars {
+        out += &format!("\nvar{} {}", sp(*s), t.show());
+    }
+    let mut rets: Vec<(&String, &Ty)> = info.fn_ret.iter().collect();
+    rets.sort_by_key(|(n, _)| n.as_str());
+    for (n, t) in rets {
+        out += &format!("\nret {} {}", n, t.show());
+    }
+    let mut ss: Vec<_> = info.structs.iter().collect();
+    ss.sort_by_key(|(n, _)| n.as_str());
+    for (n, (tps, fs)) in ss {
+        out += &format!("\nstructty {}<{}> {}", n, tps.join(", "), tys(fs));
+    }
+    let mut es: Vec<_> = info.enums.iter().collect();
+    es.sort_by_key(|(n, _)| n.as_str());
+    for (n, (tps, vs)) in es {
+        let vs: Vec<String> = vs.iter().map(|(v, fs)| format!("{}({})", v, tys(fs))).collect();
+        out += &format!("\nenumty {}<{}> {}", n, tps.join(", "), vs.join(" "));
+    }
+    out
+}
+
+fn dump_with(p: &Program, info: Option<&TypeInfo>) -> String {
+    let mut o = Out { lines: Vec::new(), info };
     for s in &p.structs {
         o.line(0, format!("struct {}<{}>{}", s.name, s.tparams.join(", "), sp(s.span)));
         for (f, t) in s.fields.iter().zip(&s.field_types) {

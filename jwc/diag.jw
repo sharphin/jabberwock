@@ -41,6 +41,37 @@ pub struct Diag {
     Label[] labels;
     str note;        // 空なら note なし
     bool warning;
+
+    // Rust 版の `Diagnostic` の組み立てと同じ: `diag.make(題).also(位置, 文).at(位置, 文).with_note(文)`
+
+    /// 主な位置
+    fn take Diag at(i64 s, str text) {
+        let mut d = this;
+        d.labels.push(Label { span: s, text: text, primary: true });
+        d
+    }
+
+    /// 補足の位置
+    fn take Diag also(i64 s, str text) {
+        let mut d = this;
+        d.labels.push(Label { span: s, text: text, primary: false });
+        d
+    }
+
+    fn take Diag with_note(str n) {
+        let mut d = this;
+        d.note = n;
+        d
+    }
+}
+
+/// 位置のまだないエラー
+pub fn Diag make(str title) {
+    Diag { title: title, labels: [], note: "", warning: false }
+}
+
+pub fn Diag warn(str title) {
+    Diag { title: title, labels: [], note: "", warning: true }
 }
 
 /// 主な位置が 1 つのエラー

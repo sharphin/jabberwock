@@ -398,3 +398,74 @@ fn main() {
 }");
     assert!(d.labels.iter().any(|l| l.text.contains("ほかのスレッドへ送られた")), "{:?}", d.labels);
 }
+
+// ---------------------------------------------------------------- 一時的な値も自動で借りる
+
+#[test]
+fn ref_params_borrow_temporaries() {
+    let src = "
+struct P { i64 x; (own P)[] kids; }
+fn P mk(i64 x) { P { x: x, kids: [] } }
+fn i64 getx(ref P p) { p.x }
+fn i64 count(ref i64[] a) { a.len() }
+fn i64 next(ref i64 n) { *n + 1 }
+fn bool none(ref Option<i64> o) {
+    match ref o {
+        case Some(x) -> false;
+        case None -> true;
+    }
+}
+fn i64 first<T>(ref T[] a, ref T b) { a.len() }
+fn i64 words(ref str[] a) { a.len() }
+struct Q {
+    i64 y;
+    fn i64 add(ref P p) { y + p.x }
+}
+fn main() {
+    print(getx(mk(3)));
+    print(getx(own mk(4)));
+    print(count([1, 2, 3]));
+    print(next(41));
+    print(none(None));
+    print(none(Some(1)));
+    let q = Q { y: 10 };
+    print(q.add(mk(5)));
+    print(count(\"ab\".bytes().map((b) -> b as i64)));
+    let str[] one = [\"a\"];
+    print(first(one, \"b\"));
+    print(words([\"a\", \"b\"]));
+    let f = (ref P p) -> p.x * 2;
+    print(f(mk(6)));
+    print(getx(mk(getx(mk(8)))));
+}";
+    assert_eq!(ok(src), "3\n4\n3\n42\ntrue\nfalse\n15\n2\n1\n2\n12\n8\n");
+}
+
+#[test]
+fn borrowed_temporaries_die_after_the_call() {
+    // 呼び出しが終わると一時的な値は捨てられる。ref を返して持ち出すと、使うときに見つかる
+    let d = dangling("
+struct P { i64 x; }
+fn ref P same(ref P p) { p }
+fn main() {
+    let r = same(P { x: 9 });
+    print(r.x);
+}");
+    assert!(d.labels.iter().any(|l| l.text.contains("呼び出しに使い終わった一時的な値")), "{:?}", d.labels);
+    // 後ろの引数の `?` で抜けても、借りた一時的な値は解放される（リークしない）
+    let src = "
+struct P { i64 x; }
+fn i64 two(ref P p, i64 n) { p.x + n }
+fn Result<i64, str> bad() { Err(\"no\") }
+fn Result<i64, str> go() {
+    let n = two(P { x: 1 }, bad()?);
+    Ok(n)
+}
+fn main() {
+    match go() {
+        case Ok(n) -> print(n);
+        case Err(e) -> print(e);
+    }
+}";
+    assert_eq!(ok(src), "no\n");
+}

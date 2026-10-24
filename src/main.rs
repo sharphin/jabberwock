@@ -11,6 +11,7 @@ fn main() {
     let mut show_ll = false;
     let mut show_tokens = false;
     let mut show_ast = false;
+    let mut show_typed = false;
     let mut path = None;
     let mut prog_args = Vec::new();
     for a in env::args().skip(1) {
@@ -35,6 +36,7 @@ fn main() {
             "--ll" => show_ll = true,
             "--tokens" => show_tokens = true,
             "--ast" => show_ast = true,
+            "--typed" => show_typed = true,
             _ => path = Some(a),
         }
     }
@@ -62,6 +64,11 @@ fn main() {
 
     if show_ast {
         println!("{}", jabberwock::ast_dump(&src, &read, &path));
+        return;
+    }
+
+    if show_typed {
+        println!("{}", jabberwock::typed_dump(&src, &read, &path));
         return;
     }
 

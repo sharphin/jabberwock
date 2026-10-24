@@ -345,6 +345,8 @@ pub struct Interp {
     input: Arc<Mutex<Box<dyn BufRead + Send>>>,
     /// `args()` が返すコマンドライン引数
     args: Vec<String>,
+    /// `ref T` の引数に渡した一時的な値のスロット。呼び出しが終わったら解放する（`with_lent`）
+    lent: Vec<usize>,
 }
 
 impl Interp {
@@ -362,6 +364,7 @@ impl Interp {
             ref_checks_elided: 0,
             input: Arc::new(Mutex::new(Box::new(std::io::empty()))),
             args: Vec::new(),
+            lent: Vec::new(),
         }
     }
 
@@ -1698,7 +1701,7 @@ impl Interp {
     /// 戻り値の bool は「新しく作られた一時値か」（own なら使い終わりで解放が必要）。
     fn eval_borrow(&mut self, e: &Expr) -> R<(Value, bool)> {
         if e.borrow.get() {
-            return Ok((self.make_ref(e, false, e.span)?, true));
+            return Ok((self.auto_ref(e)?, true));
         }
         match &e.kind {
             ExprKind::Var(name) => {
@@ -1915,6 +1918,41 @@ impl Interp {
     }
 
     /// `ref inner` / `ref mut inner`。own なら先を、ref なら同じ先を借りる。それ以外の値は、その場所そのものを借りる
+    /// 型検査が自動で借りると決めた引数。場所なら `ref e` と同じ。一時的な値はスロットに置いて借り、
+    /// 呼び出しが終わったら解放する（`with_lent`）
+    #[inline(never)]
+    fn auto_ref(&mut self, e: &Expr) -> R<Value> {
+        if is_place(e) {
+            return self.make_ref(e, false, e.span);
+        }
+        let v = self.eval_kind(e)?;
+        let slot = match convert(e, v) {
+            Value::Own(slot) => slot,
+            v => self.heap.alloc(v),
+        };
+        self.lent.push(slot);
+        Ok(Value::Ref(RefVal {
+            slot,
+            generation: self.heap.slots[slot].generation,
+            path: Vec::new(),
+            borrowed_at: e.span,
+            what: "一時的な値".to_string(),
+            mutable: false,
+        }))
+    }
+
+    /// 呼び出し `f` のあいだに引数として借りた一時的な値を、終わったら（途中で抜けても）解放する
+    #[inline(never)]
+    fn with_lent(&mut self, span: Span, f: impl FnOnce(&mut Self) -> R<Value>) -> R<Value> {
+        let mark = self.lent.len();
+        let r = f(self);
+        while self.lent.len() > mark {
+            let slot = self.lent.pop().expect("checked above");
+            self.free(slot, span, "呼び出しに使い終わった一時的な値");
+        }
+        r
+    }
+
     fn make_ref(&mut self, inner: &Expr, mutable: bool, span: Span) -> R<Value> {
         if !is_place(inner) {
             return Err(Diagnostic::new("借用できない式です")
@@ -1964,8 +2002,8 @@ impl Interp {
     /// 式を評価する。整数なら、型検査が決めた型（`Expr.int`）に変換して返す
     fn eval(&mut self, e: &Expr) -> R<Value> {
         if e.borrow.get() {
-            // `ref` の引数に `ref` なしで渡した場所は、自動で借りる（型検査が決めた）
-            return self.make_ref(e, false, e.span);
+            // `ref` の引数に `ref` なしで渡した式は、自動で借りる（型検査が決めた）
+            return self.auto_ref(e);
         }
         let v = self.eval_kind(e)?;
         Ok(convert(e, v))
@@ -2119,8 +2157,10 @@ impl Interp {
                 let rv = self.eval(r)?;
                 binary(*op, lv, rv, e.span)
             }
-            ExprKind::Call(name, args) => self.eval_call(name, args, e.span),
-            ExprKind::MethodCall(recv, name, args, owner) => self.eval_method(recv, name, args, owner, e.span),
+            ExprKind::Call(name, args) => self.with_lent(e.span, |me| me.eval_call(name, args, e.span)),
+            ExprKind::MethodCall(recv, name, args, owner) => {
+                self.with_lent(e.span, |me| me.eval_method(recv, name, args, owner, e.span))
+            }
             ExprKind::Index(..) => {
                 let (v, _) = self.eval_borrow(e)?;
                 if self.has_own(&v) || v.moves() {

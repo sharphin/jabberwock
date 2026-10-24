@@ -7,6 +7,8 @@ use diag;
 use lexer;
 use modules;
 use parser;
+use ty;
+use typeck;
 
 // どのプログラムにも最初からある定義（Rust 版の lib.rs の PRELUDE と同じ文字）
 const PRELUDE = "enum Option<T> {{\n" +

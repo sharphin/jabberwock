@@ -741,6 +741,7 @@ impl<'a> Checker<'a> {
                     }
                     _ => None,
                 };
+                let hint = if auto_ref { hint.map(|h| arg_hint(a, h)) } else { hint };
                 let t = self.expr_h(a, hint.as_ref())?;
                 if t == Ty::Unit && !matches!(a.kind, ExprKind::Unit) {
                     return Err(Diagnostic::new("値のない式です").primary(a.span, "これは値を返さない"));
@@ -1222,7 +1223,7 @@ impl<'a> Checker<'a> {
             return Err(arity_error(name, ps.len(), args.len(), span));
         }
         for (a, p) in args.iter().zip(&ps) {
-            let got = self.expr_h(a, Some(p))?;
+            let got = self.expr_h(a, Some(&arg_hint(a, p.clone())))?;
             let got = self.auto_borrow(a, got, p)?;
             if !self.fits(&got, p) {
                 return Err(mismatch(p, &got, a.span));
@@ -2319,7 +2320,7 @@ impl<'a> Checker<'a> {
                 .require(span, format!("書き換えるメソッド `{}` を呼ぼうとした", name).as_str())?;
         }
         for (a, t) in args.iter().zip(&m.params) {
-            let got = self.expr_h(a, Some(t))?;
+            let got = self.expr_h(a, Some(&arg_hint(a, t.clone())))?;
             let got = self.auto_borrow(a, got, t)?;
             if !self.fits(&got, t) {
                 return Err(mismatch(t, &got, a.span));
@@ -2657,10 +2658,22 @@ impl<'a> Checker<'a> {
 
     /// 場所 `e` に書き込めるか
     /// 引数 `a`（型 `t`）を、引数の型 `want` が `ref T` なら自動で借りる（`ref a` と書いたのと同じ）。
-    /// 借りるのは場所（変数・フィールド・添字・`*p`）だけ。`ref mut` は呼ぶ側に書いてもらう
+    /// 場所でない式（一時的な値）も借りる。値は呼び出しが終わるまで置いておき、終わったら捨てる。
+    /// `ref mut` は呼ぶ側に書いてもらう
     fn auto_borrow(&mut self, a: &Expr, t: Ty, want: &Ty) -> R<Ty> {
-        if !matches!(want, Ty::Ref(_, false)) || matches!(t, Ty::Ref(..)) || !is_place(a) {
+        if !matches!(want, Ty::Ref(_, false)) || matches!(t, Ty::Ref(..)) {
             return Ok(t);
+        }
+        if !is_place(a) {
+            if matches!(t, Ty::Unit | Ty::Never | Ty::Fn(..)) {
+                return Ok(t);
+            }
+            a.borrow.set(true);
+            let target = match t {
+                Ty::Own(x) => *x,
+                t => t,
+            };
+            return Ok(Ty::Ref(Box::new(target), false));
         }
         let target = match t.pointee() {
             Some(x) => x.clone(),
@@ -2919,4 +2932,16 @@ fn no_field(def: &StructDef, name: &str, span: Span) -> Diagnostic {
 fn arity_error(name: &str, want: usize, got: usize, span: Span) -> Diagnostic {
     Diagnostic::new(format!("`{}` の引数の数が違います", name))
         .primary(span, format!("{} 個必要ですが {} 個渡されました", want, got))
+}
+
+/// `ref T` の引数に書いた値の式（`[1, 2]`・`None`・`5` など）は、`T` を入れる先として調べる（あとで自動で借りる）
+fn arg_hint(a: &Expr, p: Ty) -> Ty {
+    let literal = matches!(
+        a.kind,
+        ExprKind::ArrayLit(..) | ExprKind::MapLit(..) | ExprKind::ArrayRepeat(..) | ExprKind::Variant { .. } | ExprKind::StructLit(..)
+    ) || is_const_tree(a);
+    match p {
+        Ty::Ref(x, false) if literal => *x,
+        p => p,
+    }
 }

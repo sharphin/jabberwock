@@ -329,7 +329,11 @@ impl<'a> FnAnalyzer<'a> {
     /// `borrow` はインタプリタの `eval_borrow` に当たる（変数を読んでもムーブしない）。
     fn expr(&mut self, e: &Expr, borrow: bool) -> Option<Fact> {
         if e.borrow.get() {
-            // 型検査が自動で借りると決めた引数（`ref e` と同じ）
+            // 型検査が自動で借りると決めた引数（`ref e` と同じ）。一時的な値は値として評価して借りる
+            if !is_place(e) {
+                self.expr_kind(e, false);
+                return None;
+            }
             return self.ref_of(e);
         }
         self.expr_kind(e, borrow)

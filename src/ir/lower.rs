@@ -143,6 +143,8 @@ struct FnLower<'a, 'p> {
     spawning: bool,
     /// 値として使う if / match の中にいる深さ（中の return は、まだ使っていない一時的な値も drop する）
     in_value: usize,
+    /// `ref T` の引数に渡した一時的な値の変数。呼び出しのあとで drop する（interp の `with_lent`）
+    lent: Vec<Local>,
     locals: Vec<LocalDecl>,
     blocks: Vec<Block>,
     cur: Bb,
@@ -170,6 +172,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             captures: Vec::new(),
             spawning: false,
             in_value: 0,
+            lent: Vec::new(),
             locals: Vec::new(),
             blocks: vec![Block { insts: Vec::new(), term: Term::Unreachable }],
             cur: 0,
@@ -1203,6 +1206,31 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
     /// 値として評価する（interp の `eval`）。ムーブする値の変数はムーブする
     fn expr(&mut self, e: &Expr) -> L<Operand> {
+        if e.borrow.get() && !is_place(e) {
+            // 一時的な値は変数に置いて借りる（interp の `auto_ref`）。呼び出しが終わったら drop する
+            let v = self.converted(e)?;
+            let t = match v {
+                Operand::Move(t, _) if self.locals[t].name.is_empty() => t,
+                v => {
+                    let ty = match &v {
+                        Operand::Const(Const::Int(_, t)) => Ty::Int(*t),
+                        Operand::Const(Const::Float(_)) => Ty::Float,
+                        _ => self.ty(e),
+                    };
+                    let t = self.temp(ty, e.span);
+                    self.assign(t, Rvalue::Use(v), e.span);
+                    t
+                }
+            };
+            self.lent.push(t);
+            let (follows, ty) = match self.locals[t].ty.clone() {
+                Ty::Own(x) => (true, Ty::Ref(x, false)),
+                t => (false, Ty::Ref(Box::new(t), false)),
+            };
+            let place = Place::local(t, e.span);
+            let r = Rvalue::Ref { place, mutable: false, follows, what: "一時的な値".to_string(), span: e.span };
+            return Ok(self.temp_of(ty, r, e.span));
+        }
         if e.borrow.get() {
             // `ref T` の引数に `ref` なしで渡した場所は自動で借りる（変換はしない）
             let place = self.place(e)?;
@@ -1213,6 +1241,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
             let r = Rvalue::Ref { place, mutable: false, follows, what: describe(e), span: e.span };
             return Ok(self.temp_of(ty, r, e.span));
         }
+        self.converted(e)
+    }
+
+    /// 式の値に、型検査がつけた変換の印（interp の `convert`）を当てる
+    fn converted(&mut self, e: &Expr) -> L<Operand> {
         let v = self.expr_kind(e)?;
         // 型検査がつけた変換の印（interp の `convert`）
         let target = if e.float.get() {
@@ -1353,8 +1386,18 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 let rv = self.expr(r)?;
                 self.temp_of(ty, Rvalue::Bin(*op, lv, rv, sp), sp)
             }
-            ExprKind::Call(name, args) => return self.call(e, name, args, ty),
-            ExprKind::MethodCall(recv, name, args, _) => return self.method(e, recv, name, args, ty),
+            ExprKind::Call(name, args) => {
+                let mark = self.lent.len();
+                let r = self.call(e, name, args, ty)?;
+                self.drop_lent(mark, sp);
+                return Ok(r);
+            }
+            ExprKind::MethodCall(recv, name, args, _) => {
+                let mark = self.lent.len();
+                let r = self.method(e, recv, name, args, ty)?;
+                self.drop_lent(mark, sp);
+                return Ok(r);
+            }
             ExprKind::Interp(parts) => {
                 let mut strs = Vec::new();
                 for p in parts {
@@ -1685,6 +1728,15 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 Ok(r)
             }
             _ => Err(format!("{} のメソッド", inner.show())),
+        }
+    }
+
+    /// 呼び出しのために借りた一時的な値を drop する（interp の `with_lent`）
+    fn drop_lent(&mut self, mark: usize, span: Span) {
+        while self.lent.len() > mark {
+            let t = self.lent.pop().expect("checked above");
+            let why = "呼び出しに使い終わった一時的な値".to_string();
+            self.emit(Inst::Drop { local: t, span, why });
         }
     }
 
