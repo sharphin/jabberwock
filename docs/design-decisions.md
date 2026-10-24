@@ -511,7 +511,12 @@ let x = pick(true, 1, 2);
   `Box<ref P>` に本物の ref を入れたものは今まで通り取り出せる。
 - 組み込みの操作は、取り出す操作（pop・remove・drain・sort・辞書の remove）はどれも書き換えなので、読むだけの写しには型検査がエラーにする。
   `filter` と辞書の `get` はコピーできない要素には使えない。`map` の要素と `for (k, v) in m` の v は ref なので、取り出しにならない。
-- 将来の課題: interp と実行ファイルの差分を自動で探す（ランダムにプログラムを作って両方で動かし、出力とエラーを比べる）。突き合わせの土台（`same_as_interp`・`JW_NATIVE=1`）はある。
+- interp と実行ファイルの差分を自動で探す（tests/fuzz.rs）: 種から小さなプログラムを作り（写しの印の表の部品: for の要素・クロージャの取り込み・
+  `Box<T>`・match ref・for / map・リストの pop / push / sort_by と、取り出す・借りる・読む文）、interp と実行ファイルで出力とエラーを全文比べる
+  （デバッグビルドなら IR も）。取り出す文は 8 回に 1 回にして、最初の文で止まるものばかりにならないようにした。
+  ふだんの `cargo test` は 40 本。`JW_FUZZ=本数`・`JW_FUZZ_SEED=始めの種`、`JW_FUZZ_JWC=jwc の実行ファイル` で jwc で作った実行ファイルとも比べる。
+  2026-10-24 の時点で、2000 本（interp・IR・実行ファイル）と 300 本（jwc も）でずれなし。型の引数の穴と、印が残りすぎる穴を戻すと、
+  どちらも 200 本以内で見つかった。
 - 写しの印（`RefVal.view`）の一覧（3 回目の確認。tests/native.rs の `view_mark_is_kept_or_dropped_where_it_should_be`）:
   付くのは `view_of` が own を ref にするときだけ（for の構造体の要素の中・クロージャの取り込み）。写しの写しは印を引き継ぐ。
   消えるのは ref の型の名前で受け取るとき: `ref s.b` と自動で借りる引数（`make_ref`）・メソッドの this・`match ref` で受けた中身・

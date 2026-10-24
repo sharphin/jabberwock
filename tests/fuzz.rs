@@ -1,0 +1,197 @@
+//! 差分テスト（小さなファジング）。種から小さなプログラムを作り、interp と実行ファイルで出力とエラーを全文比べる
+//! （デバッグビルドでは interp が IR でも動かして突き合わせるので、3 つを比べることになる）。
+//! 作るプログラムは、読むだけの写し（for の要素・クロージャの取り込み）・ジェネリクス（`Box<T>`）・match ref・
+//! リストの操作を組み合わせ、own を取り出す・借りる・読む（docs/design-decisions.md の「写しの印」の表の部品）。
+//! ふだんは `CASES` 本。`JW_FUZZ=1000` で本数、`JW_FUZZ_SEED=n` で始めの種を変えられる。
+//! `JW_FUZZ_JWC=jwc の実行ファイル` なら、jwc で作った実行ファイルとも比べる。clang がなければ何もしない。
+
+use std::process::Command;
+
+use jabberwock::{llvm_build, native, no_modules};
+
+const CASES: u64 = 40;
+
+fn have_clang() -> bool {
+    Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// xorshift の乱数（外部クレートなし）
+struct Rng(u64);
+
+impl Rng {
+    fn new(seed: u64) -> Rng {
+        Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+    fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+        xs[self.below(xs.len())]
+    }
+}
+
+const HEAD: &str = "struct P { i64 x; }
+struct Box<T> { T v; }
+struct S { own P b; i64 n; (own P)[] ps; Option<own P> o; Box<own P> bx; }
+fn T get<T>(ref Box<T> b) { b.v }
+fn i64 look(ref P p) { p.x }
+fn i64 take(own P p) { p.x }
+fn S mk(i64 n) { S { b: own P { x: n }, n: n, ps: [own P { x: n + 1 }, own P { x: n + 2 }], o: Some(own P { x: n + 3 }), bx: Box { v: own P { x: n + 4 } } } }
+";
+
+/// s（S の場所。写しのことも本物のこともある）について、1 つの文を作る。`muts` はリスト ss を書き換えてよいか
+fn action(r: &mut Rng, s: &str, muts: bool, k: usize) -> String {
+    let place = r.pick(&["{s}.b", "{s}.ps[0]", "{s}.ps[1]", "{s}.bx.v"]).replace("{s}", s);
+    // 取り出す文（たいていエラーで止まる）は 8 回に 1 回。ほかは借りる・読む・リストを書き換える
+    const RISKY: [usize; 6] = [4, 5, 6, 7, 9, 12];
+    const SAFE: [usize; 13] = [0, 1, 2, 3, 8, 10, 11, 13, 14, 15, 16, 17, 18];
+    let which = if r.below(8) == 0 {
+        RISKY[r.below(RISKY.len())]
+    } else {
+        loop {
+            let w = SAFE[r.below(SAFE.len())];
+            if muts || w < 16 {
+                break w;
+            }
+        }
+    };
+    match which {
+        0 => format!("print({}.x);", place),
+        1 => format!("print(look({}));", place),
+        2 => format!("let r{k} = ref {}; print(r{k}.x);", place),
+        3 => format!("let h{k} = Box {{ v: ref {} }}; print(get(ref h{k}).x);", place),
+        4 => format!("let q{k} = {}; print(q{k}.x);", place),
+        5 => format!("print(take({}));", place),
+        6 => format!("print(get({s}.bx).x);"),
+        7 => format!("let g{k} = get(ref {s}.bx); print(g{k}.x);"),
+        8 => format!("match ref {s}.o {{\n        case Some(p{k}) -> {{ let h{k} = Box {{ v: p{k} }}; print(get(ref h{k}).x); }}\n        case None -> print(0);\n    }}"),
+        9 => format!("match {s}.o {{\n        case Some(p{k}) -> print(p{k}.x);\n        case None -> print(0);\n    }}"),
+        10 => format!("for p{k} in {s}.ps {{ let h{k} = Box {{ v: p{k} }}; print(get(ref h{k}).x); }}"),
+        11 => format!("let m{k} = {s}.ps.map((p) -> p); let h{k} = Box {{ v: m{k}[0] }}; print(get(ref h{k}).x);"),
+        12 => format!("let h{k} = Box {{ v: {s} }}; print(get(ref h{k}).b.x);"),
+        13 => format!("print({s}.n, {s}.ps.len());"),
+        14 => format!("let f{k} = () -> look({}); print(f{k}());", place),
+        15 => format!("let f{k} = () -> {}.x; print(f{k}());", place),
+        16 => "ss.pop();".to_string(),
+        17 => format!("ss.push(mk({}));", 100 + k),
+        _ => "ss.sort_by((a, c) -> a.n > c.n);".to_string(),
+    }
+}
+
+fn body(r: &mut Rng, s: &str, muts: bool, base: usize) -> String {
+    let n = 1 + r.below(6);
+    (0..n).map(|i| format!("    {}\n", action(r, s, muts, base + i))).collect()
+}
+
+fn program(seed: u64) -> String {
+    let mut r = Rng::new(seed);
+    let mut out = String::from(HEAD);
+    out.push_str("fn main() {\n    let S[] mut ss = [mk(1), mk(10)];\n    let s0 = mk(20);\n");
+    match r.below(6) {
+        // for の要素（写し）
+        0 => out.push_str(&format!("    for s in ss {{\n{}    }}\n", body(&mut r, "s", true, 0))),
+        // 添字と for (i, s)
+        1 => out.push_str(&format!("    for (i, s) in ss {{\n{}    }}\n", body(&mut r, "s", true, 0))),
+        // クロージャに取り込んだ構造体（写し）
+        2 => out.push_str(&format!("    let f = () -> {{\n{}    0\n    }};\n    print(f());\n", body(&mut r, "s0", false, 0))),
+        // for の中のクロージャ（写しの写し）
+        3 => out.push_str(&format!(
+            "    for s in ss {{\n    let f = () -> {{\n{}    0\n    }};\n    print(f());\n    }}\n",
+            body(&mut r, "s", false, 0)
+        )),
+        // 本物の構造体
+        4 => out.push_str(&body(&mut r, "s0", false, 0)),
+        // リストの要素（本物）
+        _ => out.push_str(&body(&mut r, "ss[0]", true, 0)),
+    }
+    out.push_str(&format!("    {}\n", action(&mut r, "s0", false, 50)));
+    out.push_str("}\n");
+    out
+}
+
+/// interp と実行ファイルを比べる。型エラーなら None（比べない）
+fn compare(name: &str, src: &str, jwc: Option<&str>) -> Option<Result<String, String>> {
+    let o = jabberwock::run_source(src, false);
+    let ll = llvm_build(src, &no_modules, "main.jw", false).ok()?;
+    let want_err = o.error.as_ref().map(|d| jabberwock::render(d, "main.jw", &o.files));
+    // 実行時ライブラリの .o を使い回すので、フォルダは全部の種で同じ（最後に消す）
+    let dir = fuzz_dir();
+    let mut exes = vec![native::compile_with_cached_runtime(&ll, &dir, name).expect("clang compiles")];
+    if let Some(jwc) = jwc {
+        // エラーに出るファイル名を interp と同じ main.jw にする
+        let sub = dir.join(format!("{}-jwc", name));
+        std::fs::create_dir_all(&sub).expect("temp dir");
+        std::fs::write(sub.join("main.jw"), src).expect("writes source");
+        let exe = sub.join("jwc-exe");
+        let b = Command::new(jwc).arg("build").arg("-o").arg(&exe).arg("main.jw").current_dir(&sub).output().expect("runs jwc");
+        if !b.status.success() {
+            return Some(Err(format!("jwc build: {}", String::from_utf8_lossy(&b.stderr))));
+        }
+        exes.push(exe);
+    }
+    for exe in exes {
+        let out = Command::new(&exe).env("JW_LEAKS", "1").current_dir(&dir).output().expect("runs");
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        let what = exe.display().to_string();
+        if stdout != o.output {
+            return Some(Err(format!("{}: 出力が違う\ninterp:\n{}\nexe:\n{}", what, o.output, stdout)));
+        }
+        match &want_err {
+            Some(e) if out.status.code() != Some(1) || &stderr != e => {
+                return Some(Err(format!("{}: エラーが違う\ninterp:\n{}\nexe ({:?}):\n{}", what, e, out.status.code(), stderr)));
+            }
+            None if out.status.code() != Some(0) || !stderr.contains("[live] 0") || o.live_objects != 0 => {
+                return Some(Err(format!("{}: 正常に終わらない・リーク (interp {})\n{}", what, o.live_objects, stderr)));
+            }
+            _ => {}
+        }
+    }
+    Some(Ok(o.error.map(|d| d.title).unwrap_or_else(|| "（正常に終わった）".to_string())))
+}
+
+fn fuzz_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("jw-fuzz-{}", std::process::id()))
+}
+
+#[test]
+fn interp_and_executables_agree_on_generated_programs() {
+    if !have_clang() {
+        return;
+    }
+    let n: u64 = std::env::var("JW_FUZZ").ok().and_then(|s| s.parse().ok()).unwrap_or(CASES);
+    let first: u64 = std::env::var("JW_FUZZ_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let jwc = std::env::var("JW_FUZZ_JWC").ok();
+    let (mut ran, mut failed) = (0, Vec::new());
+    let mut kinds: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for seed in first..first + n {
+        let src = program(seed);
+        // デバッグビルドでは IR とのずれは panic になるので、種を添えて出す
+        let r = std::panic::catch_unwind(|| compare(&format!("s{}", seed), &src, jwc.as_deref()));
+        match r {
+            Ok(None) => {}
+            Ok(Some(Ok(kind))) => {
+                ran += 1;
+                *kinds.entry(kind).or_insert(0) += 1;
+            }
+            Ok(Some(Err(e))) => failed.push(format!("種 {}:\n{}\n{}", seed, src, e)),
+            Err(_) => failed.push(format!("種 {}（IR とのずれ）:\n{}", seed, src)),
+        }
+    }
+    let _ = std::fs::remove_dir_all(fuzz_dir());
+    eprintln!("fuzz: {} 本のうち {} 本を比べた（残りは型エラー）", n, ran);
+    for (k, c) in &kinds {
+        eprintln!("  {:5} {}", c, k);
+    }
+    assert!(failed.is_empty(), "{} 本ずれた:\n\n{}", failed.len(), failed.join("\n\n"));
+    // 型エラーで比べられないものばかりにならないように
+    assert!(ran * 2 >= n as usize, "比べられたのは {} / {} 本だけ", ran, n);
+}
