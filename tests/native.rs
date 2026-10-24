@@ -340,6 +340,8 @@ fn view_mark_is_kept_or_dropped_where_it_should_be() {
         ("u_iface_ref", "interface Shape { fn i64 area(); }\nstruct Sq { i64 w; fn i64 area() { w * w } }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { own Sq s; }\nfn i64 area_of(ref Shape s) { s.area() }\nfn main() {\n    let H[] hs = [H { s: own Sq { w: 3 } }];\n    for h in hs { print(area_of(h.s)); let ref Shape r = ref h.s; let bx = Box { v: r }; print(get(ref bx).area()); }\n}"),
         ("k_iface_own", "interface Shape { fn i64 area(); }\nstruct Sq { i64 w; fn i64 area() { w * w } }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { own Sq s; }\nfn main() {\n    let H[] hs = [H { s: own Sq { w: 3 } }];\n    for h in hs { let own Shape x = h.s; print(x.area()); }\n}"),
         ("k_iface_generic", "interface Shape { fn i64 area(); }\nstruct Sq { i64 w; fn i64 area() { w * w } }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { own Sq s; }\nstruct G { Box<own Shape> b; }\nfn main() {\n    let G[] gs = [G { b: Box { v: own Sq { w: 2 } } }];\n    for g in gs { let x = get(g.b); print(x.area()); }\n}"),
+        ("u_autoborrow", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { own P b; }\nfn i64 f(ref P p) { let bx = Box { v: p }; get(ref bx).x }\nfn main() {\n    let S[] ss = [S { b: own P { x: 11 } }];\n    for s in ss { print(f(s.b)); }\n}"),
+        ("u_capture_ref", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { own P b; }\nfn main() {\n    let S[] ss = [S { b: own P { x: 12 } }];\n    for s in ss { let r = ref s.b; let f = () -> { let bx = Box { v: r }; get(ref bx).x }; print(f()); }\n}"),
         ("k_arrfor_take", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct A { (own P)[2] a; }\nfn main() {\n    let A[] as2 = [A { a: [own P { x: 9 }, own P { x: 10 }] }];\n    for x in as2 { for p in x.a { let bx = Box { v: p }; print(get(ref bx).x); } let q = x.a[0]; print(q.x); }\n}"),
     ];
     for (name, src) in runs.iter() {
@@ -380,6 +382,11 @@ fn spawn_fails_with_an_error_when_no_thread_can_be_made() {
             // 上限がなければふつうに動く
             let out = Command::new(&exe).output().expect("runs");
             assert_eq!(out.status.code(), Some(0), "{}: {}", name, String::from_utf8_lossy(&out.stderr));
+            // --release の実行ファイルは JW_MAX_THREADS を見ない（テスト用の仕組みを本番に残さない）
+            let ll = llvm_build(src, &no_modules, "main.jw", true).expect("lowers to LLVM");
+            let exe = native::compile(&ll, &dir, &format!("{}-release", name), "-O1").expect("clang compiles");
+            let out = Command::new(&exe).env("JW_MAX_THREADS", limit).output().expect("runs");
+            assert_eq!(out.status.code(), Some(0), "{} --release: {}", name, String::from_utf8_lossy(&out.stderr));
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

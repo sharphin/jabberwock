@@ -236,7 +236,7 @@
   関数の値は作らずに `spawn!(関数の番号, 取り込む値...)` にする。
   デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
   スレッドを作れなければ spawn の位置でエラー（`start_thread` / jw_rt.c の `jw_spawn`。錠を持ったまま作り、作れてから `alive` を足す）。
-  環境変数 `JW_MAX_THREADS` で上限を下げて起こせる（`threads::max_threads` / jw_rt.c の `max_threads`）。
+  環境変数 `JW_MAX_THREADS` で上限を下げて起こせる（`threads::max_threads` / jw_rt.c の `max_threads`。`--release` の実行ファイルは見ない）。
 - ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
   LLVM は jw_rt.c の `jw_read_file` などと `result_of`（`Result<T, str>` を作る）。エラーの文は OS の文を使わず、interp と jw_rt.c で一字一句そろえる。
   `exit` は `World.exit`（終了コードを覚えて `exit_marker` で全スレッドを止める）。`run_inner` / `ir_mismatch` がそれをエラーでなく終了として扱う。

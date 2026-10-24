@@ -1665,11 +1665,12 @@ static void *thread_start(void *arg) {
     return 0;
 }
 
-// 同時に動かしてよいスレッドの数（main のほか。環境変数 JW_MAX_THREADS、スレッドを作れないときのテスト用）。-1 なら上限なし。g_lock の中で呼ぶ
+// 同時に動かしてよいスレッドの数（main のほか。環境変数 JW_MAX_THREADS、スレッドを作れないときのテスト用）。-1 なら上限なし。g_lock の中で呼ぶ。
+// --release で作った実行ファイル（ソースを持たない）は環境変数を見ない
 static int64_t max_threads(void) {
     static int64_t m = -2;
     if (m == -2) {
-        const char *s = getenv("JW_MAX_THREADS");
+        const char *s = jw_nfiles > 0 ? getenv("JW_MAX_THREADS") : NULL;
         char *end = NULL;
         m = s && *s ? strtoll(s, &end, 10) : -1;
         if (m < 0 || (end && *end)) m = -1;
