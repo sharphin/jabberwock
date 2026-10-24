@@ -1590,8 +1590,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     ops.append(&mut vals);
                     return Ok(self.temp_of(ty, Rvalue::Call(f, ops, sp), sp));
                 }
-                if temp.is_none() && self.through_list(recv) {
-                    return Err("リストの中の値のメソッド".to_string());
+                if temp.is_none() && self.through_map(recv) {
+                    return Err("辞書の中の値のメソッド".to_string());
                 }
                 let pl = recv_place(self)?.ok_or("定数の receiver")?;
                 let owner = if is_enum { Ty::Enum(sname.clone(), sargs.clone()) } else { Ty::Struct(sname.clone(), sargs.clone()) };
@@ -1782,8 +1782,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
         Ok(())
     }
 
-    /// 場所がリスト・辞書の中を通るか（中の値は借りられない。interp の `through_list`）
-    fn through_list(&self, e: &Expr) -> bool {
+    /// 場所が辞書の中を通るか（中の値は借りられない。interp の `through_map`）。
+    /// リストの要素はリストの中身の区画から数えるので、リストの添字まで来たらそこで切れる
+    fn through_map(&self, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Field(base, ..) | ExprKind::Index(base, ..) => {
                 let bt = self.ty(base);
@@ -1791,10 +1792,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     Ty::Own(t) | Ty::Ref(t, _) => ((**t).clone(), true),
                     t => (t.clone(), false),
                 };
-                if matches!(e.kind, ExprKind::Index(..)) && matches!(inner, Ty::List(_) | Ty::Map(..)) {
-                    return true;
+                if matches!(e.kind, ExprKind::Index(..)) {
+                    match inner {
+                        Ty::Map(..) => return true,
+                        Ty::List(_) => return false,
+                        _ => {}
+                    }
                 }
-                !ptr && self.through_list(base)
+                !ptr && self.through_map(base)
             }
             _ => false,
         }

@@ -66,7 +66,14 @@
 - 値を捨てるときは `release` で中の own を（構造体のフィールドも含めて）すべて解放する。リークはテストで `live_objects == 0` を確認。
 - 変数の値もヒープのスロットに置く（`VarState::Live(slot)`）。ムーブ・スコープ終了で `vacate` して世代を進める（変数を借りた ref が無効になる）。
   `RefVal` は `slot` / `generation` に加えてスロットの中の道筋 `path`（フィールドと添字）を持つ。own の先を指すなら空。
-  道筋はリストの中を通らない（`through_list` / types.rs の `inside_list` で弾く）。enum の中も通らない（`place` が通さない）。
+  道筋は辞書の中を通らない（`through_map` / types.rs の `inside_map` / lower の `through_map` で弾く）。enum の中も通らない（`place` が通さない）。
+- リストは `Value::List(スロット)`。中身 `Array(_, true)` は own の先と同じく自分のスロットに置く（`new_list`。`Array(_, true)` をじかに値として持たない。
+  文字列のメソッドなどヒープなしで作ったものは `adopt` で置き直す）。要素の場所は中身のスロットから数える（`index_place` / exec の `resolve_in` が `list_place` で移る）。
+  要素が動く操作（push・pop（中身があるとき）・insert・remove・drain・reverse・sort・sort_by）は `list_moved` で中身のスロットの世代を進める
+  （理由の文は `list_moved_why`。IR の `seq_op`・llvm.rs の `seq_op` も同じ操作で同じ文）。リストの写し（`view_of`）は中身も新しいスロットに写すので、
+  写しを捨てるときは `release` する。一時的な値の中から読んだリストは `copy_lists` で写す（一時的な値と一緒に解放されるため）。
+  IR の `Operand::Copy` も中のリストを写す（実行ファイルの複製と同じ）。`Show(Copy(場所), false)` は写さずに場所を見る。
+  中身のスロットの数も `live_objects` に入る（実行ファイルは数えないが、正常に終われば両方 0）。
   `check_ptr` は (スロット, 道筋) を返し、`at` / `at_mut` で中の値をたどる。
 - `ref T` の引数に `ref` なしで場所を渡すと、types.rs の `auto_borrow` が `Expr.borrow` を立てる。interp（`eval` / `eval_borrow`）と
   analyze（`expr`）はそれを `ref e` と同じに扱う（`make_ref` / `ref_of`）。関数とメソッドの引数だけ（enum の中身・構造体のフィールドは対象外）。
@@ -118,7 +125,7 @@
   型の引数は構造体のもの＋メソッドのもの）。本体のフィールド名・メソッド名は `bind_this` が `this.名前` に書き換える
   （引数・ローカル変数にフィールドと同じ名前はつけられない。types.rs の `not_a_field`）。呼び出しは `ExprKind::MethodCall`。
   interp の `eval_method`: 一時的な receiver は先に評価、場所の receiver は引数のあとで借りる（analyze も同じ順）。
-  場所にある構造体の値の receiver はその場所を借りて this にする。一時的な値とリストの中の receiver だけヒープへ貸し（`Lent`）、呼び出し後に解放して元の場所へ戻す。
+  場所にある構造体の値の receiver はその場所を借りて this にする（リストの要素も）。一時的な値と辞書の中の receiver だけヒープへ貸し（`Lent`）、呼び出し後に解放して元の場所へ戻す。
   analyze は receiver の型を知らないので、同じ名前のメソッドすべての呼び出しとして記録する（安全側）。
   静的メソッド（`static fn`）は this のない `構造体名.名前` の関数。パーサが `struct 名前` を先に集め（`struct_names`）、
   `Point.at(...)` を `ExprKind::Call("Point.at")` にする。型検査の `FnSig.method` で呼び方の取り違えを弾く。
@@ -167,7 +174,7 @@
   テストは `cargo test --no-fail-fast` で全部のファイルを走らせて確かめる（スタックあふれは途中で止まり、後ろのテストが走らない）。
 - 辞書: `Value::Map(Box<MapVal>)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。
   `["a": 1]` は `ExprKind::MapLit`、空の `[]` は型検査が `ArrayLit` の `Cell<Seq>` を `Seq::Map` にする。
-  `Place.path` の要素は辞書なら `entries` の位置（`at` / `at_mut`）。辞書の中も `through_list` / `inside_list` で借りるのを弾く。
+  `Place.path` の要素は辞書なら `entries` の位置（`at` / `at_mut`）。辞書の中は `through_map` / `inside_map` で借りるのを弾く。
   `a[k]` は interp の `index_place`（`locate` で位置を求める）。代入 `m[k] = v` だけ `create` でないキーを入れる（仮の Unit を置いてから置き換える）。
   型検査は `a[k]` の base を先に調べる（キーの型を入れる先として使う）。interp / analyze は添字が先のまま。
   `for (k, v) in m` / `for (i, x) in a` は `Stmt::ForEach.key`。
@@ -244,6 +251,9 @@
 - 区画（LLVM）: 頭は世代だけの 8 バイト（llvm.rs の `-8`）。世代が奇数なら解放済みで、中身の 2 語目に解放した位置（`FREED_SITE`）。
   小さい区画は塊から切り出し、8 バイト刻みの空き区画の鎖で使い回す。送った区画は世代を 2 進め、位置は `sent` の輪の表。
   「中身なし」と「own 1 つ」の 2 種類の enum はポインタ 1 つ（`Module::niche`。種類の番号と中身の場所は `enum_tag` / `enum_payload` を通す）。
+  リストの中身も区画の頭（世代）を持つ。要素を借りると頭の世代に `2 | LIST_SHARED` の印を付け（llvm.rs の `borrow_gen`）、
+  `jw_list_moved` は印があるときだけ世代を進めて理由を記録する。一度も借りていないリストは malloc / realloc / free で扱い（前に 16 バイト、`LIST_PAD`）、
+  借りたことのあるリストは伸ばすとき新しい区画へ写して古い区画を `block_free` する（古い ref が頭を読めるように）。大きい区画は 64 バイト境界にそろえる。
   呼び出しの深さは関数の最初の引数（`FnGen.depth`）。リストの頭と要素の中の数には TBAA の印（`TBAA_HEADER` / `TBAA_ELEMENT`）。
   最適化に頼る書き出しを変えたら `JW_NATIVE=o2 cargo test`（-O2 と LTO）も走らせる。
 

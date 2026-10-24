@@ -1343,6 +1343,7 @@ impl<'a> Checker<'a> {
                 r?;
                 if let Some(els) = els {
                     self.block(els, false, None)?;
+                    self.warn_for_else(body);
                 }
                 Ok(false)
             }
@@ -1378,6 +1379,7 @@ impl<'a> Checker<'a> {
                 r?;
                 if let Some(els) = els {
                     self.block(els, false, None)?;
+                    self.warn_for_else(body);
                 }
                 Ok(false)
             }
@@ -1654,10 +1656,8 @@ impl<'a> Checker<'a> {
                 let target = match t.pointee() {
                     Some(x) => x.clone(),
                     None => {
-                        if let Some(at) = self.inside_list(inner)? {
-                            return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
-                                .primary(at, "リストや辞書は伸び縮みするので、中の場所が変わる")
-                                .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                        if let Some(at) = self.inside_map(inner)? {
+                            return Err(crate::interp::map_borrow_error(at));
                         }
                         t.clone()
                     }
@@ -2631,6 +2631,17 @@ impl<'a> Checker<'a> {
         Ok(Ty::Int(t))
     }
 
+    /// for-else の本体に break があるときの警告。Python の for-else（break しなかったら else）と読み違えやすいため
+    fn warn_for_else(&mut self, body: &Block) {
+        if let Some(at) = find_break(body) {
+            self.warnings.push(
+                Diagnostic::warning("for の else は、1 回も回らなかったときだけ実行されます")
+                    .primary(at, "この break で抜けても抜けなくても、else とは関係ない")
+                    .note("Python の for-else（break しなかったら実行）とは違います。break したかを知りたいときは、変数に記録してください"),
+            );
+        }
+    }
+
     fn warn_overflow(&mut self, span: Span, t: IntTy) {
         self.warnings.push(
             Diagnostic::warning("整数があふれます")
@@ -2654,10 +2665,8 @@ impl<'a> Checker<'a> {
         let target = match t.pointee() {
             Some(x) => x.clone(),
             None => {
-                if let Some(at) = self.inside_list(a)? {
-                    return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
-                        .primary(at, "`ref` の引数なので借りて渡そうとしたが、リストや辞書は伸び縮みするので中の場所が変わる")
-                        .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                if let Some(at) = self.inside_map(a)? {
+                    return Err(crate::interp::map_borrow_error(at));
                 }
                 t
             }
@@ -2666,8 +2675,9 @@ impl<'a> Checker<'a> {
         Ok(Ty::Ref(Box::new(target), false))
     }
 
-    /// 場所 `e`（own / ref でない値）が、リストの要素の中にあるか。あればその添字の位置
-    fn inside_list(&mut self, e: &Expr) -> R<Option<Span>> {
+    /// 場所 `e`（own / ref でない値）が、辞書の値の中にあるか。あればその添字の位置。
+    /// リストの要素はリストの中身の区画から数えるので、リストの添字まで来たらそこで切れる
+    fn inside_map(&mut self, e: &Expr) -> R<Option<Span>> {
         let (base, is_index) = match &e.kind {
             ExprKind::Field(base, ..) => (base, false),
             ExprKind::Index(base, ..) => (base, true),
@@ -2680,11 +2690,12 @@ impl<'a> Checker<'a> {
         match bt? {
             // own / ref の先は別のスロットなので、ここで道筋が切れる
             Ty::Own(x) | Ty::Ref(x, _) => Ok(match &*x {
-                Ty::List(_) | Ty::Map(..) if is_index => Some(e.span),
+                Ty::Map(..) if is_index => Some(e.span),
                 _ => None,
             }),
-            Ty::List(_) | Ty::Map(..) if is_index => Ok(Some(e.span)),
-            _ => self.inside_list(base),
+            Ty::Map(..) if is_index => Ok(Some(e.span)),
+            Ty::List(_) if is_index => Ok(None),
+            _ => self.inside_map(base),
         }
     }
 
@@ -2797,17 +2808,22 @@ fn out_of_range(v: i128, t: IntTy, span: Span) -> Diagnostic {
 
 /// ループ本体に、このループを抜ける break があるか（内側のループの break は数えない）
 fn has_break(b: &Block) -> bool {
-    b.stmts.iter().any(|s| match s {
-        Stmt::Break(_) => true,
+    find_break(b).is_some()
+}
+
+/// ループ本体の中で、このループを抜ける最初の break の位置
+fn find_break(b: &Block) -> Option<Span> {
+    b.stmts.iter().find_map(|s| match s {
+        Stmt::Break(at) => Some(*at),
         Stmt::Expr(e) => match &e.kind {
-            ExprKind::If { then, els, .. } => has_break(then) || matches!(els, Some(b) if has_break(b)),
+            ExprKind::If { then, els, .. } => find_break(then).or_else(|| els.as_ref().and_then(find_break)),
             ExprKind::Match { arms, default, .. } => {
-                arms.iter().any(|a| has_break(&a.body)) || matches!(default, Some(b) if has_break(b))
+                arms.iter().find_map(|a| find_break(&a.body)).or_else(|| default.as_ref().and_then(find_break))
             }
-            _ => false,
+            _ => None,
         },
-        Stmt::For { els: Some(els), .. } | Stmt::ForEach { els: Some(els), .. } => has_break(els),
-        _ => false,
+        Stmt::For { els: Some(els), .. } | Stmt::ForEach { els: Some(els), .. } => find_break(els),
+        _ => None,
     })
 }
 

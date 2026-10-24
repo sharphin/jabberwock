@@ -269,7 +269,9 @@ impl<'a> Cx<'a> {
     /// `ref 場所` で作った ref について分かること
     fn ref_fact(&self, place: &Place, follows: bool, facts: &Facts) -> Option<Fact> {
         let root = facts.get(&place.local).copied();
-        let rest_ok = |from: usize| place.proj[from..].iter().all(|p| matches!(p, Proj::Field(..) | Proj::Index(..)));
+        // 添字は通さない（リストの要素はリストの中身の区画にあり、長さが変わると無効になる。
+        // 配列の添字も、型を見ずに見分けられないので安全側に倒す）
+        let rest_ok = |from: usize| place.proj[from..].iter().all(|p| matches!(p, Proj::Field(..)));
         match place.proj.first() {
             // 変数そのもの
             None if follows => match root? {
