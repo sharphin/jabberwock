@@ -1289,6 +1289,55 @@ WStr *jw_str_repeat(WStr *s, int64_t k, const WSite *at) {
 }
 
 // Rust の `trim().parse::<i64>()`
+// Rust の `str::parse::<f64>`（前後の空白は除く）: [+-] のあとに inf / infinity / nan（大文字小文字は問わない）か、
+// 数字 [. 数字] / . 数字 に [eE][+-]数字 が続いてよい。合っていれば strtod で読む
+int32_t jw_str_to_float(WStr *s, double *out) {
+    int64_t a, b;
+    trim_range(s, &a, &b);
+    const char *p = s->data + a;
+    int64_t n = b - a, i = 0;
+    if (n == 0) return 0;
+    if (p[0] == '+' || p[0] == '-') i++;
+    const char *word = p + i;
+    int64_t wl = n - i;
+    static const char *names[] = {"inf", "infinity", "nan"};
+    for (int k = 0; k < 3; k++) {
+        int64_t len = (int64_t)strlen(names[k]);
+        if (wl != len) continue;
+        int same = 1;
+        for (int64_t j = 0; j < len; j++)
+            if ((word[j] | 0x20) != names[k][j]) same = 0;
+        if (same) {
+            double v = k == 2 ? NAN : INFINITY;
+            *out = p[0] == '-' ? -v : v;
+            return 1;
+        }
+    }
+    int64_t digits = 0;
+    while (i < n && p[i] >= '0' && p[i] <= '9') i++, digits++;
+    if (i < n && p[i] == '.') {
+        i++;
+        while (i < n && p[i] >= '0' && p[i] <= '9') i++, digits++;
+    }
+    if (digits == 0) return 0;
+    if (i < n && (p[i] == 'e' || p[i] == 'E')) {
+        i++;
+        if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+        int64_t ed = 0;
+        while (i < n && p[i] >= '0' && p[i] <= '9') i++, ed++;
+        if (ed == 0) return 0;
+    }
+    if (i != n) return 0;
+    char buf[128];
+    char *heap = NULL, *t = buf;
+    if (n + 1 > (int64_t)sizeof buf) t = heap = malloc((size_t)n + 1);
+    memcpy(t, p, (size_t)n);
+    t[n] = 0;
+    *out = strtod(t, NULL);
+    free(heap);
+    return 1;
+}
+
 int32_t jw_str_to_int(WStr *s, int64_t *out) {
     int64_t a, b;
     trim_range(s, &a, &b);

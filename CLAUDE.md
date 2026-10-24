@@ -221,11 +221,17 @@
   `exit` は `World.exit`（終了コードを覚えて `exit_marker` で全スレッドを止める）。`run_inner` / `ir_mismatch` がそれをエラーでなく終了として扱う。
   exit のあとは片づけないので、残ったヒープの数は比べない。lower は exit の呼び出しのあとを `Term::Unreachable` にする。
   `eprint` は print と同じ形で `World.errput`（`Outcome.errput`）へ。突き合わせは標準エラーの先頭が errput と同じかを見る。
+  デバッグビルドは IR でもう一度動かすので、ファイルやコマンドの副作用も 2 回起きる（テストは何度起きても同じになるように書く）。
   `()`（`ExprKind::Unit`）は `Ok(())` のための値。types の `value` と引数の検査は `()` と書いた式だけ値なしを許す。
 - 文字列の値は `Value::Str(Rc<String>)`（作るのは `text_rc`）。`s = s + e`（`s += e`）で s が文字列の変数なら、interp の `assign` は
   e を先に計算して `Rc::make_mut` でその場で足す。lower も同じ形を `append!(s の場所, e)` にし、llvm は変数の場所を `jw_str_append` に渡す
   （数が 1 ならその場で足し、数を 2 にして返す。古い値の drop で 1 に戻る）。そのため jw_rt.c の文字列の区画の大きさは長さだけで決まる
   （`str_bytes`。大きいものは 2 のべき乗）。e は s を書き換えられない（呼ばれた関数は呼び出し元の変数に触れない）ので、順番を変えても同じ。
+- `const`: パーサの `resolve_consts` が、関数の中で定数の名前を使っている場所を値の式に置き換える（`ast::walk_block_mut`）。
+  なので types より後ろは定数を知らない。`Program.consts`（モジュールの中は `geom.N`）は、変数に同じ名前をつけるのを types の `not_a_fn_name` が弾くためだけ。
+- ビット演算: `>>` は字句解析では `>` 2 つ（型の `>>` と区別）。パーサの `parse_binary` が、すき間なく並んだ `>` 2 つを `BinOp::Shr` にする。
+  ずらす数は左と別の型でよい（types の `binary` が先に扱う。llvm.rs の `shift`）。
+- f64 のメソッドは `to_bits` だけ（interp の `eval_method`・lower の `f64.to_bits`）。
 - 自己ホストに向けて足りないものの一覧は `docs/self-hosting.md`。
 - スレッド（LLVM）: 区画の空きリスト・`jw_live`・`jw_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
   生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。

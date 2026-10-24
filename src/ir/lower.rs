@@ -1520,6 +1520,15 @@ impl<'a, 'p> FnLower<'a, 'p> {
         };
         let is_enum = matches!(inner, Ty::Enum(..));
         match inner {
+            Ty::Float => {
+                let x = match recv_place(self)? {
+                    Some(pl) => Operand::Copy(pl),
+                    None => temp.clone().expect("a constant receiver"),
+                };
+                let r = self.temp_of(ty, Rvalue::Builtin(format!("f64.{}", name), vec![x], sp), sp);
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
             Ty::Str => {
                 let text = match recv_place(self)? {
                     Some(pl) => Operand::Copy(pl),

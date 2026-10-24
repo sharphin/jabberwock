@@ -30,6 +30,7 @@ pub enum Tok {
     Interface,
     Use,
     Pub,
+    Const,
     Own,
     As,
     Ref,
@@ -71,6 +72,11 @@ pub enum Tok {
     Question,
     AndAnd,
     OrOr,
+    Amp,
+    Pipe,
+    Caret,
+    Tilde,
+    Shl,
     Eof,
 }
 
@@ -109,6 +115,7 @@ impl Tok {
             Tok::Interface => "interface",
             Tok::Use => "use",
             Tok::Pub => "pub",
+            Tok::Const => "const",
             Tok::Own => "own",
             Tok::As => "as",
             Tok::Ref => "ref",
@@ -149,6 +156,11 @@ impl Tok {
             Tok::Question => "?",
             Tok::AndAnd => "&&",
             Tok::OrOr => "||",
+            Tok::Amp => "&",
+            Tok::Pipe => "|",
+            Tok::Caret => "^",
+            Tok::Tilde => "~",
+            Tok::Shl => "<<",
             _ => "?",
         }
     }
@@ -224,9 +236,37 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     col += 1;
                 }
             }
+            // `0xff`・`0b1010`・`0o17`（`_` で区切ってよい）
+            '0' if matches!(chars.get(i + 1), Some('x' | 'b' | 'o')) => {
+                let radix = match chars[i + 1] {
+                    'x' => 16,
+                    'b' => 2,
+                    _ => 8,
+                };
+                let s = i;
+                i += 2;
+                col += 2;
+                let mut digits = String::new();
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    if chars[i] != '_' {
+                        digits.push(chars[i]);
+                    }
+                    i += 1;
+                    col += 1;
+                }
+                let span = Span { file: 0, line, col: start_col, len: i - s };
+                if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+                    return Err(Diagnostic::new("数の書き方が正しくありません")
+                        .primary(span, format!("{} 進数に使えない文字があります", radix)));
+                }
+                let n = u64::from_str_radix(&digits, radix)
+                    .map(i128::from)
+                    .map_err(|_| Diagnostic::new("整数が大きすぎます").primary(span, "どの整数型にも収まりません"))?;
+                out.push(Token { tok: Tok::Int(n), span });
+            }
             '0'..='9' => {
                 let s = i;
-                while i < chars.len() && chars[i].is_ascii_digit() {
+                while i < chars.len() && (chars[i].is_ascii_digit() || (chars[i] == '_' && i > s)) {
                     i += 1;
                     col += 1;
                 }
@@ -243,7 +283,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     out.push(Token { tok: Tok::Float(text), span });
                     continue;
                 }
-                let text: String = chars[s..i].iter().collect();
+                let text: String = chars[s..i].iter().filter(|c| **c != '_').collect();
                 let span = Span { file: 0, line, col: start_col, len: i - s };
                 // 型は型検査が決める（相手の型に合わせる）。ここでは u64 に収まるかだけ見る
                 let n = text
@@ -280,6 +320,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     "interface" => Tok::Interface,
                     "use" => Tok::Use,
                     "pub" => Tok::Pub,
+                    "const" => Tok::Const,
                     "own" => Tok::Own,
                     "as" => Tok::As,
                     "ref" => Tok::Ref,
@@ -390,15 +431,35 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     }
                     if ch == '\\' {
                         let esc = chars.get(i + 1).copied();
+                        // `\u{1F600}`: 番号で書いた文字
+                        if esc == Some('u') && chars.get(i + 2) == Some(&'{') {
+                            let close = (i + 3..chars.len()).find(|&k| chars[k] == '}' || chars[k] == '"' || chars[k] == '\n');
+                            let code = close.filter(|&k| chars[k] == '}').and_then(|k| {
+                                let hex: String = chars[i + 3..k].iter().collect();
+                                u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).map(|c| (c, k))
+                            });
+                            let Some((c, k)) = code else {
+                                return Err(Diagnostic::new("文字の番号のエスケープが正しくありません").primary(
+                                    Span { file: 0, line, col, len: 2 },
+                                    "`\\u{41}` のように、{ } の中に 16 進数で文字の番号を書きます",
+                                ));
+                            };
+                            text.push(c);
+                            col += k + 1 - i;
+                            i = k + 1;
+                            continue;
+                        }
                         let mapped = match esc {
                             Some('n') => '\n',
                             Some('t') => '\t',
+                            Some('r') => '\r',
+                            Some('0') => '\0',
                             Some('"') => '"',
                             Some('\\') => '\\',
                             _ => {
                                 return Err(Diagnostic::new("未知のエスケープです").primary(
                                     Span { file: 0, line, col, len: 2 },
-                                    "使えるのは \\n \\t \\\" \\\\ です",
+                                    "使えるのは \\n \\t \\r \\0 \\\" \\\\ \\u{...} です",
                                 ));
                             }
                         };
@@ -428,6 +489,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ('=', Some('=')) => (Tok::EqEq, 2),
                     ('!', Some('=')) => (Tok::NotEq, 2),
                     ('<', Some('=')) => (Tok::Le, 2),
+                    ('<', Some('<')) => (Tok::Shl, 2),
                     ('>', Some('=')) => (Tok::Ge, 2),
                     ('&', Some('&')) => (Tok::AndAnd, 2),
                     ('|', Some('|')) => (Tok::OrOr, 2),
@@ -459,6 +521,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                     ('%', _) => (Tok::Percent, 1),
                     ('!', _) => (Tok::Bang, 1),
                     ('?', _) => (Tok::Question, 1),
+                    ('&', _) => (Tok::Amp, 1),
+                    ('|', _) => (Tok::Pipe, 1),
+                    ('^', _) => (Tok::Caret, 1),
+                    ('~', _) => (Tok::Tilde, 1),
                     _ => {
                         return Err(Diagnostic::new("使えない文字です").primary(
                             Span { file: 0, line, col, len: 1 },

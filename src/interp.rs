@@ -1959,6 +1959,7 @@ impl Interp {
                     (UnOp::Neg, Value::Int(n, t)) => Ok(Value::Int(t.wrap(-n), t)),
                     (UnOp::Neg, Value::Float(x)) => Ok(Value::Float(-x)),
                     (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                    (UnOp::BitNot, Value::Int(n, t)) => Ok(Value::Int(t.wrap(!n), t)),
                     (_, other) => Err(Diagnostic::new("型が合わない演算です")
                         .primary(e.span, format!("{} にはこの演算を使えません", other.type_name()))),
                 }
@@ -2238,6 +2239,21 @@ impl Interp {
                 self.release(rv, span, "使い終わった一時的な値");
             }
             return str_method(&text, name, vals, span);
+        }
+        // f64 のメソッド（`to_bits` だけ）
+        let float = match &rv {
+            Value::Float(x) => Some(*x),
+            Value::Own(_) | Value::Ref(_) => {
+                let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
+                match self.at(slot, &path) {
+                    Value::Float(x) => Some(*x),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(x) = float {
+            return Ok(Value::Int(x.to_bits() as i128, IntTy::U64));
         }
         // task と chan のメソッド
         let handle = match &rv {
@@ -2949,6 +2965,10 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
             Ok(v) => some(Value::Int(v as i128, IntTy::I64)),
             Err(_) => none(),
         },
+        "to_float" => match text.trim().parse::<f64>() {
+            Ok(v) => some(Value::Float(v)),
+            Err(_) => none(),
+        },
         _ => return Err(Diagnostic::new(format!("文字列にメソッド `{}` はありません", name)).primary(span, "ここ")),
     })
 }
@@ -2993,6 +3013,35 @@ pub(crate) fn as_bool(v: Value, span: Span) -> R<bool> {
 
 pub(crate) fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
     match (op, &l, &r) {
+        // 値は型の範囲で持っている（符号つきの負の数は i128 でも負）ので、i128 のまま計算して型の幅で一周させればよい
+        (BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor, Value::Int(a, t), Value::Int(b, _)) => Ok(Value::Int(
+            t.wrap(match op {
+                BinOp::BitAnd => a & b,
+                BinOp::BitOr => a | b,
+                _ => a ^ b,
+            }),
+            *t,
+        )),
+        // 型の幅以上ずらすと、<< は 0、>> は 0 か -1（Go と同じ）。負の数だけはずらせない
+        (BinOp::Shl | BinOp::Shr, Value::Int(a, t), Value::Int(n, _)) => {
+            if *n < 0 {
+                return Err(Diagnostic::new("負の数だけはずらせません").primary(span, "右の数が負です"));
+            }
+            let big = *n >= t.bits() as i128;
+            let v = match op {
+                BinOp::Shl if big => 0,
+                BinOp::Shl => a << n,
+                _ if big => {
+                    if *a < 0 {
+                        -1
+                    } else {
+                        0
+                    }
+                }
+                _ => a >> n,
+            };
+            Ok(Value::Int(t.wrap(v), *t))
+        }
         (BinOp::Add, Value::Str(a), Value::Str(b)) => {
             let s = format!("{}{}", a, b);
             Ok(Value::Str(text_rc(s.as_str())))

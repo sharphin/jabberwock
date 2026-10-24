@@ -186,6 +186,7 @@ declare ptr @jw_str_slice(ptr, i64, i64, ptr)
 declare ptr @jw_str_replace(ptr, ptr, ptr)
 declare ptr @jw_str_repeat(ptr, i64, ptr)
 declare i32 @jw_str_to_int(ptr, ptr)
+declare i32 @jw_str_to_float(ptr, ptr)
 declare i32 @jw_read_line(ptr)
 declare void @jw_eprint_begin()
 declare void @jw_eprint_part(ptr, i32)
@@ -2651,6 +2652,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     (UnOp::Neg, Ty::Int(i)) => (self.b.val(format!("sub i{} 0, {}", i.bits(), v)), t),
                     (UnOp::Neg, Ty::Float) => (self.b.val(format!("fneg double {}", v)), t),
                     (UnOp::Not, Ty::Bool) => (self.b.val(format!("xor i1 {}, true", v)), t),
+                    (UnOp::BitNot, Ty::Int(i)) => (self.b.val(format!("xor i{} {}, -1", i.bits(), v)), t),
                     _ => return Err(format!("{:?} {}", op, t.show())),
                 })
             }
@@ -3307,9 +3309,44 @@ impl<'m, 'p> FnGen<'m, 'p> {
         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem))))
     }
 
+    /// `x << y` / `x >> y`（interp の `binary` と同じ: 幅以上なら 0 か -1、負ならエラー）
+    fn shift(&mut self, op: BinOp, x: &str, i: IntTy, y: &str, n: IntTy, span: Span) -> G<(String, Ty)> {
+        let lt = format!("i{}", i.bits());
+        let y64 = widen(&mut self.b, y, n);
+        if n.signed() {
+            let neg = self.b.val(format!("icmp slt i64 {}, 0", y64));
+            let (_, ok) = self.b.if_true(&neg);
+            let title = self.m.cstr("負の数だけはずらせません");
+            let l = self.m.cstr("右の数が負です");
+            let s = self.m.site(span, "");
+            self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
+            self.b.op("unreachable");
+            self.b.label(&ok);
+        }
+        let big = self.b.val(format!("icmp uge i64 {}, {}", y64, i.bits()));
+        let safe = self.b.val(format!("select i1 {}, i64 {}, i64 {}", big, i.bits() - 1, y64));
+        let amt = if i.bits() == 64 { safe } else { self.b.val(format!("trunc i64 {} to {}", safe, lt)) };
+        let v = match op {
+            BinOp::Shl => {
+                let s = self.b.val(format!("shl {} {}, {}", lt, x, amt));
+                self.b.val(format!("select i1 {}, {} 0, {} {}", big, lt, lt, s))
+            }
+            // 幅以上のときは幅 - 1 だけずらしたもの（符号つきなら 0 か -1、符号なしなら 0）
+            _ if i.signed() => self.b.val(format!("ashr {} {}, {}", lt, x, amt)),
+            _ => {
+                let s = self.b.val(format!("lshr {} {}, {}", lt, x, amt));
+                self.b.val(format!("select i1 {}, {} 0, {} {}", big, lt, lt, s))
+            }
+        };
+        Ok((v, Ty::Int(i)))
+    }
+
     fn binary(&mut self, op: BinOp, a: &Operand, b: &Operand, span: Span) -> G<(String, Ty)> {
         let (x, t) = self.operand(a)?;
         let (y, tb) = self.operand(b)?;
+        if let (BinOp::Shl | BinOp::Shr, Ty::Int(i), Ty::Int(n)) = (op, &t, &tb) {
+            return self.shift(op, &x, *i, &y, *n, span);
+        }
         let y = self.coerce(&y, &tb, &t)?;
         let cmp = |op: BinOp| match op {
             BinOp::Eq => "eq",
@@ -3351,6 +3388,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         } else {
                             (self.b.val(format!("{} {} {}, {}", if div { "udiv" } else { "urem" }, lt, x, y)), t.clone())
                         }
+                    }
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+                        let o = match op {
+                            BinOp::BitAnd => "and",
+                            BinOp::BitOr => "or",
+                            _ => "xor",
+                        };
+                        (self.b.val(format!("{} {} {}, {}", o, lt, x, y)), t.clone())
                     }
                     BinOp::Eq | BinOp::Ne => (self.b.val(format!("icmp {} {} {}, {}", cmp(op), lt, x, y)), Ty::Bool),
                     BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -3604,6 +3649,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.op(format!("call void @jw_args(ptr {})", out));
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
+            "f64.to_bits" => Ok((self.b.val(format!("bitcast double {} to i64", vals[0].0)), Ty::Int(IntTy::U64))),
             _ if name.starts_with("str.") => {
                 let r = self.str_method(&name[4..], &vals, span, want)?;
                 release(self, &vals);
@@ -3680,6 +3726,26 @@ impl<'m, 'p> FnGen<'m, 'p> {
             "repeat" => {
                 let k = int(self, 1)?;
                 (self.b.val(format!("call ptr @jw_str_repeat(ptr {}, i64 {}, ptr {})", s, k, site)), Ty::Str)
+            }
+            "to_float" => {
+                let out = self.b.alloca("double");
+                let ok = self.b.val(format!("call i32 @jw_str_to_float(ptr {}, ptr {})", s, out));
+                let opt = want.clone();
+                let lt = self.m.lt(&opt)?;
+                let res = self.b.alloca(&lt);
+                let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
+                let (_, no) = self.b.if_true(&none);
+                let nv = self.make_enum(&opt, "None", Vec::new())?;
+                self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+                let done = self.b.l();
+                self.b.br(&done);
+                self.b.label(&no);
+                let v = self.b.val(format!("load double, ptr {}", out));
+                let sv = self.make_enum(&opt, "Some", vec![(v, Ty::Float)])?;
+                self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+                self.b.br(&done);
+                self.b.label(&done);
+                (self.b.val(format!("load {}, ptr {}", lt, res)), opt)
             }
             "to_int" => {
                 let out = self.b.alloca("i64");

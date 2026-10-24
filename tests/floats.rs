@@ -92,3 +92,20 @@ fn float_errors() {
     assert!(err("let b = true as f64;").title.contains("as"));
     assert!(err("let f32 x = 1.0;").title.contains("まだ使えません"));
 }
+
+#[test]
+fn parse_floats_and_read_bits() {
+    let o = main_ok("
+    for t in [\"1.5\", \" -2.25e3 \", \"1.\", \".5\", \"1e\", \"e5\", \"inf\", \"-Infinity\", \"NaN\", \"abc\", \"\", \"+0.1\", \"1_0\", \"0x10\", \"7\", \"1E-2\"] {
+        print(t.to_float());
+    }
+    let x = 1.5;
+    let own f64 p = own 2.0;
+    print(x.to_bits(), (0.1).to_bits(), (-0.0).to_bits(), p.to_bits());");
+    assert_eq!(
+        o,
+        "Some(1.5)\nSome(-2250.0)\nSome(1.0)\nSome(0.5)\nNone\nNone\nSome(inf)\nSome(-inf)\nSome(NaN)\nNone\nNone\nSome(0.1)\nNone\nNone\nSome(7.0)\nSome(0.01)\n\
+4609434218613702656 4591870180066957722 9223372036854775808 4611686018427387904\n"
+    );
+    assert!(err("let x = 1.5; print(x.round());").title.contains("メソッド"));
+}

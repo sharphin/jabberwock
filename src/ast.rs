@@ -169,6 +169,8 @@ impl Expr {
 pub enum UnOp {
     Neg,
     Not,
+    /// `~x`: ビットを反転する（整数だけ）
+    BitNot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +188,12 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    /// ビット演算（整数だけ）。`<<` `>>` の右は ずらす数
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 /// `*p` で ref の世代チェックが要るかどうか。静的解析（`analyze`）が書き込む。
@@ -449,6 +457,8 @@ pub struct Program {
     pub public: Vec<String>,
     /// 読み込んだすべてのモジュールの名前（全体をまとめたプログラムだけが持つ）
     pub modules: Vec<String>,
+    /// `const` の名前（使う場所はパーサが値に置き換え済み。モジュールの中のものは `geom.N`）。変数に同じ名前をつけるのを型検査が弾く
+    pub consts: Vec<String>,
 }
 
 /// `[...]` を何として作るか
@@ -575,6 +585,100 @@ pub fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> bool) {
         ExprKind::MethodCall(recv, _, args, _) => {
             walk_expr(recv, f);
             args.iter().for_each(|a| walk_expr(a, f));
+        }
+    }
+}
+
+/// `walk_block` の書き換えられる版（パーサが `const` の名前を値に置き換えるのに使う）
+pub fn walk_block_mut(b: &mut Block, f: &mut dyn FnMut(&mut Expr) -> bool) {
+    for s in &mut b.stmts {
+        walk_stmt_mut(s, f);
+    }
+}
+
+pub fn walk_stmt_mut(s: &mut Stmt, f: &mut dyn FnMut(&mut Expr) -> bool) {
+    match s {
+        Stmt::Let { init, .. } => walk_expr_mut(init, f),
+        Stmt::Assign { target, value, .. } => {
+            walk_expr_mut(target, f);
+            walk_expr_mut(value, f);
+        }
+        Stmt::Expr(e) => walk_expr_mut(e, f),
+        Stmt::While { cond, body } => {
+            walk_expr_mut(cond, f);
+            walk_block_mut(body, f);
+        }
+        Stmt::Loop { body } => walk_block_mut(body, f),
+        Stmt::For { range, body, els, .. } => {
+            range.iter_mut().for_each(|a| walk_expr_mut(a, f));
+            walk_block_mut(body, f);
+            if let Some(els) = els {
+                walk_block_mut(els, f);
+            }
+        }
+        Stmt::ForEach { iter, body, els, .. } => {
+            walk_expr_mut(iter, f);
+            walk_block_mut(body, f);
+            if let Some(els) = els {
+                walk_block_mut(els, f);
+            }
+        }
+        Stmt::Break(_) | Stmt::Continue(_) => {}
+        Stmt::Return { value, .. } => {
+            if let Some(e) = value {
+                walk_expr_mut(e, f);
+            }
+        }
+    }
+}
+
+pub fn walk_expr_mut(e: &mut Expr, f: &mut dyn FnMut(&mut Expr) -> bool) {
+    if !f(e) {
+        return;
+    }
+    match &mut e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit | ExprKind::Var(_) => {}
+        ExprKind::Cast(x, _) | ExprKind::Try(x) | ExprKind::Own(x) | ExprKind::Ref(x, _) | ExprKind::Deref(x, _) => walk_expr_mut(x, f),
+        ExprKind::Field(x, ..) | ExprKind::Unary(_, x) | ExprKind::ArrayRepeat(x, ..) => walk_expr_mut(x, f),
+        ExprKind::Variant { args, .. } | ExprKind::Call(_, args) | ExprKind::ArrayLit(args, _) => {
+            args.iter_mut().for_each(|a| walk_expr_mut(a, f))
+        }
+        ExprKind::StructLit(_, inits) => inits.iter_mut().for_each(|i| walk_expr_mut(&mut i.value, f)),
+        ExprKind::If { cond, then, els } => {
+            walk_expr_mut(cond, f);
+            walk_block_mut(then, f);
+            if let Some(els) = els {
+                walk_block_mut(els, f);
+            }
+        }
+        ExprKind::Match { scrut, arms, default } => {
+            walk_expr_mut(scrut, f);
+            arms.iter_mut().for_each(|a| walk_block_mut(&mut a.body, f));
+            if let Some(d) = default {
+                walk_block_mut(d, f);
+            }
+        }
+        ExprKind::Binary(_, l, r) | ExprKind::Index(l, r, _) => {
+            walk_expr_mut(l, f);
+            walk_expr_mut(r, f);
+        }
+        ExprKind::MapLit(pairs) => {
+            for (k, v) in pairs {
+                walk_expr_mut(k, f);
+                walk_expr_mut(v, f);
+            }
+        }
+        ExprKind::Interp(parts) => {
+            for p in parts {
+                if let InterpPart::Expr(x) = p {
+                    walk_expr_mut(x, f);
+                }
+            }
+        }
+        ExprKind::Lambda(l) => walk_block_mut(&mut Rc::get_mut(l).expect("lambda is not shared while parsing").body, f),
+        ExprKind::MethodCall(recv, _, args, _) => {
+            walk_expr_mut(recv, f);
+            args.iter_mut().for_each(|a| walk_expr_mut(a, f));
         }
     }
 }

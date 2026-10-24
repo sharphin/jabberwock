@@ -182,3 +182,14 @@ fn main() {
 }");
     assert_eq!(o, "abab4c a abab4c abab4c! abab4c\n[x, xy, xyy] xyyy pq [k: vw]\n50000 0123456789\n");
 }
+
+#[test]
+fn more_escapes() {
+    let o = main_ok("
+    print(\"a\\rb\".bytes(), \"x\\0y\".bytes(), \"\\u{41}\\u{3042}\\u{1F600}\", \"\\u{41}{1 + 1}\");");
+    assert_eq!(o, "[97, 13, 98] [120, 0, 121] Aあ😀 A2\n");
+    assert!(err("print(\"\\q\");").title.contains("エスケープ"));
+    assert!(err("print(\"\\u{D800}\");").title.contains("エスケープ"));
+    assert!(err("print(\"\\u{zz}\");").title.contains("エスケープ"));
+    assert!(err("print(\"\\u{41\");").title.contains("エスケープ"));
+}

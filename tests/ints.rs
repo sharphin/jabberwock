@@ -151,3 +151,98 @@ fn pointers_do_not_convert() {
     let d = run_source(src, false).error.expect("error");
     assert!(d.labels.iter().any(|l| l.text.contains("`ref u8` ですが、`ref i64` が必要")));
 }
+
+// ---------------------------------------------------------------- ビット演算・16 進数・定数
+
+#[test]
+fn bit_operations() {
+    assert_eq!(
+        out("print(12 & 10, 12 | 10, 12 ^ 10, ~5, 1 << 4, -16 >> 2, 255 >> 9, -1 >> 70, 1 << 64);
+let u8 a = 200;
+print(a & 15, a | 1, a ^ 255, ~a, a << 1, a >> 3, a >> 8);
+let u64 big = 18446744073709551615;
+print(big >> 63, big << 63, big >> (64 as u8), 3 + 4 << 1, 1 | 2 == 3, 6 & 3 ^ 1 | 8);
+let i32 k = 5;
+print(k << 30, k << 31, (k << 29) >> 29);
+let Option<Option<i64>> o = Some(Some(1 << 2));
+print(o);"),
+        "8 14 6 -6 16 -4 0 -1 0\n8 201 55 55 144 25 0\n1 9223372036854775808 0 14 true 11\n1073741824 -2147483648 -3\nSome(Some(4))\n"
+    );
+}
+
+#[test]
+fn hash_with_bits() {
+    // FNV-1a（64 ビット）
+    assert_eq!(
+        ok("
+fn u64 fnv(str s) {
+    let u64 mut h = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h = (h ^ b) * 0x100000001b3;
+    }
+    h
+}
+fn main() {
+    print(fnv(\"\"), fnv(\"a\"), fnv(\"abc\"));
+}"),
+        "14695981039346656037 12638187200555641996 16654208175385433931\n"
+    );
+}
+
+#[test]
+fn bit_operation_errors() {
+    assert!(err("print(true & false);").title.contains("型"));
+    assert!(err("print(1.5 << 1);").title.contains("整数"));
+    assert!(err("print(~true);").title.contains("整数"));
+    let o = run_source("fn main() {\n    let n = -1;\n    print(1 << n);\n}", false);
+    assert_eq!(o.error.expect("error").title, "負の数だけはずらせません");
+}
+
+#[test]
+fn hex_binary_octal_and_underscores() {
+    assert_eq!(out("let u64 all = 0xFFFF_FFFF_FFFF_FFFF;
+let u8 m = 0x0f;
+print(0xff, 0xFF + 0, 0b1010, 0o17, 1_000_000, 0x_ff, all, m);"), "255 255 10 15 1000000 255 18446744073709551615 15\n");
+    assert!(err("print(0xfg);").title.contains("数の書き方"));
+    assert!(err("print(0b102);").title.contains("数の書き方"));
+    assert!(err("print(0x);").title.contains("数の書き方"));
+    assert!(err("print(0x1_0000_0000_0000_0000);").title.contains("大きすぎ"));
+}
+
+#[test]
+fn constants() {
+    assert_eq!(
+        ok("
+const MAX = 5000;
+const NAME = \"jw\";
+const HOUR = 60 * 60;
+const BIG = HOUR * 1000;
+const RATE = 1.5;
+const ON = true;
+const MASK = 0xff;
+fn f() {
+    let u8 b = MASK;
+    print(b, MAX + 1, NAME, HOUR, BIG, RATE * 2.0, ON, MASK & 0x0f);
+}
+fn main() {
+    f();
+    let u16 w = HOUR;
+    let g = () -> MAX * 2;
+    print(w, \"{NAME}-{MAX}\", g());
+}"),
+        "255 5001 jw 3600 3600000 3.0 true 15\n3600 jw-5000 10000\n"
+    );
+}
+
+#[test]
+fn constant_errors() {
+    let e = |src: &str| run_source(src, false).error.expect("expected an error").title;
+    assert!(e("const A = B; const B = 1; fn main() {}").contains("使えない名前"));
+    assert!(e("const A = 1; fn main() { let A = 2; }").contains("定数の名前"));
+    assert!(e("const A = 1; fn main() { for A in range(3) {} }").contains("定数の名前"));
+    assert!(e("const A = 1; fn A() {} fn main() {}").contains("定数の名前"));
+    assert!(e("fn i64 f() { 1 } const A = f(); fn main() {}").contains("定数ではありません"));
+    assert!(e("pub const A = 1; fn main() {}").contains("pub"));
+    assert!(e("const A = 1; const A = 2; fn main() {}").contains("二重"));
+    assert!(e("const A = 300; fn main() { let u8 b = A; }").contains("入りません"));
+}

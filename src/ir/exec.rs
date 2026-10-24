@@ -254,6 +254,7 @@ impl<'a> Machine<'a> {
                 (UnOp::Neg, Value::Int(n, t)) => Ok(Value::Int(t.wrap(-n), t)),
                 (UnOp::Neg, Value::Float(x)) => Ok(Value::Float(-x)),
                 (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                (UnOp::BitNot, Value::Int(n, t)) => Ok(Value::Int(t.wrap(!n), t)),
                 (_, other) => Err(Diagnostic::new("型が合わない演算です")
                     .primary(*span, format!("{} にはこの演算を使えません", other.type_name()))),
             },
@@ -396,6 +397,10 @@ impl<'a> Machine<'a> {
                 }
                 Ok(Value::Str(text_rc(shown?.as_str())))
             }
+            Rvalue::Builtin(name, ops, _) if name == "f64.to_bits" => match self.operands(f, locs, ops)?.as_slice() {
+                [Value::Float(x)] => Ok(Value::Int(x.to_bits() as i128, IntTy::U64)),
+                _ => unreachable!("to_bits on a float"),
+            },
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;
                 let Value::Str(text) = vals.remove(0) else { unreachable!("string method on a string") };
