@@ -59,3 +59,38 @@ A5 は速さの問題なので、ベンチマーク（`bench/`）にも文字列
 足した機能だけで書いた小さなコンパイラ。`let x = 式; print 式;` の言語を字句解析 → 構文木 → LLVM IR にして
 `write_file` で書き、`run_command` で clang を呼んで実行ファイルにし、動かす。書いてみて見つかった不便が C5（もう直したので、let のところは match の中で return してもよい）。
 （デバッグビルドの jabberwock は IR でももう一度動かして突き合わせるので、`run_command` の出力が 2 回出る。）
+
+## 設計方針（案。2026-10-24）
+
+jabberwock で書いたコンパイラ（以下 jwc）をどう作り、どう Windows で動かすか。
+
+### 1. 出力はいまと同じ「LLVM のテキスト → clang」
+
+- jwc も今の Rust 版と同じく `.ll` を書き、clang で実行ファイルにする。アセンブラやリンカーは自分で作らない。
+- 書き出す `.ll` には OS の印（target triple）を入れていない。clang が自分の OS に合わせて決めるので、**同じ `.ll` が Windows でも Linux でも使える**。
+- OS ごとに違うのは実行時ライブラリ `jw_rt.c` の `#ifdef _WIN32` の部分（端末の UTF-8・引数の UTF-16・錠・ファイル・コマンド）と、clang に渡すつなぐ指定（Windows は `-lshell32`、ほかは `-lm -pthread`）だけ。
+- なので jwc そのものは OS を気にせず書ける。「Windows のコンパイラ」は、jwc のソースを Windows で `jabberwock build` したもの（`jwc.exe`）になる。
+
+### 2. 作るのは「コンパイラに要る段」だけ
+
+| 段 | 今の Rust 版 | jwc で |
+|---|---|---|
+| 字句・構文・モジュール | lexer / parser / modules（約 2,750 行） | 作る |
+| 型検査 | types（約 2,900 行） | 作る |
+| IR への書き出し | ir/lower（約 1,850 行） | 作る |
+| LLVM の書き出し | ir/llvm（約 4,070 行） | 作る |
+| 世代チェックを消す解析 | ir/analyze（約 420 行） | あとで（なくても正しく動く。速さだけ） |
+| インタプリタ・IR の実行・AST の解析 | interp / ir/exec / analyze | 作らない（Rust 版に残して、正しさの基準にする） |
+
+### 3. 正しさは Rust 版との突き合わせで確かめる
+
+- 段ごとに、同じ入力で Rust 版と同じものが出るかを比べる（`--ir` の IR のテキスト、`--ll` の LLVM のテキスト）。今あるテストの jabberwock プログラムをそのまま入力に使える。
+- 最後は自分で自分をコンパイルする: Rust 版で作った jwc（1 代目）が jwc をコンパイルして 2 代目を作り、2 代目が作った `.ll` が 1 代目のものと一字一句同じなら完成。
+- Rust 版はそのあとも残す（インタプリタと、言語を変えるときの基準として）。
+
+### 4. 順番
+
+1. **Windows で今の Rust 版が本当に動くか確かめる。** `jw_rt.c` の Windows の部分は、Linux で文法を調べただけで、まだ一度も Windows で動かしていない。GitHub Actions の Windows で `JW_NATIVE=1 cargo test` を走らせるのが一番早い。
+2. jwc を字句 → 構文 → 型検査 → lower → llvm の順に書き、段ごとに突き合わせる。
+3. 自分で自分をコンパイルする。
+4. Windows で jwc.exe を作って、同じ突き合わせをする。
