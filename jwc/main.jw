@@ -2,12 +2,15 @@
 // 使い方: jwc --tokens <file.jw>   トークンを 1 行に 1 つ出す（Rust 版の `jabberwock --tokens` と同じ形）
 //         jwc --ast <file.jw>      構文木を出す（Rust 版の `jabberwock --ast` と同じ形）
 //         jwc --typed <file.jw>    型検査の結果つきの構文木を出す（Rust 版の `jabberwock --typed` と同じ形）
+//         jwc --ir-raw / --ir <file.jw>  IR を出す（解析の前 / 後）
+//         jwc --ll <file.jw>       LLVM のテキストを出す（Rust 版の `jabberwock --ll` と同じ形）
 use analyze;
 use ast;
 use astdump;
 use diag;
 use ir;
 use lexer;
+use llvmfn;
 use lower;
 use modules;
 use parser;
@@ -101,10 +104,19 @@ fn str err_text(str mode, str text) {
     if (mode == "--ir-raw" || mode == "--ir") && text.ends_with("\n") { text.slice(0, text.len() - 1) } else { text }
 }
 
+/// 末尾の改行を 1 つ削る（print / eprint が改行を足すので）
+fn str chop(str text) { if text.ends_with("\n") { text.slice(0, text.len() - 1) } else { text } }
+
+/// `--ll` のエラー（Rust 版は標準エラーに出して 1 で終わる）
+fn fail_ll(str text) {
+    eprint(text);
+    exit(1);
+}
+
 fn main() {
     let a = args();
-    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw" && a[0] != "--ir") {
-        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw> / jwc --ir <file.jw>");
+    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw" && a[0] != "--ir" && a[0] != "--ll") {
+        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw> / jwc --ir <file.jw> / jwc --ll <file.jw>");
         exit(2);
     }
     let path = a[1];
@@ -133,6 +145,20 @@ fn main() {
                 let q = ast.number(p);
                 match typeck.check(q) {
                     case Ok(c) -> {
+                        if a[0] == "--ll" {
+                            match lower.lower(q, c) {
+                                case Ok(ip) -> {
+                                    let mut prog = ip;
+                                    analyze.analyze(ref mut prog);
+                                    match llvmfn.emit(prog, c, ns, l.srcs) {
+                                        case Ok(text) -> print(chop(text));
+                                        case Err(why) -> fail_ll("まだ LLVM に書き出せない書き方があります: " + why + "\n");
+                                    }
+                                }
+                                case Err(why) -> fail_ll("まだ IR に書き出せない書き方があります: " + why + "\n");
+                            }
+                            return;
+                        }
                         if a[0] == "--ir-raw" || a[0] == "--ir" {
                             match lower.lower(q, c) {
                                 case Ok(ip) -> {
@@ -149,10 +175,16 @@ fn main() {
                         for w in c.warns { out += diag.render(w, ns, l.srcs); }
                         print(out + astdump.dump_typed(q, c));
                     }
-                    case Err(d) -> print(err_text(a[0], diag.render(d, ns, l.srcs)));
+                    case Err(d) -> {
+                        if a[0] == "--ll" { fail_ll(diag.render(d, ns, l.srcs)); }
+                        print(err_text(a[0], diag.render(d, ns, l.srcs)));
+                    }
                 }
             }
-            case Err(d) -> print(err_text(a[0], diag.render(d, ns, l.srcs)));
+            case Err(d) -> {
+                if a[0] == "--ll" { fail_ll(diag.render(d, ns, l.srcs)); }
+                print(err_text(a[0], diag.render(d, ns, l.srcs)));
+            }
         }
         return;
     }

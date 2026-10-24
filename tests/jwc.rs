@@ -15,6 +15,11 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Rust 版を大きなスタックで動かす（デバッグビルドは、長い式（llvm.jw の PRELUDE）でテストのスレッドのスタックがあふれる）
+fn big<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new().stack_size(256 << 20).spawn(f).unwrap().join().unwrap()
+}
+
 /// jwc の実行ファイル（テストの中で 1 回だけ作る）
 fn jwc() -> PathBuf {
     static EXE: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -23,7 +28,7 @@ fn jwc() -> PathBuf {
         let dir = root().join("jwc");
         let src = std::fs::read_to_string(dir.join("main.jw")).unwrap();
         let read = move |name: &str| std::fs::read_to_string(dir.join(format!("{}.jw", name))).ok();
-        let ll = llvm_build(&src, &read, "jwc/main.jw", false).expect("jwc を LLVM に書き出せる");
+        let ll = big(move || llvm_build(&src, &read, "jwc/main.jw", false)).expect("jwc を LLVM に書き出せる");
         let out = std::env::temp_dir().join(format!("jw-jwc-test-{}", std::process::id()));
         native::compile(&ll, &out, "jwc", "-O1").expect("jwc を clang でコンパイルできる")
     })
@@ -113,7 +118,8 @@ fn same_ast(path: &Path) {
     let name = path.to_str().unwrap();
     let dir = path.parent().unwrap().to_path_buf();
     let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
-    let want = jabberwock::ast_dump(&src, &read, name) + "\n";
+    let n = name.to_string();
+    let want = big(move || jabberwock::ast_dump(&src, &read, &n)) + "\n";
     assert_eq!(run_jwc(&["--ast", name]), want, "{}", name);
 }
 
@@ -252,6 +258,7 @@ fn ast_with_modules() {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));
         same_irs(&dir.join(format!("{}.jw", n)));
+        same_ll(&dir.join(format!("{}.jw", n)));
     }
 }
 
@@ -261,7 +268,8 @@ fn same_typed(path: &Path) {
     let name = path.to_str().unwrap();
     let dir = path.parent().unwrap().to_path_buf();
     let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
-    let want = jabberwock::typed_dump(&src, &read, name) + "\n";
+    let n = name.to_string();
+    let want = big(move || jabberwock::typed_dump(&src, &read, &n)) + "\n";
     assert_eq!(run_jwc(&["--typed", name]), want, "{}", name);
 }
 
@@ -271,12 +279,28 @@ fn same_irs(path: &Path) {
     same_ir(path, true);
 }
 
+/// `--ll` の出力が Rust 版（`llvm_text`）と同じか。書けないときは、どちらも標準エラーに同じ文を出す
+fn same_ll(path: &Path) {
+    let src = std::fs::read_to_string(path).unwrap();
+    let name = path.to_str().unwrap();
+    let dir = path.parent().unwrap().to_path_buf();
+    let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
+    let out = Command::new(jwc()).args(["--ll", name]).output().expect("jwc を起動できる");
+    let n = name.to_string();
+    let want = big(move || jabberwock::llvm_text(&src, &read, &n));
+    match want {
+        Ok(want) => assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{}", name),
+        Err(e) => assert_eq!(String::from_utf8_lossy(&out.stderr), e + "\n", "{}", name),
+    }
+}
+
 fn same_ir(path: &Path, analyze: bool) {
     let src = std::fs::read_to_string(path).unwrap();
     let name = path.to_str().unwrap();
     let dir = path.parent().unwrap().to_path_buf();
     let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
-    let want = jabberwock::ir_dump(&src, &read, name, analyze);
+    let n = name.to_string();
+    let want = big(move || jabberwock::ir_dump(&src, &read, &n, analyze));
     let got = run_jwc(&[if analyze { "--ir" } else { "--ir-raw" }, name]);
     assert_eq!(got.strip_suffix('\n').unwrap_or(&got), want.strip_suffix('\n').unwrap_or(&want), "{}", name);
 }
@@ -290,6 +314,7 @@ fn typed_and_ir_of_the_repository_files() {
         for p in jw_files(&root().join(dir)) {
             same_typed(&p);
             same_irs(&p);
+            same_ll(&p);
         }
     }
 }
@@ -309,5 +334,6 @@ fn ast_typed_and_ir_of_the_test_programs() {
         same_ast(&p);
         same_typed(&p);
         same_irs(&p);
+        same_ll(&p);
     }
 }
