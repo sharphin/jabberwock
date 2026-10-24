@@ -1737,6 +1737,8 @@ static void remember_sent(void *p, const WSite *why) {
 }
 
 void jw_send_block(void *p, const WSite *why) {
+    // 読むだけの写し（下の 1 ビット）は送れない（型検査と取り出しのエラーで来ないはず。来たら区画を壊す前に止める）
+    if ((uintptr_t)p & 1) jw_bug("読むだけの写しをほかのスレッドへ送ろうとした");
     remember_sent(p, why);
     HDR(p)->gen += 2;
 }

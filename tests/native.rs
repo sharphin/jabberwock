@@ -219,3 +219,27 @@ fn freed_site_is_forgotten_after_4096_reuses() {
 ";
     assert_eq!(err, want);
 }
+
+#[test]
+fn own_inside_a_for_element_cannot_be_taken_out() {
+    // for の要素の中の own は読むだけの写し。取り出すと、型は own なのに写しが外へ出てしまう（検査を消す解析・spawn・書き換えの穴）
+    let base = "struct P { i64 x; }\nstruct S { own P b; }\n";
+    let freed = "fn main() {\n    let S[] ss = [S { b: own P { x: 1 } }];\n    let mut ss2 = ss;\n    for s in ss2 {\n        \
+                 let mut q = s.b;\n        ss2.pop();\n        let n = own P { x: 777 };\n        print(q.x);\n        q.x = 4242;\n        \
+                 print(n.x);\n    }\n}";
+    same_as_interp("view_freed", &format!("{}{}", base, freed));
+    let write = "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        let mut q = s.b;\n        q.x = 4242;\n    }\n    \
+                 print(ss[0].b.x);\n}";
+    same_as_interp("view_write", &format!("{}{}", base, write));
+    let send = "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        let q = s.b;\n        \
+                let t = spawn(() -> q.x);\n        print(t.join());\n    }\n}";
+    same_as_interp("view_send", &format!("{}{}", base, send));
+    let closure = "fn main() {\n    let s = S { b: own P { x: 1 } };\n    let f = () -> { let q = s.b; q.x };\n    print(f());\n}";
+    same_as_interp("view_closure", &format!("{}{}", base, closure));
+    let array = "struct Q { (own P)[2] a; }\nfn main() {\n    let (own P)[2] arr = [own P { x: 1 }, own P { x: 2 }];\n    \
+                 let qs = [Q { a: arr }];\n    for q in qs {\n        let a = q.a;\n        print(a[0].x);\n    }\n}";
+    same_as_interp("view_array", &format!("{}{}", base, array));
+    // 借りるのはよい
+    let borrow = "fn main() {\n    let ss = [S { b: own P { x: 5 } }];\n    for s in ss {\n        let q = ref s.b;\n        print(q.x, s.b.x);\n    }\n}";
+    same_as_interp("view_borrow", &format!("{}{}", base, borrow));
+}

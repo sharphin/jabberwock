@@ -1181,17 +1181,8 @@ impl<'p> Module<'p> {
 
     fn gen_hazard(&mut self, b: &mut B, t: &Ty) -> G<String> {
         Ok(match t {
-            Ty::Own(_) => {
-                let p = if is_iface_ptr(t) {
-                    let v = b.val("load %iown, ptr %p");
-                    b.val(format!("extractvalue %iown {}, 0", v))
-                } else {
-                    b.val("load ptr, ptr %p")
-                };
-                let bits = b.val(format!("ptrtoint ptr {} to i64", p));
-                let tag = b.val(format!("and i64 {}, 1", bits));
-                b.val(format!("icmp eq i64 {}, 0", tag))
-            }
+            // 読むだけの写し（下の 1 ビット）でも取り出せない（写しが own の型で外へ出ないように。interp の `takes_own`）
+            Ty::Own(_) => "true".to_string(),
             Ty::Struct(..) | Ty::List(_) | Ty::Map(..) | Ty::Task(_) => "true".to_string(),
             Ty::Fn(..) => env_flag(b, "%p", 3),
             Ty::Enum(..) => {

@@ -165,6 +165,8 @@
   ただし、その場で作ったリスト（`a.drain()` など。型検査が `ForEach.consume` を立てる）は要素を値で受け取る（interp の `exec_for_take`・lower の `for_take`。
   逆順にして後ろから pop する。analyze はその iter を eval で読む）。
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
+  写しの中の own（own の配列）を値として取り出すのはエラー（型は own なのに中身が写しになるため）。型検査が `p.f` / `a[i]` / `*p` の型を見て `Expr.takes_own` を立て、
+  interp はそれを値として読むとエラー。IR の exec は copy_out の行き先の型（`holds_own`）、llvm.rs / jwc の Hazard は own なら必ず真。
 
 - モジュール: `modules::Loader` が `use` をたどってファイルを読み（使われる側が先。輪はエラー）、各ファイルを
   `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー。`.` のすぐあとの名前はフィールドなのでまとめない）、
@@ -219,6 +221,7 @@
   事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `Pinned`。
   前向きのデータフローで、合流は共通部分。引数が Pinned かは関数をまたいで固定点まで回す（呼ばれない関数・関数の値の引数は何も仮定しない）。
   **根拠: own 型の局所変数にはいつも own が入っている**（自動で借りた一時的な値・`for` の要素の写しは `ref` 型にする。exec が debug_assert で確かめる）。
+  念のため copy_out の結果には Own を付けない（写しの own は取り出しでエラーになる）。
   消せた数は AST の解析以上（テストの 348 本すべてで、AST 110 箇所 → IR 451 箇所。数える場所の数は IR のほうが多い）。
 - スレッド（interp）: 型は `Ty::Task(R)` / `Ty::Chan(T)`。送れる型かは types.rs の `sendable`（spawn の取り込み・戻り値・chan の T）。
   interp はスレッドごとに別の `Interp` を本物のスレッドで動かす。構文木は Rc を含むので、新しいスレッドは `World.load`（lib.rs の `reloader`）で

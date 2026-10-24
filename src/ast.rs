@@ -157,11 +157,14 @@ pub struct Expr {
     pub borrow: Cell<bool>,
     /// 型検査が「この整数の書き方は小数（f64）として使う」と決めた（`let f64 x = 1;` の `1`）
     pub float: Cell<bool>,
+    /// 型検査が「値として読むと own を取り出すことになる場所」と決めた `p.f` / `a[i]` / `*p`（型が own か、own の配列）。
+    /// interp はこれを値として読むとエラーにする（中身が for の要素などの読むだけの写しでも。写しは own の型で外へ出せない）
+    pub takes_own: Cell<bool>,
 }
 
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Expr {
-        Expr { kind, span, int: Cell::new(None), borrow: Cell::new(false), float: Cell::new(false) }
+        Expr { kind, span, int: Cell::new(None), borrow: Cell::new(false), float: Cell::new(false), takes_own: Cell::new(false) }
     }
 }
 

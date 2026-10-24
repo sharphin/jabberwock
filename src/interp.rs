@@ -134,13 +134,22 @@ pub enum Callee {
 #[derive(Debug, Clone)]
 pub struct RefVal {
     pub(crate) slot: usize,
-    pub(crate) generation: u32,
+    pub(crate) generation: u64,
     /// スロットの中のどこを指すか（構造体のフィールドと配列の添字の道筋）。own の先を指すなら空
     pub(crate) path: Vec<usize>,
     pub(crate) borrowed_at: Span,
     pub(crate) what: String,
     /// `ref mut` で借りたか（書き換えられるか）
     pub(crate) mutable: bool,
+}
+
+/// 取り出せない値の名前。own の型の場所にある読むだけの写し（for の要素の中など）は ref の値だが、own として言う
+fn taken_name(v: &Value, e: &Expr) -> &'static str {
+    if e.takes_own.get() && matches!(v, Value::Ref(_)) {
+        "own"
+    } else {
+        v.type_name()
+    }
 }
 
 impl Value {
@@ -203,7 +212,7 @@ impl Value {
 // ---------------------------------------------------------------- ヒープ
 
 pub(crate) struct Slot {
-    pub(crate) generation: u32,
+    pub(crate) generation: u64,
     pub(crate) value: Option<Value>,
 }
 
@@ -216,7 +225,7 @@ pub(crate) struct Heap {
     pub(crate) slots: Vec<Slot>,
     free_list: Vec<usize>,
     /// (スロット, その世代) がいつ・なぜ解放されたか。古い参照のエラー報告に使う。
-    history: HashMap<(usize, u32), Freed>,
+    history: HashMap<(usize, u64), Freed>,
 }
 
 impl Heap {
@@ -314,7 +323,7 @@ impl Access {
 /// `back` は値を戻す場所と、その場所を持つスロットの（貸したときの）世代
 struct Lent {
     slot: usize,
-    back: Option<(Place, Option<(usize, u32)>)>,
+    back: Option<(Place, Option<(usize, u64)>)>,
 }
 
 enum Flow {
@@ -2081,8 +2090,8 @@ impl Interp {
             ExprKind::Ref(inner, mutable) => self.make_ref(inner, *mutable, e.span),
             ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if self.has_own(&v) || v.moves() {
-                    return Err(Diagnostic::new(format!("ポインタの先にある {} は取り出せません", v.type_name()))
+                if self.has_own(&v) || v.moves() || e.takes_own.get() {
+                    return Err(Diagnostic::new(format!("ポインタの先にある {} は取り出せません", taken_name(&v, e)))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`*p = ...` で置き換えてください"));
                 }
@@ -2090,8 +2099,8 @@ impl Interp {
             }
             ExprKind::Field(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if self.has_own(&v) || v.moves() {
-                    return Err(Diagnostic::new(format!("フィールドにある {} は取り出せません", v.type_name()))
+                if self.has_own(&v) || v.moves() || e.takes_own.get() {
+                    return Err(Diagnostic::new(format!("フィールドにある {} は取り出せません", taken_name(&v, e)))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`p.f = ...` で置き換えてください"));
                 }
@@ -2163,8 +2172,8 @@ impl Interp {
             }
             ExprKind::Index(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if self.has_own(&v) || v.moves() {
-                    return Err(Diagnostic::new(format!("配列の中にある {} は取り出せません", v.type_name()))
+                if self.has_own(&v) || v.moves() || e.takes_own.get() {
+                    return Err(Diagnostic::new(format!("配列の中にある {} は取り出せません", taken_name(&v, e)))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref a[i]` で借りるか、`a[i] = ...` で置き換えてください"));
                 }
@@ -2676,7 +2685,7 @@ impl Interp {
             let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
             access.through(&rv).require(span, &format!("書き換えるメソッド `{}` を呼ぼうとした", name))?;
         }
-        let this = |slot: usize, generation: u32, what: String| {
+        let this = |slot: usize, generation: u64, what: String| {
             Value::Ref(RefVal { slot, generation, path: Vec::new(), borrowed_at: recv.span, what, mutable })
         };
         let mut lent: Option<Lent> = None;

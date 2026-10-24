@@ -162,8 +162,13 @@ struct Cx {
                 if pl.proj.len() == 0 {
                     let x = pl.local;
                     kill_value(ref mut facts, x);
-                    // own の型の変数に入れた値は、その変数が持つ own
-                    if l_own[x] { f = OWN; }
+                    // own の型の変数に入れた値は、その変数が持つ own。ただし場所から取り出した値（copy_out）は読むだけの写しでありうるので
+                    // 何も仮定しない（Rust 版と同じ）
+                    let copied = match ref v {
+                        case CopyOut(q, w2, s2) -> true;
+                        default -> false;
+                    };
+                    if l_own[x] && !copied { f = OWN; }
                     let self_ref = (is_ref_to(f) || is_ref_slot(f)) && target(f) == x;
                     if f != 0 && !self_ref { put(ref mut facts, x, f); }
                 }

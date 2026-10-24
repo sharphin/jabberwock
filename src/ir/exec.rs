@@ -121,6 +121,16 @@ impl<'a> Machine<'a> {
     fn inst(&mut self, f: &Func, locs: &mut [Loc], inst: &Inst) -> R<()> {
         match inst {
             Inst::Assign { place, value, span, what } => {
+                // own（own の配列）を場所から取り出すのは、中身が読むだけの写しでもエラー（interp の `takes_own`）
+                if let Rvalue::CopyOut(from, what, sp) = value {
+                    let t = &f.locals[place.local].ty;
+                    if place.proj.is_empty() && holds_own(t) {
+                        self.resolve(f, locs, from)?;
+                        let name = if matches!(t, Ty::Own(_)) { "own" } else { "配列" };
+                        return Err(Diagnostic::new(format!("{}にある {} は取り出せません", what, name))
+                            .primary(*sp, "所有権をここから動かすことはできない"));
+                    }
+                }
                 let v = self.rvalue(f, locs, value)?;
                 if place.proj.is_empty() {
                     // 解析は「own 型の変数には own が入っている」を根拠にする
@@ -686,4 +696,13 @@ fn at_mut<'v>(it: &'v mut Interp, slot: usize, path: &[usize]) -> &'v mut Value 
         };
     }
     v
+}
+
+/// 値として取り出すと own を動かすことになる型（types.rs の `holds_own` と同じ）
+fn holds_own(t: &Ty) -> bool {
+    match t {
+        Ty::Own(_) => true,
+        Ty::Array(x, _) => holds_own(x),
+        _ => false,
+    }
 }

@@ -172,8 +172,10 @@ impl<'a> Cx<'a> {
                 if place.proj.is_empty() {
                     let x = place.local;
                     kill_value(facts, x);
-                    // own の型の変数に入れた値は、その変数が持つ own
-                    let f = if matches!(self.locals[x].ty, Ty::Own(_)) { Some(Fact::Own) } else { f };
+                    // own の型の変数に入れた値は、その変数が持つ own。ただし場所から取り出した値（copy_out）は読むだけの写しでありうるので
+                    // 何も仮定しない（取り出しは実行時にエラーになるが、念のため）
+                    let copied = matches!(value, Rvalue::CopyOut(..));
+                    let f = if matches!(self.locals[x].ty, Ty::Own(_)) && !copied { Some(Fact::Own) } else { f };
                     match f {
                         Some(Fact::RefTo(y) | Fact::RefSlot(y)) if y == x => {}
                         Some(f) => {

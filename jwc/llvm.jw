@@ -1262,13 +1262,8 @@ pub struct Module {
 
     fn mut Result<str, str> gen_hazard(ref mut B b, ref ty.Ty t) {
         let k = ty.tag(t);
-        if k == "Own" {
-            let p = iface_load(b, t);
-            let bits = b.val("ptrtoint ptr " + p + " to i64");
-            let tg = b.val("and i64 " + bits + ", 1");
-            return Ok(b.val("icmp eq i64 " + tg + ", 0"));
-        }
-        if k == "Struct" || k == "List" || k == "Map" || k == "Task" { return Ok("true"); }
+        // 読むだけの写し（下の 1 ビット）でも取り出せない（Rust 版と同じ）
+        if k == "Own" || k == "Struct" || k == "List" || k == "Map" || k == "Task" { return Ok("true"); }
         if k == "Fn" { return Ok(env_flag(b, "%p", 3)); }
         if k == "Enum" {
             if trivial(t)? || !enum_moves(t)? { return Ok("false"); }

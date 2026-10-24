@@ -1436,6 +1436,9 @@ impl<'a> Checker<'a> {
     fn expr_ctx(&mut self, e: &Expr, want_value: bool, hint: Option<&Ty>) -> R<Ty> {
         self.pending_targs = None;
         let t = self.expr_kind(e, want_value, hint)?;
+        if matches!(e.kind, ExprKind::Field(..) | ExprKind::Index(..) | ExprKind::Deref(..)) {
+            e.takes_own.set(holds_own(&t));
+        }
         // 同じ式を何度か調べることがある（警告のための調べ直しなど）。最後に調べた結果を残す
         self.info.expr_ty.insert(e as *const Expr, t.clone());
         let instantiates = matches!(
@@ -2747,6 +2750,15 @@ impl<'a> Checker<'a> {
             ExprKind::Var(n) => self.lookup(n).map_or(e.span, |v| v.decl),
             _ => e.span,
         }
+    }
+}
+
+/// 値として取り出すと own を動かすことになる型（own か、own の配列）。構造体・リスト・enum などはムーブする値なので、別に実行時に弾く
+fn holds_own(t: &Ty) -> bool {
+    match t {
+        Ty::Own(_) => true,
+        Ty::Array(x, _) => holds_own(x),
+        _ => false,
     }
 }
 
