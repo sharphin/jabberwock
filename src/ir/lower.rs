@@ -635,9 +635,9 @@ impl<'a, 'p> FnLower<'a, 'p> {
             Ty::Map(_, v) => (**v).clone(),
             _ => return Err("配列でないものの for".to_string()),
         };
-        let key_ty = match &cty {
-            Ty::Map(k, _) => (**k).clone(),
-            _ => Ty::Int(IntTy::I64),
+        let map_key = match &cty {
+            Ty::Map(k, _) => Some((**k).clone()),
+            _ => None,
         };
         // 隠れた変数（ループの外へ出るとき drop する）
         self.scopes.push(Vec::new());
@@ -655,11 +655,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
         if ptr {
             src.proj.push(Proj::Deref(ast::Check::Required, iter.span));
         }
-        if key.is_some() && src.proj.iter().any(|p| matches!(p, Proj::Index(..))) {
+        if key.is_some() && matches!(cty, Ty::Map(..)) && src.proj.iter().any(|p| matches!(p, Proj::Index(..))) {
             return Err("要素の中の辞書の for (k, v)".to_string());
         }
         let what = format!("{} の要素", describe(iter));
-        self.each_in(key, var, var_span, iter.span, elem, key_ty, src, what, Each::Body(body, els))
+        self.each_in(key, var, var_span, iter.span, elem, map_key, src, what, Each::Body(body, els))
     }
 
     /// for の本体（`for_each`）と `a.map(f)` / `a.filter(f)` で共通: 始めた時点の要素を、読むだけの形で 1 つずつ渡す。
@@ -672,7 +672,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
         var_span: Span,
         iter_span: Span,
         elem: Ty,
-        key_ty: Ty,
+        map_key: Option<Ty>,
         src: Place,
         what: String,
         act: Each,
@@ -683,8 +683,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
         self.assign(items, Rvalue::Items { place: src.clone(), what: what.clone(), span: var_span }, var_span);
         let keys = match key {
             Some(_) => {
+                // リストの添字は写しから数える（src の中の添字を 2 回読まないため）
+                let (key_ty, from) = match map_key {
+                    Some(k) => (k, src),
+                    None => (Ty::Int(IntTy::I64), Place::local(items, var_span)),
+                };
                 let k = self.declare("", Ty::List(Box::new(key_ty)), false, var_span);
-                self.assign(k, Rvalue::Keys(src), var_span);
+                self.assign(k, Rvalue::Keys(from), var_span);
                 Some(k)
             }
             None => None,
@@ -1715,7 +1720,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.scopes.push(vec![(String::new(), f)]);
                 let what = format!("{} の要素", describe(recv));
                 let act = Each::Map { f, out, filter: name == "filter", rty };
-                self.each_in(None, "", sp, recv.span, *elem, Ty::Int(IntTy::I64), src, what, act)?;
+                self.each_in(None, "", sp, recv.span, *elem, None, src, what, act)?;
                 self.drop_temp(&temp, sp);
                 Ok(Operand::Move(out, sp))
             }

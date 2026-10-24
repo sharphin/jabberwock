@@ -217,7 +217,7 @@ pub struct Info {
     ty.Ty[] ret_tys;
 }
 
-fn Info new_info(i64 n) {
+pub fn Info new_info(i64 n) {
     let mut info = Info {
         has_ty: [], tys: [], ints: [], floats: [], borrows: [], copies: [], seqs: [], lists: [], menums: [], mtakes: [],
         consumes: [], lam_at: [], lams: [], targ_at: [], targ_maps: [], var_at: [], var_spans: [], var_tys: [],
@@ -828,6 +828,7 @@ pub struct Checker {
                         h = hint_of(ty.Ty.Fn(own ty.substs(ps, m), own ty.Ty.Never));
                     }
                 }
+                if auto_ref && h.some && !use_inits { h = hint_of(arg_hint(argv[i], ty.cl(h.t))); }
                 let t0 = if use_inits { expr_h(inits[i].value, h)? } else { expr_h(argv[i], h)? };
                 let is_unit_kind = if use_inits { is_unit_expr(inits[i].value) } else { is_unit_expr(argv[i]) };
                 if ty.is(t0, "Unit") && !is_unit_kind {
@@ -1417,7 +1418,7 @@ pub struct Checker {
             return Err(arity_error(name, ps.len(), argv.len(), span));
         }
         for (i, a) in argv {
-            let h = hint_of(ty.cl(ps[i]));
+            let h = hint_of(arg_hint(a, ty.cl(ps[i])));
             let got = expr_h(a, h)?;
             let got2 = auto_borrow(a, got, ps[i])?;
             if !fits(got2, ps[i]) { return Err(mismatch(ps[i], got2, a.span)); }
@@ -1833,7 +1834,7 @@ pub struct Checker {
             case Lambda(l) -> lambda(e, l, hint);
             case Var(name) -> {
                 match use_var(name) {
-                    case Some(v) -> return Ok(v.t);
+                    case Some(v) -> return Ok(ty.cl(v.t));
                     case None -> {}
                 }
                 // 名前のある関数を値として使う（`v.sort_by(less)`）
@@ -2579,7 +2580,7 @@ pub struct Checker {
             require_mut(recv, rt, span, "書き換えるメソッド `{name}` を呼ぼうとした")?;
         }
         for (i, a) in argv {
-            let h = hint_of(ty.cl(ps[i]));
+            let h = hint_of(arg_hint(a, ty.cl(ps[i])));
             let got = expr_h(a, h)?;
             let got2 = auto_borrow(a, got, ps[i])?;
             if !fits(got2, ps[i]) { return Err(mismatch(ps[i], got2, a.span)); }
@@ -2942,8 +2943,15 @@ pub struct Checker {
 
     /// 引数 `a`（型 `t`）を、引数の型 `want` が `ref T` なら自動で借りる。借りるのは場所だけ
     fn mut Result<ty.Ty, diag.Diag> auto_borrow(ref ast.Expr a, ty.Ty t, ref ty.Ty want) {
-        if !(ty.is(want, "Ref") && !ty.ref_mut(want)) || ty.is(t, "Ref") || !is_place(a) {
+        if !(ty.is(want, "Ref") && !ty.ref_mut(want)) || ty.is(t, "Ref") {
             return Ok(t);
+        }
+        if !is_place(a) {
+            // 一時的な値も借りる（呼び出しが終わったら捨てる）
+            if ty.is(t, "Unit") || ty.is(t, "Never") || ty.is(t, "Fn") { return Ok(t); }
+            info.borrows[a.id] = true;
+            let target = if ty.is(t, "Own") { ty.inner(t) } else { t };
+            return Ok(ty.Ty.Ref(own target, false));
         }
         let target = if ty.has_pointee(t) {
             ty.inner(t)
@@ -3038,6 +3046,19 @@ fn bool has_span(ref i64[] xs, i64 x) {
         if y == x { return true; }
     }
     false
+}
+
+/// `ref T` の引数に書いた値の式（`[1, 2]`・`None`・`5` など）は、`T` を入れる先として調べる
+fn ty.Ty arg_hint(ref ast.Expr a, ty.Ty p) {
+    let literal = match ref a.kind {
+        case ArrayLit(xs) -> true;
+        case MapLit(xs) -> true;
+        case ArrayRepeat(x, n) -> true;
+        case Variant(en, vn, xs) -> true;
+        case StructLit(n, xs) -> true;
+        default -> is_const_tree(a);
+    };
+    if literal && ty.is(p, "Ref") && !ty.ref_mut(p) { ty.inner(p) } else { p }
 }
 
 fn i64 arg_order(ref ast.Expr a) {

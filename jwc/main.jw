@@ -1,6 +1,7 @@
 // jwc: jabberwock で書いた jabberwock のコンパイラ（作りかけ）
 // 使い方: jwc --tokens <file.jw>   トークンを 1 行に 1 つ出す（Rust 版の `jabberwock --tokens` と同じ形）
 //         jwc --ast <file.jw>      構文木を出す（Rust 版の `jabberwock --ast` と同じ形）
+//         jwc --typed <file.jw>    型検査の結果つきの構文木を出す（Rust 版の `jabberwock --typed` と同じ形）
 use ast;
 use astdump;
 use diag;
@@ -94,8 +95,8 @@ fn str dir_of(str path) {
 
 fn main() {
     let a = args();
-    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast") {
-        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw>");
+    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed") {
+        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw>");
         exit(2);
     }
     let path = a[1];
@@ -108,17 +109,30 @@ fn main() {
     };
     let str[] names = [path];
     let str[] srcs = [src];
-    if a[0] == "--ast" {
+    if a[0] == "--ast" || a[0] == "--typed" {
         let mut l = modules.new_loader(dir_of(path));
-        match parse_all(ref mut l, src) {
-            case Ok(p) -> print(astdump.dump(p));
-            case Err(d) -> {
-                let str[] mut ns = [];
-                for (i, n) in l.names {
-                    if i == 0 { ns.push(path); } else { ns.push(n + ".jw"); }
+        let str[] mut ns = [];
+        let r = parse_all(ref mut l, src);
+        for (i, n) in l.names {
+            if i == 0 { ns.push(path); } else { ns.push(n + ".jw"); }
+        }
+        match r {
+            case Ok(p) -> {
+                if a[0] == "--ast" {
+                    print(astdump.dump(p));
+                    return;
                 }
-                print(diag.render(d, ns, l.srcs));
+                let q = ast.number(p);
+                match typeck.check(q) {
+                    case Ok(c) -> {
+                        let mut out = "";
+                        for w in c.warns { out += diag.render(w, ns, l.srcs); }
+                        print(out + astdump.dump_typed(q, c));
+                    }
+                    case Err(d) -> print(diag.render(d, ns, l.srcs));
+                }
             }
+            case Err(d) -> print(diag.render(d, ns, l.srcs));
         }
         return;
     }

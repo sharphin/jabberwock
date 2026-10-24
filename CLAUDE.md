@@ -58,9 +58,9 @@
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
-| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（作りかけ。設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw` |
-| `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形） |
-| `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump` と比べる。clang がなければ何もしない） |
+| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（作りかけ。設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査） |
+| `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
+| `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump` と比べる。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件
@@ -256,6 +256,9 @@
   メソッドの本体は構造体・enum の中身を 2 回読んで（1 回目でメソッドの名前を集める）読みながら `this.名前` にし（`locals` / `marks` で見えている名前を数える）、
   定数はプログラムを 2 回読んで（1 回目で値を決める）使う場所を値にする。引数にその場で書いたクロージャは `Program.borrow_lambdas`（位置）に記録する。
   モジュールは modules.jw（Rust 版と同じ順に読み、`Qualify` で名前を書き換えた写しを作る）。`jabberwock --ast` と一字一句同じ出力にする。
+  型検査（typeck.jw）は types.rs と同じ順に調べて同じエラーを出す。構文木に書けないので、結論は式の番号（`ast.number` が前から順に振る `Expr.id`）で引く
+  表 `typeck.Info` に書く（Rust 版の `Cell` と `TypeInfo`）。入れる先の型（Rust 版の `Option<&Ty>`）は `Hint { some, t }`。
+  モジュールの名前と同じ名前の変数は作れないので、型は `ty.jw`、型検査は `typeck.jw`（`types` は変数名に使っている）。
 - スレッド（LLVM）: 区画の空きリスト・`jw_live`・`jw_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
   生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。
   送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。

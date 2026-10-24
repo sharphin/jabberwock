@@ -1,6 +1,8 @@
 // 構文木を文字にする（Rust 版の src/astdump.rs と同じ形。`jwc --ast`）
 use ast;
 use diag;
+use ty;
+use typeck;
 
 pub fn str escape(str s) {
     let mut out = "";
@@ -41,6 +43,58 @@ fn str ty(ref ast.TypeExpr t) {
 struct Out {
     str[] lines;
     i64[] borrows;
+    // `--typed` のとき、型検査が決めたこと
+    bool typed;
+    ref typeck.Info info;
+
+    /// 型検査が決めたこと（`--typed` のときだけ）
+    fn str marks(ref ast.Expr e) {
+        if !typed { return ""; }
+        let mut out = "";
+        let id = e.id;
+        if info.has_ty[id] { out += " : " + ty.show(info.tys[id]); }
+        if info.ints[id] != "" { out += " int=" + info.ints[id]; }
+        if info.floats[id] { out += " float"; }
+        if info.borrows[id] { out += " borrow"; }
+        match ref e.kind {
+            case Variant(en, vn, xs) -> {
+                let c = info.copies[id];
+                if c >= 0 { out += " copy={c == 1}"; }
+            }
+            case ArrayLit(xs) -> {
+                if info.seqs[id] != "" { out += " seq=" + info.seqs[id]; }
+            }
+            case ArrayRepeat(x, n) -> {
+                if info.lists[id] { out += " list"; }
+            }
+            case MethodCall(r, n, xs) -> {
+                if info.menums[id] != "" { out += " enum=" + info.menums[id]; }
+                if info.mtakes[id] { out += " take"; }
+            }
+            case Lambda(l) -> {
+                let at = info.lam_at[id];
+                if at >= 0 {
+                    let str[] mut bs = [];
+                    for b in info.lams[at].borrowed { bs.push("{b}"); }
+                    let caps = info.lams[at].caps.join(", ");
+                    let bj = bs.join(", ");
+                    out += " caps=[{caps}] borrowed=[{bj}] returns={info.lams[at].returns}";
+                } else {
+                    out += " caps=[] borrowed=[] returns=false";
+                }
+            }
+            default -> {}
+        }
+        let ta = info.targ_at[id];
+        if ta >= 0 {
+            let mut ks = info.targ_maps[ta].ks.map((k) -> k);
+            ks.sort();
+            let str[] mut ps = [];
+            for k in ks { ps.push(k + "=" + ty.show(info.targ_maps[ta].get(k))); }
+            out += " targs={{" + ps.join(", ") + "}}";
+        }
+        out
+    }
 
     fn mut line(i64 depth, str s) {
         let mut pad = "";
@@ -89,7 +143,8 @@ struct Out {
             }
             case ForEach(has_key, key, ks, var, vs, iter, body, has_els, els) -> {
                 let k = if has_key { " key " + key + sp(ks) } else { "" };
-                line(d, "foreach" + k + " " + var + sp(vs));
+                let c = if typed && info.consumes[iter.id] { " consume" } else { "" };
+                line(d, "foreach" + k + " " + var + sp(vs) + c);
                 expr(d + 1, iter);
                 block(d + 1, body);
                 if has_els {
@@ -129,7 +184,7 @@ struct Out {
     }
 
     fn mut expr(i64 d, ref ast.Expr e) {
-        let s = sp(e.span);
+        let s = sp(e.span) + marks(e);
         match ref e.kind {
             case Int(n) -> line(d, "int {n}" + s);
             case Float(v) -> line(d, "float {v}" + s);
@@ -268,9 +323,46 @@ struct Out {
 }
 
 pub fn str dump(ref ast.Program p) {
+    let empty = typeck.new_info(0);
+    dump_with(p, false, empty)
+}
+
+fn str ty_list(ref ty.Ty[] ts) {
+    let str[] mut out = [];
+    for t in ts { out.push(ty.show(t)); }
+    out.join(", ")
+}
+
+/// 型検査の結果つき（`--typed`）
+pub fn str dump_typed(ref ast.Program p, ref typeck.Checker c) {
+    let mut out = dump_with(p, true, c.info);
+    let mut vs = c.info.var_spans.map((x) -> x);
+    vs.sort();
+    for s in vs { out += "\nvar" + sp(s) + " " + ty.show(c.info.var_tys[c.info.var_at[s]]); }
+    let mut rs = c.info.ret_names.map((x) -> x);
+    rs.sort();
+    for n in rs { out += "\nret " + n + " " + ty.show(c.info.ret_tys[c.info.ret_at[n]]); }
+    let mut ss = c.sdefs.map((d) -> d.name);
+    ss.sort();
+    for n in ss {
+        let d = ref c.sdefs[c.s_at[n]];
+        out += "\nstructty " + n + "<" + d.tparams.join(", ") + "> " + ty_list(d.tys);
+    }
+    let mut es = c.edefs.map((d) -> d.name);
+    es.sort();
+    for n in es {
+        let d = ref c.edefs[c.e_at[n]];
+        let str[] mut vv = [];
+        for v in d.vs { vv.push(v.name + "(" + ty_list(v.tys) + ")"); }
+        out += "\nenumty " + n + "<" + d.tparams.join(", ") + "> " + vv.join(" ");
+    }
+    out
+}
+
+fn str dump_with(ref ast.Program p, bool typed, ref typeck.Info info) {
     let i64[] mut bs = [];
     for x in p.borrow_lambdas { bs.push(x); }
-    let mut o = Out { lines: [], borrows: bs };
+    let mut o = Out { lines: [], borrows: bs, typed: typed, info: info };
     for s in p.structs {
         o.line(0, "struct " + s.name + "<" + s.tparams.join(", ") + ">" + sp(s.span));
         for (i, f) in s.fields { o.line(1, "field " + ty(s.field_types[i]) + " " + f); }

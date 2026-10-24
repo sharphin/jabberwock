@@ -250,5 +250,45 @@ fn ast_with_modules() {
     }
     for n in ["ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod"] {
         same_ast(&dir.join(format!("{}.jw", n)));
+        same_typed(&dir.join(format!("{}.jw", n)));
+    }
+}
+
+/// `--typed` の出力が Rust 版（`typed_dump`）と同じか
+fn same_typed(path: &Path) {
+    let src = std::fs::read_to_string(path).unwrap();
+    let name = path.to_str().unwrap();
+    let dir = path.parent().unwrap().to_path_buf();
+    let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
+    let want = jabberwock::typed_dump(&src, &read, name) + "\n";
+    assert_eq!(run_jwc(&["--typed", name]), want, "{}", name);
+}
+
+#[test]
+fn typed_of_the_repository_files() {
+    if !have_clang() {
+        return;
+    }
+    for dir in ["examples", "jwc"] {
+        for p in jw_files(&root().join(dir)) {
+            same_typed(&p);
+        }
+    }
+}
+
+/// テストで動かすプログラム（tests/jwc_cases.txt に `#####` の行で区切って集めたもの。型のエラーも含む）
+#[test]
+fn ast_and_typed_of_the_test_programs() {
+    if !have_clang() {
+        return;
+    }
+    let all = std::fs::read_to_string(root().join("tests/jwc_cases.txt")).unwrap();
+    let dir = std::env::temp_dir().join(format!("jw-jwc-progs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (i, c) in all.split("#####\n").enumerate() {
+        let p = dir.join(format!("case{}.jw", i));
+        std::fs::write(&p, c).unwrap();
+        same_ast(&p);
+        same_typed(&p);
     }
 }

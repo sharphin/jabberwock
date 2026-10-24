@@ -316,3 +316,19 @@ fn main() {
     let e = run_source("fn main() { let i64[] v = [1]; print(v.join(\",\")); }", false).error.expect("error");
     assert!(e.title.contains("join"));
 }
+
+#[test]
+fn for_with_index_over_a_list_inside_an_element() {
+    let src = "
+struct S { str[] xs; }
+fn main() {
+    let S[] a = [S { xs: [\"a\", \"b\"] }, S { xs: [\"c\"] }];
+    for j in range(2) {
+        for (i, x) in a[j].xs { print(\"{j} {i} {x}\"); }
+    }
+    let (own S)[] b = [own S { xs: [\"z\", \"y\"] }];
+    for (i, x) in b[0].xs { print(\"{i} {x}\"); }
+}";
+    assert_eq!(ok(src), "0 0 a\n0 1 b\n1 0 c\n0 z\n1 y\n");
+    assert!(jabberwock::ir_text(src, &|_: &str| None).is_ok());
+}
