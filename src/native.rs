@@ -87,7 +87,7 @@ static RUNTIME_OBJECT: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// テストの突き合わせ用: 実行時ライブラリを一度だけコンパイルしておき、`.ll` だけをコンパイルしてつなぐ。
 /// ふだんは速く作れる `-O1`。`WARD_NATIVE=o2` なら `ward build` と同じ `-O2` と LTO で作る（最適化に頼る書き出しの確かめ）
 pub fn compile_with_cached_runtime(ll: &str, dir: &Path, name: &str) -> Result<PathBuf, String> {
-    let o2 = std::env::var("WARD_NATIVE").is_ok_and(|v| v == "o2");
+    let o2 = std::env::var("WARD_NATIVE").map(|v| v == "o2").unwrap_or(false);
     let opt: &[&str] = if o2 { &["-O2", "-flto"] } else { &["-O1"] };
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let obj = {
