@@ -92,6 +92,9 @@ fn main() {
         eprint!("{}", jabberwock::render(d, &path, &outcome.files));
         process::exit(1);
     }
+    if let Some(code) = outcome.exit_code {
+        process::exit(code);
+    }
 }
 
 /// `jabberwock build [--release] [-o 出力] <file.jw>`: LLVM に書き出し、clang で実行ファイルを作る

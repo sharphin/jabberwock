@@ -141,6 +141,8 @@ struct FnLower<'a, 'p> {
     captures: Vec<Local>,
     /// 次に書き出すクロージャは `spawn` に渡すもの（1 回だけ呼ばれる）
     spawning: bool,
+    /// 値として使う if / match の中にいる深さ（中の return は、まだ使っていない一時的な値も drop する）
+    in_value: usize,
     locals: Vec<LocalDecl>,
     blocks: Vec<Block>,
     cur: Bb,
@@ -167,6 +169,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             name,
             captures: Vec::new(),
             spawning: false,
+            in_value: 0,
             locals: Vec::new(),
             blocks: vec![Block { insts: Vec::new(), term: Term::Unreachable }],
             cur: 0,
@@ -392,6 +395,18 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.assign(l, Rvalue::Use(v), *span);
             }
             Stmt::Assign { target, value, span } => {
+                // `s = s + e`（`s += e`）: 文字列の変数なら、持ち主が s だけのときその場で後ろに足す（`append`）。
+                // s は copy の型で、e は s を書き換えられないので、e を先に計算しても結果は同じ
+                if let (ExprKind::Var(x), ExprKind::Binary(BinOp::Add, l, r)) = (&target.kind, &value.kind) {
+                    let local = self.lookup(x).filter(|l| !self.captures.contains(l));
+                    if matches!(&l.kind, ExprKind::Var(y) if y == x) && self.ty(value) == Ty::Str && local.is_some() {
+                        let rv = self.expr(r)?;
+                        let place = self.place(target)?;
+                        let value = Rvalue::Builtin("append".to_string(), vec![Operand::Copy(place.clone()), rv], *span);
+                        self.emit(Inst::Assign { place, value, span: *span, what: describe(target) });
+                        return Ok(());
+                    }
+                }
                 // 値を先に計算し、そのあとで場所を求める（interp の assign と同じ順）
                 let v = self.expr(value)?;
                 let place = self.place(target)?;
@@ -458,6 +473,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     Some(e) => self.expr(e)?,
                     None => Operand::Const(Const::Unit),
                 };
+                if self.in_value > 0 {
+                    let keep = match &v {
+                        Operand::Move(t, _) => Some(*t),
+                        _ => None,
+                    };
+                    self.drop_pending(keep, *span, "return で関数を抜けたので、使われずに捨てられた");
+                }
                 self.leave(0, *span, "関数から return した");
                 self.terminate(Term::Return(v));
             }
@@ -854,6 +876,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
     /// `if`。`dest` があれば値をそこに入れる
     fn if_expr(&mut self, cond: &Expr, then: &ast::Block, els: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
+        let value = dest.is_some() as usize;
+        self.in_value += value;
+        let r = self.if_inner(cond, then, els, dest);
+        self.in_value -= value;
+        r
+    }
+
+    fn if_inner(&mut self, cond: &Expr, then: &ast::Block, els: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
         let c = self.expr(cond)?;
         let t = self.new_block();
         let e = self.new_block();
@@ -877,6 +907,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
     /// `match`。`dest` があれば値をそこに入れる
     fn match_expr(&mut self, scrut: &Expr, arms: &[ast::MatchArm], default: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
+        let value = dest.is_some() as usize;
+        self.in_value += value;
+        let r = self.match_inner(scrut, arms, default, dest);
+        self.in_value -= value;
+        r
+    }
+
+    fn match_inner(&mut self, scrut: &Expr, arms: &[ast::MatchArm], default: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
         let st = self.ty(scrut);
         let s = match self.expr(scrut)? {
             Operand::Move(t, _) => t,
@@ -1062,6 +1100,17 @@ impl<'a, 'p> FnLower<'a, 'p> {
     }
 
     /// `e?`: Ok / Some なら中身。Err / None なら、評価の途中の値と全部の変数を捨てて、それを関数から返す
+    /// 関数を途中で抜けるとき（`?`・値として使う if / match の中の return）に、まだ使われていない一時的な値
+    /// （`f(own 1, g()?)` の `own 1`）を drop する。使い終わったものは空なので、drop しても何もしない
+    fn drop_pending(&mut self, keep: Option<Local>, sp: Span, why: &str) {
+        let in_scope: Vec<Local> = self.scopes.iter().flatten().map(|(_, l)| *l).collect();
+        for l in (0..self.locals.len()).rev() {
+            if Some(l) != keep && self.locals[l].name.is_empty() && !in_scope.contains(&l) {
+                self.emit(Inst::Drop { local: l, span: sp, why: why.to_string() });
+            }
+        }
+    }
+
     fn try_expr(&mut self, inner: &Expr, sp: Span) -> L<Operand> {
         let it = self.ty(inner);
         let ok = match &it {
@@ -1077,14 +1126,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let err_bb = self.new_block();
         self.blocks[self.cur].term = Term::Switch(Place::local(t, sp), vec![(Rc::from(ok), ok_bb)], err_bb);
         self.cur = err_bb;
-        // まだ使われていない一時的な値（`f(own 1, g()?)` の `own 1`）。使い終わったものは空なので、drop しても何もしない
-        let in_scope: Vec<Local> = self.scopes.iter().flatten().map(|(_, l)| *l).collect();
-        for l in (0..self.locals.len()).rev() {
-            if l != t && self.locals[l].name.is_empty() && !in_scope.contains(&l) {
-                let why = "`?` で関数を抜けたので、使われずに捨てられた".to_string();
-                self.emit(Inst::Drop { local: l, span: sp, why });
-            }
-        }
+        self.drop_pending(Some(t), sp, "`?` で関数を抜けたので、使われずに捨てられた");
         // 戻り値の型が違えば（`Result<i64[], str>` → `Result<i64, str>`）、Err / None を作り直す
         let back = if it == self.ret {
             t
@@ -1199,6 +1241,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             ExprKind::Int(n) => Operand::Const(Const::Int(*n, IntTy::I64)),
             ExprKind::Float(x) => Operand::Const(Const::Float(*x)),
             ExprKind::Bool(b) => Operand::Const(Const::Bool(*b)),
+            ExprKind::Unit => Operand::Const(Const::Unit),
             ExprKind::Str(s) => Operand::Const(Const::Str(Rc::from(s.as_str()))),
             ExprKind::Var(name) => match self.lookup(name) {
                 Some(l) => {
@@ -1402,12 +1445,25 @@ impl<'a, 'p> FnLower<'a, 'p> {
     fn call(&mut self, e: &Expr, name: &str, args: &[Expr], ty: Ty) -> L<Operand> {
         let sp = e.span;
         match name {
-            "print" => {
+            "print" | "eprint" => {
                 let mut strs = Vec::new();
                 for a in args {
                     strs.push(self.show(a)?);
                 }
-                Ok(self.temp_of(Ty::Unit, Rvalue::Builtin("print".to_string(), strs, sp), sp))
+                Ok(self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), strs, sp), sp))
+            }
+            "exit" | "read_file" | "write_file" | "run_command" | "chr" => {
+                let mut ops = Vec::new();
+                for a in args {
+                    ops.push(self.expr(a)?);
+                }
+                if name != "exit" {
+                    return Ok(self.temp_of(ty, Rvalue::Builtin(name.to_string(), ops, sp), sp));
+                }
+                // exit からは戻らない
+                let u = self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), ops, sp), sp);
+                self.terminate(Term::Unreachable);
+                Ok(u)
             }
             "assert" => {
                 let v = self.expr(&args[0])?;
@@ -1494,6 +1550,15 @@ impl<'a, 'p> FnLower<'a, 'p> {
         };
         let is_enum = matches!(inner, Ty::Enum(..));
         match inner {
+            Ty::Float => {
+                let x = match recv_place(self)? {
+                    Some(pl) => Operand::Copy(pl),
+                    None => temp.clone().expect("a constant receiver"),
+                };
+                let r = self.temp_of(ty, Rvalue::Builtin(format!("f64.{}", name), vec![x], sp), sp);
+                self.drop_temp(&temp, sp);
+                Ok(r)
+            }
             Ty::Str => {
                 let text = match recv_place(self)? {
                     Some(pl) => Operand::Copy(pl),

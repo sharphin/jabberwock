@@ -14,7 +14,7 @@ use crate::diag::{Diagnostic, Span};
 
 type R<T> = Result<T, Diagnostic>;
 
-const BUILTINS: [&str; 7] = ["print", "drop", "assert", "read_line", "args", "spawn", "chan"];
+use crate::interp::BUILTINS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -178,7 +178,7 @@ fn has_unbound(pattern: &Ty, tparams: &[String], map: &HashMap<String, Ty>) -> b
 /// 整数どうしは、欠けずにそろえられる広い方にする（`max(a_u8, b_i64)` の T は i64）
 fn unify(pattern: &Ty, actual: &Ty, tparams: &[String], map: &mut HashMap<String, Ty>) {
     match (pattern, actual) {
-        (_, Ty::Never) | (_, Ty::Unit) => {}
+        (_, Ty::Never) => {}
         (Ty::Param(p), _) if tparams.contains(p) => match map.get(p) {
             None => {
                 map.insert(p.clone(), actual.clone());
@@ -311,6 +311,8 @@ struct Checker<'a> {
     warnings: Vec<Diagnostic>,
     /// 読み込んだモジュールの名前（変数の名前にできない）
     modules: &'a [String],
+    /// 定数の名前（変数の名前にできない。モジュールの中のものは `geom.N`）
+    consts: &'a [String],
     /// 今調べている関数のモジュール（最初のファイルなら None）
     module: Option<&'a str>,
     /// 式ごとの型などの記録
@@ -331,7 +333,7 @@ struct IMethod {
 /// 組み込みの条件: 大小を比べられる型（整数と str）
 const ORDERED: &str = "ordered";
 
-const STR_METHODS: &str = "len, byte_len, chars, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
+const STR_METHODS: &str = "len, byte_len, chars, bytes, code, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int, to_float";
 
 /// 型検査で分かったこと（IR への書き出しに使う）。式は構文木の中の位置（アドレス）で引く
 #[derive(Default)]
@@ -379,6 +381,7 @@ pub fn check_with_info(prog: &Program) -> R<(Vec<Diagnostic>, TypeInfo)> {
         bounds: HashMap::new(),
         warnings: Vec::new(),
         modules: &prog.modules,
+        consts: &prog.consts,
         module: None,
         info: TypeInfo::default(),
         pending_targs: None,
@@ -739,7 +742,7 @@ impl<'a> Checker<'a> {
                     _ => None,
                 };
                 let t = self.expr_h(a, hint.as_ref())?;
-                if t == Ty::Unit {
+                if t == Ty::Unit && !matches!(a.kind, ExprKind::Unit) {
                     return Err(Diagnostic::new("値のない式です").primary(a.span, "これは値を返さない"));
                 }
                 let t = if auto_ref { self.auto_borrow(a, t, p)? } else { t };
@@ -1075,6 +1078,15 @@ impl<'a> Checker<'a> {
 
     /// 変数に関数と同じ名前はつけられない（`f(x)` がどちらの呼び出しか分からなくなるため）
     fn not_a_fn_name(&self, name: &str, span: Span) -> R<()> {
+        let full = match self.module {
+            Some(m) => format!("{}.{}", m, name),
+            None => name.to_string(),
+        };
+        if self.consts.contains(&full) {
+            return Err(Diagnostic::new(format!("`{}` は定数の名前です", name))
+                .primary(span, "変数や引数に、定数と同じ名前はつけられない")
+                .note("別の名前をつけてください"));
+        }
         if self.modules.iter().any(|m| m == name) {
             return Err(Diagnostic::new(format!("`{}` はモジュールの名前です", name))
                 .primary(span, "変数や引数に、モジュールと同じ名前はつけられない")
@@ -1604,6 +1616,7 @@ impl<'a> Checker<'a> {
                 Ok(target)
             }
             ExprKind::Bool(_) => Ok(Ty::Bool),
+            ExprKind::Unit => Ok(Ty::Unit),
             ExprKind::Str(_) => Ok(Ty::Str),
             ExprKind::Lambda(l) => self.lambda(l, hint),
             ExprKind::Var(name) => match self.use_var(name) {
@@ -1783,6 +1796,10 @@ impl<'a> Checker<'a> {
                 self.expect(inner, &Ty::Bool)?;
                 Ok(Ty::Bool)
             }
+            ExprKind::Unary(UnOp::BitNot, inner) => match self.expr_h(inner, hint)? {
+                Ty::Int(t) => Ok(Ty::Int(t)),
+                other => Err(Diagnostic::new("`~` は整数に使います").primary(inner.span, format!("ここは `{}` です", other.show()))),
+            },
             ExprKind::Unary(UnOp::Neg, inner) => match self.expr_h(inner, hint)? {
                 Ty::Float => Ok(Ty::Float),
                 Ty::Int(t) if t.signed() => Ok(Ty::Int(t)),
@@ -1800,7 +1817,7 @@ impl<'a> Checker<'a> {
     /// 値として使う式。値なしならエラー
     fn value(&mut self, e: &Expr) -> R<Ty> {
         let t = self.expr(e)?;
-        if t == Ty::Unit {
+        if t == Ty::Unit && !matches!(e.kind, ExprKind::Unit) {
             return Err(Diagnostic::new("値のない式です").primary(e.span, "これは値を返さない"));
         }
         Ok(t)
@@ -1851,8 +1868,20 @@ impl<'a> Checker<'a> {
     }
 
     fn binary(&mut self, op: BinOp, l: &Expr, r: &Expr, span: Span, hint: Option<&Ty>) -> R<Ty> {
+        // `a << n` / `a >> n`: 結果は a の型。n はどの整数の型でもよい（数の書き方なら i64）
+        if matches!(op, BinOp::Shl | BinOp::Shr) {
+            let h = hint.filter(|t| matches!(t, Ty::Int(_)));
+            let lt = self.expr_h(l, h)?;
+            let rt = self.expr_h(r, None)?;
+            return match (&lt, &rt) {
+                (Ty::Int(_), Ty::Int(_)) => Ok(lt),
+                _ => Err(Diagnostic::new("`<<` と `>>` は整数に使います")
+                    .primary(span, format!("`{}` と `{}` です", lt.show(), rt.show()))),
+            };
+        }
         // 片方が定数（`x + 1` の `1`）なら、もう片方の型に合わせる。算術なら外の型も手がかりにする
-        let arith = matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem);
+        let arith =
+            matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor);
         let outer = if arith { hint } else { None };
         let (lt, rt) = if is_const_tree(l) {
             let rt = self.expr_h(r, outer)?;
@@ -1878,6 +1907,11 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Ty::Bool)
             }
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => match (&lt, &rt) {
+                (Ty::Int(_), Ty::Int(_)) => Ok(Ty::Int(self.common(l, &lt, r, &rt, span)?)),
+                _ => Err(bad().note("`&` `|` `^` は整数のビット演算です（真偽値には `&&` `||` を使ってください）")),
+            },
+            BinOp::Shl | BinOp::Shr => unreachable!("shifts are handled above"),
             BinOp::Add if lt == Ty::Str && rt == Ty::Str => Ok(Ty::Str),
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => match (&lt, &rt) {
                 (Ty::Int(_), Ty::Int(_)) => Ok(Ty::Int(self.common(l, &lt, r, &rt, span)?)),
@@ -1956,6 +1990,14 @@ impl<'a> Checker<'a> {
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
             "reverse" => (0, Ty::Unit, true),
+            "join" => {
+                if *elem != Ty::Str || args.len() != 1 {
+                    return Err(Diagnostic::new("join は文字列のリストに使います")
+                        .primary(span, format!("`{}` のリストです（`sep` を 1 つ渡します）", elem.show())));
+                }
+                self.expect(&args[0], &Ty::Str)?;
+                return Ok(Ty::Str);
+            }
             // 読むだけ。戻り値の型は関数を調べてから決める
             "map" | "filter" => (1, Ty::Unit, false),
             "drain" => (0, Ty::List(Box::new(elem.clone())), true),
@@ -1963,7 +2005,7 @@ impl<'a> Checker<'a> {
             _ => {
                 return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name)).primary(
                     span,
-                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)` です",
+                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)`・`join(sep)` です",
                 ))
             }
         };
@@ -2148,6 +2190,8 @@ impl<'a> Checker<'a> {
         let (params, ret): (Vec<Ty>, Ty) = match name {
             "len" | "byte_len" => (vec![], I64),
             "chars" | "lines" => (vec![], list),
+            "bytes" => (vec![], Ty::List(Box::new(Ty::Int(IntTy::U8)))),
+            "code" => (vec![], I64),
             "split" => (vec![Ty::Str], list),
             "trim" | "to_upper" | "to_lower" => (vec![], Ty::Str),
             "contains" | "starts_with" | "ends_with" => (vec![Ty::Str], Ty::Bool),
@@ -2156,6 +2200,7 @@ impl<'a> Checker<'a> {
             "replace" => (vec![Ty::Str, Ty::Str], Ty::Str),
             "repeat" => (vec![I64], Ty::Str),
             "to_int" => (vec![], Ty::Enum("Option".to_string(), vec![I64])),
+            "to_float" => (vec![], Ty::Enum("Option".to_string(), vec![Ty::Float])),
             _ => {
                 return Err(Diagnostic::new(format!("文字列にメソッド `{}` はありません", name))
                     .primary(span, "このメソッドは定義されていません")
@@ -2325,11 +2370,34 @@ impl<'a> Checker<'a> {
 
     fn call(&mut self, name: &str, args: &[Expr], span: Span, hint: Option<&Ty>) -> R<Ty> {
         match name {
-            "print" => {
+            "print" | "eprint" => {
                 for a in args {
                     self.value(a)?;
                 }
                 return Ok(Ty::Unit);
+            }
+            "chr" => {
+                if args.len() != 1 {
+                    return Err(arity_error(name, 1, args.len(), span));
+                }
+                self.expect(&args[0], &I64)?;
+                return Ok(Ty::Str);
+            }
+            "exit" | "read_file" | "write_file" | "run_command" => {
+                let str_list = Ty::List(Box::new(Ty::Str));
+                let (params, ret) = match name {
+                    "exit" => (vec![Ty::Int(IntTy::I64)], Ty::Never),
+                    "read_file" => (vec![Ty::Str], Ty::Str),
+                    "write_file" => (vec![Ty::Str, Ty::Str], Ty::Unit),
+                    _ => (vec![Ty::Str, str_list], Ty::Int(IntTy::I64)),
+                };
+                if args.len() != params.len() {
+                    return Err(arity_error(name, params.len(), args.len(), span));
+                }
+                for (a, p) in args.iter().zip(&params) {
+                    self.expect(a, p)?;
+                }
+                return Ok(if ret == Ty::Never { ret } else { Ty::Enum("Result".to_string(), vec![ret, Ty::Str]) });
             }
             "read_line" | "args" => {
                 if !args.is_empty() {
@@ -2435,6 +2503,16 @@ impl<'a> Checker<'a> {
             Ty::List(elem) => return self.list_method(recv, &rt, elem, name, args, span),
             Ty::Map(k, v) => return self.map_method(recv, &rt, k, v, name, args, span),
             Ty::Str => return self.str_method(name, args, span),
+            Ty::Float => {
+                if name != "to_bits" {
+                    return Err(Diagnostic::new(format!("f64 にメソッド `{}` はありません", name))
+                        .primary(span, "f64 のメソッドは `to_bits()`（ビットの並びを u64 で）だけです"));
+                }
+                if !args.is_empty() {
+                    return Err(arity_error(name, 0, args.len(), span));
+                }
+                return Ok(Ty::Int(IntTy::U64));
+            }
             Ty::Task(r) => return self.task_method(r, name, args, span),
             Ty::Chan(x) => return self.chan_method(x, name, args, span),
             Ty::Param(p) => {

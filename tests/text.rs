@@ -118,3 +118,78 @@ fn builtin_input_errors() {
     let d = run_source("fn args() {\n}\nfn main() {\n}", false).error.expect("error");
     assert!(d.title.contains("組み込み関数"), "{}", d.title);
 }
+
+#[test]
+fn bytes_and_char_codes() {
+    let o = main_ok("
+    print(\"aé語\".bytes(), \"\".bytes().len());
+    print(\"a\".code(), \"é\".code(), \"語\".code(), \"😀\".code(), \"ab\".code());
+    print(chr(97), chr(233), chr(35486), chr(128512), chr(0).byte_len());
+    let mut n = 0;
+    for c in \"x9_\".chars() {
+        let k = c.code();
+        if k >= 48 && k <= 57 { n += 1; }
+    }
+    let u8[] b = \"AZ\".bytes();
+    print(n, b[0] + 1, b[1] as i64 - 65);");
+    assert_eq!(o, "[97, 195, 169, 232, 170, 158] 0\n97 233 35486 128512 97\na é 語 😀 1\n1 66 25\n");
+}
+
+#[test]
+fn bad_char_codes_are_errors() {
+    assert!(err("print(\"\".code());").title.contains("空の文字列"));
+    assert!(err("print(chr(55296));").title.contains("文字の番号"));
+    assert!(err("print(chr(-1));").title.contains("文字の番号"));
+    assert!(err("print(chr(1114112));").title.contains("文字の番号"));
+    assert!(err("print(chr(\"a\"));").title.contains("型"));
+}
+
+#[test]
+fn appending_to_strings() {
+    // `s += x` はその場で足すことがある。ほかに同じ文字列を持っているもの（コピー・リスト・ref）は変わらない
+    let o = ok("
+struct P { str name; }
+fn str add(str s) {
+    let mut t = s;
+    t += \"!\";
+    t
+}
+fn main() {
+    let mut s = \"a\";
+    let keep = s;
+    s += \"b\";
+    s = s + s;
+    s += \"{s.len()}\";
+    let r = ref s;
+    s += \"c\";
+    print(s, keep, *r, add(s), s);
+    let str[] mut v = [];
+    let mut u = \"x\";
+    for i in range(3) {
+        v.push(u);
+        u += \"y\";
+    }
+    let mut p = P { name: \"p\" };
+    p.name += \"q\";
+    let str[str] mut m = [\"k\": \"v\"];
+    m[\"k\"] += \"w\";
+    print(v, u, p.name, m);
+    let mut big = \"\";
+    for i in range(5000) {
+        big += \"0123456789\";
+    }
+    print(big.byte_len(), big.slice(49990, 50000));
+}");
+    assert_eq!(o, "abab4c a abab4c abab4c! abab4c\n[x, xy, xyy] xyyy pq [k: vw]\n50000 0123456789\n");
+}
+
+#[test]
+fn more_escapes() {
+    let o = main_ok("
+    print(\"a\\rb\".bytes(), \"x\\0y\".bytes(), \"\\u{41}\\u{3042}\\u{1F600}\", \"\\u{41}{1 + 1}\");");
+    assert_eq!(o, "[97, 13, 98] [120, 0, 121] Aあ😀 A2\n");
+    assert!(err("print(\"\\q\");").title.contains("エスケープ"));
+    assert!(err("print(\"\\u{D800}\");").title.contains("エスケープ"));
+    assert!(err("print(\"\\u{zz}\");").title.contains("エスケープ"));
+    assert!(err("print(\"\\u{41\");").title.contains("エスケープ"));
+}

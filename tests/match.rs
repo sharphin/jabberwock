@@ -106,11 +106,30 @@ fn value_match_needs_default() {
 }
 
 #[test]
-fn no_return_inside_a_value_match() {
-    let d = run_source("fn f() {\n let x = match 1 {\n case 1 -> return 2;\n default -> 3;\n };\n}\nfn main() {\n}", false)
-        .error
-        .unwrap();
-    assert!(d.title.contains("return できません"), "{}", d.title);
+fn return_inside_a_value_match() {
+    // 値として使う match の中から return できる。まだ使っていない一時的な値（own）も、外のスコープの変数も解放される
+    let src = "
+struct Big { i64[] xs; }
+fn i64 take(own Big a, i64 n) { a.xs.len() + n }
+fn Result<i64, str> pick(Option<i64> o) {
+    let keep = own Big { xs: [1, 2, 3] };
+    let n = match o {
+        case Some(x) -> x;
+        case None -> return Err(\"なし\");
+    };
+    let m = take(own Big { xs: [9] }, match n {
+        case 0 -> return Ok(-1);
+        default -> n * 10;
+    });
+    Ok(m + keep.xs.len())
+}
+fn main() {
+    print(pick(Some(4)), pick(None), pick(Some(0)));
+}";
+    let o = run_source(src, false);
+    assert!(o.error.is_none(), "{:?}", o.error.map(|d| d.title));
+    assert_eq!(o.output, "Ok(44) Err(なし) Ok(-1)\n");
+    assert_eq!(o.live_objects, 0);
 }
 
 #[test]
@@ -148,4 +167,26 @@ fn drop_in_one_case_keeps_the_check() {
 }";
     let d = run_source(src, false).error.expect("dangling");
     assert!(d.title.contains("dangling"), "{}", d.title);
+}
+
+#[test]
+fn return_inside_a_value_match_frees_like_return() {
+    // return で解放された own を指す ref を返すと、使ったところでダングリングのエラー（解放の理由は return）
+    let src = "
+fn ref i64 f(Option<i64> o) {
+    let a = own 7;
+    let n = match o {
+        case Some(x) -> x;
+        case None -> return ref a;
+    };
+    return ref a;
+}
+fn main() {
+    let r = f(None);
+    print(*r);
+}";
+    let o = run_source(src, false);
+    let d = o.error.expect("dangling");
+    let text = d.render("main.jw", src);
+    assert!(text.contains("関数から return した"), "{}", text);
 }

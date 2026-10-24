@@ -58,6 +58,7 @@
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
+| `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件
 
@@ -81,7 +82,9 @@
 - 解析とインタプリタの「評価順」と「ムーブする／しない（`eval` と `eval_borrow`）」は必ず一致させる。
 - `break` / `continue` で抜けるときは、抜けるスコープの変数の事実を消してから合流させる（`facts_leaving`）。
 - `if` / `match` は式（`ExprKind::If` / `ExprKind::Match`）。文として使うときは `Stmt::Expr` に入り、中の return / break を `Flow` で外へ伝える（`eval_flow`）。
-  値として使うときの中の return / 外への break はパーサが禁止しているので（`value_context`）、`eval` では `Flow` を気にしなくてよい。
+  値として使うときの外への break / continue はパーサが禁止している（`value_context`）。return は書ける: interp の `eval` が If / Match で
+  `Flow::Return` を受けたら、`unwinding` に返す値を入れ `returning` を立てて `Err` で抜け（`?` と同じ道）、`call_fn` が return にする。
+  lower は値の中の深さ `in_value` を数え、そこでの return はまだ使っていない一時的な値を `drop_pending` で捨ててから抜ける。
 - 書き換えの可否は `Access`（Write / ImmutVar / ReadOnlyRef）で表す。`place()` が持ち主から順にたどって決め、
   `ref mut` を通ると Write のまま、`ref` を通ると ReadOnlyRef になる。`RefVal.mutable` が「ref mut か」。
   同じ規則を `types.rs` が型から静的に決める（`Access::through` に型を渡す）。実行時の検査は念のため残している。
@@ -186,6 +189,7 @@
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
   `map` / `filter` は interp の `map_list`、lower は for と同じ `each_in`（`Each::Map`）で書き出す（exec / llvm は何もしない）。
   `ok_or` は `lib.rs` の `PRELUDE` に jabberwock で書いた関数。
+  `str[]` の `join(sep)` は interp の `join_strs`・llvm の `jw_list_join`（元のリストは変えないので mut でなくてよい）。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 
 - IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（`Proj::Deref` はいつも `Check::Required` で書き出す）。
@@ -222,6 +226,23 @@
   関数の番号で 1 回だけ呼ぶ（取り込んだ値は写しにしない）。lower は spawn に渡すクロージャを `once` で書き出し（取り込んだ値はそのままの型の変数）、
   関数の値は作らずに `spawn!(関数の番号, 取り込む値...)` にする。
   デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
+- ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
+  LLVM は jw_rt.c の `jw_read_file` などと `result_of`（`Result<T, str>` を作る）。エラーの文は OS の文を使わず、interp と jw_rt.c で一字一句そろえる。
+  `exit` は `World.exit`（終了コードを覚えて `exit_marker` で全スレッドを止める）。`run_inner` / `ir_mismatch` がそれをエラーでなく終了として扱う。
+  exit のあとは片づけないので、残ったヒープの数は比べない。lower は exit の呼び出しのあとを `Term::Unreachable` にする。
+  `eprint` は print と同じ形で `World.errput`（`Outcome.errput`）へ。突き合わせは標準エラーの先頭が errput と同じかを見る。
+  デバッグビルドは IR でもう一度動かすので、ファイルやコマンドの副作用も 2 回起きる（テストは何度起きても同じになるように書く）。
+  `()`（`ExprKind::Unit`）は `Ok(())` のための値。types の `value` と引数の検査は `()` と書いた式だけ値なしを許す。
+- 文字列の値は `Value::Str(Rc<String>)`（作るのは `text_rc`）。`s = s + e`（`s += e`）で s が文字列の変数なら、interp の `assign` は
+  e を先に計算して `Rc::make_mut` でその場で足す。lower も同じ形を `append!(s の場所, e)` にし、llvm は変数の場所を `jw_str_append` に渡す
+  （数が 1 ならその場で足し、数を 2 にして返す。古い値の drop で 1 に戻る）。そのため jw_rt.c の文字列の区画の大きさは長さだけで決まる
+  （`str_bytes`。大きいものは 2 のべき乗）。e は s を書き換えられない（呼ばれた関数は呼び出し元の変数に触れない）ので、順番を変えても同じ。
+- `const`: パーサの `resolve_consts` が、関数の中で定数の名前を使っている場所を値の式に置き換える（`ast::walk_block_mut`）。
+  なので types より後ろは定数を知らない。`Program.consts`（モジュールの中は `geom.N`）は、変数に同じ名前をつけるのを types の `not_a_fn_name` が弾くためだけ。
+- ビット演算: `>>` は字句解析では `>` 2 つ（型の `>>` と区別）。パーサの `parse_binary` が、すき間なく並んだ `>` 2 つを `BinOp::Shr` にする。
+  ずらす数は左と別の型でよい（types の `binary` が先に扱う。llvm.rs の `shift`）。
+- f64 のメソッドは `to_bits` だけ（interp の `eval_method`・lower の `f64.to_bits`）。
+- 自己ホストに向けて足りないものの一覧は `docs/self-hosting.md`。
 - スレッド（LLVM）: 区画の空きリスト・`jw_live`・`jw_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
   生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。
   送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。

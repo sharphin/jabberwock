@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use super::*;
 use crate::ast::UnOp;
 use crate::diag::Diagnostic;
-use crate::interp::{
+use crate::interp::{text_rc, 
     Callee,
     as_bool, binary, bounds, float_to_int, locate, map_borrow_error, merge_sort, moved_error, none, some,
     str_method, Interp, MapVal, RefVal,
@@ -209,7 +209,7 @@ impl<'a> Machine<'a> {
                 Const::Int(n, t) => Value::Int(*n, *t),
                 Const::Float(x) => Value::Float(*x),
                 Const::Bool(b) => Value::Bool(*b),
-                Const::Str(s) => Value::Str(s.clone()),
+                Const::Str(s) => Value::Str(text_rc(s)),
             }),
             Operand::Copy(place) => {
                 let (slot, path) = self.resolve(f, locs, place)?;
@@ -262,6 +262,7 @@ impl<'a> Machine<'a> {
                 (UnOp::Neg, Value::Int(n, t)) => Ok(Value::Int(t.wrap(-n), t)),
                 (UnOp::Neg, Value::Float(x)) => Ok(Value::Float(-x)),
                 (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                (UnOp::BitNot, Value::Int(n, t)) => Ok(Value::Int(t.wrap(!n), t)),
                 (_, other) => Err(Diagnostic::new("型が合わない演算です")
                     .primary(*span, format!("{} にはこの演算を使えません", other.type_name()))),
             },
@@ -402,7 +403,7 @@ impl<'a> Machine<'a> {
                 let (slot, path) = self.resolve(f, locs, p)?;
                 let v = at(self.it, slot, &path).clone();
                 let shown = self.it.show(&v, *span, 0)?;
-                Ok(Value::Str(Rc::from(shown.as_str())))
+                Ok(Value::Str(text_rc(shown.as_str())))
             }
             Rvalue::Show(o, temp, span) => {
                 let v = self.operand(f, locs, o)?;
@@ -410,8 +411,12 @@ impl<'a> Machine<'a> {
                 if *temp {
                     self.it.release(v, *span, "使い終わった一時的な値");
                 }
-                Ok(Value::Str(Rc::from(shown?.as_str())))
+                Ok(Value::Str(text_rc(shown?.as_str())))
             }
+            Rvalue::Builtin(name, ops, _) if name == "f64.to_bits" => match self.operands(f, locs, ops)?.as_slice() {
+                [Value::Float(x)] => Ok(Value::Int(x.to_bits() as i128, IntTy::U64)),
+                _ => unreachable!("to_bits on a float"),
+            },
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;
                 let Value::Str(text) = vals.remove(0) else { unreachable!("string method on a string") };
@@ -454,7 +459,17 @@ impl<'a> Machine<'a> {
                         self.it.world.print_line(&line);
                         Ok(Value::Unit)
                     }
-                    "concat" => Ok(Value::Str(Rc::from(strs().concat().as_str()))),
+                    "eprint" => {
+                        let line = strs().join(" ");
+                        self.it.world.eprint_line(&line);
+                        Ok(Value::Unit)
+                    }
+                    "exit" | "read_file" | "write_file" | "run_command" => self.it.system(name, vals, *span),
+                    "chr" => {
+                        let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
+                        crate::interp::chr(n, *span)
+                    }
+                    "concat" | "append" => Ok(Value::Str(text_rc(strs().concat().as_str()))),
                     "read_line" => self.it.read_line(*span),
                     "chan" => Ok(Value::Chan(std::sync::Arc::new(crate::threads::Chan::default()))),
                     "args" => Ok(self.it.args_value()),
@@ -576,6 +591,7 @@ impl<'a> Machine<'a> {
                 items.reverse();
                 Value::Unit
             }
+            "join" => Value::Str(Rc::new(crate::interp::join_strs(items, &vals[0]))),
             "drain" => Value::Array(std::mem::take(items), true),
             "insert" => {
                 let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };

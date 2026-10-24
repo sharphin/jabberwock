@@ -187,7 +187,20 @@ declare ptr @jw_str_slice(ptr, i64, i64, ptr)
 declare ptr @jw_str_replace(ptr, ptr, ptr)
 declare ptr @jw_str_repeat(ptr, i64, ptr)
 declare i32 @jw_str_to_int(ptr, ptr)
+declare i32 @jw_str_to_float(ptr, ptr)
 declare i32 @jw_read_line(ptr)
+declare void @jw_eprint_begin()
+declare void @jw_eprint_part(ptr, i32)
+declare void @jw_eprint_end()
+declare i32 @jw_read_file(ptr, ptr)
+declare i32 @jw_write_file(ptr, ptr, ptr)
+declare i32 @jw_run_command(ptr, ptr, ptr, ptr)
+declare void @jw_exit(i64) noreturn
+declare ptr @jw_chr(i64, ptr)
+declare ptr @jw_str_append(ptr, ptr)
+declare ptr @jw_list_join(ptr, ptr)
+declare void @jw_str_bytes(ptr, ptr)
+declare i64 @jw_str_code(ptr, ptr)
 declare void @jw_args(ptr)
 
 "#;
@@ -2667,6 +2680,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     (UnOp::Neg, Ty::Int(i)) => (self.b.val(format!("sub i{} 0, {}", i.bits(), v)), t),
                     (UnOp::Neg, Ty::Float) => (self.b.val(format!("fneg double {}", v)), t),
                     (UnOp::Not, Ty::Bool) => (self.b.val(format!("xor i1 {}, true", v)), t),
+                    (UnOp::BitNot, Ty::Int(i)) => (self.b.val(format!("xor i{} {}, -1", i.bits(), v)), t),
                     _ => return Err(format!("{:?} {}", op, t.show())),
                 })
             }
@@ -3246,6 +3260,26 @@ impl<'m, 'p> FnGen<'m, 'p> {
         Ok(name)
     }
 
+    /// `Result<T, str>` を作る。`ok` が 0 でなければ `Ok(ok_val)`、0 なら `Err(*err)`（err は文字列を指す場所）
+    fn result_of(&mut self, want: &Ty, ok: &str, err: &str, ok_val: impl FnOnce(&mut Self) -> G<(String, Ty)>) -> G<(String, Ty)> {
+        let lt = self.m.lt(want)?;
+        let res = self.b.alloca(&lt);
+        let failed = self.b.val(format!("icmp eq i32 {}, 0", ok));
+        let (_, fine) = self.b.if_true(&failed);
+        let msg = self.b.val(format!("load ptr, ptr {}", err));
+        let ev = self.make_enum(want, "Err", vec![(msg, Ty::Str)])?;
+        self.b.op(format!("store {} {}, ptr {}", lt, ev, res));
+        let done = self.b.l();
+        self.b.br(&done);
+        self.b.label(&fine);
+        let v = ok_val(self)?;
+        let ov = self.make_enum(want, "Ok", vec![v])?;
+        self.b.op(format!("store {} {}, ptr {}", lt, ov, res));
+        self.b.br(&done);
+        self.b.label(&done);
+        Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
+    }
+
     fn make_enum(&mut self, et: &Ty, variant: &str, vals: Vec<(String, Ty)>) -> G<String> {
         let vs = self.m.variants(et)?;
         let vi = vs.iter().position(|(n, _)| n == variant).ok_or_else(|| format!("enum の種類 {} がない", variant))?;
@@ -3301,9 +3335,44 @@ impl<'m, 'p> FnGen<'m, 'p> {
         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem))))
     }
 
+    /// `x << y` / `x >> y`（interp の `binary` と同じ: 幅以上なら 0 か -1、負ならエラー）
+    fn shift(&mut self, op: BinOp, x: &str, i: IntTy, y: &str, n: IntTy, span: Span) -> G<(String, Ty)> {
+        let lt = format!("i{}", i.bits());
+        let y64 = widen(&mut self.b, y, n);
+        if n.signed() {
+            let neg = self.b.val(format!("icmp slt i64 {}, 0", y64));
+            let (_, ok) = self.b.if_true(&neg);
+            let title = self.m.cstr("負の数だけはずらせません");
+            let l = self.m.cstr("右の数が負です");
+            let s = self.m.site(span, "");
+            self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
+            self.b.op("unreachable");
+            self.b.label(&ok);
+        }
+        let big = self.b.val(format!("icmp uge i64 {}, {}", y64, i.bits()));
+        let safe = self.b.val(format!("select i1 {}, i64 {}, i64 {}", big, i.bits() - 1, y64));
+        let amt = if i.bits() == 64 { safe } else { self.b.val(format!("trunc i64 {} to {}", safe, lt)) };
+        let v = match op {
+            BinOp::Shl => {
+                let s = self.b.val(format!("shl {} {}, {}", lt, x, amt));
+                self.b.val(format!("select i1 {}, {} 0, {} {}", big, lt, lt, s))
+            }
+            // 幅以上のときは幅 - 1 だけずらしたもの（符号つきなら 0 か -1、符号なしなら 0）
+            _ if i.signed() => self.b.val(format!("ashr {} {}, {}", lt, x, amt)),
+            _ => {
+                let s = self.b.val(format!("lshr {} {}, {}", lt, x, amt));
+                self.b.val(format!("select i1 {}, {} 0, {} {}", big, lt, lt, s))
+            }
+        };
+        Ok((v, Ty::Int(i)))
+    }
+
     fn binary(&mut self, op: BinOp, a: &Operand, b: &Operand, span: Span) -> G<(String, Ty)> {
         let (x, t) = self.operand(a)?;
         let (y, tb) = self.operand(b)?;
+        if let (BinOp::Shl | BinOp::Shr, Ty::Int(i), Ty::Int(n)) = (op, &t, &tb) {
+            return self.shift(op, &x, *i, &y, *n, span);
+        }
         let y = self.coerce(&y, &tb, &t)?;
         let cmp = |op: BinOp| match op {
             BinOp::Eq => "eq",
@@ -3345,6 +3414,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         } else {
                             (self.b.val(format!("{} {} {}, {}", if div { "udiv" } else { "urem" }, lt, x, y)), t.clone())
                         }
+                    }
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+                        let o = match op {
+                            BinOp::BitAnd => "and",
+                            BinOp::BitOr => "or",
+                            _ => "xor",
+                        };
+                        (self.b.val(format!("{} {} {}, {}", o, lt, x, y)), t.clone())
                     }
                     BinOp::Eq | BinOp::Ne => (self.b.val(format!("icmp {} {} {}, {}", cmp(op), lt, x, y)), Ty::Bool),
                     BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -3397,6 +3474,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let mut vals = Vec::new();
         // チャンネルのメソッドは、場所のチャンネルを複製せずに読む（数を増やすと、スレッドのあいだで取り合いになる）
         let borrowed = name.starts_with("chan.") && matches!(ops.first(), Some(Operand::Copy(_)));
+        // `append` は足す先の変数の場所を渡す（数が 1 ならその場で足して、場所の値を置き換える）
+        if let ("append", [Operand::Copy(p), b]) = (name, ops) {
+            let pr = self.place(p, false)?;
+            let (bv, _) = self.operand(b)?;
+            let r = self.b.val(format!("call ptr @jw_str_append(ptr {}, ptr {})", pr.ptr, bv));
+            self.b.op(format!("call void @jw_str_release(ptr {})", bv));
+            return Ok((r, Ty::Str));
+        }
         for (i, o) in ops.iter().enumerate() {
             match o {
                 Operand::Copy(p) if i == 0 && borrowed => {
@@ -3501,14 +3586,45 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 }
                 Ok(r)
             }
-            "print" => {
-                self.b.op("call void @jw_print_begin()");
+            "print" | "eprint" => {
+                self.b.op(format!("call void @jw_{}_begin()", name));
                 for (i, (v, _)) in vals.iter().enumerate() {
-                    self.b.op(format!("call void @jw_print_part(ptr {}, i32 {})", v, (i == 0) as i32));
+                    self.b.op(format!("call void @jw_{}_part(ptr {}, i32 {})", name, v, (i == 0) as i32));
                 }
-                self.b.op("call void @jw_print_end()");
+                self.b.op(format!("call void @jw_{}_end()", name));
                 release(self, &vals);
                 Ok(("0".to_string(), Ty::Unit))
+            }
+            // 戻らない（IR のブロックは続けて unreachable で終わる）
+            "chr" => {
+                let site = self.m.site(span, "");
+                Ok((self.b.val(format!("call ptr @jw_chr(i64 {}, ptr {})", vals[0].0, site)), Ty::Str))
+            }
+            "exit" => {
+                self.b.op(format!("call void @jw_exit(i64 {})", vals[0].0));
+                Ok(("0".to_string(), Ty::Unit))
+            }
+            "read_file" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_read_file(ptr {}, ptr {})", vals[0].0, out));
+                release(self, &vals);
+                self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load ptr, ptr {}", out)), Ty::Str)))
+            }
+            "write_file" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_write_file(ptr {}, ptr {}, ptr {})", vals[0].0, vals[1].0, out));
+                release(self, &vals);
+                self.result_of(want, &ok, &out, |_| Ok(("0".to_string(), Ty::Unit)))
+            }
+            // 引数のリストは jw_run_command が解放する
+            "run_command" => {
+                let list = self.b.alloca("%list");
+                self.b.op(format!("store %list {}, ptr {}", vals[1].0, list));
+                let code = self.b.alloca("i64");
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_run_command(ptr {}, ptr {}, ptr {}, ptr {})", vals[0].0, list, code, out));
+                release(self, &vals[..1]);
+                self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load i64, ptr {}", code)), Ty::Int(IntTy::I64))))
             }
             "concat" if vals.len() == 2 => {
                 let r = self.b.val(format!("call ptr @jw_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));
@@ -3559,6 +3675,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.op(format!("call void @jw_args(ptr {})", out));
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
+            "f64.to_bits" => Ok((self.b.val(format!("bitcast double {} to i64", vals[0].0)), Ty::Int(IntTy::U64))),
             _ if name.starts_with("str.") => {
                 let r = self.str_method(&name[4..], &vals, span, want)?;
                 release(self, &vals);
@@ -3591,6 +3708,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 (self.b.val(format!("load i64, ptr {}", lp)), i64t)
             }
             "chars" => list_of(self, "jw_str_chars_list", ""),
+            "bytes" => {
+                let (v, _) = list_of(self, "jw_str_bytes", "");
+                (v, Ty::List(Box::new(Ty::Int(IntTy::U8))))
+            }
+            "code" => (self.b.val(format!("call i64 @jw_str_code(ptr {}, ptr {})", s, site)), i64t),
             "lines" => list_of(self, "jw_str_lines", ""),
             "split" => {
                 let sep = vals[1].0.clone();
@@ -3630,6 +3752,26 @@ impl<'m, 'p> FnGen<'m, 'p> {
             "repeat" => {
                 let k = int(self, 1)?;
                 (self.b.val(format!("call ptr @jw_str_repeat(ptr {}, i64 {}, ptr {})", s, k, site)), Ty::Str)
+            }
+            "to_float" => {
+                let out = self.b.alloca("double");
+                let ok = self.b.val(format!("call i32 @jw_str_to_float(ptr {}, ptr {})", s, out));
+                let opt = want.clone();
+                let lt = self.m.lt(&opt)?;
+                let res = self.b.alloca(&lt);
+                let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
+                let (_, no) = self.b.if_true(&none);
+                let nv = self.make_enum(&opt, "None", Vec::new())?;
+                self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+                let done = self.b.l();
+                self.b.br(&done);
+                self.b.label(&no);
+                let v = self.b.val(format!("load double, ptr {}", out));
+                let sv = self.make_enum(&opt, "Some", vec![(v, Ty::Float)])?;
+                self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+                self.b.br(&done);
+                self.b.label(&done);
+                (self.b.val(format!("load {}, ptr {}", lt, res)), opt)
             }
             "to_int" => {
                 let out = self.b.alloca("i64");
@@ -3772,6 +3914,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let moved = if matches!(name, "len") { String::new() } else { self.m.site(span, &crate::interp::list_moved_why(name)) };
                 match name {
                     "len" => Ok((len, i64t)),
+                    "join" => {
+                        let r = self.b.val(format!("call ptr @jw_list_join(ptr {}, ptr {})", pr.ptr, vals[0].0));
+                        self.b.op(format!("call void @jw_str_release(ptr {})", vals[0].0));
+                        Ok((r, Ty::Str))
+                    }
                     "push" => {
                         let (v, t) = vals[0].clone();
                         let v = self.coerce(&v, &t, &x)?;

@@ -160,6 +160,7 @@ impl Parser {
         let mut interfaces = Vec::new();
         let mut uses: Vec<(String, Span)> = Vec::new();
         let mut public = Vec::new();
+        let mut consts: Vec<(String, Expr)> = Vec::new();
         loop {
             self.skip_semis();
             if *self.peek() == Tok::Use {
@@ -177,6 +178,23 @@ impl Parser {
             // `pub` は、ほかのファイルから使えるようにする印
             let is_pub = self.eat(Tok::Pub);
             match self.peek() {
+                Tok::Const if is_pub => {
+                    return Err(Diagnostic::new("const に pub はつけられません")
+                        .primary(self.span(), "定数はそのファイルの中だけで使えます"))
+                }
+                Tok::Const => {
+                    // `const N = 5000;`: 使う場所に値をそのまま書いたのと同じ（数の型は使う場所で決まる）
+                    self.bump();
+                    let span = self.span();
+                    let name = self.expect_ident("定数の名前")?;
+                    self.expect(Tok::Assign, "`=`")?;
+                    let value = self.parse_expr()?;
+                    self.expect(Tok::Semi, "`;`")?;
+                    if consts.iter().any(|(n, _)| *n == name) {
+                        return Err(Diagnostic::new(format!("定数 `{}` が二重に定義されています", name)).primary(span, "ここが二回目"));
+                    }
+                    consts.push((name, value));
+                }
                 Tok::Eof if is_pub => return Err(self.unexpected("`fn`・`struct`・`enum`・`interface`")),
                 Tok::Eof => break,
                 Tok::Interface => {
@@ -211,7 +229,8 @@ impl Parser {
                 }
             }
         }
-        Ok(Program { structs, enums, interfaces, fns, uses, public, modules: Vec::new() })
+        let names = resolve_consts(&mut consts, &mut fns)?;
+        Ok(Program { structs, enums, interfaces, fns, uses, public, modules: Vec::new(), consts: names })
     }
 
     /// `interface Shape { fn i64 area(); fn mut grow(i64 n); }`
@@ -689,12 +708,8 @@ impl Parser {
                 Ok(if t.tok == Tok::Break { Stmt::Break(t.span) } else { Stmt::Continue(t.span) })
             }
             Tok::Return => {
+                // 値として使う if / match の中でも return できる（`let n = match t { case None -> return 0; ... };`）
                 let start = self.bump().span;
-                if self.in_value_if {
-                    return Err(Diagnostic::new("値として使う if / match の中では return できません")
-                        .primary(start, "ここ")
-                        .note("文として使ってください"));
-                }
                 let value = match self.peek().clone() {
                     Tok::Semi | Tok::RBrace | Tok::Eof => None,
                     _ => Some(self.parse_expr()?),
@@ -733,13 +748,13 @@ impl Parser {
         }
     }
 
-    /// `if`。`as_value` なら値として使う位置なので else が必須で、中から return / 外への break はできない。
+    /// `if`。`as_value` なら値として使う位置なので else が必須で、中から外への break / continue はできない（return はできる）。
     fn parse_if(&mut self, as_value: bool) -> R<Expr> {
         let start = self.expect(Tok::If, "`if`")?;
         self.value_context(as_value, |p| p.parse_if_rest(as_value, start))
     }
 
-    /// 値として使う位置なら、中から return / 外への break をできなくする
+    /// 値として使う位置なら、中から外への break / continue をできなくする
     fn value_context<T>(&mut self, as_value: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         let saved = (self.loop_depth, self.in_value_if);
         if as_value {
@@ -878,7 +893,9 @@ impl Parser {
         if !is_block_like(&stmt) {
             self.expect(Tok::Semi, "`;`（case の終わり）")?;
         }
-        if as_value && !is_expr {
+        // `case None -> return 0;` は値が要らない（そこで関数を抜ける）
+        let returns = matches!(stmt, Stmt::Return { .. });
+        if as_value && !is_expr && !returns {
             return Err(Diagnostic::new("値として使う match の case に値がありません")
                 .primary(end, "ここは値ではなく文")
                 .note("`case 1 -> 値;` のように書いてください"));
@@ -916,7 +933,9 @@ impl Parser {
     /// 値として使う if / match のブロック。最後に `;` のない式（値）が必要
     fn parse_value_block(&mut self, as_value: bool) -> R<Block> {
         let b = self.parse_block()?;
-        if as_value && !b.tail {
+        // 最後が return なら値は要らない（そこで関数を抜ける）
+        let returns = matches!(b.stmts.last(), Some(Stmt::Return { .. }));
+        if as_value && !b.tail && !returns {
             return Err(Diagnostic::new("値として使うブロックの最後に値がありません")
                 .primary(b.end, "このブロックの値が決まらない")
                 .note("最後の式の `;` を外すと、それがブロックの値になります"));
@@ -1090,11 +1109,20 @@ impl Parser {
     fn parse_binary(&mut self, min_prec: u8) -> R<Expr> {
         let mut lhs = self.parse_cast()?;
         loop {
-            let (op, prec) = match binop_info(self.peek()) {
+            // `>>` は `>` 2 つ（型の引数の `Option<Option<i64>>` と区別するため、字句解析では分けておく）
+            let shr = *self.peek() == Tok::Gt && *self.peek2() == Tok::Gt && {
+                let (a, b) = (self.toks[self.pos].span, self.toks[(self.pos + 1).min(self.toks.len() - 1)].span);
+                a.line == b.line && a.col + 1 == b.col
+            };
+            let info = if shr { Some((BinOp::Shr, 8)) } else { binop_info(self.peek()) };
+            let (op, prec) = match info {
                 Some(x) if x.1 >= min_prec => x,
                 _ => break,
             };
             self.bump();
+            if shr {
+                self.bump();
+            }
             let rhs = self.parse_binary(prec + 1)?;
             let span = lhs.span.join(rhs.span);
             lhs = Expr::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span);
@@ -1130,6 +1158,12 @@ impl Parser {
                 let e = self.parse_unary()?;
                 let span = start.join(e.span);
                 Ok(Expr::new(ExprKind::Unary(UnOp::Not, Box::new(e)), span))
+            }
+            Tok::Tilde => {
+                let start = self.bump().span;
+                let e = self.parse_unary()?;
+                let span = start.join(e.span);
+                Ok(Expr::new(ExprKind::Unary(UnOp::BitNot, Box::new(e)), span))
             }
             Tok::Star => {
                 let start = self.bump().span;
@@ -1352,6 +1386,11 @@ impl Parser {
                 }
             }
             Tok::LParen if self.at_lambda() => self.parse_lambda(),
+            Tok::LParen if *self.peek2() == Tok::RParen => {
+                let start = self.bump().span;
+                let end = self.bump().span;
+                Ok(Expr::new(ExprKind::Unit, start.join(end)))
+            }
             Tok::LParen => {
                 let start = self.bump().span;
                 let inner = self.with_struct_lit(true, |p| p.parse_expr())?;
@@ -1464,6 +1503,70 @@ fn covers_both_bools(arms: &[MatchArm]) -> bool {
     has(true) && has(false)
 }
 
+/// `const` の値を、ほかの定数を使っていれば置き換えて決め、関数の中で名前を使っている場所を値に置き換える。定数の名前を返す
+fn resolve_consts(consts: &mut [(String, Expr)], fns: &mut [FnDef]) -> R<Vec<String>> {
+    for f in fns.iter() {
+        if let Some((n, v)) = consts.iter().find(|(n, _)| *n == f.name) {
+            return Err(Diagnostic::new(format!("`{}` は定数の名前です", n))
+                .label(v.span, "ここで定数にした")
+                .primary(f.span, "関数に定数と同じ名前はつけられない"));
+        }
+    }
+    // 前の定数を使ってよい（後ろの定数や自分を使うとエラー）
+    for i in 0..consts.len() {
+        let (before, rest) = consts.split_at_mut(i);
+        let (name, value) = &mut rest[0];
+        let mut bad = None;
+        walk_expr_mut(value, &mut |e| {
+            if let ExprKind::Var(n) = &e.kind {
+                match before.iter().find(|(b, _)| b == n) {
+                    Some((_, v)) => {
+                        let span = e.span;
+                        *e = v.clone();
+                        e.span = span;
+                    }
+                    None if bad.is_none() => bad = Some((n.clone(), e.span)),
+                    None => {}
+                }
+            }
+            true
+        });
+        if let Some((n, span)) = bad {
+            return Err(Diagnostic::new(format!("定数 `{}` の値に使えない名前 `{}` があります", name, n))
+                .primary(span, "定数の値には、数・文字列・真偽値と、それより前に書いた定数だけが使えます"));
+        }
+        if let Some(span) = not_constant(value) {
+            return Err(Diagnostic::new(format!("定数 `{}` の値が定数ではありません", name))
+                .primary(span, "定数の値には、数・文字列・真偽値と、その計算だけが書けます"));
+        }
+    }
+    if !consts.is_empty() {
+        for f in fns.iter_mut() {
+            walk_block_mut(&mut f.body, &mut |e| {
+                if let ExprKind::Var(n) = &e.kind {
+                    if let Some((_, v)) = consts.iter().find(|(c, _)| c == n) {
+                        let span = e.span;
+                        *e = v.clone();
+                        e.span = span;
+                    }
+                }
+                true
+            });
+        }
+    }
+    Ok(consts.iter().map(|(n, _)| n.clone()).collect())
+}
+
+/// 定数の値として書けない式の位置（数・小数・文字列・真偽値と、それらの演算・`as` だけ書ける）
+fn not_constant(e: &Expr) -> Option<Span> {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => None,
+        ExprKind::Unary(_, x) | ExprKind::Cast(x, _) => not_constant(x),
+        ExprKind::Binary(_, l, r) => not_constant(l).or_else(|| not_constant(r)),
+        _ => Some(e.span),
+    }
+}
+
 fn binop_info(t: &Tok) -> Option<(BinOp, u8)> {
     Some(match t {
         Tok::OrOr => (BinOp::Or, 1),
@@ -1474,11 +1577,16 @@ fn binop_info(t: &Tok) -> Option<(BinOp, u8)> {
         Tok::Le => (BinOp::Le, 4),
         Tok::Gt => (BinOp::Gt, 4),
         Tok::Ge => (BinOp::Ge, 4),
-        Tok::Plus => (BinOp::Add, 5),
-        Tok::Minus => (BinOp::Sub, 5),
-        Tok::Star => (BinOp::Mul, 6),
-        Tok::Slash => (BinOp::Div, 6),
-        Tok::Percent => (BinOp::Rem, 6),
+        // ビット演算は比べるより強く、足し算より弱い（Rust と同じ順）
+        Tok::Pipe => (BinOp::BitOr, 5),
+        Tok::Caret => (BinOp::BitXor, 6),
+        Tok::Amp => (BinOp::BitAnd, 7),
+        Tok::Shl => (BinOp::Shl, 8),
+        Tok::Plus => (BinOp::Add, 9),
+        Tok::Minus => (BinOp::Sub, 9),
+        Tok::Star => (BinOp::Mul, 10),
+        Tok::Slash => (BinOp::Div, 10),
+        Tok::Percent => (BinOp::Rem, 10),
         _ => return None,
     })
 }
@@ -1607,7 +1715,7 @@ fn bind_this(e: &mut Expr, ctx: &ThisCtx, scopes: &mut Vec<Vec<String>>) {
             let (n, args) = (n.clone(), std::mem::take(args));
             e.kind = ExprKind::MethodCall(this(e.span), n, args, RefCell::default());
         }
-        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Var(_) => {}
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit | ExprKind::Var(_) => {}
         ExprKind::Cast(i, _)
         | ExprKind::Try(i)
         | ExprKind::Own(i)

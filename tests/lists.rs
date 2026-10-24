@@ -301,3 +301,18 @@ fn main() {
 }", false).error.expect("expected an error");
     assert_eq!(d.title, "`P` の要素は filter で選べません");
 }
+
+#[test]
+fn join_strings() {
+    let o = run_source("
+fn main() {
+    let str[] v = [\"a\", \"bc\", \"\", \"日本\"];
+    let str[] none = [];
+    print(v.join(\", \"), v.join(\"\"), none.join(\"-\"), \"a b c\".split(\" \").join(\"+\"));
+}", false);
+    assert!(o.error.is_none(), "{:?}", o.error.map(|d| d.title));
+    assert_eq!(o.output, "a, bc, , 日本 abc日本  a+b+c\n");
+    assert_eq!(o.live_objects, 0);
+    let e = run_source("fn main() { let i64[] v = [1]; print(v.join(\",\")); }", false).error.expect("error");
+    assert!(e.title.contains("join"));
+}

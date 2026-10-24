@@ -44,12 +44,14 @@ impl<'a> Loader<'a> {
             uses: Vec::new(),
             public: Vec::new(),
             modules: self.files.iter().skip(1).map(|(n, _)| n.clone()).collect(),
+            consts: Vec::new(),
         };
         for p in self.parts.drain(..) {
             all.structs.extend(p.structs);
             all.enums.extend(p.enums);
             all.interfaces.extend(p.interfaces);
             all.fns.extend(p.fns);
+            all.consts.extend(p.consts);
         }
         Ok(all)
     }
@@ -90,6 +92,7 @@ impl<'a> Loader<'a> {
         let info = info_of(&prog);
         if !name.is_empty() {
             qualify(&mut prog, name, &info);
+            prog.consts = prog.consts.iter().map(|c| format!("{}.{}", name, c)).collect();
         }
         self.parts.push(prog);
         Ok(info)
@@ -272,7 +275,7 @@ impl<'a> Qualify<'a> {
 
     fn expr(&self, e: &mut Expr, tps: &[String]) {
         match &mut e.kind {
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) => {}
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Unit => {}
             // 名前のある関数を値として使う（変数に関数と同じ名前はつけられないので、関数の名前なら関数）
             ExprKind::Var(n) => {
                 if self.fns.contains(n.as_str()) {
