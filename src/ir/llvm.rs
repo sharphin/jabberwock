@@ -197,6 +197,7 @@ declare i32 @jw_run_command(ptr, ptr, ptr, ptr)
 declare void @jw_exit(i64) noreturn
 declare ptr @jw_chr(i64, ptr)
 declare ptr @jw_str_append(ptr, ptr)
+declare ptr @jw_list_join(ptr, ptr)
 declare void @jw_str_bytes(ptr, ptr)
 declare i64 @jw_str_code(ptr, ptr)
 declare void @jw_args(ptr)
@@ -3886,6 +3887,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let len = self.b.val(format!("load i64, ptr {}", lp));
                 match name {
                     "len" => Ok((len, i64t)),
+                    "join" => {
+                        let r = self.b.val(format!("call ptr @jw_list_join(ptr {}, ptr {})", pr.ptr, vals[0].0));
+                        self.b.op(format!("call void @jw_str_release(ptr {})", vals[0].0));
+                        Ok((r, Ty::Str))
+                    }
                     "push" => {
                         let (v, t) = vals[0].clone();
                         let v = self.coerce(&v, &t, &x)?;

@@ -1071,6 +1071,25 @@ void jw_str_chars_list(WStr *s, WList *out) {
     }
 }
 
+// `a.join(sep)`: 文字列のリストを sep でつなぐ
+WStr *jw_list_join(WList *l, WStr *sep) {
+    WStr **items = (WStr **)l->data;
+    int64_t n = 0;
+    for (int64_t i = 0; i < l->len; i++) n += items[i]->len + (i > 0 ? sep->len : 0);
+    WStr *s = str_alloc(n);
+    char *p = s->data;
+    for (int64_t i = 0; i < l->len; i++) {
+        if (i > 0) {
+            memcpy(p, sep->data, (size_t)sep->len);
+            p += sep->len;
+        }
+        memcpy(p, items[i]->data, (size_t)items[i]->len);
+        p += items[i]->len;
+    }
+    s->data[n] = 0;
+    return s;
+}
+
 // バイトのリスト（u8[]）
 void jw_str_bytes(WStr *s, WList *out) {
     if (s->len == 0) return;

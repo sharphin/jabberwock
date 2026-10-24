@@ -25,7 +25,7 @@
 | A2 | 外部コマンドの実行（済み） | clang を呼ぶ | `run_command(cmd, args)` → `Result<i64, str>`（終了コード） |
 | A3 | 終了コード・標準エラー（済み） | エラーで止まる・エラーを表示する | `exit(n)`、`eprint(...)` |
 | A4 | 文字の番号・バイト（済み） | 名前に使える文字かの判定、LLVM の文字列の `\HH`、ハッシュ | `s.bytes()` → `u8[]`、`c.code()`（1 文字目の番号）、`chr(n)` → `str`（この形で足した） |
-| A5 | 文字列を後ろに足す速さ（済み。join はまだ） | `.ll` は数 MB になる。今の `s += x` は毎回まるごと複製するので、2MB 作るのに interp で 34 秒、実行ファイルで 59 秒かかる（2 乗に遅くなる） | 持ち主が 1 人なら複製せずにその場で足す。あわせて `str[]` の `join(sep)` |
+| A5 | 文字列を後ろに足す速さ（済み。join は C6） | `.ll` は数 MB になる。今の `s += x` は毎回まるごと複製するので、2MB 作るのに interp で 34 秒、実行ファイルで 59 秒かかる（2 乗に遅くなる） | 持ち主が 1 人なら複製せずにその場で足す。あわせて `str[]` の `join(sep)` |
 
 ### B. ないとかなり面倒
 
@@ -44,8 +44,8 @@
 | C2 | 構文木に解析の結論を書き込む（Rust の `Cell`） | 式に番号をつけて、番号 → 結論の辞書に置く |
 | C3 | 構造体のフィールドに関数の値 | enum と match で分ける |
 | C4 | 実行時ライブラリ（C のソース）を中に入れる | `"""..."""` の文字列としてモジュールに置く |
-| C5 | 値として使う match / if の中の `return`（`let n = match t { case Some(x) -> x; default -> return Err(...); };`） | いったん Option にして `ok_or(...)?`（examples/tinyc.jw の let のところ） |
-| C6 | `str[]` の `join(sep)` | `s += x` をくり返す（その場で足すので速い） |
+| C5 | 値として使う match / if の中の `return`（済み）（`let n = match t { case Some(x) -> x; default -> return Err(...); };`） | いったん Option にして `ok_or(...)?`（examples/tinyc.jw の let のところ） |
+| C6 | `str[]` の `join(sep)`（済み） | `s += x` をくり返す（その場で足すので速い） |
 
 スレッド・interface の型での分岐・辞書のキーに構造体は、コンパイラには要らない。
 
@@ -57,5 +57,5 @@ A5 は速さの問題なので、ベンチマーク（`bench/`）にも文字列
 ## 見本: examples/tinyc.jw
 
 足した機能だけで書いた小さなコンパイラ。`let x = 式; print 式;` の言語を字句解析 → 構文木 → LLVM IR にして
-`write_file` で書き、`run_command` で clang を呼んで実行ファイルにし、動かす。書いてみて見つかった不便が C5。
+`write_file` で書き、`run_command` で clang を呼んで実行ファイルにし、動かす。書いてみて見つかった不便が C5（もう直したので、let のところは match の中で return してもよい）。
 （デバッグビルドの jabberwock は IR でももう一度動かして突き合わせるので、`run_command` の出力が 2 回出る。）

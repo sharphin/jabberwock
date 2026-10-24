@@ -141,6 +141,8 @@ struct FnLower<'a, 'p> {
     captures: Vec<Local>,
     /// 次に書き出すクロージャは `spawn` に渡すもの（1 回だけ呼ばれる）
     spawning: bool,
+    /// 値として使う if / match の中にいる深さ（中の return は、まだ使っていない一時的な値も drop する）
+    in_value: usize,
     locals: Vec<LocalDecl>,
     blocks: Vec<Block>,
     cur: Bb,
@@ -167,6 +169,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
             name,
             captures: Vec::new(),
             spawning: false,
+            in_value: 0,
             locals: Vec::new(),
             blocks: vec![Block { insts: Vec::new(), term: Term::Unreachable }],
             cur: 0,
@@ -470,6 +473,13 @@ impl<'a, 'p> FnLower<'a, 'p> {
                     Some(e) => self.expr(e)?,
                     None => Operand::Const(Const::Unit),
                 };
+                if self.in_value > 0 {
+                    let keep = match &v {
+                        Operand::Move(t, _) => Some(*t),
+                        _ => None,
+                    };
+                    self.drop_pending(keep, *span, "return で関数を抜けたので、使われずに捨てられた");
+                }
                 self.leave(0, *span, "関数から return した");
                 self.terminate(Term::Return(v));
             }
@@ -866,6 +876,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
     /// `if`。`dest` があれば値をそこに入れる
     fn if_expr(&mut self, cond: &Expr, then: &ast::Block, els: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
+        let value = dest.is_some() as usize;
+        self.in_value += value;
+        let r = self.if_inner(cond, then, els, dest);
+        self.in_value -= value;
+        r
+    }
+
+    fn if_inner(&mut self, cond: &Expr, then: &ast::Block, els: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
         let c = self.expr(cond)?;
         let t = self.new_block();
         let e = self.new_block();
@@ -889,6 +907,14 @@ impl<'a, 'p> FnLower<'a, 'p> {
 
     /// `match`。`dest` があれば値をそこに入れる
     fn match_expr(&mut self, scrut: &Expr, arms: &[ast::MatchArm], default: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
+        let value = dest.is_some() as usize;
+        self.in_value += value;
+        let r = self.match_inner(scrut, arms, default, dest);
+        self.in_value -= value;
+        r
+    }
+
+    fn match_inner(&mut self, scrut: &Expr, arms: &[ast::MatchArm], default: Option<&ast::Block>, dest: Option<Local>) -> L<()> {
         let st = self.ty(scrut);
         let s = match self.expr(scrut)? {
             Operand::Move(t, _) => t,
@@ -1074,6 +1100,17 @@ impl<'a, 'p> FnLower<'a, 'p> {
     }
 
     /// `e?`: Ok / Some なら中身。Err / None なら、評価の途中の値と全部の変数を捨てて、それを関数から返す
+    /// 関数を途中で抜けるとき（`?`・値として使う if / match の中の return）に、まだ使われていない一時的な値
+    /// （`f(own 1, g()?)` の `own 1`）を drop する。使い終わったものは空なので、drop しても何もしない
+    fn drop_pending(&mut self, keep: Option<Local>, sp: Span, why: &str) {
+        let in_scope: Vec<Local> = self.scopes.iter().flatten().map(|(_, l)| *l).collect();
+        for l in (0..self.locals.len()).rev() {
+            if Some(l) != keep && self.locals[l].name.is_empty() && !in_scope.contains(&l) {
+                self.emit(Inst::Drop { local: l, span: sp, why: why.to_string() });
+            }
+        }
+    }
+
     fn try_expr(&mut self, inner: &Expr, sp: Span) -> L<Operand> {
         let it = self.ty(inner);
         let ok = match &it {
@@ -1089,14 +1126,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
         let err_bb = self.new_block();
         self.blocks[self.cur].term = Term::Switch(Place::local(t, sp), vec![(Rc::from(ok), ok_bb)], err_bb);
         self.cur = err_bb;
-        // まだ使われていない一時的な値（`f(own 1, g()?)` の `own 1`）。使い終わったものは空なので、drop しても何もしない
-        let in_scope: Vec<Local> = self.scopes.iter().flatten().map(|(_, l)| *l).collect();
-        for l in (0..self.locals.len()).rev() {
-            if l != t && self.locals[l].name.is_empty() && !in_scope.contains(&l) {
-                let why = "`?` で関数を抜けたので、使われずに捨てられた".to_string();
-                self.emit(Inst::Drop { local: l, span: sp, why });
-            }
-        }
+        self.drop_pending(Some(t), sp, "`?` で関数を抜けたので、使われずに捨てられた");
         // 戻り値の型が違えば（`Result<i64[], str>` → `Result<i64, str>`）、Err / None を作り直す
         let back = if it == self.ret {
             t

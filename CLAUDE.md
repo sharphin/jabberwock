@@ -75,7 +75,9 @@
 - 解析とインタプリタの「評価順」と「ムーブする／しない（`eval` と `eval_borrow`）」は必ず一致させる。
 - `break` / `continue` で抜けるときは、抜けるスコープの変数の事実を消してから合流させる（`facts_leaving`）。
 - `if` / `match` は式（`ExprKind::If` / `ExprKind::Match`）。文として使うときは `Stmt::Expr` に入り、中の return / break を `Flow` で外へ伝える（`eval_flow`）。
-  値として使うときの中の return / 外への break はパーサが禁止しているので（`value_context`）、`eval` では `Flow` を気にしなくてよい。
+  値として使うときの外への break / continue はパーサが禁止している（`value_context`）。return は書ける: interp の `eval` が If / Match で
+  `Flow::Return` を受けたら、`unwinding` に返す値を入れ `returning` を立てて `Err` で抜け（`?` と同じ道）、`call_fn` が return にする。
+  lower は値の中の深さ `in_value` を数え、そこでの return はまだ使っていない一時的な値を `drop_pending` で捨ててから抜ける。
 - 書き換えの可否は `Access`（Write / ImmutVar / ReadOnlyRef）で表す。`place()` が持ち主から順にたどって決め、
   `ref mut` を通ると Write のまま、`ref` を通ると ReadOnlyRef になる。`RefVal.mutable` が「ref mut か」。
   同じ規則を `types.rs` が型から静的に決める（`Access::through` に型を渡す）。実行時の検査は念のため残している。
@@ -180,6 +182,7 @@
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
   `map` / `filter` は interp の `map_list`、lower は for と同じ `each_in`（`Each::Map`）で書き出す（exec / llvm は何もしない）。
   `ok_or` は `lib.rs` の `PRELUDE` に jabberwock で書いた関数。
+  `str[]` の `join(sep)` は interp の `join_strs`・llvm の `jw_list_join`（元のリストは変えないので mut でなくてよい）。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 
 - IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（`Proj::Deref` はいつも `Check::Required` で書き出す）。

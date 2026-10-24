@@ -708,12 +708,8 @@ impl Parser {
                 Ok(if t.tok == Tok::Break { Stmt::Break(t.span) } else { Stmt::Continue(t.span) })
             }
             Tok::Return => {
+                // 値として使う if / match の中でも return できる（`let n = match t { case None -> return 0; ... };`）
                 let start = self.bump().span;
-                if self.in_value_if {
-                    return Err(Diagnostic::new("値として使う if / match の中では return できません")
-                        .primary(start, "ここ")
-                        .note("文として使ってください"));
-                }
                 let value = match self.peek().clone() {
                     Tok::Semi | Tok::RBrace | Tok::Eof => None,
                     _ => Some(self.parse_expr()?),
@@ -752,13 +748,13 @@ impl Parser {
         }
     }
 
-    /// `if`。`as_value` なら値として使う位置なので else が必須で、中から return / 外への break はできない。
+    /// `if`。`as_value` なら値として使う位置なので else が必須で、中から外への break / continue はできない（return はできる）。
     fn parse_if(&mut self, as_value: bool) -> R<Expr> {
         let start = self.expect(Tok::If, "`if`")?;
         self.value_context(as_value, |p| p.parse_if_rest(as_value, start))
     }
 
-    /// 値として使う位置なら、中から return / 外への break をできなくする
+    /// 値として使う位置なら、中から外への break / continue をできなくする
     fn value_context<T>(&mut self, as_value: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         let saved = (self.loop_depth, self.in_value_if);
         if as_value {
@@ -897,7 +893,9 @@ impl Parser {
         if !is_block_like(&stmt) {
             self.expect(Tok::Semi, "`;`（case の終わり）")?;
         }
-        if as_value && !is_expr {
+        // `case None -> return 0;` は値が要らない（そこで関数を抜ける）
+        let returns = matches!(stmt, Stmt::Return { .. });
+        if as_value && !is_expr && !returns {
             return Err(Diagnostic::new("値として使う match の case に値がありません")
                 .primary(end, "ここは値ではなく文")
                 .note("`case 1 -> 値;` のように書いてください"));
@@ -935,7 +933,9 @@ impl Parser {
     /// 値として使う if / match のブロック。最後に `;` のない式（値）が必要
     fn parse_value_block(&mut self, as_value: bool) -> R<Block> {
         let b = self.parse_block()?;
-        if as_value && !b.tail {
+        // 最後が return なら値は要らない（そこで関数を抜ける）
+        let returns = matches!(b.stmts.last(), Some(Stmt::Return { .. }));
+        if as_value && !b.tail && !returns {
             return Err(Diagnostic::new("値として使うブロックの最後に値がありません")
                 .primary(b.end, "このブロックの値が決まらない")
                 .note("最後の式の `;` を外すと、それがブロックの値になります"));

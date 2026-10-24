@@ -1990,6 +1990,14 @@ impl<'a> Checker<'a> {
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
             "reverse" => (0, Ty::Unit, true),
+            "join" => {
+                if *elem != Ty::Str || args.len() != 1 {
+                    return Err(Diagnostic::new("join は文字列のリストに使います")
+                        .primary(span, format!("`{}` のリストです（`sep` を 1 つ渡します）", elem.show())));
+                }
+                self.expect(&args[0], &Ty::Str)?;
+                return Ok(Ty::Str);
+            }
             // 読むだけ。戻り値の型は関数を調べてから決める
             "map" | "filter" => (1, Ty::Unit, false),
             "drain" => (0, Ty::List(Box::new(elem.clone())), true),
@@ -1997,7 +2005,7 @@ impl<'a> Checker<'a> {
             _ => {
                 return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name)).primary(
                     span,
-                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)` です",
+                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)`・`join(sep)` です",
                 ))
             }
         };

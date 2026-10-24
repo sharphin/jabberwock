@@ -552,6 +552,7 @@ impl<'a> Machine<'a> {
                 items.reverse();
                 Value::Unit
             }
+            "join" => Value::Str(Rc::new(crate::interp::join_strs(items, &vals[0]))),
             "drain" => Value::Array(std::mem::take(items), true),
             "insert" => {
                 let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };

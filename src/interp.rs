@@ -344,6 +344,8 @@ pub struct Interp {
     /// `e?` で関数を抜けている途中なら、返す値（`Err(x)` / `None`）と `?` の場所。
     /// そのあいだ R は Err を返して、呼び出し中の関数（`call_fn`）まで戻る
     unwinding: Option<(Value, Span)>,
+    /// unwinding が、値として使う if / match の中の `return` から始まったか（`?` でなく）
+    returning: bool,
     /// 実行時に行った ref の世代チェックの回数
     pub ref_checks: usize,
     /// 静的解析のおかげで飛ばせた ref の世代チェックの回数
@@ -364,6 +366,7 @@ impl Interp {
             world: World::new(echo, Box::new(|| unreachable!("spawn needs World set by run_inner"))),
             depth: 0,
             unwinding: None,
+            returning: false,
             ref_checks: 0,
             ref_checks_elided: 0,
             input: Arc::new(Mutex::new(Box::new(std::io::empty()))),
@@ -767,8 +770,9 @@ impl Interp {
     /// 評価の途中の値（引数など）を、`?` で抜けるときに解放する（ふつうのエラーなら何もしない）
     fn discard(&mut self, vals: Vec<Value>, span: Span) {
         if self.unwinding.is_some() {
+            let why = if self.returning { "return で関数を抜けたので、使われずに捨てられた" } else { "`?` で関数を抜けたので、使われずに捨てられた" };
             for v in vals {
-                self.release(v, span, "`?` で関数を抜けたので、使われずに捨てられた");
+                self.release(v, span, why);
             }
         }
     }
@@ -2058,12 +2062,17 @@ impl Interp {
                 }
                 Ok(Value::Str(text_rc(out.as_str())))
             }
-            ExprKind::If { .. } | ExprKind::Match { .. } => {
-                let (flow, v) = self.eval_flow(e, true)?;
-                // 値として使う if / match の中では return / break / continue をパーサが禁止している
-                debug_assert!(matches!(flow, Flow::Normal));
-                Ok(v)
-            }
+            ExprKind::If { .. } | ExprKind::Match { .. } => match self.eval_flow(e, true)? {
+                (Flow::Normal, v) => Ok(v),
+                // 中の return: `?` と同じく、Err で呼び出し中の関数（`run_frame`）まで戻る
+                (Flow::Return(v, sp), _) => {
+                    self.unwinding = Some((v, sp));
+                    self.returning = true;
+                    Err(Diagnostic::new("return で関数を抜けています").primary(sp, "ここ"))
+                }
+                // 外への break / continue はパーサが禁止している
+                _ => unreachable!("break / continue out of a value if / match"),
+            },
         }
     }
 
@@ -2287,7 +2296,7 @@ impl Interp {
             _ => None,
         };
         if let Some(slot) = seq_slot {
-            if !matches!(name, "len" | "map" | "filter") {
+            if !matches!(name, "len" | "map" | "filter" | "join") {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
             }
@@ -2350,6 +2359,7 @@ impl Interp {
                     items.reverse();
                     Value::Unit
                 }
+                "join" => Value::Str(Rc::new(join_strs(items, &vals[0]))),
                 "drain" => Value::Array(std::mem::take(items), true),
                 "insert" => {
                     let i = match vals[0] {
@@ -2738,7 +2748,7 @@ impl Interp {
         let frame = self.frames.pop().expect("frame");
         self.depth -= 1;
         let (value, span, how) = match flow {
-            Flow::Return(v, sp) if by_try => (v, sp, "`?` で関数を抜けた"),
+            Flow::Return(v, sp) if by_try && !std::mem::take(&mut self.returning) => (v, sp, "`?` で関数を抜けた"),
             Flow::Return(v, sp) => (v, sp, "関数から return した"),
             Flow::Normal => (tail, body.end, "スコープを抜けた"),
             Flow::Break(_) | Flow::Continue(_) => unreachable!("parser rejects break/continue outside loops"),
@@ -2971,6 +2981,19 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
         },
         _ => return Err(Diagnostic::new(format!("文字列にメソッド `{}` はありません", name)).primary(span, "ここ")),
     })
+}
+
+/// `a.join(sep)`: 文字列のリストを sep でつなぐ
+pub(crate) fn join_strs(items: &[Value], sep: &Value) -> String {
+    let Value::Str(sep) = sep else { unreachable!("type checked: str") };
+    let parts: Vec<&str> = items
+        .iter()
+        .map(|v| match v {
+            Value::Str(s) => s.as_str(),
+            _ => unreachable!("type checked: str[]"),
+        })
+        .collect();
+    parts.join(sep.as_str())
 }
 
 /// `chr(n)`: 番号 n の文字 1 つの文字列

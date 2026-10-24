@@ -198,9 +198,9 @@ fn break_and_continue_outside_a_loop() {
 }
 
 #[test]
-fn no_return_or_outer_break_inside_a_value_if() {
-    let d = err("fn f() {\n let x = if true { return 1; } else { 2 };\n}\nfn main() {\n}");
-    assert!(d.title.contains("return できません"), "{}", d.title);
+fn return_but_no_outer_break_inside_a_value_if() {
+    let o = ok("fn i64 f(i64 a) {\n let x = if a > 0 { return a * 2; } else { 2 };\n x + 100\n}\nfn main() {\n print(f(5), f(-1));\n}");
+    assert_eq!(o.output, "10 102\n");
     let d = err_in_main("loop {\n let x = if true { break; } else { 2 };\n}");
     assert!(d.title.contains("外のループへ break"), "{}", d.title);
     // 値として使う if の中のループで break するのはよい

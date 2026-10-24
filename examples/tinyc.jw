@@ -100,11 +100,10 @@ struct Parser {
                 case Some(Name(kw)) -> {
                     pos += 1;
                     if kw == "let" {
-                        let found = match peek() {
-                            case Some(Name(n)) -> Some(n);
-                            default -> None;
+                        let name = match peek() {
+                            case Some(Name(n)) -> n;
+                            default -> return Err("let のあとに名前が必要です");
                         };
-                        let name = found.ok_or("let のあとに名前が必要です")?;
                         pos += 1;
                         expect("=")?;
                         let v = expr()?;
