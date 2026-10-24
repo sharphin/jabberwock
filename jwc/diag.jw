@@ -1,0 +1,141 @@
+// エラー表示（Rust 版の src/diag.rs と同じ形で出す）
+
+pub struct Span {
+    i64 file;
+    i64 line;
+    i64 col;
+    i64 len;
+}
+
+pub struct Label {
+    Span span;
+    str text;
+    bool primary;
+}
+
+pub struct Diag {
+    str title;
+    Label[] labels;
+    str note;        // 空なら note なし
+    bool warning;
+}
+
+pub fn Span mk_span(i64 line, i64 col, i64 len) {
+    Span { file: 0, line: line, col: col, len: len }
+}
+
+/// 主な位置が 1 つのエラー
+pub fn Diag error(str title, Span s, str text) {
+    Diag { title: title, labels: [Label { span: s, text: text, primary: true }], note: "", warning: false }
+}
+
+pub fn Diag error_note(str title, Span s, str text, str note) {
+    Diag { title: title, labels: [Label { span: s, text: text, primary: true }], note: note, warning: false }
+}
+
+fn bool before(ref Label a, ref Label b, i64 mainf) {
+    let am = a.span.file != mainf;
+    let bm = b.span.file != mainf;
+    if am != bm { return !am; }
+    if a.span.file != b.span.file { return a.span.file < b.span.file; }
+    if a.span.line != b.span.line { return a.span.line < b.span.line; }
+    a.span.col < b.span.col
+}
+
+/// 全角文字を 2 桁として数える（下線の位置合わせ用）
+fn i64 width_of(str c) {
+    if c.code() < 128 { 1 } else { 2 }
+}
+
+fn str right(str s, i64 w) {
+    " ".repeat(w - s.len()) + s
+}
+
+/// names[i] / srcs[i] は Span.file が i のファイル
+pub fn str render(ref Diag d, ref str[] names, ref str[] srcs) {
+    let kind = if d.warning { "warning" } else { "error" };
+    let mut out = "{kind}: {d.title}\n";
+
+    // 主な位置（なければ最初の位置）
+    let mut p = -1;
+    for (i, l) in d.labels {
+        if p < 0 && l.primary { p = i; }
+    }
+    if p < 0 && d.labels.len() > 0 { p = 0; }
+    let mainf = if p >= 0 { d.labels[p].span.file } else { 0 };
+
+    // 主な位置のファイルを先に、あとはファイルごとに行の順（安定な挿入ソート）
+    let i64[] mut order = [];
+    for (i, l) in d.labels {
+        let mut k = order.len();
+        while k > 0 && before(l, d.labels[order[k - 1]], mainf) {
+            k -= 1;
+        }
+        order.insert(k, i);
+    }
+
+    let mut maxline = 0;
+    for l in d.labels {
+        if l.span.line > maxline { maxline = l.span.line; }
+    }
+    let width = if d.labels.len() > 0 { "{maxline}".len() } else { 1 };
+    let pad = " ".repeat(width);
+
+    if p >= 0 {
+        let s = d.labels[p].span.file;
+        out += "{pad}--> {name_of(names, s)}:{d.labels[p].span.line}:{d.labels[p].span.col}\n";
+        out += "{pad} |\n";
+    }
+
+    let mut last_line = 0;
+    let mut cur_file = mainf;
+    for k in order {
+        let l = ref d.labels[k];
+        if l.span.file != cur_file {
+            cur_file = l.span.file;
+            last_line = 0;
+            out += "{pad}--> {name_of(names, cur_file)}:{l.span.line}:{l.span.col}\n";
+            out += "{pad} |\n";
+        }
+        let lines = src_of(srcs, cur_file).lines();
+        let ln = l.span.line;
+        let text = if ln >= 1 && ln <= lines.len() { lines[ln - 1].replace("\t", " ") } else { "" };
+        let cs = text.chars();
+        if ln != last_line {
+            if last_line != 0 && ln > last_line + 1 {
+                out += "{pad} ...\n";
+            }
+            let num = right("{ln}", width);
+            out += "{num} | {text}\n";
+            last_line = ln;
+        }
+        let start = if l.span.col > 0 { l.span.col - 1 } else { 0 };
+        let mut lead = 0;
+        let mut mark = 0;
+        let n = if l.span.len > 1 { l.span.len } else { 1 };
+        for (i, c) in cs {
+            if i < start {
+                lead += width_of(c);
+            } else if i < start + n {
+                mark += width_of(c);
+            }
+        }
+        if mark < 1 { mark = 1; }
+        let ch = if l.primary { "^" } else { "-" };
+        let sp = " ".repeat(lead);
+        out += "{pad} | {sp}{ch.repeat(mark)} {l.text}\n";
+    }
+
+    if d.note != "" {
+        out += "{pad} |\n{pad} = note: {d.note}\n";
+    }
+    out
+}
+
+fn str name_of(ref str[] names, i64 i) {
+    if i < names.len() { names[i] } else if names.len() > 0 { names[0] } else { "?" }
+}
+
+fn str src_of(ref str[] srcs, i64 i) {
+    if i < srcs.len() { srcs[i] } else if srcs.len() > 0 { srcs[0] } else { "" }
+}

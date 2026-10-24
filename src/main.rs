@@ -9,6 +9,7 @@ fn main() {
     let mut elide = true;
     let mut show_ir = false;
     let mut show_ll = false;
+    let mut show_tokens = false;
     let mut path = None;
     let mut prog_args = Vec::new();
     for a in env::args().skip(1) {
@@ -31,6 +32,7 @@ fn main() {
             "--no-elide" => elide = false,
             "--ir" => show_ir = true,
             "--ll" => show_ll = true,
+            "--tokens" => show_tokens = true,
             _ => path = Some(a),
         }
     }
@@ -50,6 +52,11 @@ fn main() {
     // `use geom;` は、このファイルと同じフォルダの geom.jw を読む
     let dir = std::path::Path::new(&path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.jw", name))).ok();
+
+    if show_tokens {
+        println!("{}", jabberwock::token_dump(&src, &path));
+        return;
+    }
 
     if show_ll {
         match jabberwock::llvm_text(&src, &read, &path) {

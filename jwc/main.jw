@@ -1,0 +1,64 @@
+// jwc: jabberwock で書いた jabberwock のコンパイラ（作りかけ）
+// 使い方: jwc --tokens <file.jw>   トークンを 1 行に 1 つ出す（Rust 版の `jabberwock --tokens` と同じ形）
+use diag;
+use lexer;
+
+fn str escape(str s) {
+    let mut out = "";
+    for c in s.chars() {
+        if c == "\\" { out += "\\\\"; }
+        else if c == "\"" { out += "\\\""; }
+        else if c == "\n" { out += "\\n"; }
+        else if c == "\t" { out += "\\t"; }
+        else if c == "\r" { out += "\\r"; }
+        else if c == "\0" { out += "\\0"; }
+        else { out += c; }
+    }
+    out
+}
+
+fn str dump(ref lexer.Token[] toks) {
+    let str[] mut lines = [];
+    for t in toks {
+        let k = t.kind;
+        let head = "{t.span.line}:{t.span.col}:{t.span.len} {k}";
+        if k == "ident" || k == "float" {
+            lines.push(head + " " + t.text);
+        } else if k == "int" {
+            lines.push(head + " {t.num}");
+        } else if k == "str" {
+            lines.push(head + " \"" + escape(t.text) + "\"");
+        } else if k == "lit" {
+            lines.push("lit \"" + escape(t.text) + "\"");
+        } else if k == "code" || k == "end" {
+            lines.push(k);
+        } else {
+            lines.push(head);
+        }
+    }
+    lines.join("\n")
+}
+
+fn main() {
+    let a = args();
+    if a.len() != 2 || a[0] != "--tokens" {
+        eprint("使い方: jwc --tokens <file.jw>");
+        exit(2);
+    }
+    let path = a[1];
+    let src = match read_file(path) {
+        case Ok(s) -> s;
+        case Err(e) -> {
+            eprint(e);
+            exit(1)
+        }
+    };
+    match lexer.lex(src) {
+        case Ok(toks) -> print(dump(toks));
+        case Err(d) -> {
+            let str[] names = [path];
+            let str[] srcs = [src];
+            print(diag.render(d, names, srcs));
+        }
+    }
+}

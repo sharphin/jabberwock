@@ -57,6 +57,61 @@ pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String 
     d.render_in(&fs)
 }
 
+/// `jabberwock --tokens`: トークンを 1 行に 1 つ出す（jwc の字句解析との突き合わせ用。形は jwc/main.jw の `dump` と同じ）。
+/// 埋め込みのある文字列は平らに並べる（interp → lit / code と中のトークン → end）。エラーなら診断の表示
+pub fn token_dump(src: &str, path: &str) -> String {
+    fn escape(s: &str) -> String {
+        let mut out = String::new();
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\t' => out.push_str("\\t"),
+                '\r' => out.push_str("\\r"),
+                '\0' => out.push_str("\\0"),
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+    fn dump(toks: &[lexer::Token], lines: &mut Vec<String>) {
+        for t in toks {
+            let head = |k: &str| format!("{}:{}:{} {}", t.span.line, t.span.col, t.span.len, k);
+            let line = match &t.tok {
+                lexer::Tok::Ident(s) => format!("{} {}", head("ident"), s),
+                lexer::Tok::Float(s) => format!("{} {}", head("float"), s),
+                lexer::Tok::Int(n) => format!("{} {}", head("int"), n),
+                lexer::Tok::Str(s) => format!("{} \"{}\"", head("str"), escape(s)),
+                lexer::Tok::Eof => head("eof"),
+                lexer::Tok::Interp(parts) => {
+                    lines.push(head("interp"));
+                    for p in parts {
+                        match p {
+                            lexer::StrPart::Lit(s) => lines.push(format!("lit \"{}\"", escape(s))),
+                            lexer::StrPart::Code(inner) => {
+                                lines.push("code".to_string());
+                                dump(inner, lines);
+                            }
+                        }
+                    }
+                    "end".to_string()
+                }
+                other => head(other.describe().trim_matches('`')),
+            };
+            lines.push(line);
+        }
+    }
+    match lexer::lex(src) {
+        Ok(toks) => {
+            let mut lines = Vec::new();
+            dump(&toks, &mut lines);
+            lines.join("\n")
+        }
+        Err(d) => d.render(path, src),
+    }
+}
+
 /// どのプログラムにも最初からある定義。`Some(x)` / `None` / `Ok(x)` / `Err(e)` は
 /// `Option.Some(x)` などの短い書き方
 const PRELUDE: &str = "enum Option<T> {\n    Some(T value);\n    None;\n\

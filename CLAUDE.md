@@ -58,6 +58,8 @@
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
+| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（作りかけ。設計は docs/self-hosting.md）。今は `main.jw`（`--tokens`）・`lexer.jw`・`diag.jw` |
+| `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump` と比べる。clang がなければ何もしない） |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件
@@ -243,6 +245,9 @@
   ずらす数は左と別の型でよい（types の `binary` が先に扱う。llvm.rs の `shift`）。
 - f64 のメソッドは `to_bits` だけ（interp の `eval_method`・lower の `f64.to_bits`）。
 - 自己ホストに向けて足りないものの一覧は `docs/self-hosting.md`。
+- jwc（`jwc/`）: Rust 版の段ごとに、同じ出力を出す jabberwock のプログラムとして書く。突き合わせ用の出力を Rust 版にも足す（字句は `--tokens` / `token_dump`）。
+  トークンは `Token { kind, text, num, span }`（kind は記号・予約語ならその字）。埋め込みのある文字列は平らに並べる（interp → lit / code と中のトークン → end）。
+  違い: jwc は ASCII でない文字をすべて名前に使える文字とする（Rust 版は `is_alphabetic`）。エラーの文は Rust 版と一字一句同じにする。
 - スレッド（LLVM）: 区画の空きリスト・`jw_live`・`jw_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
   生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。
   送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。
