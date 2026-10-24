@@ -467,7 +467,7 @@ impl<'a> FnAnalyzer<'a> {
                             self.expr(a, true);
                         }
                     }
-                    "drop" | "assert" | "spawn" | "chan" | "exit" | "read_file" | "write_file" | "run_command" => {
+                    "drop" | "assert" | "spawn" | "chan" | "exit" | "read_file" | "write_file" | "run_command" | "chr" => {
                         for a in args {
                             self.expr(a, false);
                         }

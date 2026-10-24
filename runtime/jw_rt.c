@@ -612,7 +612,15 @@ static void bytes_free(void *p, size_t n) {
     free_bytes[c] = p;
 }
 
-static size_t str_bytes(int64_t len) { return sizeof(WStr) + (size_t)len + 1; }
+// 文字列の区画の大きさは長さだけで決まる（解放のときも長さから求める）。
+// 大きいもの（malloc）は 2 のべき乗に切り上げるので、後ろに足す（jw_str_append）ときに毎回は取り直さない
+static size_t str_bytes(int64_t len) {
+    size_t n = sizeof(WStr) + (size_t)len + 1;
+    if (((n + 15) >> 4) <= SCLASS) return n;
+    size_t c = (size_t)SCLASS << 4;
+    while (c < n) c <<= 1;
+    return c;
+}
 
 static WStr *str_alloc(int64_t len) {
     WStr *s = bytes_alloc(str_bytes(len));
@@ -637,6 +645,35 @@ void jw_str_retain(WStr *s) {
 
 void jw_str_release(WStr *s) {
     if (s->rc > 0 && --s->rc == 0) bytes_free(s, str_bytes(s->len));
+}
+
+WStr *jw_str_concat(WStr *a, WStr *b);
+
+// `s = s + b`: s の持ち主が 1 人ならその場で後ろに足す。slot は変数 s の場所。
+// 戻り値は新しい参照で、このあと s の古い値（*slot）が drop される。その場で足したときは
+// （取り直して場所が変わっていれば *slot も新しい場所にして）数を 1 増やして返す
+WStr *jw_str_append(WStr **slot, WStr *b) {
+    WStr *a = *slot;
+    if (a->rc != 1) return jw_str_concat(a, b);
+    int64_t n = a->len + b->len;
+    size_t old = str_bytes(a->len), need = str_bytes(n);
+    if (need != old) {
+        if (((old + 15) >> 4) > SCLASS) {
+            a = realloc(a, need);
+            if (!a) jw_bug("メモリが足りません");
+        } else {
+            WStr *s = bytes_alloc(need);
+            memcpy(s, a, sizeof(WStr) + (size_t)a->len);
+            bytes_free(a, old);
+            a = s;
+        }
+    }
+    memcpy(a->data + a->len, b->data, (size_t)b->len);
+    a->len = n;
+    a->data[n] = 0;
+    a->rc = 2;
+    *slot = a;
+    return a;
 }
 
 WStr *jw_str_concat(WStr *a, WStr *b) {
@@ -1032,6 +1069,44 @@ void jw_str_chars_list(WStr *s, WList *out) {
         push_str(out, jw_str_new(s->data + i, j - i));
         i = j;
     }
+}
+
+// バイトのリスト（u8[]）
+void jw_str_bytes(WStr *s, WList *out) {
+    if (s->len == 0) return;
+    jw_list_reserve(out, 1, s->len);
+    memcpy(out->data, s->data, (size_t)s->len);
+    out->len = s->len;
+}
+
+// 1 文字目の番号（文字列は正しい UTF-8）
+int64_t jw_str_code(WStr *s, const WSite *at) {
+    if (s->len == 0) {
+        begin_error("空の文字列には文字がありません");
+        finish_error(at, "code() は 1 文字目の番号を返します", NULL);
+    }
+    const unsigned char *p = (const unsigned char *)s->data;
+    if (p[0] < 0x80) return p[0];
+    if (p[0] < 0xE0) return ((int64_t)(p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+    if (p[0] < 0xF0) return ((int64_t)(p[0] & 0x0F) << 12) | ((int64_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+    return ((int64_t)(p[0] & 0x07) << 18) | ((int64_t)(p[1] & 0x3F) << 12) | ((int64_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+}
+
+// chr(n): 番号 n の文字 1 つ
+WStr *jw_chr(int64_t n, const WSite *at) {
+    if (n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF)) {
+        char label[128];
+        snprintf(label, sizeof label, "chr(%lld) は文字になりません", (long long)n);
+        begin_error("文字の番号ではありません");
+        finish_error(at, label, "使えるのは 0〜1114111 で、55296〜57343（サロゲート）を除く番号です");
+    }
+    char b[4];
+    int k;
+    if (n < 0x80) { b[0] = (char)n; k = 1; }
+    else if (n < 0x800) { b[0] = (char)(0xC0 | (n >> 6)); b[1] = (char)(0x80 | (n & 0x3F)); k = 2; }
+    else if (n < 0x10000) { b[0] = (char)(0xE0 | (n >> 12)); b[1] = (char)(0x80 | ((n >> 6) & 0x3F)); b[2] = (char)(0x80 | (n & 0x3F)); k = 3; }
+    else { b[0] = (char)(0xF0 | (n >> 18)); b[1] = (char)(0x80 | ((n >> 12) & 0x3F)); b[2] = (char)(0x80 | ((n >> 6) & 0x3F)); b[3] = (char)(0x80 | (n & 0x3F)); k = 4; }
+    return jw_str_new(b, k);
 }
 
 // Rust の `lines()`: \n で分け、行末の \r を除く。最後の \n のあとの空の行は数えない

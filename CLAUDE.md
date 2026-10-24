@@ -222,6 +222,10 @@
   exit のあとは片づけないので、残ったヒープの数は比べない。lower は exit の呼び出しのあとを `Term::Unreachable` にする。
   `eprint` は print と同じ形で `World.errput`（`Outcome.errput`）へ。突き合わせは標準エラーの先頭が errput と同じかを見る。
   `()`（`ExprKind::Unit`）は `Ok(())` のための値。types の `value` と引数の検査は `()` と書いた式だけ値なしを許す。
+- 文字列の値は `Value::Str(Rc<String>)`（作るのは `text_rc`）。`s = s + e`（`s += e`）で s が文字列の変数なら、interp の `assign` は
+  e を先に計算して `Rc::make_mut` でその場で足す。lower も同じ形を `append!(s の場所, e)` にし、llvm は変数の場所を `jw_str_append` に渡す
+  （数が 1 ならその場で足し、数を 2 にして返す。古い値の drop で 1 に戻る）。そのため jw_rt.c の文字列の区画の大きさは長さだけで決まる
+  （`str_bytes`。大きいものは 2 のべき乗）。e は s を書き換えられない（呼ばれた関数は呼び出し元の変数に触れない）ので、順番を変えても同じ。
 - 自己ホストに向けて足りないものの一覧は `docs/self-hosting.md`。
 - スレッド（LLVM）: 区画の空きリスト・`jw_live`・`jw_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
   生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。

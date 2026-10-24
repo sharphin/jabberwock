@@ -68,7 +68,7 @@ fn main() {
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false` `use` `pub`
 
-特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `eprint` `drop` `assert` `read_line` `args` `exit` `read_file` `write_file` `run_command` `spawn` `chan`（組み込み関数）
+特別な名前: `this`（メソッドの中の自分）、`Some` `None`（Option の値）、`Ok` `Err`（Result の値）、`Option` `Result`（最初からある enum）、`print` `eprint` `drop` `assert` `read_line` `args` `exit` `read_file` `write_file` `run_command` `chr` `spawn` `chan`（組み込み関数）
 
 ## 3. 型
 
@@ -339,12 +339,16 @@ match "42".to_int() {
 - 長さと位置は**文字単位**（バイトではない）。`"日本語".len()` は 3。バイト数は `byte_len()`。
 - 文字列を返すメソッドは新しい文字列を返す（元の文字列は変わらない）。
 - 文字列は `+` でつなぐ。`==` `<` などで比べる（`<` は辞書順）。
+- `s += x`（`s = s + x`）は、s がほかと共有されていなければその場で後ろに足すので、くり返しても速い（毎回まるごと複製しない）。
+- 番号から文字を作るのは組み込み関数 `chr(n)`（[9](#9-組み込み関数)）。
 
 | メソッド | 戻り値 | 動き |
 |---|---|---|
 | `len()` | `i64` | 文字数 |
 | `byte_len()` | `i64` | バイト数（UTF-8）。`"日本語".byte_len()` は 9 |
 | `chars()` | `str[]` | 1 文字ずつのリスト（文字型はまだないので、1 文字の str） |
+| `bytes()` | `u8[]` | バイト（UTF-8）のリスト |
+| `code()` | `i64` | 1 文字目の番号（Unicode）。`"a".code()` は 97。空の文字列なら実行時エラー |
 | `lines()` | `str[]` | 行ごとのリスト（改行は含まない） |
 | `split(sep)` | `str[]` | `sep` で分けたリスト。`sep` が空ならエラー |
 | `trim()` | `str` | 前後の空白を取る |
@@ -795,6 +799,7 @@ let (own Node)[i64] mut nodes = [];  // own を値に持つ辞書
 |---|---|
 | `print(a, b, ...)` | 値を空白区切りで 1 行に出す。引数はムーブしない。own と ref は指している中身を出す（無効な ref なら実行時エラー） |
 | `eprint(a, b, ...)` | print と同じだが、標準エラーへ出す |
+| `chr(n)` | 番号 n（Unicode）の文字 1 つの文字列。`chr(97)` は `"a"`。文字の番号でなければ実行時エラー |
 | `exit(n)` | プログラムをすぐ終わらせる（`i64` の終了コード。0〜255 にすること）。ほかのスレッドも止まる。後片づけはしない。型は「戻らない」なので、値が要る場所（match の case など）にも書ける |
 | `read_file(path)` | ファイルを読む（`Result<str, str>`）。読めない・UTF-8 でないなら `Err` |
 | `write_file(path, text)` | ファイルに書く（`Result<(), str>`。あれば上書き）。書けなければ `Err` |

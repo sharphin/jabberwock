@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use super::*;
 use crate::ast::UnOp;
 use crate::diag::Diagnostic;
-use crate::interp::{
+use crate::interp::{text_rc, 
     Callee,
     as_bool, binary, bounds, float_to_int, locate, merge_sort, moved_error, none, some, str_method, Interp, MapVal, RefVal,
     Value, MAX_DEPTH,
@@ -203,7 +203,7 @@ impl<'a> Machine<'a> {
                 Const::Int(n, t) => Value::Int(*n, *t),
                 Const::Float(x) => Value::Float(*x),
                 Const::Bool(b) => Value::Bool(*b),
-                Const::Str(s) => Value::Str(s.clone()),
+                Const::Str(s) => Value::Str(text_rc(s)),
             }),
             Operand::Copy(place) => {
                 let (slot, path) = self.resolve(f, locs, place)?;
@@ -394,7 +394,7 @@ impl<'a> Machine<'a> {
                 if *temp {
                     self.it.release(v, *span, "使い終わった一時的な値");
                 }
-                Ok(Value::Str(Rc::from(shown?.as_str())))
+                Ok(Value::Str(text_rc(shown?.as_str())))
             }
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;
@@ -443,7 +443,11 @@ impl<'a> Machine<'a> {
                         Ok(Value::Unit)
                     }
                     "exit" | "read_file" | "write_file" | "run_command" => self.it.system(name, vals, *span),
-                    "concat" => Ok(Value::Str(Rc::from(strs().concat().as_str()))),
+                    "chr" => {
+                        let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
+                        crate::interp::chr(n, *span)
+                    }
+                    "concat" | "append" => Ok(Value::Str(text_rc(strs().concat().as_str()))),
                     "read_line" => self.it.read_line(*span),
                     "chan" => Ok(Value::Chan(std::sync::Arc::new(crate::threads::Chan::default()))),
                     "args" => Ok(self.it.args_value()),

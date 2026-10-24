@@ -392,6 +392,18 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 self.assign(l, Rvalue::Use(v), *span);
             }
             Stmt::Assign { target, value, span } => {
+                // `s = s + e`（`s += e`）: 文字列の変数なら、持ち主が s だけのときその場で後ろに足す（`append`）。
+                // s は copy の型で、e は s を書き換えられないので、e を先に計算しても結果は同じ
+                if let (ExprKind::Var(x), ExprKind::Binary(BinOp::Add, l, r)) = (&target.kind, &value.kind) {
+                    let local = self.lookup(x).filter(|l| !self.captures.contains(l));
+                    if matches!(&l.kind, ExprKind::Var(y) if y == x) && self.ty(value) == Ty::Str && local.is_some() {
+                        let rv = self.expr(r)?;
+                        let place = self.place(target)?;
+                        let value = Rvalue::Builtin("append".to_string(), vec![Operand::Copy(place.clone()), rv], *span);
+                        self.emit(Inst::Assign { place, value, span: *span, what: describe(target) });
+                        return Ok(());
+                    }
+                }
                 // 値を先に計算し、そのあとで場所を求める（interp の assign と同じ順）
                 let v = self.expr(value)?;
                 let place = self.place(target)?;
@@ -1410,7 +1422,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 Ok(self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), strs, sp), sp))
             }
-            "exit" | "read_file" | "write_file" | "run_command" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "chr" => {
                 let mut ops = Vec::new();
                 for a in args {
                     ops.push(self.expr(a)?);

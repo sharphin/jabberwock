@@ -331,7 +331,7 @@ struct IMethod {
 /// 組み込みの条件: 大小を比べられる型（整数と str）
 const ORDERED: &str = "ordered";
 
-const STR_METHODS: &str = "len, byte_len, chars, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
+const STR_METHODS: &str = "len, byte_len, chars, bytes, code, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int";
 
 /// 型検査で分かったこと（IR への書き出しに使う）。式は構文木の中の位置（アドレス）で引く
 #[derive(Default)]
@@ -2149,6 +2149,8 @@ impl<'a> Checker<'a> {
         let (params, ret): (Vec<Ty>, Ty) = match name {
             "len" | "byte_len" => (vec![], I64),
             "chars" | "lines" => (vec![], list),
+            "bytes" => (vec![], Ty::List(Box::new(Ty::Int(IntTy::U8)))),
+            "code" => (vec![], I64),
             "split" => (vec![Ty::Str], list),
             "trim" | "to_upper" | "to_lower" => (vec![], Ty::Str),
             "contains" | "starts_with" | "ends_with" => (vec![Ty::Str], Ty::Bool),
@@ -2331,6 +2333,13 @@ impl<'a> Checker<'a> {
                     self.value(a)?;
                 }
                 return Ok(Ty::Unit);
+            }
+            "chr" => {
+                if args.len() != 1 {
+                    return Err(arity_error(name, 1, args.len(), span));
+                }
+                self.expect(&args[0], &I64)?;
+                return Ok(Ty::Str);
             }
             "exit" | "read_file" | "write_file" | "run_command" => {
                 let str_list = Ty::List(Box::new(Ty::Str));

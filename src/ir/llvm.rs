@@ -194,6 +194,10 @@ declare i32 @jw_read_file(ptr, ptr)
 declare i32 @jw_write_file(ptr, ptr, ptr)
 declare i32 @jw_run_command(ptr, ptr, ptr, ptr)
 declare void @jw_exit(i64) noreturn
+declare ptr @jw_chr(i64, ptr)
+declare ptr @jw_str_append(ptr, ptr)
+declare void @jw_str_bytes(ptr, ptr)
+declare i64 @jw_str_code(ptr, ptr)
 declare void @jw_args(ptr)
 
 "#;
@@ -3399,6 +3403,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let mut vals = Vec::new();
         // チャンネルのメソッドは、場所のチャンネルを複製せずに読む（数を増やすと、スレッドのあいだで取り合いになる）
         let borrowed = name.starts_with("chan.") && matches!(ops.first(), Some(Operand::Copy(_)));
+        // `append` は足す先の変数の場所を渡す（数が 1 ならその場で足して、場所の値を置き換える）
+        if let ("append", [Operand::Copy(p), b]) = (name, ops) {
+            let pr = self.place(p, false)?;
+            let (bv, _) = self.operand(b)?;
+            let r = self.b.val(format!("call ptr @jw_str_append(ptr {}, ptr {})", pr.ptr, bv));
+            self.b.op(format!("call void @jw_str_release(ptr {})", bv));
+            return Ok((r, Ty::Str));
+        }
         for (i, o) in ops.iter().enumerate() {
             match o {
                 Operand::Copy(p) if i == 0 && borrowed => {
@@ -3513,6 +3525,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 Ok(("0".to_string(), Ty::Unit))
             }
             // 戻らない（IR のブロックは続けて unreachable で終わる）
+            "chr" => {
+                let site = self.m.site(span, "");
+                Ok((self.b.val(format!("call ptr @jw_chr(i64 {}, ptr {})", vals[0].0, site)), Ty::Str))
+            }
             "exit" => {
                 self.b.op(format!("call void @jw_exit(i64 {})", vals[0].0));
                 Ok(("0".to_string(), Ty::Unit))
@@ -3620,6 +3636,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 (self.b.val(format!("load i64, ptr {}", lp)), i64t)
             }
             "chars" => list_of(self, "jw_str_chars_list", ""),
+            "bytes" => {
+                let (v, _) = list_of(self, "jw_str_bytes", "");
+                (v, Ty::List(Box::new(Ty::Int(IntTy::U8))))
+            }
+            "code" => (self.b.val(format!("call i64 @jw_str_code(ptr {}, ptr {})", s, site)), i64t),
             "lines" => list_of(self, "jw_str_lines", ""),
             "split" => {
                 let sep = vals[1].0.clone();

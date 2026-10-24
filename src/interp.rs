@@ -26,8 +26,9 @@ type R<T> = Result<T, Diagnostic>;
 pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 12] =
-    ["print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command"];
+pub(crate) const BUILTINS: [&str; 13] = [
+    "print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command", "chr",
+];
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -37,7 +38,7 @@ pub enum Value {
     /// 小数（f64）
     Float(f64),
     Bool(bool),
-    Str(Rc<str>),
+    Str(Rc<String>),
     /// 唯一の所有者（ヒープのスロット番号）
     Own(usize),
     /// 世代付き参照
@@ -66,11 +67,16 @@ pub struct MapVal {
     index: HashMap<Key, usize>,
 }
 
+/// 文字列の値を作る（`Rc<String>` なのは、持ち主が 1 人のときにその場で後ろに足すため。`s += x`）
+pub(crate) fn text_rc(s: &str) -> Rc<String> {
+    Rc::new(s.to_string())
+}
+
 /// 辞書のキー（整数・文字列・真偽値）
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Key {
     Int(i128),
-    Str(Rc<str>),
+    Str(Rc<String>),
     Bool(bool),
 }
 
@@ -393,7 +399,7 @@ impl Interp {
                 line.pop();
             }
         }
-        Ok(some(Value::Str(Rc::from(line.as_str()))))
+        Ok(some(Value::Str(text_rc(line.as_str()))))
     }
 
     /// ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）。IR の exec も使う。
@@ -404,7 +410,7 @@ impl Interp {
             _ => unreachable!("type checked: str"),
         };
         let result = |ok: bool, v: Value| Value::Enum { variant: Rc::from(if ok { "Ok" } else { "Err" }), fields: vec![v], copy: true };
-        let msg = |m: String| Value::Str(Rc::from(m.as_str()));
+        let msg = |m: String| Value::Str(text_rc(m.as_str()));
         match name {
             "exit" => {
                 let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
@@ -414,7 +420,7 @@ impl Interp {
                 let path = text(&vals[0]);
                 Ok(match std::fs::read(&path) {
                     Ok(b) => match String::from_utf8(b) {
-                        Ok(t) => result(true, Value::Str(Rc::from(t.as_str()))),
+                        Ok(t) => result(true, Value::Str(text_rc(t.as_str()))),
                         Err(_) => result(false, msg(format!("ファイルが UTF-8 ではありません: {}", path))),
                     },
                     Err(_) => result(false, msg(format!("ファイルを読めません: {}", path))),
@@ -454,7 +460,7 @@ impl Interp {
 
     /// `args()`: コマンドライン引数のリスト
     pub(crate) fn args_value(&self) -> Value {
-        Value::Array(self.args.iter().map(|a| Value::Str(Rc::from(a.as_str()))).collect(), true)
+        Value::Array(self.args.iter().map(|a| Value::Str(text_rc(a.as_str()))).collect(), true)
     }
 
     pub fn set_io(&mut self, input: Box<dyn BufRead + Send>, args: Vec<String>) {
@@ -547,7 +553,7 @@ impl Interp {
             Portable::Int(n, t) => Value::Int(n, t),
             Portable::Float(x) => Value::Float(x),
             Portable::Bool(b) => Value::Bool(b),
-            Portable::Str(s) => Value::Str(Rc::from(s.as_str())),
+            Portable::Str(s) => Value::Str(text_rc(s.as_str())),
             Portable::Own(x) => {
                 let v = self.import(*x);
                 Value::Own(self.heap.alloc(v))
@@ -1494,6 +1500,23 @@ impl Interp {
     }
 
     fn assign(&mut self, target: &Expr, value: &Expr, span: Span) -> R<()> {
+        // `s = s + e`（`s += e`）で s が文字列の変数なら、持ち主が s だけのときその場で後ろに足す（IR の `append` と同じ）。
+        // e は s を書き換えられないので、e を先に計算しても結果は同じ
+        if let (ExprKind::Var(name), ExprKind::Binary(BinOp::Add, l, r)) = (&target.kind, &value.kind) {
+            let slot = match self.find_var(name) {
+                Some(Var { state: VarState::Live(slot), mutable: true, .. }) if matches!(&l.kind, ExprKind::Var(y) if y == name) => {
+                    Some(*slot)
+                }
+                _ => None,
+            };
+            if let Some(slot) = slot.filter(|s| matches!(self.heap.slots[*s].value, Some(Value::Str(_)))) {
+                let Value::Str(tail) = self.eval(r)? else { unreachable!("type checked: str + str") };
+                if let Some(Value::Str(text)) = &mut self.heap.slots[slot].value {
+                    Rc::make_mut(text).push_str(&tail);
+                }
+                return Ok(());
+            }
+        }
         let newv = self.eval(value)?;
         match &target.kind {
             ExprKind::Var(name) => {
@@ -1848,7 +1871,7 @@ impl Interp {
             ExprKind::Float(x) => Ok(Value::Float(*x)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Unit => Ok(Value::Unit),
-            ExprKind::Str(s) => Ok(Value::Str(Rc::from(s.as_str()))),
+            ExprKind::Str(s) => Ok(Value::Str(text_rc(s.as_str()))),
             ExprKind::Var(name) => self.read_var(name, e.span),
             ExprKind::Lambda(l) => {
                 // 外の変数を、名前で読むのと同じように取り込む（own はムーブ、コピーできる値はコピー）。
@@ -2032,7 +2055,7 @@ impl Interp {
                 for v in temps {
                     self.release(v, e.span, "文字列に埋め込んで使い終わった一時的な値");
                 }
-                Ok(Value::Str(Rc::from(out.as_str())))
+                Ok(Value::Str(text_rc(out.as_str())))
             }
             ExprKind::If { .. } | ExprKind::Match { .. } => {
                 let (flow, v) = self.eval_flow(e, true)?;
@@ -2099,6 +2122,11 @@ impl Interp {
             "exit" | "read_file" | "write_file" | "run_command" => {
                 let vals = self.eval_all(args)?;
                 self.system(name, vals, span)
+            }
+            "chr" => {
+                let v = self.eval(&args[0])?;
+                let Value::Int(n, _) = v else { unreachable!("type checked: i64") };
+                chr(n, span)
             }
             "spawn" => self.spawn(&args[0], span),
             "chan" => Ok(Value::Chan(Arc::new(Chan::default()))),
@@ -2827,7 +2855,7 @@ fn select_arm<'a>(v: &Value, scrut_span: Span, arms: &'a [MatchArm]) -> R<Option
             let hit = match (pat, v) {
                 (Pat::Int(a), Value::Int(b, _)) => a == b,
                 (Pat::Bool(a), Value::Bool(b)) => a == b,
-                (Pat::Str(a), Value::Str(b)) => a.as_str() == &**b,
+                (Pat::Str(a), Value::Str(b)) => *a == **b,
                 _ => {
                     return Err(Diagnostic::new("case の値と match する値の型が合いません")
                         .label(scrut_span, format!("これは {}", v.type_name()))
@@ -2855,7 +2883,7 @@ pub(crate) fn none() -> Value {
 }
 
 fn str_list<'a>(items: impl Iterator<Item = &'a str>) -> Value {
-    Value::Array(items.map(|x| Value::Str(Rc::from(x))).collect(), true)
+    Value::Array(items.map(|x| Value::Str(text_rc(x))).collect(), true)
 }
 
 /// 文字列のメソッド。位置と長さは文字単位（バイトではない）
@@ -2868,11 +2896,18 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
         Value::Int(x, _) => Ok(*x),
         other => Err(Diagnostic::new("整数が必要です").primary(span, format!("{} が渡された", other.type_name()))),
     };
-    let string = |x: String| Value::Str(Rc::from(x.as_str()));
+    let string = |x: String| Value::Str(text_rc(x.as_str()));
     Ok(match name {
         "len" => Value::Int(text.chars().count() as i128, IntTy::I64),
         "byte_len" => Value::Int(text.len() as i128, IntTy::I64),
         "chars" => Value::Array(text.chars().map(|c| string(c.to_string())).collect(), true),
+        "bytes" => Value::Array(text.bytes().map(|b| Value::Int(b as i128, IntTy::U8)).collect(), true),
+        "code" => match text.chars().next() {
+            Some(c) => Value::Int(c as i128, IntTy::I64),
+            None => {
+                return Err(Diagnostic::new("空の文字列には文字がありません").primary(span, "code() は 1 文字目の番号を返します"))
+            }
+        },
         "lines" => str_list(text.lines()),
         "split" => {
             let sep = s(0)?;
@@ -2918,6 +2953,16 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
     })
 }
 
+/// `chr(n)`: 番号 n の文字 1 つの文字列
+pub(crate) fn chr(n: i128, span: Span) -> R<Value> {
+    match u32::try_from(n).ok().and_then(char::from_u32) {
+        Some(c) => Ok(Value::Str(text_rc(c.to_string().as_str()))),
+        None => Err(Diagnostic::new("文字の番号ではありません")
+            .primary(span, format!("chr({}) は文字になりません", n))
+            .note("使えるのは 0〜1114111 で、55296〜57343（サロゲート）を除く番号です")),
+    }
+}
+
 fn arity_error(name: &str, want: usize, got: usize, span: Span) -> Diagnostic {
     Diagnostic::new(format!("`{}` の引数の数が違います", name))
         .primary(span, format!("{} 個必要ですが {} 個渡されました", want, got))
@@ -2950,7 +2995,7 @@ pub(crate) fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
     match (op, &l, &r) {
         (BinOp::Add, Value::Str(a), Value::Str(b)) => {
             let s = format!("{}{}", a, b);
-            Ok(Value::Str(Rc::from(s.as_str())))
+            Ok(Value::Str(text_rc(s.as_str())))
         }
         (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem, Value::Int(a, t), Value::Int(b, _)) => {
             // 両辺は型検査が同じ型にそろえている。i128 で計算して、型の幅で一周させる
