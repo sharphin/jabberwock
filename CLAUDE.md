@@ -58,7 +58,7 @@
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
-| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（作りかけ。設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw` / `--ir`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く）・`analyze.jw`（ir/analyze.rs の移植。事実は変数ごとの数 1 つを、分かっている変数だけ番号の順に並べる）・`llvm.jw`（ir/llvm.rs の Module: 型の形・手伝いの関数）・`llvmfn.jw`（FnGen と `emit`。Rust 版と同じ順に同じ番号をつける）。`--ll` も |
+| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw` / `--ir`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く）・`analyze.jw`（ir/analyze.rs の移植。事実は変数ごとの数 1 つを、分かっている変数だけ番号の順に並べる）・`llvm.jw`（ir/llvm.rs の Module: 型の形・手伝いの関数）・`llvmfn.jw`（FnGen と `emit`。Rust 版と同じ順に同じ番号をつける）。`--ll` も。`jwc build` で実行ファイルまで作れ、jwc 自身もコンパイルできる。`runtime.jw` は runtime/jw_rt.c を文字列にしたもの（手で直さず `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す） |
 | `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
@@ -212,7 +212,7 @@
 - LLVM（`ir::llvm::emit`）: 値の形は docs/ir-design.md の「7 で決めたこと」。**`JW_NATIVE=1 cargo test` で全テストを実行ファイルでも突き合わせる**
   （`lib.rs` の `native_mismatch`。clang が要る）。IR の動きを変えたら llvm.rs も同じに直し、これを走らせること。
   own の写し（下の 1 ビット）・interface の構造体の番号・変数の状態（null / `@jw.unset` / ムーブした位置）が要。
-  実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す。
+  実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す（jwc/llvm.jw の PRELUDE も）。jw_rt.c を直したら jwc/runtime.jw を作り直す（`JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date`）。
   実行時エラーは interp の `render_in` と一字一句同じに出す（突き合わせは全文を比べる）。interp のエラーの文を変えたら llvm.rs / jw_rt.c も直す。
   `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
 - IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。

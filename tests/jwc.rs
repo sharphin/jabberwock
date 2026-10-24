@@ -337,3 +337,49 @@ fn ast_typed_and_ir_of_the_test_programs() {
         same_ll(&p);
     }
 }
+
+/// jwc/runtime.jw（実行時ライブラリを jabberwock の文字列にしたもの）の中身。runtime/jw_rt.c から作る
+fn runtime_jw() -> String {
+    let body = native::RUNTIME_C.replace('\\', "\\\\").replace('{', "{{").replace('}', "}}");
+    format!(
+        "// 実行時ライブラリ（runtime/jw_rt.c）を文字列にしたもの。`jwc build` が書き出して一緒にコンパイルする。\n\
+         // 手で書き換えない: runtime/jw_rt.c を直したら `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す。\n\
+         pub fn str source() {{\n    \"\"\"\n{}\"\"\"\n}}\n",
+        body
+    )
+}
+
+#[test]
+fn runtime_is_up_to_date() {
+    let path = root().join("jwc/runtime.jw");
+    let want = runtime_jw();
+    if std::env::var("JWC_REGEN").is_ok() {
+        std::fs::write(&path, &want).unwrap();
+    }
+    let got = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(got == want, "jwc/runtime.jw が runtime/jw_rt.c と合っていません。`JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直してください");
+}
+
+/// `jwc build` で作った実行ファイルが、interp と同じものを出す
+#[test]
+fn jwc_build_makes_an_executable() {
+    if !have_clang() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-build-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["fib", "bst", "shop"] {
+        let path = root().join(format!("examples/{}.jw", name));
+        let exe = dir.join(name);
+        let clang = native::clang();
+        let out = Command::new(jwc())
+            .args(["build", "--clang", &clang, "-o", exe.to_str().unwrap(), path.to_str().unwrap()])
+            .output()
+            .expect("jwc を起動できる");
+        assert!(out.status.success(), "{}: {}", name, String::from_utf8_lossy(&out.stderr));
+        let src = std::fs::read_to_string(&path).unwrap();
+        let want = big(move || jabberwock::run_source(&src, false).output);
+        let got = Command::new(&exe).output().expect("作った実行ファイルを起動できる");
+        assert_eq!(String::from_utf8_lossy(&got.stdout), want, "{}", name);
+    }
+}
