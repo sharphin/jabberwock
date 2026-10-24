@@ -243,3 +243,33 @@ fn own_inside_a_for_element_cannot_be_taken_out() {
     let borrow = "fn main() {\n    let ss = [S { b: own P { x: 5 } }];\n    for s in ss {\n        let q = ref s.b;\n        print(q.x, s.b.x);\n    }\n}";
     same_as_interp("view_borrow", &format!("{}{}", base, borrow));
 }
+
+#[test]
+fn own_in_a_view_gives_the_same_error_on_every_path() {
+    // 写しの中の own を取り出す経路はどれも同じエラー（借りる経路 arg_ref / match_ref は通る）。interp と実行ファイルで突き合わせる
+    let base = "struct P { i64 x; }\nstruct S { own P b; }\nenum E { A(own P p); N; }\nstruct T { own P p; }\nstruct W { E e; }\n";
+    let cases = [
+        ("view_index", "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    let mut ss2 = ss;\n    for s in ss2 {\n        let q = ss2[0].b;\n        print(q.x);\n    }\n}"),
+        ("view_arg_own", "fn i64 take(own P p) { p.x }\nfn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        print(take(s.b));\n    }\n}"),
+        ("view_arg_ref", "fn i64 look(ref P p) { p.x }\nfn main() {\n    let ss = [S { b: own P { x: 3 } }];\n    for s in ss {\n        print(look(s.b));\n    }\n}"),
+        ("view_ret", "fn own P get(ref S s) { return s.b; }\nfn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        let q = get(s);\n        print(q.x);\n    }\n}"),
+        ("view_struct_init", "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        let t = T { p: s.b };\n        print(t.p.x);\n    }\n}"),
+        ("view_variant", "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        let o = Some(s.b);\n        print(o.is_some());\n    }\n}"),
+        ("view_push", "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    let (own P)[] mut out = [];\n    for s in ss {\n        out.push(s.b);\n    }\n    print(out.len());\n}"),
+        ("view_match_val", "fn main() {\n    let ws = [W { e: E.A(own P { x: 1 }) }];\n    for w in ws {\n        match w.e {\n            case A(p) -> print(p.x);\n            case N -> print(0);\n        }\n    }\n}"),
+        ("view_match_ref", "fn main() {\n    let ws = [W { e: E.A(own P { x: 1 }) }];\n    for w in ws {\n        match ref w.e {\n            case A(p) -> print(p.x);\n            case N -> print(0);\n        }\n    }\n}"),
+        ("view_ifval", "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    for s in ss {\n        let q = if true { s.b } else { own P { x: 2 } };\n        print(q.x);\n    }\n}"),
+        ("view_assign", "fn main() {\n    let ss = [S { b: own P { x: 1 } }];\n    let mut q = own P { x: 0 };\n    for s in ss {\n        q = s.b;\n    }\n    print(q.x);\n}"),
+        ("view_lambda_ret", "fn main() {\n    let s = S { b: own P { x: 1 } };\n    let f = () -> s.b;\n    let q = f();\n    print(q.x);\n}"),
+    ];
+    for (name, body) in cases.iter() {
+        let src = format!("{}{}", base, body);
+        let o = jabberwock::run_source(&src, false);
+        let borrows = name.ends_with("_ref");
+        assert_eq!(o.error.is_none(), borrows, "{}", name);
+        if let Some(d) = &o.error {
+            assert!(d.title.contains("は取り出せません"), "{}: {}", name, d.title);
+        }
+        same_as_interp(name, &src);
+    }
+}
