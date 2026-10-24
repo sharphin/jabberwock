@@ -149,8 +149,10 @@ fn main() {
 
 #[test]
 fn borrow_errors() {
-    let d = err("struct S { i64 a; }\nfn main() {\n    let S[] mut v = [S { a: 1 }];\n    let r = ref v[0];\n}");
-    assert!(d.title.contains("リスト・辞書の中の値は借りられません"), "{}", d.title);
+    let d = err("struct S { i64 a; }\nfn main() {\n    let S[str] mut m = [\"k\": S { a: 1 }];\n    let r = ref m[\"k\"];\n}");
+    assert!(d.title.contains("辞書の中の値は借りられません"), "{}", d.title);
+    let d = err("fn main() {\n    let i64[str] m = [\"k\": 1];\n    let r = ref m[\"k\"];\n}");
+    assert!(d.title.contains("辞書の中の値は借りられません"), "{}", d.title);
     let d = err("fn main() {\n    let x = 1;\n    let r = ref mut x;\n}");
     assert!(d.title.contains("mut ではない"), "{}", d.title);
     let d = err("fn main() {\n    let r = ref 5;\n}");
@@ -242,4 +244,157 @@ fn main() {
     print(r.n);
 }";
     assert_eq!(ok(src), "2\n");
+}
+
+// ---------------------------------------------------------------- リストの要素を借りる
+
+#[test]
+fn list_elements_can_be_borrowed() {
+    let src = format!("{SHAPES}
+fn shift(ref mut Point p, i64 d) {{
+    p.x += d;
+}}
+
+fn i64 sum(ref Point p) {{
+    p.x + p.y
+}}
+
+fn main() {{
+    let Point[] mut ps = [Point {{ x: 1, y: 2 }}, Point {{ x: 3, y: 4 }}];
+    let r = ref mut ps[1];
+    r.y = 40;
+    shift(ref mut ps[0], 10);
+    print(sum(ps[0]), sum(ps[1]));
+    let px = ref ps[0].x;
+    print(*px);
+    let Line[] mut ls = [Line {{ a: Point {{ x: 0, y: 0 }}, b: Point {{ x: 5, y: 6 }} }}];
+    let b = ref mut ls[0].b;
+    b.x = 50;
+    print(ls[0].b.x);
+    print(ps);
+}}");
+    assert_eq!(ok(&src), "13 43\n11\n50\n[Point { x: 11, y: 2 }, Point { x: 3, y: 40 }]\n");
+}
+
+#[test]
+fn methods_on_list_elements_borrow_the_element() {
+    let src = "
+struct Counter {
+    i64 n;
+
+    fn mut bump() { n += 1; }
+    fn i64 get() { n }
+}
+
+fn main() {
+    let Counter[] mut cs = [Counter { n: 0 }, Counter { n: 10 }];
+    cs[1].bump();
+    cs[1].bump();
+    cs[0].bump();
+    print(cs[0].get(), cs[1].get());
+    for i in range(cs.len()) {
+        cs[i].bump();
+    }
+    print(cs[0].n, cs[1].n);
+}";
+    assert_eq!(ok(src), "1 12\n2 13\n");
+}
+
+#[test]
+fn element_refs_survive_moves_and_element_writes() {
+    // 要素を借りた ref は、リストを別の変数へムーブしても有効。要素への代入は新しい値が見える
+    let src = "
+struct P { i64 x; }
+
+fn main() {
+    let P[] mut a = [P { x: 1 }, P { x: 2 }];
+    let r = ref a[1];
+    let mut b = a;
+    print(r.x);
+    b[1] = P { x: 20 };
+    print(r.x);
+    b[1].x = 30;
+    print(r.x);
+    let i64[][] mut g = [[1, 2], [3]];
+    let e = ref g[0][1];
+    g.push([4]);
+    print(*e, g);
+}";
+    assert_eq!(ok(src), "2\n20\n30\n2 [[1, 2], [3], [4]]\n");
+}
+
+#[test]
+fn changing_the_length_invalidates_element_refs() {
+    for (op, extra) in [
+        ("a.push(P { x: 3 });", ""),
+        ("let _ = a.pop();", ""),
+        ("let _ = a.remove(0);", ""),
+        ("a.insert(0, P { x: 0 });", ""),
+        ("a.reverse();", ""),
+        ("a.sort_by((p, q) -> p.x < q.x);", ""),
+        ("let d = a.drain();", "print(d.len());"),
+    ] {
+        let src = format!("
+struct P {{ i64 x; }}
+
+fn main() {{
+    let P[] mut a = [P {{ x: 1 }}, P {{ x: 2 }}];
+    let r = ref a[1];
+    print(r.x);
+    {op}
+    {extra}
+    print(r.x);
+}}");
+        let d = dangling(&src);
+        let name = op.split('.').nth(1).and_then(|m| m.split('(').next()).expect("a method");
+        assert!(
+            d.labels.iter().any(|l| l.text.contains(&format!("`{}` でリストの要素が動いた", name))),
+            "{}: {:?}",
+            op,
+            d.labels
+        );
+    }
+}
+
+#[test]
+fn element_refs_dangle_when_the_list_dies() {
+    let d = dangling("
+struct P { i64 x; }
+
+fn ref P first(ref P[] a) {
+    ref a[0]
+}
+
+fn ref P bad() {
+    let P[] a = [P { x: 1 }];
+    first(a)
+}
+
+fn main() {
+    let r = bad();
+    print(r.x);
+}");
+    assert!(d.labels.iter().any(|l| l.text.contains("スコープを抜けた")), "{:?}", d.labels);
+    // リストに入れ直すと、古いリストの要素を借りた ref は無効
+    let d = dangling("
+fn main() {
+    let i64[] mut a = [1, 2];
+    let r = ref a[0];
+    a = [3];
+    print(*r);
+}");
+    assert!(d.labels.iter().any(|l| l.text.contains("再代入")), "{:?}", d.labels);
+}
+
+#[test]
+fn element_refs_dangle_after_sending_the_list() {
+    let d = dangling("
+fn main() {
+    let i64[] a = [1, 2];
+    let r = ref a[0];
+    let t = spawn(() -> a.len());
+    print(t.join());
+    print(*r);
+}");
+    assert!(d.labels.iter().any(|l| l.text.contains("ほかのスレッドへ送られた")), "{:?}", d.labels);
 }

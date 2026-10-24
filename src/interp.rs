@@ -45,9 +45,12 @@ pub enum Value {
     Struct(Rc<StructDef>, Vec<Value>),
     /// enum の値（Option も）。`copy` は型検査が決めた「値として読むとコピーか」（false ならムーブ）
     Enum { variant: Rc<str>, fields: Vec<Value>, copy: bool },
-    /// 配列（bool が false）とリスト（true）。配列は要素にムーブする値があればムーブ（なければコピー）、
-    /// リストはいつもムーブ
+    /// 配列（bool が false）。要素にムーブする値があればムーブ（なければコピー）。
+    /// bool が true のものはリストの中身で、リストの区画（`List` のスロット）にだけ置く
     Array(Vec<Value>, bool),
+    /// リスト。中身（`Array(_, true)`）は own の先と同じく自分のスロットに置く（いつもムーブ）。
+    /// 要素を借りた ref はそのスロットを指すので、リストをムーブしても有効で、長さが変わると世代が進んで無効になる
+    List(usize),
     /// 関数の値。クロージャは作ったときに取り込んだ外の変数の値を持つ（`Lambda.captures` の順）
     Func(Callee, Vec<Value>),
     /// 辞書。入れた順に並ぶ（表示と for の順）。いつもムーブ
@@ -146,23 +149,11 @@ impl Value {
             Value::Struct(..) => "構造体",
             Value::Enum { .. } => "enum",
             Value::Array(_, false) => "配列",
-            Value::Array(_, true) => "リスト",
+            Value::Array(_, true) | Value::List(_) => "リスト",
             Value::Func(..) => "関数",
             Value::Map(_) => "辞書",
             Value::Task(_) => "task",
             Value::Chan(_) => "chan",
-        }
-    }
-
-    /// 中に（フィールドも含めて）own を持っているか
-    pub(crate) fn has_own(&self) -> bool {
-        match self {
-            Value::Own(_) => true,
-            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
-                fields.iter().any(Value::has_own)
-            }
-            Value::Map(m) => m.entries.iter().any(|(_, v)| v.has_own()),
-            _ => false,
         }
     }
 
@@ -172,7 +163,7 @@ impl Value {
             Value::Array(items, list) => *list || items.iter().any(Value::moves),
             // 取り込んだ値にムーブするものがあればムーブ（なければコピー）
             Value::Func(_, caps) => caps.iter().any(Value::moves),
-            Value::Map(_) | Value::Task(_) => true,
+            Value::Map(_) | Value::Task(_) | Value::List(_) => true,
             _ => matches!(self, Value::Own(_) | Value::Struct(..) | Value::Enum { copy: false, .. }),
         }
     }
@@ -189,10 +180,10 @@ impl Value {
         }
     }
 
-    /// 中にある own のスロットをすべて集める
+    /// 中にある own のスロット（とリストの中身のスロット）をすべて集める
     fn collect_owns(&self, out: &mut Vec<usize>) {
         match self {
-            Value::Own(s) => out.push(*s),
+            Value::Own(s) | Value::List(s) => out.push(*s),
             Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
                 fields.iter().for_each(|f| f.collect_owns(out))
             }
@@ -396,8 +387,9 @@ impl Interp {
     }
 
     /// `args()`: コマンドライン引数のリスト
-    pub(crate) fn args_value(&self) -> Value {
-        Value::Array(self.args.iter().map(|a| Value::Str(Rc::from(a.as_str()))).collect(), true)
+    pub(crate) fn args_value(&mut self) -> Value {
+        let items = self.args.iter().map(|a| Value::Str(Rc::from(a.as_str()))).collect();
+        self.new_list(items)
     }
 
     pub fn set_io(&mut self, input: Box<dyn BufRead + Send>, args: Vec<String>) {
@@ -474,6 +466,10 @@ impl Interp {
                 copy,
             },
             Value::Array(items, list) => Portable::Array(items.into_iter().map(|x| self.export(x, span)).collect(), list),
+            Value::List(slot) => {
+                let Value::Array(items, _) = self.vacate(slot, span, "ほかのスレッドへ送られた") else { unreachable!("list storage") };
+                Portable::Array(items.into_iter().map(|x| self.export(x, span)).collect(), true)
+            }
             Value::Map(m) => {
                 Portable::Map(m.entries.into_iter().map(|(k, v)| (self.export(k, span), self.export(v, span))).collect())
             }
@@ -504,7 +500,14 @@ impl Interp {
                 fields: fields.into_iter().map(|f| self.import(f)).collect(),
                 copy,
             },
-            Portable::Array(items, list) => Value::Array(items.into_iter().map(|x| self.import(x)).collect(), list),
+            Portable::Array(items, list) => {
+                let items = items.into_iter().map(|x| self.import(x)).collect();
+                if list {
+                    self.new_list(items)
+                } else {
+                    Value::Array(items, false)
+                }
+            }
             Portable::Map(entries) => {
                 let mut m = MapVal::default();
                 for (k, v) in entries {
@@ -683,13 +686,16 @@ impl Interp {
             };
             let g = self.heap.slots[s].generation;
             self.heap.slots[s].generation = g.wrapping_add(1);
-            self.heap.history.insert((s, g), Freed { span, why });
+            self.heap.history.insert((s, g), Freed { span, why: why.clone() });
             self.heap.free_list.push(s);
             self.settle_tasks(&inner, span);
             let mut children = Vec::new();
             inner.collect_owns(&mut children);
+            // リストの中身は、リストと同じ理由で解放される（リストの要素は持ち主の中にあるのと同じ）
+            let list = matches!(inner, Value::Array(_, true));
             for child in children {
-                work.push((child, "持ち主が解放されたので、中身も連鎖して解放された".to_string()));
+                let why = if list { why.clone() } else { "持ち主が解放されたので、中身も連鎖して解放された".to_string() };
+                work.push((child, why));
             }
         }
     }
@@ -756,6 +762,104 @@ impl Interp {
         v
     }
 
+    /// 値の中に（フィールドやリストの中も含めて）own を持っているか
+    pub(crate) fn has_own(&self, v: &Value) -> bool {
+        match v {
+            Value::Own(_) => true,
+            Value::List(s) => matches!(&self.heap.slots[*s].value, Some(x) if self.has_own(x)),
+            Value::Struct(_, fields) | Value::Enum { fields, .. } | Value::Array(fields, _) | Value::Func(_, fields) => {
+                fields.iter().any(|f| self.has_own(f))
+            }
+            Value::Map(m) => m.entries.iter().any(|(_, x)| self.has_own(x)),
+            _ => false,
+        }
+    }
+
+    /// 新しいリスト（中身を置くスロットを作る）
+    pub(crate) fn new_list(&mut self, items: Vec<Value>) -> Value {
+        Value::List(self.heap.alloc(Value::Array(items, true)))
+    }
+
+    /// リストなら中身（`Array(_, true)`）、ほかはそのまま
+    pub(crate) fn seq_at<'v>(&'v self, v: &'v Value) -> &'v Value {
+        match v {
+            Value::List(s) => self.heap.slots[*s].value.as_ref().expect("live list"),
+            v => v,
+        }
+    }
+
+    /// 値の中のリストを、新しいスロットへ写したものに置き換える（一時的な値の中から読むとき）。写したものがあれば true
+    pub(crate) fn copy_lists(&mut self, v: Value) -> (Value, bool) {
+        match v {
+            Value::List(s) => {
+                let Some(Value::Array(items, _)) = self.heap.slots[s].value.clone() else { unreachable!("live list") };
+                let items = items.into_iter().map(|x| self.copy_lists(x).0).collect();
+                (self.new_list(items), true)
+            }
+            Value::Struct(def, fields) => {
+                let mut any = false;
+                let fields = fields.into_iter().map(|f| {
+                    let (f, c) = self.copy_lists(f);
+                    any |= c;
+                    f
+                }).collect();
+                (Value::Struct(def, fields), any)
+            }
+            Value::Array(items, list) => {
+                let mut any = false;
+                let items = items.into_iter().map(|f| {
+                    let (f, c) = self.copy_lists(f);
+                    any |= c;
+                    f
+                }).collect();
+                (Value::Array(items, list), any)
+            }
+            Value::Enum { variant, fields, copy } => {
+                let mut any = false;
+                let fields = fields.into_iter().map(|f| {
+                    let (f, c) = self.copy_lists(f);
+                    any |= c;
+                    f
+                }).collect();
+                (Value::Enum { variant, fields, copy }, any)
+            }
+            Value::Map(mut m) => {
+                let mut any = false;
+                for e in m.entries.iter_mut() {
+                    let x = std::mem::replace(&mut e.1, Value::Unit);
+                    let (x, c) = self.copy_lists(x);
+                    any |= c;
+                    e.1 = x;
+                }
+                (Value::Map(m), any)
+            }
+            other => (other, false),
+        }
+    }
+
+    /// ヒープを使わずに作ったリスト（`Array(_, true)`。文字列のメソッドの結果）を、中身のスロットに置いたリストにする
+    pub(crate) fn adopt(&mut self, v: Value) -> Value {
+        match v {
+            Value::Array(items, true) => self.new_list(items),
+            v => v,
+        }
+    }
+
+    /// 道筋の先がリストなら、その中身のスロットへ移る（要素の場所はそこから数える）
+    pub(crate) fn list_place(&self, slot: usize, path: Vec<usize>) -> (usize, Vec<usize>) {
+        match self.at(slot, &path) {
+            Value::List(s) => (*s, Vec::new()),
+            _ => (slot, path),
+        }
+    }
+
+    /// リストの要素が動いた（長さが変わった・並べ替えた）。中身のスロットの世代を進め、要素を借りた ref を無効にする
+    pub(crate) fn list_moved(&mut self, slot: usize, span: Span, name: &str) {
+        let g = self.heap.slots[slot].generation;
+        self.heap.slots[slot].generation = g.wrapping_add(1);
+        self.heap.history.insert((slot, g), Freed { span, why: list_moved_why(name) });
+    }
+
     /// print と埋め込みで出す文字。own と ref は先の中身を出す（ref が無効なら実行時エラー）
     pub(crate) fn show(&mut self, v: &Value, span: Span, depth: usize) -> R<String> {
         // ref は輪になりうるので、深くなりすぎたら打ち切る
@@ -788,6 +892,10 @@ impl Interp {
                 }
                 format!("[{}]", parts.join(", "))
             }
+            Value::List(slot) => {
+                let inner = self.heap.slots[*slot].value.clone().expect("live list");
+                self.show(&inner, span, depth)?
+            }
             Value::Enum { variant, fields, .. } if fields.is_empty() => variant.to_string(),
             Value::Enum { variant, fields, .. } => {
                 let mut parts = Vec::new();
@@ -810,7 +918,8 @@ impl Interp {
     }
 
     /// 値の写し。中の own はすべて、それを借りた読むだけの ref にする（own は唯一の持ち主なので写せない）
-    pub(crate) fn view_of(&self, v: Value, span: Span, what: &str) -> Value {
+    /// リストは中身の写しを新しいスロットに置く（写しを捨てるときは `release` する）
+    pub(crate) fn view_of(&mut self, v: Value, span: Span, what: &str) -> Value {
         match v {
             Value::Own(slot) => Value::Ref(RefVal {
                 slot,
@@ -825,6 +934,11 @@ impl Interp {
             }
             Value::Array(items, list) => {
                 Value::Array(items.into_iter().map(|f| self.view_of(f, span, what)).collect(), list)
+            }
+            Value::List(slot) => {
+                let Some(Value::Array(items, _)) = self.heap.slots[slot].value.clone() else { unreachable!("live list") };
+                let items = items.into_iter().map(|f| self.view_of(f, span, what)).collect();
+                self.new_list(items)
             }
             Value::Enum { variant, fields, copy } => Value::Enum {
                 variant,
@@ -856,12 +970,12 @@ impl Interp {
         v
     }
 
-    /// 道筋がリストの中を通るか（リストの要素の場所は借りられない）
-    pub(crate) fn through_list(&self, slot: usize, path: &[usize]) -> bool {
+    /// 道筋が辞書の中を通るか（辞書の値の場所は借りられない。リストの要素は中身のスロットから数えるので通らない）
+    pub(crate) fn through_map(&self, slot: usize, path: &[usize]) -> bool {
         let mut v = self.heap.slots[slot].value.as_ref().expect("live slot");
         for &i in path {
             v = match v {
-                Value::Array(_, true) | Value::Map(_) => return true,
+                Value::Map(_) => return true,
                 Value::Struct(_, fields) | Value::Array(fields, _) => &fields[i],
                 _ => unreachable!("paths go through structs and arrays"),
             };
@@ -1201,9 +1315,9 @@ impl Interp {
         let target = match &src {
             Value::Own(_) | Value::Ref(_) => {
                 let (slot, path) = self.check_ptr(&src, iter.span, Check::Required)?;
-                self.at(slot, &path)
+                self.seq_at(self.at(slot, &path))
             }
-            v => v,
+            v => self.seq_at(v),
         };
         // (前の名前の値, 要素)。リストなら添字、辞書ならキー
         let (keys, items): (Vec<Value>, Vec<Value>) = match target {
@@ -1217,6 +1331,8 @@ impl Interp {
         // ループを始めた時点の要素を回す。own の要素は借りた ref にする
         // （ループの中で置き換えられたり取り出されたりすれば、その ref は無効になる）
         let what = format!("{} の要素", describe(iter));
+        // 構造体などムーブする要素は、始めた時点の写しにする（IR と同じく、ループの前にまとめて作る）。
+        // 写しの中の own は、元の要素の own を借りた ref にする（元が解放されれば、たどったときに検出される）
         let views: Vec<Value> = items
             .into_iter()
             .map(|v| match v {
@@ -1228,16 +1344,16 @@ impl Interp {
                     what: what.clone(),
                     mutable: false,
                 }),
+                other if other.moves() => self.view_of(other, var_span, &what),
                 other => other,
             })
             .collect();
         let ran = !views.is_empty();
         let mut out = Ok(Flow::Normal);
-        for v in views {
-            // 構造体などムーブする要素は、その時点の写しを一時的なスロットに置き、読むだけの ref で渡す。
-            // 写しの中の own は、元の要素の own を借りた ref にする（元が解放されれば、たどったときに検出される）
+        let mut views = views.into_iter();
+        for v in views.by_ref() {
+            // ムーブする要素の写しは一時的なスロットに置き、読むだけの ref で渡す
             let (v, copy) = if v.moves() {
-                let v = self.view_of(v, var_span, &what);
                 let slot = self.heap.alloc(v);
                 let r = RefVal {
                     slot,
@@ -1261,8 +1377,9 @@ impl Interp {
             let scope = self.frames.last_mut().expect("frame").scopes.pop().expect("scope");
             self.drop_scope(scope, var_span, "次の周回へ進んだ");
             if let Some(slot) = copy {
-                // 写しは捨てる（中は ref だけなので、解放するものはない）
-                self.vacate(slot, var_span, "for の次の周回へ進んだ");
+                // 写しは捨てる（中の own は ref なので解放しない。写したリストの中身だけ解放される）
+                let v = self.vacate(slot, var_span, "for の次の周回へ進んだ");
+                self.release(v, var_span, "for の次の周回へ進んだ");
             }
             match r {
                 Ok(None) => {}
@@ -1275,6 +1392,10 @@ impl Interp {
                     break;
                 }
             }
+        }
+        // 途中で抜けたら、残りの写しを捨てる
+        for v in views {
+            self.release(v, var_span, "for の次の周回へ進んだ");
         }
         if temp {
             match &out {
@@ -1300,7 +1421,10 @@ impl Interp {
         body: &Block,
         els: Option<&Block>,
     ) -> R<Flow> {
-        let Value::Array(mut items, _) = self.eval(iter)? else { unreachable!("type checked: a list") };
+        let Value::List(list) = self.eval(iter)? else { unreachable!("type checked: a list") };
+        let Value::Array(mut items, _) = self.vacate(list, iter.span, "for で回し終わった一時的な値") else {
+            unreachable!("list storage")
+        };
         items.reverse();
         let mut out = Ok(Flow::Normal);
         let mut i = 0;
@@ -1505,11 +1629,14 @@ impl Interp {
                 let v = self.at(slot, &path).clone();
                 if temp {
                     if let Value::Own(tmp) = p {
-                        if v.has_own() {
+                        if self.has_own(&v) {
                             return Err(Diagnostic::new("一時的な own の中から own を取り出せません")
                                 .primary(e.span, "先に変数に入れてください"));
                         }
+                        // 中のリストは一時的な値と一緒に解放されるので、写してから読む
+                        let (v, copied) = self.copy_lists(v);
                         self.free(tmp, e.span, "使い終わった一時的な値");
+                        return Ok((v, copied));
                     }
                 }
                 Ok((v, false))
@@ -1530,15 +1657,17 @@ impl Interp {
                     }
                     other => return Err(not_a_struct(other, base.span)),
                 };
-                if v.has_own() && !matches!(tmp, Value::Ref(_)) {
+                if self.has_own(&v) && !matches!(tmp, Value::Ref(_)) {
                     return Err(Diagnostic::new("一時的な値の中から own を取り出せません")
                         .primary(e.span, "先に変数に入れてください"));
                 }
+                // 中のリストは一時的な値と一緒に解放されるので、写してから読む
+                let (v, copied) = if matches!(tmp, Value::Ref(_)) { (v, false) } else { self.copy_lists(v) };
                 match holder {
                     Some(slot) => self.free(slot, e.span, "使い終わった一時的な値"),
                     None => self.release(tmp, e.span, "使い終わった一時的な値"),
                 }
-                Ok((v, false))
+                Ok((v, copied))
             }
             ExprKind::Index(base, idx, check) => {
                 if is_place(base) {
@@ -1551,21 +1680,26 @@ impl Interp {
                 let (v, holder) = match &tmp {
                     Value::Own(_) | Value::Ref(_) => {
                         let (slot, path) = self.check_ptr(&tmp, e.span, check.get())?;
-                        let c = self.at(slot, &path);
+                        let c = self.seq_at(self.at(slot, &path));
                         let v = entry(c, locate(c, &key, idx.span, base.span)?).clone();
                         (v, matches!(tmp, Value::Own(_)).then_some(slot))
                     }
-                    c => (entry(c, locate(c, &key, idx.span, base.span)?).clone(), None),
+                    c => {
+                        let c = self.seq_at(c);
+                        (entry(c, locate(c, &key, idx.span, base.span)?).clone(), None)
+                    }
                 };
-                if v.has_own() && !matches!(tmp, Value::Ref(_)) {
+                if self.has_own(&v) && !matches!(tmp, Value::Ref(_)) {
                     return Err(Diagnostic::new("一時的な配列の中から own を取り出せません")
                         .primary(e.span, "先に変数に入れてください"));
                 }
+                // 中のリストは一時的な値と一緒に解放されるので、写してから読む
+                let (v, copied) = if matches!(tmp, Value::Ref(_)) { (v, false) } else { self.copy_lists(v) };
                 match holder {
                     Some(slot) => self.free(slot, e.span, "使い終わった一時的な値"),
                     None => self.release(tmp, e.span, "使い終わった一時的な値"),
                 }
-                Ok((v, false))
+                Ok((v, copied))
             }
             _ => Ok((self.eval(e)?, true)),
         }
@@ -1647,10 +1781,10 @@ impl Interp {
         }
         let place = self.place(base)?;
         let here = match self.place_mut(&place) {
-            Value::Array(..) | Value::Map(_) => None,
+            Value::Array(..) | Value::Map(_) | Value::List(_) => None,
             v => Some(v.clone()),
         };
-        let (slot, mut path, access) = match here {
+        let (slot, path, access) = match here {
             None => (place.slot, place.path, place.access),
             Some(p @ (Value::Own(_) | Value::Ref(_))) => {
                 let (slot, path) = self.check_ptr(&p, e.span, check)?;
@@ -1658,6 +1792,8 @@ impl Interp {
             }
             Some(other) => return Err(not_an_array(&other, base.span)),
         };
+        // リストの要素は、リストの中身のスロットから数える
+        let (slot, mut path) = self.list_place(slot, path);
         let missing = matches!(self.at(slot, &path), Value::Map(m) if m.find(key).is_none());
         let i = if create && missing {
             access.require(e.span, "書き換えようとした")?;
@@ -1723,10 +1859,8 @@ impl Interp {
             })),
             Some(Value::Ref(r)) => Ok(Value::Ref(RefVal { mutable, ..r })),
             _ => {
-                if self.through_list(pl.slot, &pl.path) {
-                    return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
-                        .primary(inner.span, "リストや辞書は伸び縮みするので、中の場所が変わる")
-                        .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                if self.through_map(pl.slot, &pl.path) {
+                    return Err(map_borrow_error(inner.span));
                 }
                 Ok(Value::Ref(RefVal {
                     slot: pl.slot,
@@ -1821,7 +1955,7 @@ impl Interp {
             ExprKind::Ref(inner, mutable) => self.make_ref(inner, *mutable, e.span),
             ExprKind::Deref(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if v.has_own() || v.moves() {
+                if self.has_own(&v) || v.moves() {
                     return Err(Diagnostic::new(format!("ポインタの先にある {} は取り出せません", v.type_name()))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`*p = ...` で置き換えてください"));
@@ -1830,7 +1964,7 @@ impl Interp {
             }
             ExprKind::Field(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if v.has_own() || v.moves() {
+                if self.has_own(&v) || v.moves() {
                     return Err(Diagnostic::new(format!("フィールドにある {} は取り出せません", v.type_name()))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref` で借りるか、`p.f = ...` で置き換えてください"));
@@ -1900,7 +2034,7 @@ impl Interp {
             ExprKind::MethodCall(recv, name, args, owner) => self.eval_method(recv, name, args, owner, e.span),
             ExprKind::Index(..) => {
                 let (v, _) = self.eval_borrow(e)?;
-                if v.has_own() || v.moves() {
+                if self.has_own(&v) || v.moves() {
                     return Err(Diagnostic::new(format!("配列の中にある {} は取り出せません", v.type_name()))
                         .primary(e.span, "所有権をここから動かすことはできない")
                         .note("`ref a[i]` で借りるか、`a[i] = ...` で置き換えてください"));
@@ -1908,7 +2042,10 @@ impl Interp {
                 Ok(v)
             }
             ExprKind::ArrayLit(_, seq) if seq.get() == Seq::Map => Ok(Value::Map(Box::default())),
-            ExprKind::ArrayLit(items, seq) => Ok(Value::Array(self.eval_all(items)?, seq.get() == Seq::List)),
+            ExprKind::ArrayLit(items, seq) => {
+                let items = self.eval_all(items)?;
+                Ok(if seq.get() == Seq::List { self.new_list(items) } else { Value::Array(items, false) })
+            }
             ExprKind::MapLit(pairs) => {
                 // キー・値の順に評価する。同じキーが二度あれば後のものが残る
                 let mut m = Box::<MapVal>::default();
@@ -1938,7 +2075,8 @@ impl Interp {
                 if v.moves() {
                     return Err(Diagnostic::new("複製できない値は並べられません").primary(x.span, "ここ"));
                 }
-                Ok(Value::Array(vec![v; *n as usize], list.get()))
+                let items = vec![v; *n as usize];
+                Ok(if list.get() { self.new_list(items) } else { Value::Array(items, false) })
             }
             ExprKind::Interp(parts) => {
                 // print と同じく借りて読み、作った一時的な値は使い終わったら解放する
@@ -2143,7 +2281,8 @@ impl Interp {
             if place.is_none() {
                 self.release(rv, span, "使い終わった一時的な値");
             }
-            return str_method(&text, name, vals, span);
+            let v = str_method(&text, name, vals, span)?;
+            return Ok(self.adopt(v));
         }
         // task と chan のメソッド
         let handle = match &rv {
@@ -2167,10 +2306,12 @@ impl Interp {
         // 配列・リストのメソッド（`len()`・`push(x)`・`pop()`）
         let seq_slot = match &rv {
             Value::Array(..) => Some(None),
+            Value::List(s) => Some(Some((*s, Vec::new()))),
             Value::Own(_) | Value::Ref(_) => {
                 let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
                 match self.at(slot, &path) {
                     Value::Array(..) => Some(Some((slot, path))),
+                    Value::List(s) => Some(Some((*s, Vec::new()))),
                     _ => None,
                 }
             }
@@ -2188,6 +2329,11 @@ impl Interp {
                     (None, None) => None,
                 };
                 let r = self.sort_list(loc.as_ref(), &mut rv, vals.into_iter().next(), recv, span);
+                if let (Ok(()), Some((s, p))) = (&r, &loc) {
+                    if p.is_empty() && matches!(self.heap.slots[*s].value, Some(Value::Array(_, true))) {
+                        self.list_moved(*s, span, name);
+                    }
+                }
                 if place.is_none() {
                     self.release(rv, span, "使い終わった一時的な値");
                 }
@@ -2199,7 +2345,7 @@ impl Interp {
                     (None, Some(pl)) => self.place_mut(pl).clone(),
                     (None, None) => rv.clone(),
                 };
-                let Value::Array(items, _) = items else { unreachable!("checked above") };
+                let Value::Array(items, _) = self.seq_at(&items).clone() else { unreachable!("checked above") };
                 let f = vals.into_iter().next().expect("one function");
                 let r = self.map_list(items, &f, name == "filter", recv, span);
                 self.release(f, span, "使い終わった関数の値");
@@ -2209,12 +2355,19 @@ impl Interp {
                 return r;
             }
             let mut vals = vals;
+            // リストの中身のスロット（要素が動いたら世代を進める）
+            let list = match &slot {
+                Some((s, p)) if p.is_empty() && matches!(self.heap.slots[*s].value, Some(Value::Array(_, true))) => Some(*s),
+                _ => None,
+            };
             let items = match (slot, &place) {
                 (Some((s, path)), _) => self.at_mut(s, &path),
                 (None, Some(pl)) => self.place_mut(pl),
                 (None, None) => &mut rv,
             };
             let Value::Array(items, _) = items else { unreachable!("checked above") };
+            let len = items.len();
+            let mut drained = None;
             let result = match name {
                 "len" => Value::Int(items.len() as i128, IntTy::I64),
                 "push" => {
@@ -2240,7 +2393,10 @@ impl Interp {
                     items.reverse();
                     Value::Unit
                 }
-                "drain" => Value::Array(std::mem::take(items), true),
+                "drain" => {
+                    drained = Some(std::mem::take(items));
+                    Value::Unit
+                }
                 "insert" => {
                     let i = match vals[0] {
                         Value::Int(i, _) => i,
@@ -2262,6 +2418,19 @@ impl Interp {
                     return Err(Diagnostic::new(format!("メソッド `{}` はありません", name)).primary(span, "ここ"))
                 }
             };
+            let result = match drained {
+                Some(items) => self.new_list(items),
+                None => result,
+            };
+            // 要素が動いた（長さが変わった・並びが変わった）ら、要素を借りた ref を無効にする
+            let moved = match name {
+                "push" | "insert" | "remove" | "reverse" | "drain" => true,
+                "pop" => len > 0,
+                _ => false,
+            };
+            if let (true, Some(s)) = (moved, list) {
+                self.list_moved(s, span, name);
+            }
             if place.is_none() {
                 self.release(rv, span, "使い終わった一時的な値");
             }
@@ -2310,6 +2479,7 @@ impl Interp {
                     return Err(Diagnostic::new(format!("メソッド `{}` はありません", name)).primary(span, "ここ"))
                 }
             };
+            let result = self.adopt(result);
             if place.is_none() {
                 self.release(rv, span, "使い終わった一時的な値");
             }
@@ -2357,7 +2527,7 @@ impl Interp {
             }
             Value::Ref(r) => Value::Ref(RefVal { mutable, ..r }),
             // 場所にある構造体は、その場所を借りて this にする（リストの中は場所が変わりうるので貸す）
-            _ if matches!(&place, Some(pl) if !self.through_list(pl.slot, &pl.path)) => {
+            _ if matches!(&place, Some(pl) if !self.through_map(pl.slot, &pl.path)) => {
                 let pl = place.expect("checked above");
                 Value::Ref(RefVal {
                     slot: pl.slot,
@@ -2433,8 +2603,10 @@ impl Interp {
     fn map_list(&mut self, items: Vec<Value>, f: &Value, filter: bool, recv: &Expr, span: Span) -> R<Value> {
         let what = format!("{} の要素", describe(recv));
         let mut out = Vec::new();
-        for v in items {
-            let v = match v {
+        // for と同じく、始めた時点の写しをまとめて作る
+        let views: Vec<Value> = items
+            .into_iter()
+            .map(|v| match v {
                 Value::Own(slot) => Value::Ref(RefVal {
                     slot,
                     generation: self.heap.slots[slot].generation,
@@ -2443,10 +2615,13 @@ impl Interp {
                     what: what.clone(),
                     mutable: false,
                 }),
+                other if other.moves() => self.view_of(other, span, &what),
                 other => other,
-            };
+            })
+            .collect();
+        let mut views = views.into_iter();
+        for v in views.by_ref() {
             let (v, copy) = if v.moves() {
-                let v = self.view_of(v, span, &what);
                 let slot = self.heap.alloc(v);
                 let r = RefVal {
                     slot,
@@ -2462,11 +2637,15 @@ impl Interp {
             };
             let r = self.call_func(f, vec![v.clone()], span);
             if let Some(slot) = copy {
-                self.vacate(slot, span, "map の次の要素へ進んだ");
+                let w = self.vacate(slot, span, "map の次の要素へ進んだ");
+                self.release(w, span, "map の次の要素へ進んだ");
             }
             let r = match r {
                 Ok(r) => r,
                 Err(d) => {
+                    for w in views {
+                        self.release(w, span, "map の次の要素へ進んだ");
+                    }
                     self.discard(out, span);
                     return Err(d);
                 }
@@ -2477,7 +2656,7 @@ impl Interp {
                 (true, _) => {}
             }
         }
-        Ok(Value::Array(out, true))
+        Ok(self.new_list(out))
     }
 
     fn sort_list(&mut self, loc: Option<&(usize, Vec<usize>)>, tmp: &mut Value, f: Option<Value>, recv: &Expr, span: Span) -> R<()> {
@@ -2530,7 +2709,8 @@ impl Interp {
         };
         let order = merge_sort(self, (0..n).collect(), &mut less);
         for slot in temps {
-            self.vacate(slot, span, "sort_by の比べ終わった写し");
+            let w = self.vacate(slot, span, "sort_by の比べ終わった写し");
+            self.release(w, span, "sort_by の比べ終わった写し");
         }
         if let Some(f) = f {
             self.release(f, span, "sort_by が使い終わった関数");
@@ -2686,6 +2866,11 @@ pub(crate) fn float_to_int(x: f64) -> i128 {
     }
 }
 
+/// リストの要素が動いたときの説明（IR・実行ファイルと同じ文）
+pub(crate) fn list_moved_why(name: &str) -> String {
+    format!("`{}` でリストの要素が動いた", name)
+}
+
 pub(crate) fn describe(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
@@ -2739,6 +2924,13 @@ fn entry(c: &Value, i: usize) -> &Value {
         Value::Map(m) => &m.entries[i].1,
         _ => unreachable!("located above"),
     }
+}
+
+/// 辞書の中の値を借りようとした（型検査・IR・実行ファイルと同じ文）
+pub(crate) fn map_borrow_error(span: Span) -> Diagnostic {
+    Diagnostic::new("辞書の中の値は借りられません")
+        .primary(span, "辞書はキーを取り除くと値の場所が詰まるので、中の場所が変わる")
+        .note("値を借りたいときは、値を own にしてください（`(own T)[K]`）")
 }
 
 fn not_an_array(v: &Value, span: Span) -> Diagnostic {

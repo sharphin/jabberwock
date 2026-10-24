@@ -151,11 +151,12 @@ declare ptr @jw_sb_finish(ptr)
 declare ptr @jw_str_int(i64, i32)
 declare i64 @jw_f2i(double, i32, i32)
 declare void @jw_list_reserve(ptr, i64, i64)
-declare ptr @jw_list_push_slot(ptr, i64)
-declare ptr @jw_list_insert_slot(ptr, i64, i64)
-declare void @jw_list_remove(ptr, i64, i64, ptr)
-declare void @jw_list_reverse(ptr, i64)
-declare void @jw_list_free(ptr)
+declare ptr @jw_list_push_slot(ptr, i64, ptr)
+declare ptr @jw_list_insert_slot(ptr, i64, i64, ptr)
+declare void @jw_list_remove(ptr, i64, i64, ptr, ptr)
+declare void @jw_list_reverse(ptr, i64, ptr)
+declare void @jw_list_moved(ptr, ptr)
+declare void @jw_list_free(ptr, i64, ptr)
 declare void @jw_sort(ptr, i64, i64, ptr, ptr)
 declare void @jw_permute(ptr, i64, i64, ptr)
 declare ptr @jw_env_new(i64, ptr)
@@ -817,7 +818,8 @@ impl<'p> Module<'p> {
                     b.op(format!("call void {}(ptr {}, ptr %site)", d, ep));
                     b.loop_end(e);
                 }
-                b.op("call void @jw_list_free(ptr %p)");
+                let size = self.sizeof(x)?;
+                b.op(format!("call void @jw_list_free(ptr %p, i64 {}, ptr %site)", size));
             }
             Ty::Fn(..) => {
                 let v = b.val("load %fnv, ptr %p");
@@ -913,6 +915,8 @@ impl<'p> Module<'p> {
                 }
             }
             Ty::List(x) => {
+                // 中身の区画の世代を進める（送った側に残った、要素を借りた ref を無効にする。interp の `export`）
+                b.op("call void @jw_list_moved(ptr %p, ptr %site)");
                 if self.needs_drop(x)? {
                     let xt = self.lt(x)?;
                     let data = b.val("load ptr, ptr %p");
@@ -1838,8 +1842,12 @@ struct PlaceRes {
     ty: Ty,
     /// 場所を含む区画（ref で借りるときの世代の元）。スタックの変数なら None
     block: Option<String>,
-    /// 最後の区画のあとでリスト・辞書の中を通ったか（借りられない）
+    /// 最後の区画のあとでリスト・辞書の要素の中を通ったか（要素の印 TBAA をつけてよい）
     list: bool,
+    /// 最後の区画のあとで辞書の中を通ったか（借りられない）
+    map: bool,
+    /// `block` がリストの中身の区画か（要素を借りるときに世代へ「借りられた」の印を立てる。jw_rt.c の `jw_list_moved`）
+    list_block: bool,
     /// interface の先なら、構造体の番号
     tid: Option<String>,
     /// 辞書に新しく入れたキーの場所か（代入で古い値を解放しない）
@@ -2201,7 +2209,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.check_live(l, p.span);
         let ptr = self.local_ptr(l);
         let block = if self.boxed[l] { Some(ptr.clone()) } else { None };
-        let mut r = PlaceRes { ptr, ty: self.f.locals[l].ty.clone(), block, list: false, tid: None, fresh: None };
+        let mut r = PlaceRes { ptr, ty: self.f.locals[l].ty.clone(), block, list: false, map: false, list_block: false, tid: None, fresh: None };
         let last = p.proj.len();
         for (k, pr) in p.proj.iter().enumerate() {
             match pr {
@@ -2241,6 +2249,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         t => return Err(format!("{} の先", t.show())),
                     }
                     r.list = false;
+                    r.map = false;
+                    r.list_block = false;
                 }
                 Proj::Field(i, _) => {
                     let st = self.m.lt(&r.ty)?;
@@ -2274,6 +2284,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             r.ptr = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", xt, data, i));
                             r.ty = *x;
                             r.list = true;
+                            // 要素はリストの中身の区画にある（要素を借りた ref はこの区画の世代を持つ）
+                            r.block = Some(data);
+                            r.map = false;
+                            r.list_block = true;
                         }
                         Ty::Map(kty, v) => {
                             let k64 = self.key64(&kv, &kty)?;
@@ -2314,6 +2328,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             }
                             r.ty = *v;
                             r.list = true;
+                            r.map = true;
                         }
                         t => return Err(format!("{} の添字", t.show())),
                     }
@@ -2617,6 +2632,18 @@ impl<'m, 'p> FnGen<'m, 'p> {
         Err(format!("型の変換 {} → {}", from.show(), to.show()))
     }
 
+    /// 区画を借りるときの世代。リストの中身の区画なら「借りられた」「借りられたことがある」の印を立てる（jw_rt.c の `LIST_SHARED`）
+    fn borrow_gen(&mut self, blk: &str, list_block: bool) -> String {
+        let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
+        let g = self.b.val(format!("load i64, ptr {}", hp));
+        if !list_block {
+            return g;
+        }
+        let g2 = self.b.val(format!("or i64 {}, {}", g, (1u64 << 62) | 2));
+        self.b.op(format!("store i64 {}, ptr {}", g2, hp));
+        g2
+    }
+
     fn make_ref(&mut self, addr: &str, blk: &str, gen: &str, site: &str) -> String {
         let a = self.b.val(format!("insertvalue %ref undef, ptr {}, 0", addr));
         let a = self.b.val(format!("insertvalue %ref {}, ptr {}, 1", a, blk));
@@ -2715,19 +2742,18 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         Ok((self.b.val(format!("load {}, ptr {}", rt, pr.ptr)), Ty::Ref(x, m)))
                     }
                     t => {
-                        if pr.list {
-                            let title = self.m.cstr("リスト・辞書の中の値は借りられません");
-                            let l = self.m.cstr("リストや辞書は伸び縮みするので、中の場所が変わる");
+                        if pr.map {
+                            let title = self.m.cstr("辞書の中の値は借りられません");
+                            let l = self.m.cstr("辞書はキーを取り除くと値の場所が詰まるので、中の場所が変わる");
                             let s = self.m.site(*span, "");
-                            let note = self.m.cstr("要素を借りたいときは、要素を own にしてください（`(own T)[]`）");
+                            let note = self.m.cstr("値を借りたいときは、値を own にしてください（`(own T)[K]`）");
                             self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
                             self.b.op("unreachable");
                             let after = self.b.l();
                             self.b.label(&after);
                         }
                         let blk = pr.block.clone().ok_or("区画にない変数を借りた")?;
-                        let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
-                        let g = self.b.val(format!("load i64, ptr {}", hp));
+                        let g = self.borrow_gen(&blk, pr.list_block);
                         let rv = self.make_ref(&pr.ptr, &blk, &g, &site);
                         if let Some(tid) = pr.tid {
                             let mut acc = "undef".to_string();
@@ -2886,7 +2912,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let view = self.m.helper(H::View, &elem);
                 let (i, e) = self.b.loop_begin(&n);
                 let src = get(&mut self.b, &i);
-                let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
+                let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {}, ptr null)", out, size));
                 self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, dst, site));
                 self.b.loop_end(e);
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem))))
@@ -2907,7 +2933,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             let kp = self.b.val(format!("inttoptr i64 {} to ptr", kv));
                             self.b.op(format!("call void @jw_str_retain(ptr {})", kp));
                         }
-                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
+                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {}, ptr null)", out, size));
                         store_key(self.m, &mut self.b, &k, &kv, &dst)?;
                         self.b.loop_end(e);
                         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(k)))
@@ -2923,7 +2949,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         };
                         self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 8, i64 {})", out, len));
                         let (i, e) = self.b.loop_begin(&len);
-                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 8)", out));
+                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 8, ptr null)", out));
                         self.b.op(format!("store i64 {}, ptr {}", i, dst));
                         self.b.loop_end(e);
                         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Int(IntTy::I64)))))
@@ -2951,8 +2977,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let pr = self.place(this, false)?;
                 let tid = pr.tid.clone().ok_or("interface でない this")?;
                 let blk = pr.block.clone().ok_or("区画にない this")?;
-                let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
-                let g = self.b.val(format!("load i64, ptr {}", hp));
+                let g = self.borrow_gen(&blk, pr.list_block);
                 let site = self.m.site(this.span, what);
                 let rv = self.make_ref(&pr.ptr, &blk, &g, &site);
                 let ret = want.clone();
@@ -3270,7 +3295,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 {}, i64 {})", out, size, vals.len()));
         for (v, t) in vals {
             let v = self.coerce(&v, &t, &elem)?;
-            let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
+            let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {}, ptr null)", out, size));
             self.b.op(format!("store {} {}, ptr {}", el, v, dst));
         }
         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem))))
@@ -3675,7 +3700,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let kp = self.b.val(format!("inttoptr i64 {} to ptr", kv));
                         self.b.op(format!("call void @jw_str_retain(ptr {})", kp));
                     }
-                    let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
+                    let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {}, ptr null)", out, size));
                     store_key(self.m, &mut self.b, &kt, &kv, &dst)?;
                     self.b.loop_end(e);
                     return Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(kt)));
@@ -3743,12 +3768,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let size = self.m.sizeof(&x)?;
                 let lp = self.b.val(format!("getelementptr %list, ptr {}, i32 0, i32 1", pr.ptr));
                 let len = self.b.val(format!("load i64, ptr {}", lp));
+                // 要素が動いたときの位置（要素を借りた ref を無効にする。interp の `list_moved`）
+                let moved = if matches!(name, "len") { String::new() } else { self.m.site(span, &crate::interp::list_moved_why(name)) };
                 match name {
                     "len" => Ok((len, i64t)),
                     "push" => {
                         let (v, t) = vals[0].clone();
                         let v = self.coerce(&v, &t, &x)?;
-                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", pr.ptr, size));
+                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {}, ptr {})", pr.ptr, size, moved));
                         self.b.op(format!("store {} {}, ptr {}", xl, v, dst));
                         Ok(("0".to_string(), Ty::Unit))
                     }
@@ -3767,6 +3794,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         self.b.label(&no);
                         let n1 = self.b.val(format!("sub i64 {}, 1", len));
                         self.b.op(format!("store i64 {}, ptr {}", n1, lp));
+                        self.b.op(format!("call void @jw_list_moved(ptr {}, ptr {})", pr.ptr, moved));
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
                         let ep = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", xl, data, n1));
                         let v = self.b.val(format!("load {}, ptr {}", xl, ep));
@@ -3780,7 +3808,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let (iv, it) = vals[0].clone();
                         let i = self.index(&iv, &it, &len, arg_span)?;
                         let tmp = self.b.alloca(&xl);
-                        self.b.op(format!("call void @jw_list_remove(ptr {}, i64 {}, i64 {}, ptr {})", pr.ptr, size, i, tmp));
+                        self.b.op(format!("call void @jw_list_remove(ptr {}, i64 {}, i64 {}, ptr {}, ptr {})", pr.ptr, size, i, tmp, moved));
                         Ok((self.b.val(format!("load {}, ptr {}", xl, tmp)), (*x).clone()))
                     }
                     "insert" => {
@@ -3798,16 +3826,17 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         self.b.op(format!("call void @jw_fail_insert(i64 {}, i64 {}, ptr {})", i, len, s));
                         self.b.op("unreachable");
                         self.b.label(&ok);
-                        let dst = self.b.val(format!("call ptr @jw_list_insert_slot(ptr {}, i64 {}, i64 {})", pr.ptr, size, i));
+                        let dst = self.b.val(format!("call ptr @jw_list_insert_slot(ptr {}, i64 {}, i64 {}, ptr {})", pr.ptr, size, i, moved));
                         self.b.op(format!("store {} {}, ptr {}", xl, v, dst));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     "reverse" => {
-                        self.b.op(format!("call void @jw_list_reverse(ptr {}, i64 {})", pr.ptr, size));
+                        self.b.op(format!("call void @jw_list_reverse(ptr {}, i64 {}, ptr {})", pr.ptr, size, moved));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     // 中身ごと新しいリストへ移し、元は空にする
                     "drain" => {
+                        self.b.op(format!("call void @jw_list_moved(ptr {}, ptr {})", pr.ptr, moved));
                         let v = self.b.val(format!("load %list, ptr {}", pr.ptr));
                         self.b.op(format!("store %list zeroinitializer, ptr {}", pr.ptr));
                         Ok((v, Ty::List(x.clone())))
@@ -3815,12 +3844,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     "sort_by" => {
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
                         self.sort_by(&data, &len, &x, vals[0].clone(), span)?;
+                        self.b.op(format!("call void @jw_list_moved(ptr {}, ptr {})", pr.ptr, moved));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     "sort" => {
                         let less = self.m.helper(H::Less, &x);
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
                         self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", data, len, size, less));
+                        self.b.op(format!("call void @jw_list_moved(ptr {}, ptr {})", pr.ptr, moved));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     _ => Err(format!("リストのメソッド {}", name)),

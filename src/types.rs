@@ -1641,10 +1641,8 @@ impl<'a> Checker<'a> {
                 let target = match t.pointee() {
                     Some(x) => x.clone(),
                     None => {
-                        if let Some(at) = self.inside_list(inner)? {
-                            return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
-                                .primary(at, "リストや辞書は伸び縮みするので、中の場所が変わる")
-                                .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                        if let Some(at) = self.inside_map(inner)? {
+                            return Err(crate::interp::map_borrow_error(at));
                         }
                         t.clone()
                     }
@@ -2576,10 +2574,8 @@ impl<'a> Checker<'a> {
         let target = match t.pointee() {
             Some(x) => x.clone(),
             None => {
-                if let Some(at) = self.inside_list(a)? {
-                    return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
-                        .primary(at, "`ref` の引数なので借りて渡そうとしたが、リストや辞書は伸び縮みするので中の場所が変わる")
-                        .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                if let Some(at) = self.inside_map(a)? {
+                    return Err(crate::interp::map_borrow_error(at));
                 }
                 t
             }
@@ -2588,8 +2584,9 @@ impl<'a> Checker<'a> {
         Ok(Ty::Ref(Box::new(target), false))
     }
 
-    /// 場所 `e`（own / ref でない値）が、リストの要素の中にあるか。あればその添字の位置
-    fn inside_list(&mut self, e: &Expr) -> R<Option<Span>> {
+    /// 場所 `e`（own / ref でない値）が、辞書の値の中にあるか。あればその添字の位置。
+    /// リストの要素はリストの中身の区画から数えるので、リストの添字まで来たらそこで切れる
+    fn inside_map(&mut self, e: &Expr) -> R<Option<Span>> {
         let (base, is_index) = match &e.kind {
             ExprKind::Field(base, ..) => (base, false),
             ExprKind::Index(base, ..) => (base, true),
@@ -2602,11 +2599,12 @@ impl<'a> Checker<'a> {
         match bt? {
             // own / ref の先は別のスロットなので、ここで道筋が切れる
             Ty::Own(x) | Ty::Ref(x, _) => Ok(match &*x {
-                Ty::List(_) | Ty::Map(..) if is_index => Some(e.span),
+                Ty::Map(..) if is_index => Some(e.span),
                 _ => None,
             }),
-            Ty::List(_) | Ty::Map(..) if is_index => Ok(Some(e.span)),
-            _ => self.inside_list(base),
+            Ty::Map(..) if is_index => Ok(Some(e.span)),
+            Ty::List(_) if is_index => Ok(None),
+            _ => self.inside_map(base),
         }
     }
 

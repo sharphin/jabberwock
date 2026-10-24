@@ -12,7 +12,8 @@ use crate::ast::UnOp;
 use crate::diag::Diagnostic;
 use crate::interp::{
     Callee,
-    as_bool, binary, bounds, float_to_int, locate, merge_sort, moved_error, none, some, str_method, Interp, MapVal, RefVal,
+    as_bool, binary, bounds, float_to_int, locate, map_borrow_error, merge_sort, moved_error, none, some,
+    str_method, Interp, MapVal, RefVal,
     Value, MAX_DEPTH,
 };
 
@@ -181,6 +182,11 @@ impl<'a> Machine<'a> {
                 Proj::Index(k, key_span, base_span) => {
                     let key = self.operand(f, locs, k)?;
                     let last = std::ptr::eq(p, place.proj.last().expect("non-empty"));
+                    // リストの要素は、リストの中身のスロットから数える
+                    if let Value::List(s) = at(self.it, slot, &path) {
+                        slot = *s;
+                        path = Vec::new();
+                    }
                     let c = at_mut(self.it, slot, &path);
                     let i = match c {
                         Value::Map(m) if create && last && m.find(&key).is_none() => {
@@ -207,7 +213,9 @@ impl<'a> Machine<'a> {
             }),
             Operand::Copy(place) => {
                 let (slot, path) = self.resolve(f, locs, place)?;
-                Ok(at(self.it, slot, &path).clone())
+                // 写しは別の値（中のリストも写す。実行ファイルの複製と同じ）
+                let v = at(self.it, slot, &path).clone();
+                Ok(self.it.copy_lists(v).0)
             }
             Operand::Read(l, span) => match locs[*l] {
                 Loc::Live(_) if matches!(self.views.last(), Some(v) if v.contains(l)) => {
@@ -279,10 +287,8 @@ impl<'a> Machine<'a> {
                     }
                     Value::Ref(r) => Value::Ref(RefVal { mutable: *mutable, ..r.clone() }),
                     _ => {
-                        if self.it.through_list(slot, &path) {
-                            return Err(Diagnostic::new("リスト・辞書の中の値は借りられません")
-                                .primary(*span, "リストや辞書は伸び縮みするので、中の場所が変わる")
-                                .note("要素を借りたいときは、要素を own にしてください（`(own T)[]`）"));
+                        if self.it.through_map(slot, &path) {
+                            return Err(map_borrow_error(*span));
                         }
                         Value::Ref(RefVal {
                             slot,
@@ -302,10 +308,14 @@ impl<'a> Machine<'a> {
                 let (slot, path) = self.resolve(f, locs, place)?;
                 Ok(std::mem::replace(at_mut(self.it, slot, &path), Value::Unit))
             }
-            Rvalue::Array(items, list) => Ok(Value::Array(self.operands(f, locs, items)?, *list)),
+            Rvalue::Array(items, list) => {
+                let items = self.operands(f, locs, items)?;
+                Ok(if *list { self.it.new_list(items) } else { Value::Array(items, false) })
+            }
             Rvalue::Repeat(x, n, list) => {
                 let v = self.operand(f, locs, x)?;
-                Ok(Value::Array(vec![v; *n as usize], *list))
+                let items = vec![v; *n as usize];
+                Ok(if *list { self.it.new_list(items) } else { Value::Array(items, false) })
             }
             Rvalue::Map(pairs, span) => {
                 let mut m = Box::<MapVal>::default();
@@ -325,23 +335,22 @@ impl<'a> Machine<'a> {
             }
             Rvalue::Items { place, what, span } => {
                 let (slot, path) = self.resolve(f, locs, place)?;
-                let items: Vec<Value> = match at(self.it, slot, &path) {
+                let items: Vec<Value> = match self.it.seq_at(at(self.it, slot, &path)) {
                     Value::Array(items, _) => items.clone(),
                     Value::Map(m) => m.entries.iter().map(|(_, v)| v.clone()).collect(),
                     _ => unreachable!("for over an array, a list or a map"),
                 };
-                Ok(Value::Array(items.into_iter().map(|v| self.it.view_of(v, *span, what)).collect(), true))
+                let views = items.into_iter().map(|v| self.it.view_of(v, *span, what)).collect();
+                Ok(self.it.new_list(views))
             }
             Rvalue::Keys(place) => {
                 let (slot, path) = self.resolve(f, locs, place)?;
-                Ok(Value::Array(
-                    match at(self.it, slot, &path) {
-                        Value::Array(items, _) => (0..items.len()).map(|i| Value::Int(i as i128, IntTy::I64)).collect(),
-                        Value::Map(m) => m.entries.iter().map(|(k, _)| k.clone()).collect(),
-                        _ => unreachable!("for over an array, a list or a map"),
-                    },
-                    true,
-                ))
+                let keys = match self.it.seq_at(at(self.it, slot, &path)) {
+                    Value::Array(items, _) => (0..items.len()).map(|i| Value::Int(i as i128, IntTy::I64)).collect(),
+                    Value::Map(m) => m.entries.iter().map(|(k, _)| k.clone()).collect(),
+                    _ => unreachable!("for over an array, a list or a map"),
+                };
+                Ok(self.it.new_list(keys))
             }
             Rvalue::Own(a) => {
                 let v = self.operand(f, locs, a)?;
@@ -382,11 +391,18 @@ impl<'a> Machine<'a> {
             Rvalue::CopyOut(place, what, span) => {
                 let (slot, path) = self.resolve(f, locs, place)?;
                 let v = at(self.it, slot, &path).clone();
-                if v.has_own() || v.moves() {
+                if self.it.has_own(&v) || v.moves() {
                     return Err(Diagnostic::new(format!("{}にある {} は取り出せません", what, v.type_name()))
                         .primary(*span, "所有権をここから動かすことはできない"));
                 }
                 Ok(v)
+            }
+            Rvalue::Show(Operand::Copy(p), false, span) => {
+                // 場所の値は写さずに見る（実行ファイルと同じ）
+                let (slot, path) = self.resolve(f, locs, p)?;
+                let v = at(self.it, slot, &path).clone();
+                let shown = self.it.show(&v, *span, 0)?;
+                Ok(Value::Str(Rc::from(shown.as_str())))
             }
             Rvalue::Show(o, temp, span) => {
                 let v = self.operand(f, locs, o)?;
@@ -399,7 +415,8 @@ impl<'a> Machine<'a> {
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;
                 let Value::Str(text) = vals.remove(0) else { unreachable!("string method on a string") };
-                str_method(&text, &name[4..], vals, *span)
+                let v = str_method(&text, &name[4..], vals, *span)?;
+                Ok(self.it.adopt(v))
             }
             Rvalue::Builtin(name, ops, span) if name.starts_with("task.") || name.starts_with("chan.") => {
                 let mut vals = self.operands(f, locs, ops)?;
@@ -473,7 +490,29 @@ impl<'a> Machine<'a> {
     }
 
     /// 配列・リスト・辞書の操作（interp の `eval_method` の配列・辞書の部分と同じ）
-    fn seq_op(&mut self, name: &str, slot: usize, path: &[usize], mut vals: Vec<Value>, span: Span, arg_span: Span) -> R<Value> {
+    fn seq_op(&mut self, name: &str, slot: usize, path: &[usize], vals: Vec<Value>, span: Span, arg_span: Span) -> R<Value> {
+        // リストなら中身のスロットで操作し、要素が動いたら世代を進める（interp の `list_moved`）
+        let (slot, path, list) = match at(self.it, slot, path) {
+            Value::List(s) => (*s, Vec::new(), true),
+            _ => (slot, path.to_vec(), false),
+        };
+        let len = match at(self.it, slot, &path) {
+            Value::Array(items, _) => items.len(),
+            _ => 0,
+        };
+        let r = self.seq_op_in(name, slot, &path, vals, span, arg_span)?;
+        let moved = match name {
+            "push" | "insert" | "remove" | "reverse" | "drain" | "sort" | "sort_by" => true,
+            "pop" => len > 0,
+            _ => false,
+        };
+        if list && moved {
+            self.it.list_moved(slot, span, name);
+        }
+        Ok(self.it.adopt(r))
+    }
+
+    fn seq_op_in(&mut self, name: &str, slot: usize, path: &[usize], mut vals: Vec<Value>, span: Span, arg_span: Span) -> R<Value> {
         if name == "sort_by" {
             return self.sort_by(slot, path, vals.remove(0), span);
         }
@@ -590,7 +629,8 @@ impl<'a> Machine<'a> {
         };
         let order = merge_sort(self, (0..n).collect(), &mut less);
         for s in temps {
-            self.it.vacate(s, span, "sort_by の比べ終わった写し");
+            let w = self.it.vacate(s, span, "sort_by の比べ終わった写し");
+            self.it.release(w, span, "sort_by の比べ終わった写し");
         }
         self.it.release(f, span, "sort_by が使い終わった関数");
         let order = order?;

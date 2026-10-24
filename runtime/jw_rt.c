@@ -333,7 +333,8 @@ static _Thread_local struct {
 } reused[NREUSED];
 static _Thread_local unsigned reused_n;
 
-// ほかのスレッドへ送った区画（送ると世代が 2 進む。中身は使われ続けるので、位置はここに残す）
+// ほかのスレッドへ送った区画と、要素が動いたリストの中身の区画（世代が進むが中身は使われ続けるので、位置はここに残す）。
+// gen は進める前の世代（それを持つ ref を無効にした出来事）
 static _Thread_local struct {
     void *block;
     uint64_t gen;
@@ -341,7 +342,7 @@ static _Thread_local struct {
 } sent[NREUSED];
 static _Thread_local unsigned sent_n;
 
-// 世代 gen の ref を無効にした出来事（解放なら世代 gen+1、送ったなら gen+2）の位置
+// 世代 gen の ref を無効にした出来事（解放なら世代 gen+1、送った・要素が動いたなら表の中）の位置
 static const WSite *freed_at(void *block, uint64_t gen) {
     if (HDR(block)->gen == gen + 1) return FREED_SITE(block);
     for (unsigned k = 0; k < NREUSED; k++) {
@@ -350,7 +351,7 @@ static const WSite *freed_at(void *block, uint64_t gen) {
     }
     for (unsigned k = 0; k < NREUSED && k < sent_n; k++) {
         unsigned i = (sent_n - 1 - k) % NREUSED;
-        if (sent[i].block == block && sent[i].gen == gen + 2) return sent[i].why;
+        if (sent[i].block == block && sent[i].gen == gen) return sent[i].why;
     }
     return NULL;
 }
@@ -463,7 +464,8 @@ static void remember_reuse(void *p) {
     HDR(p)->gen++;
 }
 
-void *jw_alloc(int64_t size) {
+// 区画を確保する（生きている区画の数は数えない。リストの中身の区画はこれだけを使う）
+static void *block_alloc(int64_t size) {
     size_t s = round8(size);
     void *p = NULL;
     if (s / 8 <= NCLASS) {
@@ -488,22 +490,26 @@ void *jw_alloc(int64_t size) {
             }
         }
         if (!p) {
-            WHdr *h = malloc(sizeof(WHdr) + s);
-            if (!h) jw_bug("メモリが足りません");
-            h->gen = 0;
-            p = h + 1;
+            // 中身を 64 バイトの境目にそろえる（リストの要素をまとめて読み書きする命令が速くなる）。大きな区画は OS に返さない
+            char *raw = malloc(sizeof(WHdr) + s + 64);
+            if (!raw) jw_bug("メモリが足りません");
+            p = (void *)(((uintptr_t)raw + sizeof(WHdr) + 63) & ~(uintptr_t)63);
+            HDR(p)->gen = 0;
         }
     }
-    jw_live++;
     return p;
 }
 
-// 区画を解放する（中身の own は書き出したコードが先に解放する）。世代が進むので、ここを指す ref は無効になる
-void jw_free(void *p, int64_t size, const WSite *why) {
+void *jw_alloc(int64_t size) {
+    jw_live++;
+    return block_alloc(size);
+}
+
+// 区画を解放する（生きている区画の数は数えない）
+static void block_free(void *p, int64_t size, const WSite *why) {
     WHdr *h = HDR(p);
     h->gen++;
     FREED_SITE(p) = why;
-    jw_live--;
     size_t s = round8(size);
     if (s / 8 <= NCLASS) {
         *(void **)p = free_small[s / 8];
@@ -515,6 +521,12 @@ void jw_free(void *p, int64_t size, const WSite *why) {
         b->payload = p;
         free_big = b;
     }
+}
+
+// 区画を解放する（中身の own は書き出したコードが先に解放する）。世代が進むので、ここを指す ref は無効になる
+void jw_free(void *p, int64_t size, const WSite *why) {
+    jw_live--;
+    block_free(p, size, why);
 }
 
 uint64_t jw_gen(void *p) { return HDR(p)->gen; }
@@ -834,36 +846,83 @@ int64_t jw_f2i(double x, int32_t bits, int32_t is_signed) {
 
 // ---------------------------------------------------------------- リスト
 
-void jw_list_reserve(WList *l, int64_t esize, int64_t n) {
-    if (n <= l->cap) return;
-    int64_t cap = l->cap ? l->cap : 4;
-    while (cap < n) cap *= 2;
-    l->data = realloc(l->data, (size_t)(cap * (esize ? esize : 1)));
-    l->cap = cap;
+static void remember_sent(void *p, const WSite *why);
+
+// リストの中身は own の先と同じく、頭に世代を持つ区画に置く（要素を借りた ref はこの区画と世代を持つ）。
+// 要素を借りるときは世代に「借りられた」の印（2 のビット）と「借りられたことがある」の印（LIST_SHARED）を立てる（書き出したコード）。
+// - 要素が動く操作（長さが変わる・並べ替える）では、2 のビットがあるときだけ世代を進めてそれを消し、要素を借りた ref を無効にする
+//   （`why` がその位置）。なければ今の世代を持つ ref はないので何もしない（push のたびに記録を書かずに済む）。
+// - 一度も借りられていない中身は malloc の領域そのもの（頭 16 バイト）で、realloc で伸ばし、free で返す。
+//   借りられたことがあれば、古い ref が世代を読めるよう、伸ばすときは新しい領域へ写して古いほうを区画として解放し（`why` で）、
+//   捨てるときも区画として解放する（OS には返さない）。
+// `why` が NULL なら作りかけのリスト（ref はない）
+#define LIST_SHARED ((uint64_t)1 << 62)
+#define LIST_PAD 16
+
+static int64_t list_bytes(int64_t esize, int64_t n) { return (int64_t)round8(n * (esize ? esize : 1)); }
+
+static char *list_new_data(int64_t bytes) {
+    char *raw = malloc((size_t)(LIST_PAD + bytes));
+    if (!raw) jw_bug("メモリが足りません");
+    char *d = raw + LIST_PAD;
+    HDR(d)->gen = 0;
+    return d;
 }
 
+// 要素が動いた（interp の `list_moved`）
+void jw_list_moved(WList *l, const WSite *why) {
+    if (!l->data || !why || !(HDR(l->data)->gen & 2)) return;
+    remember_sent(l->data, why);
+    HDR(l->data)->gen = (HDR(l->data)->gen & ~(uint64_t)3) + 4;
+}
+
+// 長さ n まで入れられるようにする。取り直したら true
+static int list_grow(WList *l, int64_t esize, int64_t n, const WSite *why) {
+    if (n <= l->cap) return 0;
+    int64_t cap = l->cap ? l->cap : 4;
+    while (cap < n) cap *= 2;
+    int64_t bytes = list_bytes(esize, cap);
+    if (!l->data) {
+        l->data = list_new_data(bytes);
+    } else if (HDR(l->data)->gen & LIST_SHARED) {
+        char *nd = list_new_data(bytes);
+        memcpy(nd, l->data, (size_t)(l->len * (esize ? esize : 1)));
+        block_free(l->data, list_bytes(esize, l->cap), why);
+        l->data = nd;
+    } else {
+        char *raw = realloc(l->data - LIST_PAD, (size_t)(LIST_PAD + bytes));
+        if (!raw) jw_bug("メモリが足りません");
+        l->data = raw + LIST_PAD;
+    }
+    l->cap = cap;
+    return 1;
+}
+
+void jw_list_reserve(WList *l, int64_t esize, int64_t n) { list_grow(l, esize, n, NULL); }
+
 // 終わりに 1 つ場所を足して、その場所を返す
-char *jw_list_push_slot(WList *l, int64_t esize) {
-    jw_list_reserve(l, esize, l->len + 1);
+char *jw_list_push_slot(WList *l, int64_t esize, const WSite *why) {
+    if (!list_grow(l, esize, l->len + 1, why)) jw_list_moved(l, why);
     return l->data + (l->len++) * esize;
 }
 
 // i 番目に場所を空けて、その場所を返す
-char *jw_list_insert_slot(WList *l, int64_t esize, int64_t i) {
-    jw_list_reserve(l, esize, l->len + 1);
+char *jw_list_insert_slot(WList *l, int64_t esize, int64_t i, const WSite *why) {
+    if (!list_grow(l, esize, l->len + 1, why)) jw_list_moved(l, why);
     memmove(l->data + (i + 1) * esize, l->data + i * esize, (size_t)((l->len - i) * esize));
     l->len++;
     return l->data + i * esize;
 }
 
 // i 番目を out へ移して詰める
-void jw_list_remove(WList *l, int64_t esize, int64_t i, void *out) {
+void jw_list_remove(WList *l, int64_t esize, int64_t i, void *out, const WSite *why) {
     memcpy(out, l->data + i * esize, (size_t)esize);
     memmove(l->data + i * esize, l->data + (i + 1) * esize, (size_t)((l->len - i - 1) * esize));
     l->len--;
+    jw_list_moved(l, why);
 }
 
-void jw_list_reverse(WList *l, int64_t esize) {
+void jw_list_reverse(WList *l, int64_t esize, const WSite *why) {
     char tmp[256];
     char *big = esize > (int64_t)sizeof tmp ? malloc((size_t)esize) : tmp;
     for (int64_t i = 0, j = l->len - 1; i < j; i++, j--) {
@@ -872,9 +931,15 @@ void jw_list_reverse(WList *l, int64_t esize) {
         memcpy(l->data + j * esize, big, (size_t)esize);
     }
     if (big != tmp) free(big);
+    jw_list_moved(l, why);
 }
 
-void jw_list_free(WList *l) { free(l->data); }
+// 中身の区画を解放する（要素の own は書き出したコードが先に解放する）
+void jw_list_free(WList *l, int64_t esize, const WSite *why) {
+    if (!l->data) return;
+    if (HDR(l->data)->gen & LIST_SHARED) block_free(l->data, list_bytes(esize, l->cap), why);
+    else free(l->data - LIST_PAD);
+}
 
 // 並べ替え（安定）。less(a, b, env) で比べる
 typedef int32_t (*WLess)(void *a, void *b, void *env);
@@ -1005,7 +1070,7 @@ int64_t jw_str_chars(WStr *s) {
     return n;
 }
 
-static void push_str(WList *out, WStr *x) { *(WStr **)jw_list_push_slot(out, 8) = x; }
+static void push_str(WList *out, WStr *x) { *(WStr **)jw_list_push_slot(out, 8, NULL) = x; }
 
 void jw_str_chars_list(WStr *s, WList *out) {
     int64_t i = 0;
@@ -1504,13 +1569,16 @@ void jw_wait_all(const WSite *at) {
 }
 
 // ほかのスレッドへ送る区画: 世代を進める（送った側に残った ref は、使うとダングリングとして見つかる）
-void jw_send_block(void *p, const WSite *why) {
-    WHdr *h = HDR(p);
-    h->gen += 2;
+static void remember_sent(void *p, const WSite *why) {
     unsigned i = sent_n++ % NREUSED;
     sent[i].block = p;
-    sent[i].gen = h->gen;
+    sent[i].gen = HDR(p)->gen;
     sent[i].why = why;
+}
+
+void jw_send_block(void *p, const WSite *why) {
+    remember_sent(p, why);
+    HDR(p)->gen += 2;
 }
 
 // ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）
