@@ -163,7 +163,7 @@ impl Parser {
         loop {
             self.skip_semis();
             if *self.peek() == Tok::Use {
-                // `use geom;`: 同じフォルダの geom.ward を使う
+                // `use geom;`: 同じフォルダの geom.jw を使う
                 self.bump();
                 let span = self.span();
                 let name = self.expect_ident("モジュールの名前")?;
@@ -1440,7 +1440,7 @@ fn merge_paths(toks: Vec<Token>, deps: &HashMap<String, ModuleInfo>) -> R<Vec<To
             Some((_, false)) => {
                 return Err(Diagnostic::new(format!("`{}.{}` は pub ではありません", module, name))
                     .primary(full, "ほかのファイルからは使えない")
-                    .note(format!("使えるようにするなら、{}.ward の定義の前に `pub` をつけてください", module)))
+                    .note(format!("使えるようにするなら、{}.jw の定義の前に `pub` をつけてください", module)))
             }
             Some(_) => {}
         }

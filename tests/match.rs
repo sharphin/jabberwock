@@ -1,19 +1,19 @@
 //! match（Java の switch の矢印形式）のテスト
 
-use ward::{run_source, run_source_with};
+use jabberwock::{run_source, run_source_with};
 
 fn out(body: &str) -> String {
     let src = format!("fn main() {{\n{}\n}}", body);
     let o = run_source(&src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", &src));
+        panic!("unexpected error:\n{}", d.render("test.jw", &src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     assert_eq!(o.output, run_source_with(&src, false, false).output);
     o.output
 }
 
-fn err_in_main(body: &str) -> ward::diag::Diagnostic {
+fn err_in_main(body: &str) -> jabberwock::diag::Diagnostic {
     run_source(&format!("fn main() {{\n{}\n}}", body), false).error.expect("expected an error")
 }
 

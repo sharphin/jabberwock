@@ -1,11 +1,11 @@
 //! 文字列の埋め込み `"x = {x}"` のテスト
 
-use ward::{run_source, run_source_with};
+use jabberwock::{run_source, run_source_with};
 
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     let off = run_source_with(src, false, false);
@@ -13,7 +13,7 @@ fn ok(src: &str) -> String {
     o.output
 }
 
-fn err(src: &str) -> ward::diag::Diagnostic {
+fn err(src: &str) -> jabberwock::diag::Diagnostic {
     run_source(src, false).error.expect("expected an error")
 }
 
@@ -30,7 +30,7 @@ struct Point {
 
 fn main() {
     let x = 3;
-    let name = \"ward\";
+    let name = \"jabberwock\";
     print(\"x = {x}, x+1 = {x + 1}, {name}!\");
     let p = own Point { x: 1, y: 2 };
     print(\"p = {p.show()}, len2 = {p.len2()}, ok = {p.x < p.y}\");
@@ -44,7 +44,7 @@ fn main() {
 }";
     assert_eq!(
         ok(src),
-        "x = 3, x+1 = 4, ward!\np = (1, 2), len2 = 5, ok = true\no = Some(5)\n4\na3bc\n{x} はそのまま 3\n"
+        "x = 3, x+1 = 4, jabberwock!\np = (1, 2), len2 = 5, ok = true\no = Some(5)\n4\na3bc\n{x} はそのまま 3\n"
     );
 }
 
@@ -72,7 +72,7 @@ fn embedding_errors() {
     assert!(d.note.unwrap().contains("文字列を書けない"));
     // エラーの位置は元のファイルの中の位置
     let d = e("let a = 1;\nprint(\"value: {a + nope}\");");
-    assert!(d.render("t.ward", "fn main() {\nlet a = 1;\nprint(\"value: {a + nope}\");\n}").contains("^^^^"));
+    assert!(d.render("t.jw", "fn main() {\nlet a = 1;\nprint(\"value: {a + nope}\");\n}").contains("^^^^"));
 }
 
 #[test]
@@ -116,6 +116,6 @@ fn multi_line_strings() {
     let src = "fn main() {\n    let n = 3;\n    let s = \"\"\"\nこんにちは \"世界\"\n  n = {n}\n{{}}\"\"\";\n    print(s);\n    print(s.lines().len());\n}\n";
     assert_eq!(ok(src), "こんにちは \"世界\"\n  n = 3\n{}\n3\n");
     // 後ろの行の位置はずれない
-    let d = ward::run_source("fn main() {\n    let s = \"\"\"\nx\"\"\";\n    let i64 a = \"no\";\n}\n", false).error.expect("error");
+    let d = jabberwock::run_source("fn main() {\n    let s = \"\"\"\nx\"\"\";\n    let i64 a = \"no\";\n}\n", false).error.expect("error");
     assert_eq!(d.labels[0].span.line, 4);
 }

@@ -1,5 +1,5 @@
 // 単語の数え上げ（試しに書いたプログラム）。辞書は入れた順に回る
-// ファイル名のあとに文章を渡すと、それを数える（ward words.ward "a b a"）
+// ファイル名のあとに文章を渡すと、それを数える（jabberwock words.jw "a b a"）
 fn i64[str] count_words(ref str[] words) {
     let i64[str] mut out = [];
     for w in words {

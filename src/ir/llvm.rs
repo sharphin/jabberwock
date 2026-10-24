@@ -1,9 +1,9 @@
-//! IR → LLVM のテキスト（.ll）。実行時ライブラリ `runtime/ward_rt.c` と一緒に clang でコンパイルする。
+//! IR → LLVM のテキスト（.ll）。実行時ライブラリ `runtime/jw_rt.c` と一緒に clang でコンパイルする。
 //! 値の形は docs/ir-design.md の「実行時の値の形」。
 //!
 //! - 変数はスタック（`alloca`）に置く。`ref x` で変数そのものを借りられる変数だけ、区画（ヒープ）に置く
 //!   （変数がなくなったときに世代を進めて、借りた ref を無効にするため）。
-//! - 変数ごとに「状態」を持つ: null なら値がある、`@ward.unset` ならまだない、それ以外はムーブした位置（`WSite`）。
+//! - 変数ごとに「状態」を持つ: null なら値がある、`@jw.unset` ならまだない、それ以外はムーブした位置（`WSite`）。
 //!   ムーブ済みの変数を読むと、その位置を使ってエラーを出す（interp と同じ）。
 //! - 型ごとの手伝いの関数（解放・複製・写し・表示・比べる）を、使われた型の分だけ作る。
 //! - own の「読むだけの写し」（for の要素など）は、下の 1 ビットを立てたポインタ（実行時ライブラリの `WCell`）。
@@ -57,7 +57,7 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
     let site = m.site(mf.span, "");
     let _ = write!(
         m.code,
-        "define void @ward_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @ward_wait_all(ptr {})\n  ret void\n}}\n\n",
+        "define void @jw_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @jw_wait_all(ptr {})\n  ret void\n}}\n\n",
         ret, main, site
     );
     m.finish_helpers()?;
@@ -69,7 +69,7 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
     }
     let _ = writeln!(
         m.globals,
-        "@ward_files = constant [{} x %wsrc] [{}]\n@ward_nfiles = constant i32 {}",
+        "@jw_files = constant [{} x %wsrc] [{}]\n@jw_nfiles = constant i32 {}",
         entries.len(),
         entries.join(", "),
         entries.len()
@@ -80,7 +80,7 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
 /// 型にもとづく別名の情報（TBAA）。リストの頭（要素の領域・長さ）と、リスト・辞書の要素の中の数やポインタは
 /// 別の場所にあると LLVM に教える。要素へ書き込んでも長さを読み直さずに済み、添字の範囲の確認をループの外へ出せる。
 /// 印のない読み書き（構造体ごとの写し・実行時ライブラリ）は、どれとも重なりうるものとして扱われる
-const TBAA: &str = "!9000 = !{!\"ward\"}\n!9001 = !{!\"ward list header\", !9000, i64 0}\n!9002 = !{!\"ward element\", !9000, i64 0}\n\
+const TBAA: &str = "!9000 = !{!\"jabberwock\"}\n!9001 = !{!\"jabberwock list header\", !9000, i64 0}\n!9002 = !{!\"jabberwock element\", !9000, i64 0}\n\
 !9003 = !{!9001, !9001, i64 0}\n!9004 = !{!9002, !9002, i64 0}\n";
 const TBAA_HEADER: &str = ", !tbaa !9003";
 const TBAA_ELEMENT: &str = ", !tbaa !9004";
@@ -90,7 +90,7 @@ fn scalar_lt(lt: &str) -> bool {
     matches!(lt, "i1" | "i8" | "i16" | "i32" | "i64" | "double" | "ptr")
 }
 
-const PRELUDE: &str = r#"; ward が書き出した LLVM IR
+const PRELUDE: &str = r#"; jabberwock が書き出した LLVM IR
 %ref = type { ptr, ptr, i64, ptr }
 %iref = type { ptr, ptr, i64, ptr, i64 }
 %iown = type { ptr, i64 }
@@ -99,95 +99,95 @@ const PRELUDE: &str = r#"; ward が書き出した LLVM IR
 %fnv = type { ptr, ptr }
 %wsrc = type { ptr, ptr }
 
-@ward_depth = external thread_local(initialexec) global i64
-@ward.unset = private constant %site { ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }
+@jw_depth = external thread_local(initialexec) global i64
+@jw.unset = private constant %site { ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }
 
-declare void @ward_print_begin()
-declare ptr @ward_chan_new(i64, ptr)
-declare void @ward_chan_retain(ptr)
-declare void @ward_chan_release(ptr, ptr)
-declare void @ward_chan_send(ptr, ptr, ptr)
-declare i32 @ward_chan_recv(ptr, ptr, ptr)
-declare void @ward_chan_close(ptr, ptr)
-declare ptr @ward_spawn(ptr, ptr, i64, ptr)
-declare ptr @ward_spawn_args(i64)
-declare void @ward_task_join(ptr, ptr, ptr)
-declare void @ward_task_drop(ptr, ptr)
-declare ptr @ward_task_view(ptr)
-declare void @ward_wait_all(ptr)
-declare void @ward_send_block(ptr, ptr)
-declare ptr @ward_str_unshare(ptr)
-declare void @ward_map_unshare_keys(ptr)
-declare void @ward_print_part(ptr, i32)
-declare void @ward_print_end()
-declare void @ward_fail(ptr, ptr, ptr, ptr) noreturn
-declare void @ward_bug(ptr) noreturn
-declare void @ward_fail_moved(ptr, ptr, ptr) noreturn
-declare void @ward_fail_dangling(ptr, ptr, ptr, i64) noreturn
-declare void @ward_fail_bounds(i64, i32, i64, ptr) noreturn
-declare void @ward_fail_depth(ptr) noreturn
-declare void @ward_fail_nokey(i32, i64, i32, ptr) noreturn
-declare void @ward_fail_insert(i64, i64, ptr) noreturn
-declare ptr @ward_alloc(i64)
-declare void @ward_free(ptr, i64, ptr)
-declare ptr @ward_view(ptr, ptr)
-declare void @ward_view_free(ptr)
-declare ptr @ward_view_target(ptr, ptr)
-declare ptr @ward_view_target_nocheck(ptr)
-declare i64 @ward_view_gen(ptr)
-declare ptr @ward_view_site(ptr)
-declare ptr @ward_str_new(ptr, i64)
-declare void @ward_str_retain(ptr)
-declare void @ward_str_release(ptr)
-declare ptr @ward_str_concat(ptr, ptr)
-declare i32 @ward_str_cmp(ptr, ptr)
-declare i32 @ward_str_eq(ptr, ptr)
-declare ptr @ward_sb_new()
-declare void @ward_sb_cstr(ptr, ptr)
-declare void @ward_sb_str(ptr, ptr)
-declare void @ward_sb_int(ptr, i64, i32)
-declare void @ward_sb_float(ptr, double)
-declare ptr @ward_sb_finish(ptr)
-declare ptr @ward_str_int(i64, i32)
-declare i64 @ward_f2i(double, i32, i32)
-declare void @ward_list_reserve(ptr, i64, i64)
-declare ptr @ward_list_push_slot(ptr, i64)
-declare ptr @ward_list_insert_slot(ptr, i64, i64)
-declare void @ward_list_remove(ptr, i64, i64, ptr)
-declare void @ward_list_reverse(ptr, i64)
-declare void @ward_list_free(ptr)
-declare void @ward_sort(ptr, i64, i64, ptr, ptr)
-declare void @ward_permute(ptr, i64, i64, ptr)
-declare ptr @ward_env_new(i64, ptr)
-declare void @ward_env_retain(ptr)
-declare void @ward_env_release(ptr, ptr)
+declare void @jw_print_begin()
+declare ptr @jw_chan_new(i64, ptr)
+declare void @jw_chan_retain(ptr)
+declare void @jw_chan_release(ptr, ptr)
+declare void @jw_chan_send(ptr, ptr, ptr)
+declare i32 @jw_chan_recv(ptr, ptr, ptr)
+declare void @jw_chan_close(ptr, ptr)
+declare ptr @jw_spawn(ptr, ptr, i64, ptr)
+declare ptr @jw_spawn_args(i64)
+declare void @jw_task_join(ptr, ptr, ptr)
+declare void @jw_task_drop(ptr, ptr)
+declare ptr @jw_task_view(ptr)
+declare void @jw_wait_all(ptr)
+declare void @jw_send_block(ptr, ptr)
+declare ptr @jw_str_unshare(ptr)
+declare void @jw_map_unshare_keys(ptr)
+declare void @jw_print_part(ptr, i32)
+declare void @jw_print_end()
+declare void @jw_fail(ptr, ptr, ptr, ptr) noreturn
+declare void @jw_bug(ptr) noreturn
+declare void @jw_fail_moved(ptr, ptr, ptr) noreturn
+declare void @jw_fail_dangling(ptr, ptr, ptr, i64) noreturn
+declare void @jw_fail_bounds(i64, i32, i64, ptr) noreturn
+declare void @jw_fail_depth(ptr) noreturn
+declare void @jw_fail_nokey(i32, i64, i32, ptr) noreturn
+declare void @jw_fail_insert(i64, i64, ptr) noreturn
+declare ptr @jw_alloc(i64)
+declare void @jw_free(ptr, i64, ptr)
+declare ptr @jw_view(ptr, ptr)
+declare void @jw_view_free(ptr)
+declare ptr @jw_view_target(ptr, ptr)
+declare ptr @jw_view_target_nocheck(ptr)
+declare i64 @jw_view_gen(ptr)
+declare ptr @jw_view_site(ptr)
+declare ptr @jw_str_new(ptr, i64)
+declare void @jw_str_retain(ptr)
+declare void @jw_str_release(ptr)
+declare ptr @jw_str_concat(ptr, ptr)
+declare i32 @jw_str_cmp(ptr, ptr)
+declare i32 @jw_str_eq(ptr, ptr)
+declare ptr @jw_sb_new()
+declare void @jw_sb_cstr(ptr, ptr)
+declare void @jw_sb_str(ptr, ptr)
+declare void @jw_sb_int(ptr, i64, i32)
+declare void @jw_sb_float(ptr, double)
+declare ptr @jw_sb_finish(ptr)
+declare ptr @jw_str_int(i64, i32)
+declare i64 @jw_f2i(double, i32, i32)
+declare void @jw_list_reserve(ptr, i64, i64)
+declare ptr @jw_list_push_slot(ptr, i64)
+declare ptr @jw_list_insert_slot(ptr, i64, i64)
+declare void @jw_list_remove(ptr, i64, i64, ptr)
+declare void @jw_list_reverse(ptr, i64)
+declare void @jw_list_free(ptr)
+declare void @jw_sort(ptr, i64, i64, ptr, ptr)
+declare void @jw_permute(ptr, i64, i64, ptr)
+declare ptr @jw_env_new(i64, ptr)
+declare void @jw_env_retain(ptr)
+declare void @jw_env_release(ptr, ptr)
 declare ptr @malloc(i64)
 declare void @free(ptr)
-declare ptr @ward_map_new(i64, i32)
-declare i64 @ward_map_find(ptr, i64)
-declare i64 @ward_map_add(ptr, i64)
-declare ptr @ward_map_val(ptr, i64)
-declare i64 @ward_map_key(ptr, i64)
-declare i64 @ward_map_len(ptr)
-declare void @ward_map_remove_at(ptr, i64)
-declare void @ward_map_free(ptr)
-declare i64 @ward_str_chars(ptr)
-declare void @ward_str_chars_list(ptr, ptr)
-declare void @ward_str_lines(ptr, ptr)
-declare void @ward_str_split(ptr, ptr, ptr, ptr)
-declare ptr @ward_str_trim(ptr)
-declare ptr @ward_str_upper(ptr)
-declare ptr @ward_str_lower(ptr)
-declare i32 @ward_str_contains(ptr, ptr)
-declare i32 @ward_str_starts(ptr, ptr)
-declare i32 @ward_str_ends(ptr, ptr)
-declare i64 @ward_str_find(ptr, ptr)
-declare ptr @ward_str_slice(ptr, i64, i64, ptr)
-declare ptr @ward_str_replace(ptr, ptr, ptr)
-declare ptr @ward_str_repeat(ptr, i64, ptr)
-declare i32 @ward_str_to_int(ptr, ptr)
-declare i32 @ward_read_line(ptr)
-declare void @ward_args(ptr)
+declare ptr @jw_map_new(i64, i32)
+declare i64 @jw_map_find(ptr, i64)
+declare i64 @jw_map_add(ptr, i64)
+declare ptr @jw_map_val(ptr, i64)
+declare i64 @jw_map_key(ptr, i64)
+declare i64 @jw_map_len(ptr)
+declare void @jw_map_remove_at(ptr, i64)
+declare void @jw_map_free(ptr)
+declare i64 @jw_str_chars(ptr)
+declare void @jw_str_chars_list(ptr, ptr)
+declare void @jw_str_lines(ptr, ptr)
+declare void @jw_str_split(ptr, ptr, ptr, ptr)
+declare ptr @jw_str_trim(ptr)
+declare ptr @jw_str_upper(ptr)
+declare ptr @jw_str_lower(ptr)
+declare i32 @jw_str_contains(ptr, ptr)
+declare i32 @jw_str_starts(ptr, ptr)
+declare i32 @jw_str_ends(ptr, ptr)
+declare i64 @jw_str_find(ptr, ptr)
+declare ptr @jw_str_slice(ptr, i64, i64, ptr)
+declare ptr @jw_str_replace(ptr, ptr, ptr)
+declare ptr @jw_str_repeat(ptr, i64, ptr)
+declare i32 @jw_str_to_int(ptr, ptr)
+declare i32 @jw_read_line(ptr)
+declare void @jw_args(ptr)
 
 "#;
 
@@ -679,15 +679,15 @@ impl<'p> Module<'p> {
         match t {
             Ty::Chan(_) => {
                 let v = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_chan_release(ptr {}, ptr %site)", v));
+                b.op(format!("call void @jw_chan_release(ptr {}, ptr %site)", v));
             }
             Ty::Task(_) => {
                 let v = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_task_drop(ptr {}, ptr %site)", v));
+                b.op(format!("call void @jw_task_drop(ptr {}, ptr %site)", v));
             }
             Ty::Str => {
                 let v = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_str_release(ptr {})", v));
+                b.op(format!("call void @jw_str_release(ptr {})", v));
             }
             Ty::Own(x) => {
                 let (p, tid) = if is_iface_ptr(t) {
@@ -701,7 +701,7 @@ impl<'p> Module<'p> {
                 let isv = b.val(format!("icmp ne i64 {}, 0", tag));
                 let (_, no) = b.if_true(&isv);
                 let done = b.l();
-                b.op(format!("call void @ward_view_free(ptr {})", p));
+                b.op(format!("call void @jw_view_free(ptr {})", p));
                 b.br(&done);
                 b.label(&no);
                 let chain = b.val("getelementptr %site, ptr %site, i32 0, i32 6");
@@ -714,7 +714,7 @@ impl<'p> Module<'p> {
                             b.op(format!("call void {}(ptr {}, ptr {})", d, p, chain));
                         }
                         let size = self.sizeof(x)?;
-                        b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr %site)", p, size));
+                        b.op(format!("call void @jw_free(ptr {}, i64 {}, ptr %site)", p, size));
                     }
                     Some(tid) => {
                         // 構造体ごとに分かれる
@@ -731,7 +731,7 @@ impl<'p> Module<'p> {
                                 sub.op(format!("call void {}(ptr {}, ptr {})", d, p, chain));
                             }
                             let size = self.sizeof(s)?;
-                            sub.op(format!("call void @ward_free(ptr {}, i64 {}, ptr %site)", p, size));
+                            sub.op(format!("call void @jw_free(ptr {}, i64 {}, ptr %site)", p, size));
                             sub.br(&done);
                             b.n = sub.n;
                             bodies.push_str(&sub.text);
@@ -741,7 +741,7 @@ impl<'p> Module<'p> {
                         b.text.push_str(&bodies);
                         b.label(&bad);
                         let msg = self.cstr("interface の値の構造体が分からない");
-                        b.op(format!("call void @ward_bug(ptr {})", msg));
+                        b.op(format!("call void @jw_bug(ptr {})", msg));
                         b.op("unreachable");
                     }
                 }
@@ -817,33 +817,33 @@ impl<'p> Module<'p> {
                     b.op(format!("call void {}(ptr {}, ptr %site)", d, ep));
                     b.loop_end(e);
                 }
-                b.op("call void @ward_list_free(ptr %p)");
+                b.op("call void @jw_list_free(ptr %p)");
             }
             Ty::Fn(..) => {
                 let v = b.val("load %fnv, ptr %p");
                 let env = b.val(format!("extractvalue %fnv {}, 1", v));
                 let has = b.val(format!("icmp ne ptr {}, null", env));
                 let (_, no) = b.if_true(&has);
-                b.op(format!("call void @ward_env_release(ptr {}, ptr %site)", env));
+                b.op(format!("call void @jw_env_release(ptr {}, ptr %site)", env));
                 b.br(&no);
                 b.label(&no);
             }
             Ty::Map(k, v) => {
                 let m = b.val("load ptr, ptr %p");
-                let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                let len = b.val(format!("call i64 @jw_map_len(ptr {})", m));
                 let (i, e) = b.loop_begin(&len);
                 if matches!(**k, Ty::Str) {
-                    let kv = b.val(format!("call i64 @ward_map_key(ptr {}, i64 {})", m, i));
+                    let kv = b.val(format!("call i64 @jw_map_key(ptr {}, i64 {})", m, i));
                     let kp = b.val(format!("inttoptr i64 {} to ptr", kv));
-                    b.op(format!("call void @ward_str_release(ptr {})", kp));
+                    b.op(format!("call void @jw_str_release(ptr {})", kp));
                 }
                 if self.needs_drop(v)? {
                     let d = self.helper(H::Drop, v);
-                    let vp = b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                    let vp = b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                     b.op(format!("call void {}(ptr {}, ptr %site)", d, vp));
                 }
                 b.loop_end(e);
-                b.op(format!("call void @ward_map_free(ptr {})", m));
+                b.op(format!("call void @jw_map_free(ptr {})", m));
             }
             _ => {}
         }
@@ -863,12 +863,12 @@ impl<'p> Module<'p> {
         match t {
             Ty::Str => {
                 let v = b.val("load ptr, ptr %p");
-                let n = b.val(format!("call ptr @ward_str_unshare(ptr {})", v));
+                let n = b.val(format!("call ptr @jw_str_unshare(ptr {})", v));
                 b.op(format!("store ptr {}, ptr %p", n));
             }
             Ty::Own(x) => {
                 let p = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_send_block(ptr {}, ptr %site)", p));
+                b.op(format!("call void @jw_send_block(ptr {}, ptr %site)", p));
                 sub(self, b, x, &p)?;
             }
             Ty::Struct(..) => {
@@ -927,12 +927,12 @@ impl<'p> Module<'p> {
             Ty::Map(k, v) => {
                 let m = b.val("load ptr, ptr %p");
                 if matches!(**k, Ty::Str) {
-                    b.op(format!("call void @ward_map_unshare_keys(ptr {})", m));
+                    b.op(format!("call void @jw_map_unshare_keys(ptr {})", m));
                 }
                 if self.needs_drop(v)? {
-                    let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                    let len = b.val(format!("call i64 @jw_map_len(ptr {})", m));
                     let (i, e) = b.loop_begin(&len);
-                    let vp = b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                    let vp = b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                     sub(self, b, v, &vp)?;
                     b.loop_end(e);
                 }
@@ -998,18 +998,18 @@ impl<'p> Module<'p> {
         match t {
             Ty::Str => {
                 let v = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_str_retain(ptr {})", v));
+                b.op(format!("call void @jw_str_retain(ptr {})", v));
                 b.op(format!("store ptr {}, ptr %dst", v));
             }
             Ty::Chan(_) => {
                 let v = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_chan_retain(ptr {})", v));
+                b.op(format!("call void @jw_chan_retain(ptr {})", v));
                 b.op(format!("store ptr {}, ptr %dst", v));
             }
             // task の写しは、解放しない印（下の 1 ビット）をつけたポインタ
             Ty::Task(_) => {
                 let v = b.val("load ptr, ptr %p");
-                let w = b.val(format!("call ptr @ward_task_view(ptr {})", v));
+                let w = b.val(format!("call ptr @jw_task_view(ptr {})", v));
                 b.op(format!("store ptr {}, ptr %dst", w));
             }
             Ty::Own(_) => {
@@ -1027,12 +1027,12 @@ impl<'p> Module<'p> {
                     let real = b.val(format!("icmp eq i64 {}, 0", tag));
                     let (_, no) = b.if_true(&real);
                     let msg = self.cstr("own を複製しようとした");
-                    b.op(format!("call void @ward_bug(ptr {})", msg));
+                    b.op(format!("call void @jw_bug(ptr {})", msg));
                     b.op("unreachable");
                     b.label(&no);
                 }
                 let site = view.unwrap_or("null");
-                let c = b.val(format!("call ptr @ward_view(ptr {}, ptr {})", p, site));
+                let c = b.val(format!("call ptr @jw_view(ptr {}, ptr {})", p, site));
                 if iface {
                     let v = b.val("load %iown, ptr %p");
                     let v2 = b.val(format!("insertvalue %iown {}, ptr {}, 0", v, c));
@@ -1104,7 +1104,7 @@ impl<'p> Module<'p> {
                 let lp = b.val("getelementptr %list, ptr %p, i32 0, i32 1");
                 let len = b.val(format!("load i64, ptr {}", lp));
                 b.op("store %list zeroinitializer, ptr %dst");
-                b.op(format!("call void @ward_list_reserve(ptr %dst, i64 {}, i64 {})", size, len));
+                b.op(format!("call void @jw_list_reserve(ptr %dst, i64 {}, i64 {})", size, len));
                 let nd = b.val("load ptr, ptr %dst");
                 let (i, e) = b.loop_begin(&len);
                 let s = b.val(format!("getelementptr {}, ptr {}, i64 {}", xt, data, i));
@@ -1117,18 +1117,18 @@ impl<'p> Module<'p> {
             Ty::Map(k, v) => {
                 let m = b.val("load ptr, ptr %p");
                 let vsize = self.sizeof(v)?;
-                let nm = b.val(format!("call ptr @ward_map_new(i64 {}, i32 {})", vsize, key_kind(k)));
+                let nm = b.val(format!("call ptr @jw_map_new(i64 {}, i32 {})", vsize, key_kind(k)));
                 b.op(format!("store ptr {}, ptr %dst", nm));
-                let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                let len = b.val(format!("call i64 @jw_map_len(ptr {})", m));
                 let (i, e) = b.loop_begin(&len);
-                let kv = b.val(format!("call i64 @ward_map_key(ptr {}, i64 {})", m, i));
+                let kv = b.val(format!("call i64 @jw_map_key(ptr {}, i64 {})", m, i));
                 if matches!(**k, Ty::Str) {
                     let kp = b.val(format!("inttoptr i64 {} to ptr", kv));
-                    b.op(format!("call void @ward_str_retain(ptr {})", kp));
+                    b.op(format!("call void @jw_str_retain(ptr {})", kp));
                 }
-                let j = b.val(format!("call i64 @ward_map_add(ptr {}, i64 {})", nm, kv));
-                let s = b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
-                let d = b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", nm, j));
+                let j = b.val(format!("call i64 @jw_map_add(ptr {}, i64 {})", nm, kv));
+                let s = b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
+                let d = b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", nm, j));
                 call(self, b, v, &s, &d);
                 b.loop_end(e);
             }
@@ -1141,7 +1141,7 @@ impl<'p> Module<'p> {
                 b.op(format!("store %fnv {}, ptr {}", v, out));
                 let (_, no) = b.if_true(&has);
                 match view {
-                    None => b.op(format!("call void @ward_env_retain(ptr {})", env)),
+                    None => b.op(format!("call void @jw_env_retain(ptr {})", env)),
                     Some(site) => {
                         let vt = b.val(format!("getelementptr i8, ptr {}, i64 8", env));
                         let vt = b.val(format!("load ptr, ptr {}", vt));
@@ -1233,7 +1233,7 @@ impl<'p> Module<'p> {
         let deep = b.val("icmp sgt i64 %d, 32");
         let (_, no) = b.if_true(&deep);
         let dots = self.cstr("...");
-        b.op(format!("call void @ward_sb_cstr(ptr %sb, ptr {})", dots));
+        b.op(format!("call void @jw_sb_cstr(ptr %sb, ptr {})", dots));
         b.op("ret void");
         b.label(&no);
         let d1 = b.val("add i64 %d, 1");
@@ -1243,7 +1243,7 @@ impl<'p> Module<'p> {
         };
         let lit = |me: &mut Self, b: &mut B, s: &str| {
             let c = me.cstr(s);
-            b.op(format!("call void @ward_sb_cstr(ptr %sb, ptr {})", c));
+            b.op(format!("call void @jw_sb_cstr(ptr %sb, ptr {})", c));
         };
         match t {
             Ty::Unit | Ty::Never => lit(self, b, "()"),
@@ -1253,22 +1253,22 @@ impl<'p> Module<'p> {
             Ty::Int(i) => {
                 let v = b.val(format!("load i{}, ptr %p", i.bits()));
                 let w = widen(b, &v, *i);
-                b.op(format!("call void @ward_sb_int(ptr %sb, i64 {}, i32 {})", w, if i.signed() { 0 } else { 1 }));
+                b.op(format!("call void @jw_sb_int(ptr %sb, i64 {}, i32 {})", w, if i.signed() { 0 } else { 1 }));
             }
             Ty::Float => {
                 let v = b.val("load double, ptr %p");
-                b.op(format!("call void @ward_sb_float(ptr %sb, double {})", v));
+                b.op(format!("call void @jw_sb_float(ptr %sb, double {})", v));
             }
             Ty::Bool => {
                 let v = b.val("load i1, ptr %p");
                 let tr = self.cstr("true");
                 let fa = self.cstr("false");
                 let s = b.val(format!("select i1 {}, ptr {}, ptr {}", v, tr, fa));
-                b.op(format!("call void @ward_sb_cstr(ptr %sb, ptr {})", s));
+                b.op(format!("call void @jw_sb_cstr(ptr %sb, ptr {})", s));
             }
             Ty::Str => {
                 let v = b.val("load ptr, ptr %p");
-                b.op(format!("call void @ward_sb_str(ptr %sb, ptr {})", v));
+                b.op(format!("call void @jw_sb_str(ptr %sb, ptr {})", v));
             }
             Ty::Own(x) => {
                 let iface = is_iface_ptr(t);
@@ -1371,16 +1371,16 @@ impl<'p> Module<'p> {
             }
             Ty::Map(k, v) => {
                 let m = b.val("load ptr, ptr %p");
-                let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                let len = b.val(format!("call i64 @jw_map_len(ptr {})", m));
                 lit(self, b, "[");
                 let (i, e) = b.loop_begin(&len);
                 self.comma(b, &i)?;
-                let kv = b.val(format!("call i64 @ward_map_key(ptr {}, i64 {})", m, i));
+                let kv = b.val(format!("call i64 @jw_map_key(ptr {}, i64 {})", m, i));
                 let kp = b.alloca(&self.lt(k)?);
                 store_key(self, b, k, &kv, &kp)?;
                 show(self, b, k, &kp);
                 lit(self, b, ": ");
-                let vp = b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                let vp = b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                 show(self, b, v, &vp);
                 b.loop_end(e);
                 lit(self, b, "]");
@@ -1394,7 +1394,7 @@ impl<'p> Module<'p> {
         let c = b.val(format!("icmp sgt i64 {}, 0", i));
         let (_, no) = b.if_true(&c);
         let s = self.cstr(", ");
-        b.op(format!("call void @ward_sb_cstr(ptr %sb, ptr {})", s));
+        b.op(format!("call void @jw_sb_cstr(ptr %sb, ptr {})", s));
         b.br(&no);
         b.label(&no);
         Ok(())
@@ -1531,8 +1531,8 @@ impl<'p> Module<'p> {
                     (len, Box::new(move |b: &mut B, i: &str| b.val(format!("getelementptr {}, ptr {}, i64 {}", xt, data, i))))
                 } else {
                     let m = b.val("load ptr, ptr %p");
-                    let len = b.val(format!("call i64 @ward_map_len(ptr {})", m));
-                    (len, Box::new(move |b: &mut B, i: &str| b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i))))
+                    let len = b.val(format!("call i64 @jw_map_len(ptr {})", m));
+                    (len, Box::new(move |b: &mut B, i: &str| b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i))))
                 };
                 let (i, e) = b.loop_begin(&len);
                 let ep = get(b, &i);
@@ -1582,10 +1582,10 @@ impl<'p> Module<'p> {
                 (Ty::Own(_), Ty::Ref(..)) => {
                     let iface = is_iface_ptr(ct);
                     let raw = if iface { b.val(format!("extractvalue %iown {}, 0", v)) } else { v.clone() };
-                    let t = b.val(format!("call ptr @ward_view_target_nocheck(ptr {})", raw));
-                    let g = b.val(format!("call i64 @ward_view_gen(ptr {})", raw));
-                    let s = b.val(format!("call ptr @ward_view_site(ptr {})", raw));
-                    b.op(format!("call void @ward_view_free(ptr {})", raw));
+                    let t = b.val(format!("call ptr @jw_view_target_nocheck(ptr {})", raw));
+                    let g = b.val(format!("call i64 @jw_view_gen(ptr {})", raw));
+                    let s = b.val(format!("call ptr @jw_view_site(ptr {})", raw));
+                    b.op(format!("call void @jw_view_free(ptr {})", raw));
                     let rt = if iface { "%iref" } else { "%ref" };
                     let r = b.val(format!("insertvalue {} undef, ptr {}, 0", rt, t));
                     let r = b.val(format!("insertvalue {} {}, ptr {}, 1", rt, r, t));
@@ -1632,7 +1632,7 @@ impl<'p> Module<'p> {
         let mut b = B::default();
         let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", caps_t);
         let total = b.val(format!("add i64 24, {}", size));
-        let ne = b.val(format!("call ptr @ward_env_new(i64 {}, ptr {})", total, vt));
+        let ne = b.val(format!("call ptr @jw_env_new(i64 {}, ptr {})", total, vt));
         let cp = b.val("getelementptr i8, ptr %env, i64 24");
         let np = b.val(format!("getelementptr i8, ptr {}, i64 24", ne));
         for (i, ct) in ctys.iter().enumerate() {
@@ -1686,7 +1686,7 @@ impl<'p> Module<'p> {
             Ty::Str => {
                 let a = b.val("load ptr, ptr %p");
                 let c = b.val("load ptr, ptr %q");
-                let r = b.val(format!("call i32 @ward_str_cmp(ptr {}, ptr {})", a, c));
+                let r = b.val(format!("call i32 @jw_str_cmp(ptr {}, ptr {})", a, c));
                 b.val(format!("icmp slt i32 {}, 0", r))
             }
             _ => return Err(format!("{} の並べ替え", t.show())),
@@ -1777,9 +1777,9 @@ fn own_target(b: &mut B, p: &str, check: bool, use_site: &str) -> String {
     b.op(format!("br i1 {}, label %{}, label %{}", isv, yes, join));
     b.label(&yes);
     let t = if check {
-        b.val(format!("call ptr @ward_view_target(ptr {}, ptr {})", p, use_site))
+        b.val(format!("call ptr @jw_view_target(ptr {}, ptr {})", p, use_site))
     } else {
-        b.val(format!("call ptr @ward_view_target_nocheck(ptr {})", p))
+        b.val(format!("call ptr @jw_view_target_nocheck(ptr {})", p))
     };
     b.br(&join);
     b.label(&join);
@@ -1796,7 +1796,7 @@ fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str) -> String {
     let g = b.val(format!("load i64, ptr {}", hp));
     let bad = b.val(format!("icmp ne i64 {}, {}", g, gen));
     let (_, ok) = b.if_true(&bad);
-    b.op(format!("call void @ward_fail_dangling(ptr {}, ptr {}, ptr {}, i64 {})", use_site, site, blk, gen));
+    b.op(format!("call void @jw_fail_dangling(ptr {}, ptr {}, ptr {}, i64 {})", use_site, site, blk, gen));
     b.op("unreachable");
     b.label(&ok);
     addr
@@ -1913,14 +1913,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let _ = writeln!(init, "  store ptr null, ptr %s{}", i);
                 if self.boxed[i] {
                     let size = self.m.sizeof(&l.ty)?;
-                    let _ = writeln!(init, "  %box{} = call ptr @ward_alloc(i64 {})", i, size);
+                    let _ = writeln!(init, "  %box{} = call ptr @jw_alloc(i64 {})", i, size);
                     let _ = writeln!(init, "  store {} %a{}, ptr %box{}", lt, i, i);
                     let _ = writeln!(init, "  store ptr %box{}, ptr %l{}", i, i);
                 } else {
                     let _ = writeln!(init, "  store {} %a{}, ptr %l{}", lt, i, i);
                 }
             } else {
-                let _ = writeln!(init, "  store ptr @ward.unset, ptr %s{}", i);
+                let _ = writeln!(init, "  store ptr @jw.unset, ptr %s{}", i);
             }
         }
         for (bi, blk) in f.blocks.iter().enumerate() {
@@ -1968,7 +1968,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.b.label(&bad);
         let name = self.m.cstr(&self.f.locals[l].name);
         let use_site = self.m.site(span, "");
-        self.b.op(format!("call void @ward_fail_moved(ptr {}, ptr {}, ptr {})", name, st, use_site));
+        self.b.op(format!("call void @jw_fail_moved(ptr {}, ptr {}, ptr {})", name, st, use_site));
         self.b.op("unreachable");
         self.b.label(&ok);
     }
@@ -1995,7 +1995,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
             if let Ty::Own(x) = &ty {
                 let v = self.b.val(format!("load ptr, ptr {}", p));
                 let size = self.m.sizeof(x)?;
-                self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", v, size, site));
+                self.b.op(format!("call void @jw_free(ptr {}, i64 {}, ptr {})", v, size, site));
             }
         } else if self.m.needs_drop(&ty)? {
             let d = self.m.helper(H::Drop, &ty);
@@ -2003,9 +2003,9 @@ impl<'m, 'p> FnGen<'m, 'p> {
         }
         if self.boxed[l] {
             let size = self.m.sizeof(&ty)?;
-            self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", p, size, site));
+            self.b.op(format!("call void @jw_free(ptr {}, i64 {}, ptr {})", p, size, site));
         }
-        self.b.op(format!("store ptr @ward.unset, ptr %s{}", l));
+        self.b.op(format!("store ptr @jw.unset, ptr %s{}", l));
         self.b.br(&done);
         self.b.label(&done);
         Ok(())
@@ -2040,7 +2040,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.b.label(&no);
         if self.boxed[l] {
             let size = self.m.sizeof(&ty)?;
-            let blk = self.b.val(format!("call ptr @ward_alloc(i64 {})", size));
+            let blk = self.b.val(format!("call ptr @jw_alloc(i64 {})", size));
             self.b.op(format!("store {} {}, ptr {}", lt, v, blk));
             self.b.op(format!("store ptr {}, ptr %l{}", blk, l));
         } else {
@@ -2165,7 +2165,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let t = self.m.cstr(title);
                 let l = self.m.cstr(label);
                 let s = self.m.site(*span, "");
-                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", t, s, l));
+                self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr null)", t, s, l));
                 self.b.op("unreachable");
             }
             Term::Unreachable => self.b.op("unreachable"),
@@ -2278,14 +2278,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         Ty::Map(kty, v) => {
                             let k64 = self.key64(&kv, &kty)?;
                             let m = self.b.val(format!("load ptr, ptr {}", r.ptr));
-                            let i = self.b.val(format!("call i64 @ward_map_find(ptr {}, i64 {})", m, k64));
+                            let i = self.b.val(format!("call i64 @jw_map_find(ptr {}, i64 {})", m, k64));
                             let missing = self.b.val(format!("icmp slt i64 {}, 0", i));
                             if create && k + 1 == last {
                                 // `m[k] = v`: なければ入れる（キーは辞書のものになる）
                                 let ip = self.b.alloca("i64");
                                 self.b.op(format!("store i64 {}, ptr {}", i, ip));
                                 let (_, no) = self.b.if_true(&missing);
-                                let j = self.b.val(format!("call i64 @ward_map_add(ptr {}, i64 {})", m, k64));
+                                let j = self.b.val(format!("call i64 @jw_map_add(ptr {}, i64 {})", m, k64));
                                 self.b.op(format!("store i64 {}, ptr {}", j, ip));
                                 let skip = self.b.l();
                                 self.b.br(&skip);
@@ -2294,14 +2294,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                                 self.b.br(&skip);
                                 self.b.label(&skip);
                                 let i = self.b.val(format!("load i64, ptr {}", ip));
-                                r.ptr = self.b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                                r.ptr = self.b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                                 r.fresh = Some(missing);
                             } else {
                                 let (_, ok) = self.b.if_true(&missing);
                                 let unsigned = matches!(&*kty, Ty::Int(t) if !t.signed());
                                 let s = self.m.site(*key_span, "");
                                 self.b.op(format!(
-                                    "call void @ward_fail_nokey(i32 {}, i64 {}, i32 {}, ptr {})",
+                                    "call void @jw_fail_nokey(i32 {}, i64 {}, i32 {}, ptr {})",
                                     key_kind(&kty),
                                     k64,
                                     unsigned as i32,
@@ -2310,7 +2310,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                                 self.b.op("unreachable");
                                 self.b.label(&ok);
                                 self.release_key(&kv, &kty);
-                                r.ptr = self.b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                                r.ptr = self.b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                             }
                             r.ty = *v;
                             r.list = true;
@@ -2336,7 +2336,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         };
         let (_, ok) = self.b.if_true(&bad);
         let s = self.m.site(span, "");
-        self.b.op(format!("call void @ward_fail_bounds(i64 {}, i32 {}, i64 {}, ptr {})", i, !t.signed() as i32, len, s));
+        self.b.op(format!("call void @jw_fail_bounds(i64 {}, i32 {}, i64 {}, ptr {})", i, !t.signed() as i32, len, s));
         self.b.op("unreachable");
         self.b.label(&ok);
         Ok(i)
@@ -2354,7 +2354,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
 
     fn release_key(&mut self, kv: &str, kt: &Ty) {
         if matches!(kt, Ty::Str) {
-            self.b.op(format!("call void @ward_str_release(ptr {})", kv));
+            self.b.op(format!("call void @jw_str_release(ptr {})", kv));
         }
     }
 
@@ -2390,7 +2390,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let site = self.m.site(*span, &why);
                 if self.boxed[l] {
                     let size = self.m.sizeof(&ty)?;
-                    self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", p, size, site));
+                    self.b.op(format!("call void @jw_free(ptr {}, i64 {}, ptr {})", p, size, site));
                 }
                 self.b.op(format!("store ptr {}, ptr %s{}", site, l));
                 Ok((v, ty))
@@ -2428,7 +2428,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let lab = self.m.cstr("クロージャは何度も呼べるので、取り込んだ値をムーブできない");
                 let s = self.m.site(span, "");
                 let note = self.m.cstr("`ref` で借りるか、中の値をコピーして使ってください");
-                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, lab, note));
+                self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, lab, note));
                 self.b.op("unreachable");
                 self.b.label(&ok);
                 if always {
@@ -2457,7 +2457,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let site = self.m.site(span, &why);
         if self.boxed[l] {
             let size = self.m.sizeof(&ty)?;
-            self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", p, size, site));
+            self.b.op(format!("call void @jw_free(ptr {}, i64 {}, ptr {})", p, size, site));
         }
         self.b.op(format!("store ptr {}, ptr %s{}", site, l));
         self.b.br(&done);
@@ -2492,7 +2492,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         }
         if matches!(ty, Ty::Str) {
             let v = self.b.val(format!("load ptr, ptr {}", ptr));
-            self.b.op(format!("call void @ward_str_retain(ptr {})", v));
+            self.b.op(format!("call void @jw_str_retain(ptr {})", v));
             return Ok(v);
         }
         let tmp = self.b.alloca(&lt);
@@ -2534,13 +2534,13 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let real = self.b.val(format!("icmp eq i64 {}, 0", tag));
                 let (_, no) = self.b.if_true(&real);
                 let msg = self.m.cstr("own を ref にしようとした");
-                self.b.op(format!("call void @ward_bug(ptr {})", msg));
+                self.b.op(format!("call void @jw_bug(ptr {})", msg));
                 self.b.op("unreachable");
                 self.b.label(&no);
-                let t = self.b.val(format!("call ptr @ward_view_target_nocheck(ptr {})", v));
-                let g = self.b.val(format!("call i64 @ward_view_gen(ptr {})", v));
-                let s = self.b.val(format!("call ptr @ward_view_site(ptr {})", v));
-                self.b.op(format!("call void @ward_view_free(ptr {})", v));
+                let t = self.b.val(format!("call ptr @jw_view_target_nocheck(ptr {})", v));
+                let g = self.b.val(format!("call i64 @jw_view_gen(ptr {})", v));
+                let s = self.b.val(format!("call ptr @jw_view_site(ptr {})", v));
+                self.b.op(format!("call void @jw_view_free(ptr {})", v));
                 return Ok(self.make_ref(&t, &t, &g, &s));
             }
             // interface の own の写し（for の要素）を ref にする: 中の写しを ref にして、構造体の番号をつける
@@ -2652,7 +2652,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         (self.b.val(format!("{} i{} {} to double", op, x.bits(), v)), Ty::Float)
                     }
                     (Ty::Float, Ty::Int(y)) => {
-                        let w = self.b.val(format!("call i64 @ward_f2i(double {}, i32 {}, i32 {})", v, y.bits(), y.signed() as i32));
+                        let w = self.b.val(format!("call i64 @jw_f2i(double {}, i32 {}, i32 {})", v, y.bits(), y.signed() as i32));
                         let r = if y.bits() < 64 { self.b.val(format!("trunc i64 {} to i{}", w, y.bits())) } else { w };
                         (r, to.clone())
                     }
@@ -2675,13 +2675,13 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let bits = self.b.val(format!("ptrtoint ptr {} to i64", raw));
                         let tag = self.b.val(format!("and i64 {}, 1", bits));
                         let isv = self.b.val(format!("icmp ne i64 {}, 0", tag));
-                        let tgt = self.b.val(format!("call ptr @ward_view_target_nocheck(ptr {})", raw));
+                        let tgt = self.b.val(format!("call ptr @jw_view_target_nocheck(ptr {})", raw));
                         let target = self.b.val(format!("select i1 {}, ptr {}, ptr {}", isv, tgt, raw));
                         let vg = self.b.alloca("i64");
                         let vs = self.b.alloca("ptr");
                         let (_, no) = self.b.if_true(&isv);
-                        let g1 = self.b.val(format!("call i64 @ward_view_gen(ptr {})", raw));
-                        let s1 = self.b.val(format!("call ptr @ward_view_site(ptr {})", raw));
+                        let g1 = self.b.val(format!("call i64 @jw_view_gen(ptr {})", raw));
+                        let s1 = self.b.val(format!("call ptr @jw_view_site(ptr {})", raw));
                         self.b.op(format!("store i64 {}, ptr {}", g1, vg));
                         self.b.op(format!("store ptr {}, ptr {}", s1, vs));
                         let join = self.b.l();
@@ -2720,7 +2720,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             let l = self.m.cstr("リストや辞書は伸び縮みするので、中の場所が変わる");
                             let s = self.m.site(*span, "");
                             let note = self.m.cstr("要素を借りたいときは、要素を own にしてください（`(own T)[]`）");
-                            self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
+                            self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
                             self.b.op("unreachable");
                             let after = self.b.l();
                             self.b.label(&after);
@@ -2752,7 +2752,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let v = self.coerce(&v, &t, &inner)?;
                 let size = self.m.sizeof(&inner)?;
                 let lt = self.m.lt(&inner)?;
-                let p = self.b.val(format!("call ptr @ward_alloc(i64 {})", size));
+                let p = self.b.val(format!("call ptr @jw_alloc(i64 {})", size));
                 self.b.op(format!("store {} {}, ptr {}", lt, v, p));
                 Ok((p, Ty::Own(Box::new(inner))))
             }
@@ -2824,7 +2824,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
             Rvalue::Map(pairs, span) => {
                 let Ty::Map(kt, vt) = want else { return Err("辞書の型が分からない".to_string()) };
                 let vsize = self.m.sizeof(vt)?;
-                let m = self.b.val(format!("call ptr @ward_map_new(i64 {}, i32 {})", vsize, key_kind(kt)));
+                let m = self.b.val(format!("call ptr @jw_map_new(i64 {}, i32 {})", vsize, key_kind(kt)));
                 let vl = self.m.lt(vt)?;
                 for (k, v) in pairs {
                     let (kv, kty) = self.operand(k)?;
@@ -2832,21 +2832,21 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     let (vv, vty) = self.operand(v)?;
                     let vv = self.coerce(&vv, &vty, vt)?;
                     let k64 = self.key64(&kv, kt)?;
-                    let i = self.b.val(format!("call i64 @ward_map_find(ptr {}, i64 {})", m, k64));
+                    let i = self.b.val(format!("call i64 @jw_map_find(ptr {}, i64 {})", m, k64));
                     let missing = self.b.val(format!("icmp slt i64 {}, 0", i));
                     let yes = self.b.l();
                     let no = self.b.l();
                     let done = self.b.l();
                     self.b.op(format!("br i1 {}, label %{}, label %{}", missing, yes, no));
                     self.b.label(&yes);
-                    let j = self.b.val(format!("call i64 @ward_map_add(ptr {}, i64 {})", m, k64));
-                    let p = self.b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, j));
+                    let j = self.b.val(format!("call i64 @jw_map_add(ptr {}, i64 {})", m, k64));
+                    let p = self.b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, j));
                     self.b.op(format!("store {} {}, ptr {}", vl, vv, p));
                     self.b.br(&done);
                     self.b.label(&no);
                     // 同じキー: 後の値が残り、前の値は捨てる
                     self.release_key(&kv, kt);
-                    let p = self.b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                    let p = self.b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                     let old = self.b.val(format!("load {}, ptr {}", vl, p));
                     self.b.op(format!("store {} {}, ptr {}", vl, vv, p));
                     self.discard(&old, vt, *span, "辞書の同じキーに後から入れた値で置き換えられた")?;
@@ -2874,19 +2874,19 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     }
                     Ty::Map(_, v) => {
                         let m = self.b.val(format!("load ptr, ptr {}", pr.ptr));
-                        let len = self.b.val(format!("call i64 @ward_map_len(ptr {})", m));
-                        (*v, len, Box::new(move |b: &mut B, i: &str| b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i))))
+                        let len = self.b.val(format!("call i64 @jw_map_len(ptr {})", m));
+                        (*v, len, Box::new(move |b: &mut B, i: &str| b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i))))
                     }
                     t => return Err(format!("{} の for", t.show())),
                 };
                 let out = self.b.alloca("%list");
                 self.b.op(format!("store %list zeroinitializer, ptr {}", out));
                 let size = self.m.sizeof(&elem)?;
-                self.b.op(format!("call void @ward_list_reserve(ptr {}, i64 {}, i64 {})", out, size, n));
+                self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 {}, i64 {})", out, size, n));
                 let view = self.m.helper(H::View, &elem);
                 let (i, e) = self.b.loop_begin(&n);
                 let src = get(&mut self.b, &i);
-                let dst = self.b.val(format!("call ptr @ward_list_push_slot(ptr {}, i64 {})", out, size));
+                let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
                 self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, dst, site));
                 self.b.loop_end(e);
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem))))
@@ -2898,16 +2898,16 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 match pr.ty.clone() {
                     Ty::Map(k, _) => {
                         let m = self.b.val(format!("load ptr, ptr {}", pr.ptr));
-                        let len = self.b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                        let len = self.b.val(format!("call i64 @jw_map_len(ptr {})", m));
                         let size = self.m.sizeof(&k)?;
-                        self.b.op(format!("call void @ward_list_reserve(ptr {}, i64 {}, i64 {})", out, size, len));
+                        self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 {}, i64 {})", out, size, len));
                         let (i, e) = self.b.loop_begin(&len);
-                        let kv = self.b.val(format!("call i64 @ward_map_key(ptr {}, i64 {})", m, i));
+                        let kv = self.b.val(format!("call i64 @jw_map_key(ptr {}, i64 {})", m, i));
                         if matches!(*k, Ty::Str) {
                             let kp = self.b.val(format!("inttoptr i64 {} to ptr", kv));
-                            self.b.op(format!("call void @ward_str_retain(ptr {})", kp));
+                            self.b.op(format!("call void @jw_str_retain(ptr {})", kp));
                         }
-                        let dst = self.b.val(format!("call ptr @ward_list_push_slot(ptr {}, i64 {})", out, size));
+                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
                         store_key(self.m, &mut self.b, &k, &kv, &dst)?;
                         self.b.loop_end(e);
                         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(k)))
@@ -2921,9 +2921,9 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             }
                             _ => return Err(format!("{} の for (i, x)", t.show())),
                         };
-                        self.b.op(format!("call void @ward_list_reserve(ptr {}, i64 8, i64 {})", out, len));
+                        self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 8, i64 {})", out, len));
                         let (i, e) = self.b.loop_begin(&len);
-                        let dst = self.b.val(format!("call ptr @ward_list_push_slot(ptr {}, i64 8)", out));
+                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 8)", out));
                         self.b.op(format!("store i64 {}, ptr {}", i, dst));
                         self.b.loop_end(e);
                         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Int(IntTy::I64)))))
@@ -2987,7 +2987,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 }
                 self.b.label(&bad);
                 let msg = self.m.cstr("interface のメソッドが見つからない");
-                self.b.op(format!("call void @ward_bug(ptr {})", msg));
+                self.b.op(format!("call void @jw_bug(ptr {})", msg));
                 self.b.op("unreachable");
                 self.b.label(&done);
                 Ok((self.b.val(format!("load {}, ptr {}", rl, out)), ret))
@@ -3008,7 +3008,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let caps_t = self.m.variant_lt(&ctys)?;
                 let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", caps_t);
                 let total = self.b.val(format!("add i64 24, {}", size));
-                let env = self.b.val(format!("call ptr @ward_env_new(i64 {}, ptr {})", total, vt));
+                let env = self.b.val(format!("call ptr @jw_env_new(i64 {}, ptr {})", total, vt));
                 let cp = self.b.val(format!("getelementptr i8, ptr {}, i64 24", env));
                 for (i, (v, t)) in vals.iter().enumerate() {
                     let lt = self.m.lt(t)?;
@@ -3043,7 +3043,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     let l = self.m.cstr("所有権をここから動かすことはできない");
                     let s = self.m.site(*span, "");
                     let note = self.m.cstr(copy_out_note(what));
-                    self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
+                    self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr {})", title, s, l, note));
                     self.b.op("unreachable");
                     self.b.label(&ok);
                 }
@@ -3054,21 +3054,21 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let use_site = self.m.site(*span, "");
                 match (o, temp) {
                     (Operand::Copy(p), false) => {
-                        let sb = self.b.val("call ptr @ward_sb_new()");
+                        let sb = self.b.val("call ptr @jw_sb_new()");
                         let pr = self.place(p, false)?;
                         let f = self.m.helper(H::Show, &pr.ty);
                         self.b.op(format!("call void {}(ptr {}, ptr {}, i64 0, ptr {})", f, pr.ptr, sb, use_site));
-                        Ok((self.b.val(format!("call ptr @ward_sb_finish(ptr {})", sb)), Ty::Str))
+                        Ok((self.b.val(format!("call ptr @jw_sb_finish(ptr {})", sb)), Ty::Str))
                     }
                     _ => {
                         let (v, t) = self.operand(o)?;
                         // 整数は組み立てずにそのまま文字列にする
                         if let Ty::Int(i) = t {
                             let w = widen(&mut self.b, &v, i);
-                            let r = self.b.val(format!("call ptr @ward_str_int(i64 {}, i32 {})", w, !i.signed() as i32));
+                            let r = self.b.val(format!("call ptr @jw_str_int(i64 {}, i32 {})", w, !i.signed() as i32));
                             return Ok((r, Ty::Str));
                         }
-                        let sb = self.b.val("call ptr @ward_sb_new()");
+                        let sb = self.b.val("call ptr @jw_sb_new()");
                         let lt = self.m.lt(&t)?;
                         let tmp = self.b.alloca(&lt);
                         self.b.op(format!("store {} {}, ptr {}", lt, v, tmp));
@@ -3079,7 +3079,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             let v2 = self.b.val(format!("load {}, ptr {}", lt, tmp));
                             self.discard(&v2, &t, *span, why)?;
                         }
-                        Ok((self.b.val(format!("call ptr @ward_sb_finish(ptr {})", sb)), Ty::Str))
+                        Ok((self.b.val(format!("call ptr @jw_sb_finish(ptr {})", sb)), Ty::Str))
                     }
                 }
             }
@@ -3093,7 +3093,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let deep = self.b.val(format!("icmp sge i64 {}, {}", d, MAX_DEPTH));
         let (_, ok) = self.b.if_true(&deep);
         let s = self.m.site(span, "");
-        self.b.op(format!("call void @ward_fail_depth(ptr {})", s));
+        self.b.op(format!("call void @jw_fail_depth(ptr {})", s));
         self.b.op("unreachable");
         self.b.label(&ok);
         let d1 = self.b.val(format!("add i64 {}, 1", d));
@@ -3138,7 +3138,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let src = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", xl, data, i));
         let dst = self.b.val(format!("getelementptr {}, ptr {}, i64 {}", pl, args, i));
         if boxed {
-            let blk = self.b.val(format!("call ptr @ward_alloc(i64 {})", xsize));
+            let blk = self.b.val(format!("call ptr @jw_alloc(i64 {})", xsize));
             self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, blk, site));
             let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
             let g = self.b.val(format!("load i64, ptr {}", hp));
@@ -3166,8 +3166,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let c2 = self.b.val(format!("insertvalue {{ %fnv, ptr }} {}, ptr {}, 1", c1, args));
         self.b.op(format!("store {{ %fnv, ptr }} {}, ptr {}", c2, ctx));
         // 比べる関数は実行時ライブラリから呼ばれるので、深さはグローバル変数で渡す
-        self.b.op(format!("store i64 {}, ptr @ward_depth", self.depth));
-        self.b.op(format!("call void @ward_sort(ptr {}, i64 {}, i64 8, ptr {}, ptr {})", order, n, cmp, ctx));
+        self.b.op(format!("store i64 {}, ptr @jw_depth", self.depth));
+        self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 8, ptr {}, ptr {})", order, n, cmp, ctx));
         // 写しを片づける
         let fin = self.m.site(span, "sort_by の比べ終わった写し");
         let (i, e) = self.b.loop_begin(n);
@@ -3179,7 +3179,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let d = self.m.helper(H::Drop, x);
                 self.b.op(format!("call void {}(ptr {}, ptr {})", d, blk, fin));
             }
-            self.b.op(format!("call void @ward_free(ptr {}, i64 {}, ptr {})", blk, xsize, fin));
+            self.b.op(format!("call void @jw_free(ptr {}, i64 {}, ptr {})", blk, xsize, fin));
         } else if self.m.needs_drop(&pa)? {
             let d = self.m.helper(H::Drop, &pa);
             self.b.op(format!("call void {}(ptr {}, ptr {})", d, ap, fin));
@@ -3187,7 +3187,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.b.loop_end(e);
         self.b.op(format!("call void @free(ptr {})", args));
         self.discard(&fv, &ft, span, "sort_by が使い終わった関数")?;
-        self.b.op(format!("call void @ward_permute(ptr {}, i64 {}, i64 {}, ptr {})", data, n, xsize, order));
+        self.b.op(format!("call void @jw_permute(ptr {}, i64 {}, i64 {}, ptr {})", data, n, xsize, order));
         self.b.op(format!("call void @free(ptr {})", order));
         Ok(())
     }
@@ -3196,7 +3196,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
     fn sort_cmp(&mut self, ft: &Ty, pa: &Ty, span: Span) -> G<String> {
         let name = format!("@sortcmp{}", self.m.fresh());
         let saved = std::mem::take(&mut self.b);
-        let depth = self.b.val("load i64, ptr @ward_depth");
+        let depth = self.b.val("load i64, ptr @jw_depth");
         let saved_depth = std::mem::replace(&mut self.depth, depth);
         let pl = self.m.lt(pa)?;
         let ctx = "%env";
@@ -3267,10 +3267,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let out = self.b.alloca("%list");
         self.b.op(format!("store %list zeroinitializer, ptr {}", out));
         let size = self.m.sizeof(&elem)?;
-        self.b.op(format!("call void @ward_list_reserve(ptr {}, i64 {}, i64 {})", out, size, vals.len()));
+        self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 {}, i64 {})", out, size, vals.len()));
         for (v, t) in vals {
             let v = self.coerce(&v, &t, &elem)?;
-            let dst = self.b.val(format!("call ptr @ward_list_push_slot(ptr {}, i64 {})", out, size));
+            let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
             self.b.op(format!("store {} {}, ptr {}", el, v, dst));
         }
         Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem))))
@@ -3306,7 +3306,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let title = self.m.cstr("0 で割りました");
                         let l = self.m.cstr("右辺が 0 です");
                         let s = self.m.site(span, "");
-                        self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
+                        self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
                         self.b.op("unreachable");
                         self.b.label(&ok);
                         let div = op == BinOp::Div;
@@ -3350,18 +3350,18 @@ impl<'m, 'p> FnGen<'m, 'p> {
             Ty::Unit => (if op == BinOp::Eq { "true" } else { "false" }.to_string(), Ty::Bool),
             Ty::Str => {
                 let r = match op {
-                    BinOp::Add => (self.b.val(format!("call ptr @ward_str_concat(ptr {}, ptr {})", x, y)), Ty::Str),
+                    BinOp::Add => (self.b.val(format!("call ptr @jw_str_concat(ptr {}, ptr {})", x, y)), Ty::Str),
                     BinOp::Eq | BinOp::Ne => {
-                        let e = self.b.val(format!("call i32 @ward_str_eq(ptr {}, ptr {})", x, y));
+                        let e = self.b.val(format!("call i32 @jw_str_eq(ptr {}, ptr {})", x, y));
                         (self.b.val(format!("icmp {} i32 {}, 0", if op == BinOp::Eq { "ne" } else { "eq" }, e)), Ty::Bool)
                     }
                     _ => {
-                        let c = self.b.val(format!("call i32 @ward_str_cmp(ptr {}, ptr {})", x, y));
+                        let c = self.b.val(format!("call i32 @jw_str_cmp(ptr {}, ptr {})", x, y));
                         (self.b.val(format!("icmp s{} i32 {}, 0", cmp(op), c)), Ty::Bool)
                     }
                 };
-                self.b.op(format!("call void @ward_str_release(ptr {})", x));
-                self.b.op(format!("call void @ward_str_release(ptr {})", y));
+                self.b.op(format!("call void @jw_str_release(ptr {})", x));
+                self.b.op(format!("call void @jw_str_release(ptr {})", y));
                 r
             }
             _ => return Err(format!("{:?} の {}", op, t.show())),
@@ -3384,7 +3384,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
         let release = |me: &mut Self, vals: &[(String, Ty)]| {
             for (v, t) in vals {
                 if matches!(t, Ty::Str) {
-                    me.b.op(format!("call void @ward_str_release(ptr {})", v));
+                    me.b.op(format!("call void @jw_str_release(ptr {})", v));
                 }
             }
         };
@@ -3395,7 +3395,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let ctys: Vec<Ty> = caps.iter().map(|(_, t)| t.clone()).collect();
                 let args_t = self.m.variant_lt(&ctys)?;
                 let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", args_t);
-                let args = self.b.val(format!("call ptr @ward_spawn_args(i64 {})", size));
+                let args = self.b.val(format!("call ptr @jw_spawn_args(i64 {})", size));
                 let sent = self.m.site(span, "ほかのスレッドへ送られた");
                 for (i, (v, t)) in caps.iter().enumerate() {
                     let lt = self.m.lt(t)?;
@@ -3410,20 +3410,20 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let Ty::Task(r) = want else { return Err("spawn の型".to_string()) };
                 let rsize = self.m.sizeof(r)?;
                 let drop = if self.m.needs_drop(r)? { self.m.helper(H::Drop, r) } else { "null".to_string() };
-                let t = self.b.val(format!("call ptr @ward_spawn(ptr {}, ptr {}, i64 {}, ptr {})", thunk, args, rsize, drop));
+                let t = self.b.val(format!("call ptr @jw_spawn(ptr {}, ptr {}, i64 {}, ptr {})", thunk, args, rsize, drop));
                 Ok((t, want.clone()))
             }
             "chan" => {
                 let Ty::Chan(x) = want else { return Err("chan の型".to_string()) };
                 let size = self.m.sizeof(x)?;
                 let drop = if self.m.needs_drop(x)? { self.m.helper(H::Drop, x) } else { "null".to_string() };
-                Ok((self.b.val(format!("call ptr @ward_chan_new(i64 {}, ptr {})", size, drop)), want.clone()))
+                Ok((self.b.val(format!("call ptr @jw_chan_new(i64 {}, ptr {})", size, drop)), want.clone()))
             }
             "task.join" => {
                 let lt = self.m.lt(want)?;
                 let out = self.b.alloca(&lt);
                 let site = self.m.site(span, "");
-                self.b.op(format!("call void @ward_task_join(ptr {}, ptr {}, ptr {})", vals[0].0, out, site));
+                self.b.op(format!("call void @jw_task_join(ptr {}, ptr {}, ptr {})", vals[0].0, out, site));
                 Ok((self.b.val(format!("load {}, ptr {}", lt, out)), want.clone()))
             }
             "chan.send" | "chan.recv" | "chan.close" => {
@@ -3440,7 +3440,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             let f = self.m.helper(H::Send, &t);
                             self.b.op(format!("call void {}(ptr {}, ptr {})", f, tmp, sent));
                         }
-                        self.b.op(format!("call void @ward_chan_send(ptr {}, ptr {}, ptr {})", c, tmp, site));
+                        self.b.op(format!("call void @jw_chan_send(ptr {}, ptr {}, ptr {})", c, tmp, site));
                         ("0".to_string(), Ty::Unit)
                     }
                     "chan.recv" => {
@@ -3448,7 +3448,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let x = targs[0].clone();
                         let xl = self.m.lt(&x)?;
                         let out = self.b.alloca(&xl);
-                        let got = self.b.val(format!("call i32 @ward_chan_recv(ptr {}, ptr {}, ptr {})", c, out, site));
+                        let got = self.b.val(format!("call i32 @jw_chan_recv(ptr {}, ptr {}, ptr {})", c, out, site));
                         let lt = self.m.lt(want)?;
                         let res = self.b.alloca(&lt);
                         let none = self.b.val(format!("icmp eq i32 {}, 0", got));
@@ -3466,37 +3466,37 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         (self.b.val(format!("load {}, ptr {}", lt, res)), want.clone())
                     }
                     _ => {
-                        self.b.op(format!("call void @ward_chan_close(ptr {}, ptr {})", c, site));
+                        self.b.op(format!("call void @jw_chan_close(ptr {}, ptr {})", c, site));
                         ("0".to_string(), Ty::Unit)
                     }
                 };
                 // 一時的なチャンネルの値なら捨てる
                 if !borrowed {
-                    self.b.op(format!("call void @ward_chan_release(ptr {}, ptr {})", c, site));
+                    self.b.op(format!("call void @jw_chan_release(ptr {}, ptr {})", c, site));
                 }
                 Ok(r)
             }
             "print" => {
-                self.b.op("call void @ward_print_begin()");
+                self.b.op("call void @jw_print_begin()");
                 for (i, (v, _)) in vals.iter().enumerate() {
-                    self.b.op(format!("call void @ward_print_part(ptr {}, i32 {})", v, (i == 0) as i32));
+                    self.b.op(format!("call void @jw_print_part(ptr {}, i32 {})", v, (i == 0) as i32));
                 }
-                self.b.op("call void @ward_print_end()");
+                self.b.op("call void @jw_print_end()");
                 release(self, &vals);
                 Ok(("0".to_string(), Ty::Unit))
             }
             "concat" if vals.len() == 2 => {
-                let r = self.b.val(format!("call ptr @ward_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));
+                let r = self.b.val(format!("call ptr @jw_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));
                 release(self, &vals);
                 Ok((r, Ty::Str))
             }
             "concat" => {
-                let sb = self.b.val("call ptr @ward_sb_new()");
+                let sb = self.b.val("call ptr @jw_sb_new()");
                 for (v, _) in &vals {
-                    self.b.op(format!("call void @ward_sb_str(ptr {}, ptr {})", sb, v));
+                    self.b.op(format!("call void @jw_sb_str(ptr {}, ptr {})", sb, v));
                 }
                 release(self, &vals);
-                Ok((self.b.val(format!("call ptr @ward_sb_finish(ptr {})", sb)), Ty::Str))
+                Ok((self.b.val(format!("call ptr @jw_sb_finish(ptr {})", sb)), Ty::Str))
             }
             "assert" => {
                 let bad = self.b.val(format!("xor i1 {}, true", vals[0].0));
@@ -3504,14 +3504,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let title = self.m.cstr("assert に失敗しました");
                 let l = self.m.cstr("この条件が false でした");
                 let s = self.m.site(span, "");
-                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
+                self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, s, l));
                 self.b.op("unreachable");
                 self.b.label(&ok);
                 Ok(("0".to_string(), Ty::Unit))
             }
             "read_line" => {
                 let out = self.b.alloca("ptr");
-                let ok = self.b.val(format!("call i32 @ward_read_line(ptr {})", out));
+                let ok = self.b.val(format!("call i32 @jw_read_line(ptr {})", out));
                 let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
                 let lt = self.m.lt(want)?;
                 let res = self.b.alloca(&lt);
@@ -3531,7 +3531,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
             "args" => {
                 let out = self.b.alloca("%list");
                 self.b.op(format!("store %list zeroinitializer, ptr {}", out));
-                self.b.op(format!("call void @ward_args(ptr {})", out));
+                self.b.op(format!("call void @jw_args(ptr {})", out));
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
             _ if name.starts_with("str.") => {
@@ -3560,13 +3560,13 @@ impl<'m, 'p> FnGen<'m, 'p> {
             (me.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str)))
         };
         Ok(match name {
-            "len" => (self.b.val(format!("call i64 @ward_str_chars(ptr {})", s)), i64t),
+            "len" => (self.b.val(format!("call i64 @jw_str_chars(ptr {})", s)), i64t),
             "byte_len" => {
                 let lp = self.b.val(format!("getelementptr i8, ptr {}, i64 8", s));
                 (self.b.val(format!("load i64, ptr {}", lp)), i64t)
             }
-            "chars" => list_of(self, "ward_str_chars_list", ""),
-            "lines" => list_of(self, "ward_str_lines", ""),
+            "chars" => list_of(self, "jw_str_chars_list", ""),
+            "lines" => list_of(self, "jw_str_lines", ""),
             "split" => {
                 let sep = vals[1].0.clone();
                 let lp = self.b.val(format!("getelementptr i8, ptr {}, i64 8", sep));
@@ -3575,40 +3575,40 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let (_, ok) = self.b.if_true(&empty);
                 let title = self.m.cstr("空の文字列では分けられません");
                 let l = self.m.cstr("1 文字ずつにするなら `chars()` を使ってください");
-                self.b.op(format!("call void @ward_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, site, l));
+                self.b.op(format!("call void @jw_fail(ptr {}, ptr {}, ptr {}, ptr null)", title, site, l));
                 self.b.op("unreachable");
                 self.b.label(&ok);
-                list_of(self, "ward_str_split", &format!(", ptr {}", sep))
+                list_of(self, "jw_str_split", &format!(", ptr {}", sep))
             }
-            "trim" => (self.b.val(format!("call ptr @ward_str_trim(ptr {})", s)), Ty::Str),
-            "to_upper" => (self.b.val(format!("call ptr @ward_str_upper(ptr {})", s)), Ty::Str),
-            "to_lower" => (self.b.val(format!("call ptr @ward_str_lower(ptr {})", s)), Ty::Str),
+            "trim" => (self.b.val(format!("call ptr @jw_str_trim(ptr {})", s)), Ty::Str),
+            "to_upper" => (self.b.val(format!("call ptr @jw_str_upper(ptr {})", s)), Ty::Str),
+            "to_lower" => (self.b.val(format!("call ptr @jw_str_lower(ptr {})", s)), Ty::Str),
             "contains" | "starts_with" | "ends_with" => {
                 let f = match name {
-                    "contains" => "ward_str_contains",
-                    "starts_with" => "ward_str_starts",
-                    _ => "ward_str_ends",
+                    "contains" => "jw_str_contains",
+                    "starts_with" => "jw_str_starts",
+                    _ => "jw_str_ends",
                 };
                 let r = self.b.val(format!("call i32 @{}(ptr {}, ptr {})", f, s, vals[1].0));
                 (self.b.val(format!("icmp ne i32 {}, 0", r)), Ty::Bool)
             }
             "find" => {
-                let r = self.b.val(format!("call i64 @ward_str_find(ptr {}, ptr {})", s, vals[1].0));
+                let r = self.b.val(format!("call i64 @jw_str_find(ptr {}, ptr {})", s, vals[1].0));
                 self.option_of(want, &r, &i64t)?
             }
             "slice" => {
                 let a = int(self, 1)?;
                 let c = int(self, 2)?;
-                (self.b.val(format!("call ptr @ward_str_slice(ptr {}, i64 {}, i64 {}, ptr {})", s, a, c, site)), Ty::Str)
+                (self.b.val(format!("call ptr @jw_str_slice(ptr {}, i64 {}, i64 {}, ptr {})", s, a, c, site)), Ty::Str)
             }
-            "replace" => (self.b.val(format!("call ptr @ward_str_replace(ptr {}, ptr {}, ptr {})", s, vals[1].0, vals[2].0)), Ty::Str),
+            "replace" => (self.b.val(format!("call ptr @jw_str_replace(ptr {}, ptr {}, ptr {})", s, vals[1].0, vals[2].0)), Ty::Str),
             "repeat" => {
                 let k = int(self, 1)?;
-                (self.b.val(format!("call ptr @ward_str_repeat(ptr {}, i64 {}, ptr {})", s, k, site)), Ty::Str)
+                (self.b.val(format!("call ptr @jw_str_repeat(ptr {}, i64 {}, ptr {})", s, k, site)), Ty::Str)
             }
             "to_int" => {
                 let out = self.b.alloca("i64");
-                let ok = self.b.val(format!("call i32 @ward_str_to_int(ptr {}, ptr {})", s, out));
+                let ok = self.b.val(format!("call i32 @jw_str_to_int(ptr {}, ptr {})", s, out));
                 let v = self.b.val(format!("load i64, ptr {}", out));
                 let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
                 let r = self.b.val(format!("select i1 {}, i64 -1, i64 {}", none, v));
@@ -3661,21 +3661,21 @@ impl<'m, 'p> FnGen<'m, 'p> {
             Ty::Map(kt, vt) => {
                 let m = self.b.val(format!("load ptr, ptr {}", pr.ptr));
                 if name == "len" {
-                    return Ok((self.b.val(format!("call i64 @ward_map_len(ptr {})", m)), i64t));
+                    return Ok((self.b.val(format!("call i64 @jw_map_len(ptr {})", m)), i64t));
                 }
                 if name == "keys" {
                     let out = self.b.alloca("%list");
                     self.b.op(format!("store %list zeroinitializer, ptr {}", out));
-                    let len = self.b.val(format!("call i64 @ward_map_len(ptr {})", m));
+                    let len = self.b.val(format!("call i64 @jw_map_len(ptr {})", m));
                     let size = self.m.sizeof(&kt)?;
-                    self.b.op(format!("call void @ward_list_reserve(ptr {}, i64 {}, i64 {})", out, size, len));
+                    self.b.op(format!("call void @jw_list_reserve(ptr {}, i64 {}, i64 {})", out, size, len));
                     let (i, e) = self.b.loop_begin(&len);
-                    let kv = self.b.val(format!("call i64 @ward_map_key(ptr {}, i64 {})", m, i));
+                    let kv = self.b.val(format!("call i64 @jw_map_key(ptr {}, i64 {})", m, i));
                     if matches!(*kt, Ty::Str) {
                         let kp = self.b.val(format!("inttoptr i64 {} to ptr", kv));
-                        self.b.op(format!("call void @ward_str_retain(ptr {})", kp));
+                        self.b.op(format!("call void @jw_str_retain(ptr {})", kp));
                     }
-                    let dst = self.b.val(format!("call ptr @ward_list_push_slot(ptr {}, i64 {})", out, size));
+                    let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", out, size));
                     store_key(self.m, &mut self.b, &kt, &kv, &dst)?;
                     self.b.loop_end(e);
                     return Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(kt)));
@@ -3683,7 +3683,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let (kv, kty) = vals[0].clone();
                 let kv = self.coerce(&kv, &kty, &kt)?;
                 let k64 = self.key64(&kv, &kt)?;
-                let i = self.b.val(format!("call i64 @ward_map_find(ptr {}, i64 {})", m, k64));
+                let i = self.b.val(format!("call i64 @jw_map_find(ptr {}, i64 {})", m, k64));
                 self.release_key(&kv, &kt);
                 let found = self.b.val(format!("icmp sge i64 {}, 0", i));
                 match name {
@@ -3696,18 +3696,18 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let done = self.b.l();
                         self.b.op(format!("br i1 {}, label %{}, label %{}", found, yes, no));
                         self.b.label(&yes);
-                        let vp = self.b.val(format!("call ptr @ward_map_val(ptr {}, i64 {})", m, i));
+                        let vp = self.b.val(format!("call ptr @jw_map_val(ptr {}, i64 {})", m, i));
                         let v = if name == "get" {
                             self.read_copy(&vp, &vt)?
                         } else {
                             let vl = self.m.lt(&vt)?;
                             let v = self.b.val(format!("load {}, ptr {}", vl, vp));
                             if matches!(*kt, Ty::Str) {
-                                let key = self.b.val(format!("call i64 @ward_map_key(ptr {}, i64 {})", m, i));
+                                let key = self.b.val(format!("call i64 @jw_map_key(ptr {}, i64 {})", m, i));
                                 let kp = self.b.val(format!("inttoptr i64 {} to ptr", key));
-                                self.b.op(format!("call void @ward_str_release(ptr {})", kp));
+                                self.b.op(format!("call void @jw_str_release(ptr {})", kp));
                             }
-                            self.b.op(format!("call void @ward_map_remove_at(ptr {}, i64 {})", m, i));
+                            self.b.op(format!("call void @jw_map_remove_at(ptr {}, i64 {})", m, i));
                             v
                         };
                         let sv = self.make_enum(want, "Some", vec![(v, (*vt).clone())])?;
@@ -3728,7 +3728,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 "sort" => {
                     let less = self.m.helper(H::Less, &x);
                     let size = self.m.sizeof(&x)?;
-                    self.b.op(format!("call void @ward_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", pr.ptr, n, size, less));
+                    self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", pr.ptr, n, size, less));
                     Ok(("0".to_string(), Ty::Unit))
                 }
                 "sort_by" => {
@@ -3748,7 +3748,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     "push" => {
                         let (v, t) = vals[0].clone();
                         let v = self.coerce(&v, &t, &x)?;
-                        let dst = self.b.val(format!("call ptr @ward_list_push_slot(ptr {}, i64 {})", pr.ptr, size));
+                        let dst = self.b.val(format!("call ptr @jw_list_push_slot(ptr {}, i64 {})", pr.ptr, size));
                         self.b.op(format!("store {} {}, ptr {}", xl, v, dst));
                         Ok(("0".to_string(), Ty::Unit))
                     }
@@ -3780,7 +3780,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let (iv, it) = vals[0].clone();
                         let i = self.index(&iv, &it, &len, arg_span)?;
                         let tmp = self.b.alloca(&xl);
-                        self.b.op(format!("call void @ward_list_remove(ptr {}, i64 {}, i64 {}, ptr {})", pr.ptr, size, i, tmp));
+                        self.b.op(format!("call void @jw_list_remove(ptr {}, i64 {}, i64 {}, ptr {})", pr.ptr, size, i, tmp));
                         Ok((self.b.val(format!("load {}, ptr {}", xl, tmp)), (*x).clone()))
                     }
                     "insert" => {
@@ -3795,15 +3795,15 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let (_, ok) = self.b.if_true(&bad);
                         self.discard(&v, &x, span, "入れられずに捨てられた")?;
                         let s = self.m.site(arg_span, "");
-                        self.b.op(format!("call void @ward_fail_insert(i64 {}, i64 {}, ptr {})", i, len, s));
+                        self.b.op(format!("call void @jw_fail_insert(i64 {}, i64 {}, ptr {})", i, len, s));
                         self.b.op("unreachable");
                         self.b.label(&ok);
-                        let dst = self.b.val(format!("call ptr @ward_list_insert_slot(ptr {}, i64 {}, i64 {})", pr.ptr, size, i));
+                        let dst = self.b.val(format!("call ptr @jw_list_insert_slot(ptr {}, i64 {}, i64 {})", pr.ptr, size, i));
                         self.b.op(format!("store {} {}, ptr {}", xl, v, dst));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     "reverse" => {
-                        self.b.op(format!("call void @ward_list_reverse(ptr {}, i64 {})", pr.ptr, size));
+                        self.b.op(format!("call void @jw_list_reverse(ptr {}, i64 {})", pr.ptr, size));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     // 中身ごと新しいリストへ移し、元は空にする
@@ -3820,7 +3820,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                     "sort" => {
                         let less = self.m.helper(H::Less, &x);
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
-                        self.b.op(format!("call void @ward_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", data, len, size, less));
+                        self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", data, len, size, less));
                         Ok(("0".to_string(), Ty::Unit))
                     }
                     _ => Err(format!("リストのメソッド {}", name)),

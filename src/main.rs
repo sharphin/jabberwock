@@ -19,8 +19,8 @@ fn main() {
         }
         match a.as_str() {
             "-h" | "--help" => {
-                eprintln!("使い方: ward [--stats] [--no-elide] [--ir] [--ll] <file.ward> [プログラムへの引数...]");
-                eprintln!("        ward build [--release] [-o 出力] <file.ward>   実行ファイルを作る（clang が要る）");
+                eprintln!("使い方: jabberwock [--stats] [--no-elide] [--ir] [--ll] <file.jw> [プログラムへの引数...]");
+                eprintln!("        jabberwock build [--release] [-o 出力] <file.jw>   実行ファイルを作る（clang が要る）");
                 eprintln!("  --stats     ref の検査を静的解析でどれだけ消せたか表示する");
                 eprintln!("  --no-elide  静的解析をせず、すべての ref を実行時に検査する");
                 eprintln!("  --ir        実行せず、IR（中間表現）を表示する");
@@ -35,7 +35,7 @@ fn main() {
         }
     }
     let Some(path) = path else {
-        eprintln!("使い方: ward [--stats] [--no-elide] [--ir] [--ll] <file.ward> [プログラムへの引数...]");
+        eprintln!("使い方: jabberwock [--stats] [--no-elide] [--ir] [--ll] <file.jw> [プログラムへの引数...]");
         process::exit(2);
     };
 
@@ -47,12 +47,12 @@ fn main() {
         }
     };
 
-    // `use geom;` は、このファイルと同じフォルダの geom.ward を読む
+    // `use geom;` は、このファイルと同じフォルダの geom.jw を読む
     let dir = std::path::Path::new(&path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
-    let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.ward", name))).ok();
+    let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.jw", name))).ok();
 
     if show_ll {
-        match ward::llvm_text(&src, &read, &path) {
+        match jabberwock::llvm_text(&src, &read, &path) {
             Ok(t) => print!("{}", t),
             Err(e) => {
                 eprintln!("{}", e);
@@ -63,7 +63,7 @@ fn main() {
     }
 
     if show_ir {
-        match ward::ir_text(&src, &read) {
+        match jabberwock::ir_text(&src, &read) {
             Ok(t) => print!("{}", t),
             Err(e) => {
                 eprintln!("{}", e);
@@ -74,12 +74,12 @@ fn main() {
     }
 
     // 警告は実行の前に出す（Rust と同じ）
-    let (warnings, files) = ward::warnings(&src, &read);
+    let (warnings, files) = jabberwock::warnings(&src, &read);
     for w in warnings {
-        eprint!("{}", ward::render(&w, &path, &files));
+        eprint!("{}", jabberwock::render(&w, &path, &files));
     }
     let input = Box::new(std::io::BufReader::new(std::io::stdin()));
-    let outcome = ward::run_program(&src, &read, true, elide, input, prog_args);
+    let outcome = jabberwock::run_program(&src, &read, true, elide, input, prog_args);
     if stats {
         let a = outcome.analysis;
         eprintln!("[stats] `*p` と `p.f` の箇所: 検査を消せた {} / 実行時に残る {}", a.elided, a.required);
@@ -89,14 +89,14 @@ fn main() {
         );
     }
     if let Some(d) = &outcome.error {
-        eprint!("{}", ward::render(d, &path, &outcome.files));
+        eprint!("{}", jabberwock::render(d, &path, &outcome.files));
         process::exit(1);
     }
 }
 
-/// `ward build [--release] [-o 出力] <file.ward>`: LLVM に書き出し、clang で実行ファイルを作る
+/// `jabberwock build [--release] [-o 出力] <file.jw>`: LLVM に書き出し、clang で実行ファイルを作る
 fn build(args: Vec<String>) {
-    let usage = "使い方: ward build [--release] [-o 出力] <file.ward>";
+    let usage = "使い方: jabberwock build [--release] [-o 出力] <file.jw>";
     let mut release = false;
     let mut out = None;
     let mut path = None;
@@ -114,7 +114,7 @@ fn build(args: Vec<String>) {
             "-h" | "--help" => {
                 eprintln!("{}", usage);
                 eprintln!("  --release  実行時エラーは使った位置だけ出す（ソースを実行ファイルに入れない）");
-                eprintln!("  -o 出力     実行ファイルの名前（なければファイル名から .ward を除いたもの）");
+                eprintln!("  -o 出力     実行ファイルの名前（なければファイル名から .jw を除いたもの）");
                 process::exit(0);
             }
             _ if path.is_none() => path = Some(a),
@@ -136,12 +136,12 @@ fn build(args: Vec<String>) {
         }
     };
     let dir = std::path::Path::new(&path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
-    let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.ward", name))).ok();
-    let (warnings, files) = ward::warnings(&src, &read);
+    let read = move |name: &str| fs::read_to_string(dir.join(format!("{}.jw", name))).ok();
+    let (warnings, files) = jabberwock::warnings(&src, &read);
     for w in warnings {
-        eprint!("{}", ward::render(&w, &path, &files));
+        eprint!("{}", jabberwock::render(&w, &path, &files));
     }
-    let ll = match ward::llvm_build(&src, &read, &path, release) {
+    let ll = match jabberwock::llvm_build(&src, &read, &path, release) {
         Ok(t) => t,
         Err(e) => {
             eprint!("{}", e);
@@ -152,12 +152,12 @@ fn build(args: Vec<String>) {
         let stem = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("a");
         stem.to_string()
     });
-    match ward::native::build(&ll, std::path::Path::new(&out), "-O2") {
+    match jabberwock::native::build(&ll, std::path::Path::new(&out), "-O2") {
         Ok(exe) => eprintln!("作りました: {}", exe.display()),
         Err(e) => {
             eprintln!("{}", e);
             if e.starts_with("clang を起動できません") {
-                eprintln!("clang が要ります。入れ方は docs/native.md を見てください（別の clang を使うなら WARD_CLANG）");
+                eprintln!("clang が要ります。入れ方は docs/native.md を見てください（別の clang を使うなら JW_CLANG）");
             }
             process::exit(1);
         }

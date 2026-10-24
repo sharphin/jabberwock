@@ -1,7 +1,7 @@
 //! LLVM の書き出し（`ir::llvm`）から、clang で実行ファイルを作る。
 //!
-//! 実行時ライブラリ `runtime/ward_rt.c` はコンパイラの中に入れてあり、作るたびに書き出して一緒にコンパイルする。
-//! clang は `WARD_CLANG` で別のものを指定できる（なければ `clang`）。
+//! 実行時ライブラリ `runtime/jw_rt.c` はコンパイラの中に入れてあり、作るたびに書き出して一緒にコンパイルする。
+//! clang は `JW_CLANG` で別のものを指定できる（なければ `clang`）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,10 +9,10 @@ use std::process::Command;
 use std::sync::Mutex;
 
 /// 実行時ライブラリのソース
-pub const RUNTIME_C: &str = include_str!("../runtime/ward_rt.c");
+pub const RUNTIME_C: &str = include_str!("../runtime/jw_rt.c");
 
 pub fn clang() -> String {
-    std::env::var("WARD_CLANG").unwrap_or_else(|_| "clang".to_string())
+    std::env::var("JW_CLANG").unwrap_or_else(|_| "clang".to_string())
 }
 
 fn exe_name(name: &str) -> String {
@@ -41,13 +41,13 @@ pub fn compile(ll: &str, dir: &Path, name: &str, opt: &str) -> Result<PathBuf, S
     Ok(exe)
 }
 
-/// `ward build`: 途中のファイルは一時フォルダに置き、実行ファイルを `out` に作る（Windows で `.exe` がなければ足す）
+/// `jabberwock build`: 途中のファイルは一時フォルダに置き、実行ファイルを `out` に作る（Windows で `.exe` がなければ足す）
 pub fn build(ll: &str, out: &Path, opt: &str) -> Result<PathBuf, String> {
     let mut out = out.to_path_buf();
     if cfg!(windows) && out.extension().is_none() {
         out.set_extension("exe");
     }
-    let dir = std::env::temp_dir().join(format!("ward-build-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("jw-build-{}", std::process::id()));
     let r = compile_to(ll, &dir, "main", &out, opt);
     let _ = fs::remove_dir_all(&dir);
     r.map(|_| out)
@@ -56,7 +56,7 @@ pub fn build(ll: &str, out: &Path, opt: &str) -> Result<PathBuf, String> {
 fn compile_to(ll: &str, dir: &Path, name: &str, exe: &Path, opt: &str) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let llp = dir.join(format!("{}.ll", name));
-    let rt = dir.join("ward_rt.c");
+    let rt = dir.join("jw_rt.c");
     fs::write(&llp, ll).map_err(|e| e.to_string())?;
     fs::write(&rt, RUNTIME_C).map_err(|e| e.to_string())?;
     let mut args = vec![opt, path_str(&llp)?, path_str(&rt)?, "-o", path_str(exe)?, "-Wno-override-module"];
@@ -85,16 +85,16 @@ fn path_str(p: &Path) -> Result<&str, String> {
 static RUNTIME_OBJECT: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// テストの突き合わせ用: 実行時ライブラリを一度だけコンパイルしておき、`.ll` だけをコンパイルしてつなぐ。
-/// ふだんは速く作れる `-O1`。`WARD_NATIVE=o2` なら `ward build` と同じ `-O2` と LTO で作る（最適化に頼る書き出しの確かめ）
+/// ふだんは速く作れる `-O1`。`JW_NATIVE=o2` なら `jabberwock build` と同じ `-O2` と LTO で作る（最適化に頼る書き出しの確かめ）
 pub fn compile_with_cached_runtime(ll: &str, dir: &Path, name: &str) -> Result<PathBuf, String> {
-    let o2 = std::env::var("WARD_NATIVE").map(|v| v == "o2").unwrap_or(false);
+    let o2 = std::env::var("JW_NATIVE").map(|v| v == "o2").unwrap_or(false);
     let opt: &[&str] = if o2 { &["-O2", "-flto"] } else { &["-O1"] };
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let obj = {
         let mut g = RUNTIME_OBJECT.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_none() {
-            let rt = dir.join("ward_rt.c");
-            let o = dir.join("ward_rt.o");
+            let rt = dir.join("jw_rt.c");
+            let o = dir.join("jw_rt.o");
             fs::write(&rt, RUNTIME_C).map_err(|e| e.to_string())?;
             let mut args = vec!["-c", path_str(&rt)?, "-o", path_str(&o)?];
             args.extend(opt);

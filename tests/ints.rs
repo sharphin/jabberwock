@@ -1,6 +1,6 @@
 //! 整数型（i8〜i64、u8〜u64、usize）のテスト
 
-use ward::run_source;
+use jabberwock::run_source;
 
 fn out(body: &str) -> String {
     ok(&format!("fn main() {{\n{}\n}}", body))
@@ -9,14 +9,14 @@ fn out(body: &str) -> String {
 fn ok(src: &str) -> String {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert!(o.warnings.is_empty(), "unexpected warning: {}", o.warnings[0].title);
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     o.output
 }
 
-fn err(body: &str) -> ward::diag::Diagnostic {
+fn err(body: &str) -> jabberwock::diag::Diagnostic {
     let o = run_source(&format!("fn main() {{\n{}\n}}", body), false);
     assert_eq!(o.output, "", "a program with a type error must not run");
     o.error.expect("expected an error")

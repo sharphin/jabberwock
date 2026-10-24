@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-自作言語 ward（仮名）の Rust 実装。`own` と世代付き `ref` だけで「C++より安全、Rustより簡単、Goより速い」を狙う。
+自作言語 jabberwock の Rust 実装。`own` と世代付き `ref` だけで「C++より安全、Rustより簡単、Goより速い」を狙う。
 
 ## 作業ルール（オーナーの指示）
 
@@ -23,13 +23,13 @@
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
-| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`ward build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
+| `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
 | `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
-| `src/ir/llvm.rs` | IR → LLVM のテキスト（`ward --ll`）。書き出せない書き方は `Err(理由)` |
-| `src/native.rs` | clang を呼んで実行ファイルを作る（`ward build`。実行時ライブラリはコンパイラの中に入れてある） |
-| `runtime/ward_rt.c` | 実行時ライブラリ（区画と世代・文字列・リスト・辞書・出力・エラー） |
+| `src/ir/llvm.rs` | IR → LLVM のテキスト（`jabberwock --ll`）。書き出せない書き方は `Err(理由)` |
+| `src/native.rs` | clang を呼んで実行ファイルを作る（`jabberwock build`。実行時ライブラリはコンパイラの中に入れてある） |
+| `runtime/jw_rt.c` | 実行時ライブラリ（区画と世代・文字列・リスト・辞書・出力・エラー） |
 | `src/ir/analyze.rs` | IR の上で ref の世代チェックを消す解析（`Proj::Deref` の `Check` を書く） |
 | `tests/examples.rs` | 言語の基本動作 |
 | `tests/analyze.rs` | 検査を消す解析。消せる例と、消してはいけない例 |
@@ -52,7 +52,7 @@
 | `tests/typeinfo.rs` | 型検査が式ごとの型・型の引数を記録すること（IR の土台） |
 | `tests/ir.rs` | IR の表示と、書き出せる範囲 |
 | `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも）。区画の確保・使い回し・別スレッドでの解放・`Option<own T>`・文字列の長さを、interp と -O1 / -O2 で突き合わせる（`same_as_interp`） |
-| `bench/` | ward・Go・C++ で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`） |
+| `bench/` | jabberwock・Go・C++ で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
@@ -123,7 +123,7 @@
   enum の値は型の名前を持たないので、型検査が `MethodCall` の 4 つめ（`RefCell<Option<String>>`）に enum の名前を書き、
   interp の `eval_method` はそれで `Enum.名前` を探す。`Shape.x(...)` は x が種類でなければ静的メソッド（パーサの `enum_variants`。
   モジュールの enum は `ModuleInfo.variants`）。enum は interface に当てはめられない（`satisfies`）。
-  Option / Result の `is_some` などは `lib.rs` の `PRELUDE` に ward で書いたメソッド（prelude の変数名は `_v` など、利用者の関数名とぶつからない名前にする）。
+  Option / Result の `is_some` などは `lib.rs` の `PRELUDE` に jabberwock で書いたメソッド（prelude の変数名は `_v` など、利用者の関数名とぶつからない名前にする）。
   `fn take` のメソッドは this が値（`ref` でない型）。型検査が `MethodTarget.take` を立て（receiver は own / ref でない値だけ）、
   interp の `eval_take_method`・analyze・lower は receiver を **引数より先に** 値として読む（ムーブ）。interface には当てはまらない。
 
@@ -155,7 +155,7 @@
   `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー）、
   モジュールの中の定義と参照は `qualify` が `geom.名前` に書き換える。全部を 1 つの `Program` にまとめるので、types / analyze / interp は
   モジュールを知らない（types だけ、モジュールの中で関数と同じ名前の変数を弾くために `Checker.module` を見る。メソッド名は `rsplit_once('.')` で分ける）。
-  `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `ward::render`。
+  `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `jabberwock::render`。
 - IR への準備（設計は `docs/ir-design.md`）: `types::check_with_info` が `TypeInfo` を返す。式の型（`expr_ty`）と、
   呼び出し・構造体 / enum の値の式で決めた型の引数（`targs`。`instantiate` が `pending_targs` に置き、`expr_ctx` が受け取る）。
   キーは構文木の中の式のアドレスなので、`Program` を書き換えないこと。数だけの式（`is_const_tree`）は根だけ記録する。
@@ -178,7 +178,7 @@
   その取り込みを `ref 名前` として作る。
   名前のある関数を値にすると `Callee::Named`（analyze は全引数を Pinned でないと記録）。analyze はクロージャの本体を、何も分からない別の文脈で調べる。
   `map` / `filter` は interp の `map_list`、lower は for と同じ `each_in`（`Each::Map`）で書き出す（exec / llvm は何もしない）。
-  `ok_or` は `lib.rs` の `PRELUDE` に ward で書いた関数。
+  `ok_or` は `lib.rs` の `PRELUDE` に jabberwock で書いた関数。
   `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
 
 - IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（`Proj::Deref` はいつも `Check::Required` で書き出す）。
@@ -193,11 +193,11 @@
   取り込んだ値は呼ぶときに `view_of` の写しで最後の引数として渡す（`Callee::Ir`）。interface を型として使ったメソッド呼び出しは、
   その名前のメソッドを持つ構造体の表（`CallDyn`）。match の中身は `take`（`(x as Some).0`）で受け取る。添字は `Proj::Index`（先に計算した添字を持つ）。
   入力（`read_line` / `args`）は組み込み。入力を読むプログラムは、テストが入力を渡したときだけ突き合わせる。
-- LLVM（`ir::llvm::emit`）: 値の形は docs/ir-design.md の「7 で決めたこと」。**`WARD_NATIVE=1 cargo test` で全テストを実行ファイルでも突き合わせる**
+- LLVM（`ir::llvm::emit`）: 値の形は docs/ir-design.md の「7 で決めたこと」。**`JW_NATIVE=1 cargo test` で全テストを実行ファイルでも突き合わせる**
   （`lib.rs` の `native_mismatch`。clang が要る）。IR の動きを変えたら llvm.rs も同じに直し、これを走らせること。
-  own の写し（下の 1 ビット）・interface の構造体の番号・変数の状態（null / `@ward.unset` / ムーブした位置）が要。
+  own の写し（下の 1 ビット）・interface の構造体の番号・変数の状態（null / `@jw.unset` / ムーブした位置）が要。
   実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す。
-  実行時エラーは interp の `render_in` と一字一句同じに出す（突き合わせは全文を比べる）。interp のエラーの文を変えたら llvm.rs / ward_rt.c も直す。
+  実行時エラーは interp の `render_in` と一字一句同じに出す（突き合わせは全文を比べる）。interp のエラーの文を変えたら llvm.rs / jw_rt.c も直す。
   `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
 - IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。
   事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `Pinned`。
@@ -215,16 +215,16 @@
   関数の番号で 1 回だけ呼ぶ（取り込んだ値は写しにしない）。lower は spawn に渡すクロージャを `once` で書き出し（取り込んだ値はそのままの型の変数）、
   関数の値は作らずに `spawn!(関数の番号, 取り込む値...)` にする。
   デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
-- スレッド（LLVM）: 区画の空きリスト・`ward_live`・`ward_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
+- スレッド（LLVM）: 区画の空きリスト・`jw_live`・`jw_depth`・解放の輪の表はスレッドごと（`_Thread_local`。LLVM 側は `thread_local(initialexec)`）。
   生きている区画の数は全スレッドの合計で見る（終わったスレッドの分は `g_live_done`）。待ちは `g_lock` / `g_cv` 1 組（interp と同じ数え方）。
   送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。
-  チャンネルのメソッドは場所のチャンネルを複製せずに読む（数を取り合わない）。出力は print 1 回のあいだ錠を持つ（`ward_print_begin`）。
+  チャンネルのメソッドは場所のチャンネルを複製せずに読む（数を取り合わない）。出力は print 1 回のあいだ錠を持つ（`jw_print_begin`）。
   錠と条件変数は Linux は pthread、Windows は SRWLOCK（windows.h なしで宣言）。
 - 区画（LLVM）: 頭は世代だけの 8 バイト（llvm.rs の `-8`）。世代が奇数なら解放済みで、中身の 2 語目に解放した位置（`FREED_SITE`）。
   小さい区画は塊から切り出し、8 バイト刻みの空き区画の鎖で使い回す。送った区画は世代を 2 進め、位置は `sent` の輪の表。
   「中身なし」と「own 1 つ」の 2 種類の enum はポインタ 1 つ（`Module::niche`。種類の番号と中身の場所は `enum_tag` / `enum_payload` を通す）。
   呼び出しの深さは関数の最初の引数（`FnGen.depth`）。リストの頭と要素の中の数には TBAA の印（`TBAA_HEADER` / `TBAA_ELEMENT`）。
-  最適化に頼る書き出しを変えたら `WARD_NATIVE=o2 cargo test`（-O2 と LTO）も走らせる。
+  最適化に頼る書き出しを変えたら `JW_NATIVE=o2 cargo test`（-O2 と LTO）も走らせる。
 
 ## 設計の決めごと
 

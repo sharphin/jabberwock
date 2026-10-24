@@ -1,4 +1,4 @@
-//! ward: `own` と世代付き `ref` だけで安全を目指す小さな言語の核。
+//! jabberwock: `own` と世代付き `ref` だけで安全を目指す小さな言語の核。
 
 pub mod analyze;
 pub mod ast;
@@ -42,10 +42,10 @@ pub fn no_modules(_: &str) -> Option<String> {
     None
 }
 
-/// 診断を、読んだファイルの中の位置で出す。`main` は最初のファイルの名前、モジュールは `名前.ward`
+/// 診断を、読んだファイルの中の位置で出す。`main` は最初のファイルの名前、モジュールは `名前.jw`
 pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String {
     let names: Vec<String> =
-        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.ward", m) }).collect();
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.jw", m) }).collect();
     let fs: Vec<(&str, &str)> = names.iter().zip(files).map(|(n, (_, s))| (n.as_str(), s.as_str())).collect();
     if fs.is_empty() {
         return d.render(main, "");
@@ -99,7 +99,7 @@ pub fn typed(src: &str, read: Reader) -> Result<(ast::Program, types::TypeInfo),
     Ok((prog, info))
 }
 
-/// IR（中間表現）を読みやすい文字にする（`ward --ir`）。エラーや、まだ書き出せない書き方があれば Err
+/// IR（中間表現）を読みやすい文字にする（`jabberwock --ir`）。エラーや、まだ書き出せない書き方があれば Err
 pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
     let (prog, info) = typed(src, read).map_err(|d| d.title)?;
     ir::lower::lower(&prog, &info)
@@ -110,17 +110,17 @@ pub fn ir_text(src: &str, read: Reader) -> Result<String, String> {
         .map_err(|r| format!("まだ IR に書き出せない書き方があります: {}", r))
 }
 
-/// LLVM のテキスト（`ward --ll`）。`main` は最初のファイルの名前（エラーの位置に出す）
+/// LLVM のテキスト（`jabberwock --ll`）。`main` は最初のファイルの名前（エラーの位置に出す）
 pub fn llvm_text(src: &str, read: Reader, main: &str) -> Result<String, String> {
     llvm_build(src, read, main, false)
 }
 
-/// `ward build` 用の LLVM IR。`release` なら実行時エラーは使った位置だけ出す（ソースを入れない）。
+/// `jabberwock build` 用の LLVM IR。`release` なら実行時エラーは使った位置だけ出す（ソースを入れない）。
 /// 書けないときは、表示する文（ソースの行つきのエラー）を返す
 pub fn llvm_build(src: &str, read: Reader, main: &str, release: bool) -> Result<String, String> {
     let (prog, files) = parse(src, read);
     let names: Vec<String> =
-        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.ward", m) }).collect();
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.jw", m) }).collect();
     let prog = prog.map_err(|d| render(&d, main, &files))?;
     let (_, info) = types::check_with_info(&prog).map_err(|d| render(&d, main, &files))?;
     let mut irp = ir::lower::lower(&prog, &info).map_err(|r| format!("まだ IR に書き出せない書き方があります: {}\n", r))?;
@@ -261,8 +261,8 @@ fn run_inner(
         if let Some(diff) = ir_mismatch(&irp, &files, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
-        // WARD_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
-        if std::env::var_os("WARD_NATIVE").is_some() {
+        // JW_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
+        if std::env::var_os("JW_NATIVE").is_some() {
             if let Some(diff) = native_mismatch(&irp, &files, &it.output(), res.as_ref().err(), it.live_objects(), &input, &io.1) {
                 panic!("実行ファイルの結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
             }
@@ -321,9 +321,9 @@ fn native_mismatch(
     use std::io::Write;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let trace = std::env::var_os("WARD_NATIVE_TRACE").is_some();
+    let trace = std::env::var_os("JW_NATIVE_TRACE").is_some();
     let names: Vec<String> =
-        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { "main.ward".to_string() } else { format!("{}.ward", m) }).collect();
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { "main.jw".to_string() } else { format!("{}.jw", m) }).collect();
     let sources: Vec<String> = files.iter().map(|(_, t)| t.clone()).collect();
     let ll = match ir::llvm::emit(irp, &names, &sources) {
         Ok(t) => t,
@@ -334,7 +334,7 @@ fn native_mismatch(
             return None;
         }
     };
-    let dir = std::env::temp_dir().join(format!("ward-native-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("jw-native-{}", std::process::id()));
     let name = format!("p{}", COUNTER.fetch_add(1, Ordering::SeqCst));
     let exe = match native::compile_with_cached_runtime(&ll, &dir, &name) {
         Ok(e) => e,
@@ -342,7 +342,7 @@ fn native_mismatch(
     };
     let child = std::process::Command::new(&exe)
         .args(args)
-        .env("WARD_LEAKS", "1")
+        .env("JW_LEAKS", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

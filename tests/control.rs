@@ -1,11 +1,11 @@
 //! loop / while / for / break / continue / if 式のテスト
 
-use ward::{run_source, run_source_with, Outcome};
+use jabberwock::{run_source, run_source_with, Outcome};
 
 fn ok(src: &str) -> Outcome {
     let o = run_source(src, false);
     if let Some(d) = &o.error {
-        panic!("unexpected error:\n{}", d.render("test.ward", src));
+        panic!("unexpected error:\n{}", d.render("test.jw", src));
     }
     assert_eq!(o.live_objects, 0, "heap objects leaked");
     let off = run_source_with(src, false, false);
@@ -17,14 +17,14 @@ fn out(body: &str) -> String {
     ok(&format!("fn main() {{\n{}\n}}", body)).output
 }
 
-fn err(src: &str) -> ward::diag::Diagnostic {
+fn err(src: &str) -> jabberwock::diag::Diagnostic {
     let d = run_source(src, false).error.expect("expected an error");
     let off = run_source_with(src, false, false).error.expect("expected an error without elision");
     assert_eq!(d.title, off.title, "elision changed the error");
     d
 }
 
-fn err_in_main(body: &str) -> ward::diag::Diagnostic {
+fn err_in_main(body: &str) -> jabberwock::diag::Diagnostic {
     err(&format!("fn main() {{\n{}\n}}", body))
 }
 
