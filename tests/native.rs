@@ -16,7 +16,8 @@ fn run(name: &str, src: &str) -> (Option<i32>, String, String) {
 
 fn run_with(name: &str, src: &str, release: bool) -> (Option<i32>, String, String) {
     let ll = llvm_build(src, &no_modules, "main.jw", release).expect("lowers to LLVM");
-    let dir = std::env::temp_dir().join(format!("jw-native-test-{}", std::process::id()));
+    // テストは並んで走るので、フォルダはテストごとに分ける（Windows は使用中のファイルを書き換えられない）
+    let dir = std::env::temp_dir().join(format!("jw-native-test-{}-{}", std::process::id(), name));
     let exe = native::compile(&ll, &dir, name, "-O1").expect("clang compiles");
     let out = Command::new(&exe).env("JW_LEAKS", "1").output().expect("runs");
     (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
