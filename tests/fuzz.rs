@@ -1,7 +1,9 @@
 //! 差分テスト（小さなファジング）。種から小さなプログラムを作り、interp と実行ファイルで出力とエラーを全文比べる
 //! （デバッグビルドでは interp が IR でも動かして突き合わせるので、3 つを比べることになる）。
 //! 作るプログラムは、読むだけの写し（for の要素・クロージャの取り込み）・ジェネリクス（`Box<T>`）・match ref・
-//! リストの操作を組み合わせ、own を取り出す・借りる・読む（docs/design-decisions.md の「写しの印」の表の部品）。
+//! リストの操作・リストの要素を借りた ref・メソッドの this（場所・一時的な値・`fn take`）・辞書の値の置き換えを組み合わせ、
+//! own を取り出す・借りる・読む（docs/design-decisions.md の「写しの印」の表の部品）。
+//! 新しい取り出し経路や組み込みの操作を足したら、ここの部品にも足すこと。
 //! ふだんは `CASES` 本。`JW_FUZZ=1000` で本数、`JW_FUZZ_SEED=n` で始めの種を変えられる。
 //! `JW_FUZZ_JWC=jwc の実行ファイル` なら、jwc で作った実行ファイルとも比べる。clang がなければ何もしない。
 
@@ -40,28 +42,46 @@ impl Rng {
 
 const HEAD: &str = "struct P { i64 x; }
 struct Box<T> { T v; }
-struct S { own P b; i64 n; (own P)[] ps; Option<own P> o; Box<own P> bx; }
+struct S { own P b; i64 n; (own P)[] ps; Option<own P> o; Box<own P> bx;
+    fn i64 bval() { b.x }
+    fn ref P first() { ref ps[0] }
+    fn ref i64 nref() { ref n }
+    fn mut bump() { n = n + 1; b.x = b.x + 1; }
+    fn take own P into() { b }
+}
 fn T get<T>(ref Box<T> b) { b.v }
 fn i64 look(ref P p) { p.x }
 fn i64 take(own P p) { p.x }
 fn S mk(i64 n) { S { b: own P { x: n }, n: n, ps: [own P { x: n + 1 }, own P { x: n + 2 }], o: Some(own P { x: n + 3 }), bx: Box { v: own P { x: n + 4 } } } }
 ";
 
-/// s（S の場所。写しのことも本物のこともある）について、1 つの文を作る。`muts` はリスト ss を書き換えてよいか
-fn action(r: &mut Rng, s: &str, muts: bool, k: usize) -> String {
+/// main の始めに借りて、あとで使う ref（リストの要素・メソッドが返す ref）。(宣言, 使う文)。
+/// 辞書の値のメソッドはまだ実行ファイルに書き出せないので使わない
+const REFS: [(&str, &str); 8] = [
+    ("let e0 = ref ss[0];", "print(e0.n, e0.b.x);"),
+    ("let e1 = ref ss[1].b;", "print(e1.x);"),
+    ("let e2 = ref ss[0].n;", "print(*e2);"),
+    ("let e3 = ref ss[1].ps[0];", "print(e3.x);"),
+    ("let e4 = ss[0].first();", "print(e4.x);"),
+    ("let e5 = ss[1].nref();", "print(*e5);"),
+    ("let e6 = ref ss[0].ps;", "print(e6.len());"),
+    ("let e7 = ref mut ss[0];", "print(e7.n);"),
+];
+
+/// s（S の場所。写しのことも本物のこともある）について、1 つの文を作る。`muts` はリスト ss と辞書 m を書き換えてよいか、
+/// `refs` は始めに借りた ref（`REFS` の番号）
+fn action(r: &mut Rng, s: &str, muts: bool, refs: &[usize], k: usize) -> String {
     let place = r.pick(&["{s}.b", "{s}.ps[0]", "{s}.ps[1]", "{s}.bx.v"]).replace("{s}", s);
-    // 取り出す文（たいていエラーで止まる）は 8 回に 1 回。ほかは借りる・読む・リストを書き換える
-    const RISKY: [usize; 6] = [4, 5, 6, 7, 9, 12];
-    const SAFE: [usize; 13] = [0, 1, 2, 3, 8, 10, 11, 13, 14, 15, 16, 17, 18];
+    // 取り出す文・必ずダングリングになる文（たいていエラーで止まる）は 8 回に 1 回。ほかは借りる・読む・書き換える
+    const RISKY: [usize; 8] = [4, 5, 6, 7, 9, 12, 23, 24];
+    const SAFE: [usize; 17] = [0, 1, 2, 3, 8, 10, 11, 13, 14, 15, 19, 20, 21, 22, 25, 26, 27];
+    const MUTS: [usize; 11] = [16, 17, 18, 28, 29, 30, 31, 32, 33, 34, 35];
     let which = if r.below(8) == 0 {
         RISKY[r.below(RISKY.len())]
+    } else if muts && r.below(3) == 0 {
+        MUTS[r.below(MUTS.len())]
     } else {
-        loop {
-            let w = SAFE[r.below(SAFE.len())];
-            if muts || w < 16 {
-                break w;
-            }
-        }
+        SAFE[r.below(SAFE.len())]
     };
     match which {
         0 => format!("print({}.x);", place),
@@ -82,37 +102,70 @@ fn action(r: &mut Rng, s: &str, muts: bool, k: usize) -> String {
         15 => format!("let f{k} = () -> {}.x; print(f{k}());", place),
         16 => "ss.pop();".to_string(),
         17 => format!("ss.push(mk({}));", 100 + k),
-        _ => "ss.sort_by((a, c) -> a.n > c.n);".to_string(),
+        18 => "ss.sort_by((a, c) -> a.n > c.n);".to_string(),
+        // 始めに借りた ref を使う（要素が動いたあとならダングリング）
+        19 => match refs.get(r.below(refs.len() + 1)) {
+            Some(&i) => REFS[i].1.to_string(),
+            None => format!("print({s}.n);"),
+        },
+        // メソッドの this: 場所・一時的な値・辞書の値
+        20 => format!("print({s}.bval());"),
+        21 => format!("print(mk({}).bval());", 200 + k),
+        22 => format!("let w{k} = {s}.first(); print(w{k}.x);"),
+        23 => format!("let w{k} = mk({}).nref(); print(*w{k});", 200 + k),
+        24 => format!("let t{k} = mk({}).first(); print(t{k}.x);", 200 + k),
+        25 => format!("let o{k} = mk({}).into(); print(o{k}.x);", 200 + k),
+        26 => format!("print(look({s}.first()));"),
+        27 => format!("let u{k} = {s}.nref(); print(*u{k});"),
+        28 => "ss[0].bump();".to_string(),
+        29 => "ss[1].bump();".to_string(),
+        30 => format!("match ss.pop() {{\n        case Some(t{k}) -> {{ let o{k} = t{k}.into(); print(o{k}.x); }}\n        case None -> print(0);\n    }}"),
+        31 => format!("m[\"a\"] = mk({});", 300 + k),
+        32 => format!("ss[0] = mk({});", 300 + k),
+        33 => "ss.remove(0);".to_string(),
+        34 => format!("ss.insert(0, mk({}));", 300 + k),
+        _ => "ss.reverse();".to_string(),
     }
 }
 
-fn body(r: &mut Rng, s: &str, muts: bool, base: usize) -> String {
+fn body(r: &mut Rng, s: &str, muts: bool, refs: &[usize], base: usize) -> String {
     let n = 1 + r.below(6);
-    (0..n).map(|i| format!("    {}\n", action(r, s, muts, base + i))).collect()
+    (0..n).map(|i| format!("    {}\n", action(r, s, muts, refs, base + i))).collect()
 }
 
 fn program(seed: u64) -> String {
     let mut r = Rng::new(seed);
     let mut out = String::from(HEAD);
-    out.push_str("fn main() {\n    let S[] mut ss = [mk(1), mk(10)];\n    let s0 = mk(20);\n");
+    out.push_str("fn main() {\n    let S[] mut ss = [mk(1), mk(10)];\n    let S[str] mut m = [\"a\": mk(30)];\n    let s0 = mk(20);\n");
+    let mut refs: Vec<usize> = Vec::new();
+    for _ in 0..r.below(4) {
+        let i = r.below(REFS.len());
+        if !refs.contains(&i) {
+            refs.push(i);
+            out.push_str(&format!("    {}\n", REFS[i].0));
+        }
+    }
     match r.below(6) {
         // for の要素（写し）
-        0 => out.push_str(&format!("    for s in ss {{\n{}    }}\n", body(&mut r, "s", true, 0))),
+        0 => out.push_str(&format!("    for s in ss {{\n{}    }}\n", body(&mut r, "s", true, &refs, 0))),
         // 添字と for (i, s)
-        1 => out.push_str(&format!("    for (i, s) in ss {{\n{}    }}\n", body(&mut r, "s", true, 0))),
+        1 => out.push_str(&format!("    for (i, s) in ss {{\n{}    }}\n", body(&mut r, "s", true, &refs, 0))),
         // クロージャに取り込んだ構造体（写し）
-        2 => out.push_str(&format!("    let f = () -> {{\n{}    0\n    }};\n    print(f());\n", body(&mut r, "s0", false, 0))),
+        2 => out.push_str(&format!("    let f = () -> {{\n{}    0\n    }};\n    print(f());\n", body(&mut r, "s0", false, &refs, 0))),
         // for の中のクロージャ（写しの写し）
         3 => out.push_str(&format!(
             "    for s in ss {{\n    let f = () -> {{\n{}    0\n    }};\n    print(f());\n    }}\n",
-            body(&mut r, "s", false, 0)
+            body(&mut r, "s", false, &refs, 0)
         )),
         // 本物の構造体
-        4 => out.push_str(&body(&mut r, "s0", false, 0)),
+        4 => out.push_str(&body(&mut r, "s0", true, &refs, 0)),
         // リストの要素（本物）
-        _ => out.push_str(&body(&mut r, "ss[0]", true, 0)),
+        _ => out.push_str(&body(&mut r, "ss[0]", true, &refs, 0)),
     }
-    out.push_str(&format!("    {}\n", action(&mut r, "s0", false, 50)));
+    out.push_str(&format!("    {}\n", action(&mut r, "s0", false, &refs, 50)));
+    for &i in &refs {
+        out.push_str(&format!("    {}\n", REFS[i].1));
+    }
     out.push_str("}\n");
     out
 }
@@ -120,7 +173,15 @@ fn program(seed: u64) -> String {
 /// interp と実行ファイルを比べる。型エラーなら None（比べない）
 fn compare(name: &str, src: &str, jwc: Option<&str>) -> Option<Result<String, String>> {
     let o = jabberwock::run_source(src, false);
-    let ll = llvm_build(src, &no_modules, "main.jw", false).ok()?;
+    let ll = match llvm_build(src, &no_modules, "main.jw", false) {
+        Ok(ll) => ll,
+        Err(e) => {
+            if std::env::var("JW_FUZZ_SHOW").is_ok() {
+                eprintln!("型エラー: {}", e.lines().next().unwrap_or(""));
+            }
+            return None;
+        }
+    };
     let want_err = o.error.as_ref().map(|d| jabberwock::render(d, "main.jw", &o.files));
     // 実行時ライブラリの .o を使い回すので、フォルダは全部の種で同じ（最後に消す）
     let dir = fuzz_dir();

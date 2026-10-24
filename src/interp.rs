@@ -345,6 +345,8 @@ impl Access {
 struct Lent {
     slot: usize,
     back: Option<(Place, Option<(usize, u64)>)>,
+    /// 一時的な own の先（スロットごと解放する）。そうでなければ、貸すために置いたスロット（中の値を捨てる。変数を捨てるのと同じ理由の付け方）
+    own: bool,
 }
 
 enum Flow {
@@ -2736,7 +2738,7 @@ impl Interp {
             Value::Own(slot) => {
                 if place.is_none() {
                     // 一時的な own は、呼び出しが終わったら解放する
-                    lent = Some(Lent { slot, back: None });
+                    lent = Some(Lent { slot, back: None, own: true });
                 }
                 this(slot, self.heap.slots[slot].generation, describe(recv))
             }
@@ -2762,7 +2764,7 @@ impl Interp {
                     (pl, owner)
                 });
                 let slot = self.heap.alloc(v);
-                lent = Some(Lent { slot, back });
+                lent = Some(Lent { slot, back, own: false });
                 this(slot, self.heap.slots[slot].generation, describe(recv))
             }
         };
@@ -2771,8 +2773,13 @@ impl Interp {
         let result = self.call_fn(&f, all, span)?;
         match lent {
             None => {}
-            Some(Lent { slot, back: None }) => self.free(slot, span, "メソッドの呼び出しに使い終わった一時的な値"),
-            Some(Lent { slot, back: Some((pl, owner)) }) => {
+            Some(Lent { slot, back: None, own: true }) => self.free(slot, span, "メソッドの呼び出しに使い終わった一時的な値"),
+            Some(Lent { slot, back: None, own: false }) => {
+                let why = "メソッドの呼び出しに使い終わった一時的な値";
+                let v = self.vacate(slot, span, why);
+                self.release(v, span, why);
+            }
+            Some(Lent { slot, back: Some((pl, owner)), .. }) => {
                 let v = self.heap.slots[slot].value.replace(Value::Unit).expect("lent slot is live");
                 self.free(slot, span, &format!("メソッドの呼び出しが終わって `{}` に戻した", describe(recv)));
                 if let Some((s, g)) = owner {

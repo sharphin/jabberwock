@@ -391,3 +391,12 @@ fn spawn_fails_with_an_error_when_no_thread_can_be_made() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn temporary_receiver_frees_its_owns_with_the_same_reason() {
+    // 一時的な構造体の this を捨てたとき、中の own は「使い終わった一時的な値」として解放される（interp も変数を捨てるのと同じ付け方。差分テストで見つかったずれ）
+    let head = "struct P { i64 x; }\nstruct S { (own P)[] ps; own P b;\n    fn ref P first() { ref ps[0] }\n    fn ref P bb() { ref b }\n}\n\
+                fn S mk(i64 n) { S { ps: [own P { x: n + 1 }], b: own P { x: n } } }\n";
+    same_as_interp("temp_this_field", &format!("{}fn main() {{\n    let u = mk(4).bb();\n    print(u.x);\n}}", head));
+    same_as_interp("temp_this_list", &format!("{}fn main() {{\n    let u = mk(4).first();\n    print(u.x);\n}}", head));
+}
