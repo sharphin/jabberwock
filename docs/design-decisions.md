@@ -404,4 +404,4 @@ let x = pick(true, 1, 2);
 
 ## 名前
 
-- 言語名は **jabberwock から jabberwock に変える予定**。時期は未定で、オーナーの指示を待つ（それまでは jabberwock のまま）。
+- 言語名は **旧名 ward から jabberwock に変えた**（2026-10-24）。コマンドは `jabberwock`、ファイルの拡張子は `.jw`。

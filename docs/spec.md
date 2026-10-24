@@ -1,7 +1,7 @@
 # jabberwock 言語仕様（作成中）
 
 いま実装されている言語の決まりをまとめたもの。なぜそう決めたかは [design-decisions.md](design-decisions.md) にある。
-名前は jabberwock に変える予定（時期は未定）。
+旧名は ward（2026-10-24 に jabberwock へ改名。拡張子は `.jw`）。
 
 - 対象: 2026-10-23 時点の main
 - 「未実装」と書いたものは、決めてあってもまだ動かない
