@@ -1989,17 +1989,21 @@ void jw_exit(int64_t code) {
 void jw_main(void);
 
 #ifdef _WIN32
-// Windows: 端末の文字コードを UTF-8 にし、引数は UTF-16 から UTF-8 に直す（windows.h なしで宣言する）
+// Windows: 端末の文字コードを UTF-8 にし、出力の改行を変えないようにし、引数は UTF-16 から UTF-8 に直す（windows.h なしで宣言する）
 #include <wchar.h>
 __declspec(dllimport) int __stdcall SetConsoleOutputCP(unsigned);
 __declspec(dllimport) int __stdcall SetConsoleCP(unsigned);
 __declspec(dllimport) wchar_t *__stdcall GetCommandLineW(void);
 __declspec(dllimport) wchar_t **__stdcall CommandLineToArgvW(const wchar_t *, int *);
 __declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+int _setmode(int, int);
 
 static void win_setup(int *argc, char ***argv) {
     SetConsoleOutputCP(65001);
     SetConsoleCP(65001);
+    // 改行を \r\n に変えずにそのまま出す（interp・Go・Rust と同じ。0x8000 は _O_BINARY）
+    _setmode(_fileno(stdout), 0x8000);
+    _setmode(_fileno(stderr), 0x8000);
     int n = 0;
     wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
     if (!w) return;
