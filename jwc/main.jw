@@ -1,7 +1,38 @@
 // jwc: jabberwock で書いた jabberwock のコンパイラ（作りかけ）
 // 使い方: jwc --tokens <file.jw>   トークンを 1 行に 1 つ出す（Rust 版の `jabberwock --tokens` と同じ形）
+//         jwc --ast <file.jw>      構文木を出す（Rust 版の `jabberwock --ast` と同じ形）
+use ast;
+use astdump;
 use diag;
 use lexer;
+use modules;
+use parser;
+
+// どのプログラムにも最初からある定義（Rust 版の lib.rs の PRELUDE と同じ文字）
+const PRELUDE = "enum Option<T> {{\n" +
+    "    Some(T value);\n" +
+    "    None;\n" +
+    "fn bool is_some() {{ match this {{ case Some(_) -> true; case None -> false; }} }}\n" +
+    "fn bool is_none() {{ match this {{ case Some(_) -> false; case None -> true; }} }}\n" +
+    "fn take T unwrap_or(T _d) {{ match this {{ case Some(_v) -> _v; case None -> _d; }} }}\n" +
+    "fn take Result<T, E> ok_or<E>(E _e) {{ match this {{ case Some(_v) -> Ok(_v); case None -> Err(_e); }} }}\n" +
+    "fn take Option<U> map<U>(fn U(T) _f) {{ match this {{ case Some(_v) -> Some(_f(_v)); case None -> None; }} }}\n" +
+    "}}\n" +
+    "enum Result<T, E> {{\n" +
+    "    Ok(T value);\n" +
+    "    Err(E error);\n" +
+    "fn bool is_ok() {{ match this {{ case Ok(_) -> true; case Err(_) -> false; }} }}\n" +
+    "fn bool is_err() {{ match this {{ case Ok(_) -> false; case Err(_) -> true; }} }}\n" +
+    "fn take T unwrap_or(T _d) {{ match this {{ case Ok(_v) -> _v; case Err(_) -> _d; }} }}\n" +
+    "fn take Option<T> ok() {{ match this {{ case Ok(_v) -> Some(_v); case Err(_) -> None; }} }}\n" +
+    "fn take Result<U, E> map<U>(fn U(T) _f) {{ match this {{ case Ok(_v) -> Ok(_f(_v)); case Err(_e) -> Err(_e); }} }}\n" +
+    "}}\n" +
+    "fn Result<T, E> ok_or<T, E>(Option<T> _o, E _e) {{\n" +
+    "    match _o {{\n" +
+    "        case Some(_v) -> Ok(_v);\n" +
+    "        case None -> Err(_e);\n" +
+    "    }}\n" +
+    "}}\n";
 
 fn str escape(str s) {
     let mut out = "";
@@ -21,7 +52,7 @@ fn str dump(ref lexer.Token[] toks) {
     let str[] mut lines = [];
     for t in toks {
         let k = t.kind;
-        let head = "{t.span.line}:{t.span.col}:{t.span.len} {k}";
+        let head = "{diag.line_of(t.span)}:{diag.col_of(t.span)}:{diag.len_of(t.span)} {k}";
         if k == "ident" || k == "float" {
             lines.push(head + " " + t.text);
         } else if k == "int" {
@@ -39,10 +70,30 @@ fn str dump(ref lexer.Token[] toks) {
     lines.join("\n")
 }
 
+/// 構文解析して（`use` したモジュールも読む）、最初からある定義を前に足す
+fn Result<ast.Program, diag.Diag> parse_all(ref mut modules.Loader l, str src) {
+    let mut prog = l.load(src)?;
+    let mut pre = parser.parse(lexer.lex(PRELUDE)?)?;
+    for e in prog.enums.drain() { pre.enums.push(e); }
+    for f in prog.fns.drain() { pre.fns.push(f); }
+    prog.enums = pre.enums.drain();
+    prog.fns = pre.fns.drain();
+    Ok(prog)
+}
+
+/// ファイルのあるフォルダ（最後の `/` まで）
+fn str dir_of(str path) {
+    let mut cut = 0;
+    for (i, c) in path.chars() {
+        if c == "/" || c == "\\" { cut = i + 1; }
+    }
+    path.slice(0, cut)
+}
+
 fn main() {
     let a = args();
-    if a.len() != 2 || a[0] != "--tokens" {
-        eprint("使い方: jwc --tokens <file.jw>");
+    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast") {
+        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw>");
         exit(2);
     }
     let path = a[1];
@@ -53,12 +104,24 @@ fn main() {
             exit(1)
         }
     };
+    let str[] names = [path];
+    let str[] srcs = [src];
+    if a[0] == "--ast" {
+        let mut l = modules.new_loader(dir_of(path));
+        match parse_all(ref mut l, src) {
+            case Ok(p) -> print(astdump.dump(p));
+            case Err(d) -> {
+                let str[] mut ns = [];
+                for (i, n) in l.names {
+                    if i == 0 { ns.push(path); } else { ns.push(n + ".jw"); }
+                }
+                print(diag.render(d, ns, l.srcs));
+            }
+        }
+        return;
+    }
     match lexer.lex(src) {
         case Ok(toks) -> print(dump(toks));
-        case Err(d) -> {
-            let str[] names = [path];
-            let str[] srcs = [src];
-            print(diag.render(d, names, srcs));
-        }
+        case Err(d) -> print(diag.render(d, names, srcs));
     }
 }

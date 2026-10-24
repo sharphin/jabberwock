@@ -24,6 +24,9 @@ pub enum Shape {
         }
     }
     static fn Shape square(i64 n) { Shape.Box(n, n) }
+    // モジュールの中で、enum の静的メソッドを型名なしで・型名つきで呼ぶ
+    static fn Shape unit() { square(1) }
+    static fn Shape unit2() { Shape.unit() }
 }
 
 pub interface Sized {
@@ -91,8 +94,10 @@ fn main() {
     print(\"{geom.twice(3)}\");
     let sq = geom.Shape.square(3);
     print(geom.area(sq), sq.corners(), geom.Shape.Dot(geom.Point.at(0, 0)).corners());
+    let u = geom.Shape.unit2();
+    print(geom.area(u));
 }";
-    assert_eq!(ok(src), "25 2\n10\n2\n14 2\n9\n6\n9 4 1\n");
+    assert_eq!(ok(src), "25 2\n10\n2\n14 2\n9\n6\n9 4 1\n1\n");
 }
 
 #[test]

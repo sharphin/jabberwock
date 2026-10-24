@@ -1,6 +1,7 @@
 //! jabberwock: `own` と世代付き `ref` だけで安全を目指す小さな言語の核。
 
 pub mod analyze;
+pub mod astdump;
 pub mod ast;
 pub mod diag;
 pub mod interp;
@@ -134,6 +135,15 @@ fn parse(src: &str, read: Reader) -> (Result<ast::Program, Diagnostic>, Vec<(Str
     let mut loader = modules::Loader::new(read);
     let r = loader.load(src).map(add_prelude);
     (r, loader.files)
+}
+
+/// `jabberwock --ast`: 構文解析した結果（最初からある定義も含む）を文字にする（jwc の構文解析との突き合わせ用）。エラーなら診断の表示
+pub fn ast_dump(src: &str, read: Reader, path: &str) -> String {
+    let (r, files) = parse(src, read);
+    match r {
+        Ok(p) => astdump::dump(&p),
+        Err(d) => render(&d, path, &files),
+    }
 }
 
 fn add_prelude(mut prog: ast::Program) -> ast::Program {

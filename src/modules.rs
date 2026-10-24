@@ -283,7 +283,8 @@ impl<'a> Qualify<'a> {
                 }
             }
             ExprKind::Call(n, args) => {
-                let static_call = matches!(n.split_once('.'), Some((s, _)) if self.structs.contains(s));
+                let static_call =
+                    matches!(n.split_once('.'), Some((s, _)) if self.structs.contains(s) || self.enums.contains(s));
                 if self.fns.contains(n.as_str()) || static_call {
                     *n = self.name(n);
                 }

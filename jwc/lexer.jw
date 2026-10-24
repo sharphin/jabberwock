@@ -9,7 +9,7 @@ pub struct Token {
     str kind;
     str text;     // ident・float・str・lit の中身
     u64 num;      // int の値
-    diag.Span span;
+    i64 span;
 }
 
 const KEYWORDS = "fn let if else while loop for in break continue match case default return struct enum static interface use pub const own as ref mut true false";
@@ -258,7 +258,7 @@ struct Lexer {
                 parts.push(Token { kind: "code", text: "", num: 0, span: diag.mk_span(0, 0, 0) });
                 for t in toks.drain() {
                     // 部分の字句解析の位置を、元のファイルでの位置に直す
-                    parts.push(Token { kind: t.kind, text: t.text, num: t.num, span: diag.mk_span(line, t.span.col + open_col, t.span.len) });
+                    parts.push(Token { kind: t.kind, text: t.text, num: t.num, span: diag.mk_span(line, diag.col_of(t.span) + open_col, diag.len_of(t.span)) });
                 }
                 interp = true;
                 col += j - i + 1;
@@ -322,7 +322,7 @@ struct Lexer {
         for t in parts.drain() {
             out.push(t);
         }
-        out.push(Token { kind: "end", text: "", num: 0, span: diag.mk_span(0, 0, 0) });
+        out.push(Token { kind: "end", text: "", num: 0, span: sp });
         Ok(())
     }
 
@@ -350,4 +350,24 @@ pub fn Result<Token[], diag.Diag> lex(str src) {
     let codes = cs.map((c) -> c.code());
     let mut l = Lexer { cs: cs, codes: codes, i: 0, line: 1, col: 1, out: [] };
     l.run()
+}
+
+/// `file` 番目のファイルとして字句解析する（位置にファイルの番号を入れる）
+pub fn Result<Token[], diag.Diag> lex_file(str src, i64 file) {
+    match lex(src) {
+        case Ok(toks) -> {
+            let mut ts = toks;
+            for i in range(ts.len()) {
+                ts[i].span = diag.with_file(ts[i].span, file);
+            }
+            Ok(ts)
+        }
+        case Err(d) -> {
+            let mut e = d;
+            for i in range(e.labels.len()) {
+                e.labels[i].span = diag.with_file(e.labels[i].span, file);
+            }
+            Err(e)
+        }
+    }
 }

@@ -10,6 +10,7 @@ fn main() {
     let mut show_ir = false;
     let mut show_ll = false;
     let mut show_tokens = false;
+    let mut show_ast = false;
     let mut path = None;
     let mut prog_args = Vec::new();
     for a in env::args().skip(1) {
@@ -33,6 +34,7 @@ fn main() {
             "--ir" => show_ir = true,
             "--ll" => show_ll = true,
             "--tokens" => show_tokens = true,
+            "--ast" => show_ast = true,
             _ => path = Some(a),
         }
     }
@@ -55,6 +57,11 @@ fn main() {
 
     if show_tokens {
         println!("{}", jabberwock::token_dump(&src, &path));
+        return;
+    }
+
+    if show_ast {
+        println!("{}", jabberwock::ast_dump(&src, &read, &path));
         return;
     }
 
