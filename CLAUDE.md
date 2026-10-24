@@ -51,7 +51,8 @@
 | `tests/borrow.rs` | own でない値を借りる・`ref` の引数を自動で借りる |
 | `tests/typeinfo.rs` | 型検査が式ごとの型・型の引数を記録すること（IR の土台） |
 | `tests/ir.rs` | IR の表示と、書き出せる範囲 |
-| `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも） |
+| `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも）。区画の確保・使い回し・別スレッドでの解放・`Option<own T>`・文字列の長さを、interp と -O1 / -O2 で突き合わせる（`same_as_interp`） |
+| `bench/` | ward・Go・C++ で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
@@ -219,6 +220,11 @@
   送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。
   チャンネルのメソッドは場所のチャンネルを複製せずに読む（数を取り合わない）。出力は print 1 回のあいだ錠を持つ（`ward_print_begin`）。
   錠と条件変数は Linux は pthread、Windows は SRWLOCK（windows.h なしで宣言）。
+- 区画（LLVM）: 頭は世代だけの 8 バイト（llvm.rs の `-8`）。世代が奇数なら解放済みで、中身の 2 語目に解放した位置（`FREED_SITE`）。
+  小さい区画は塊から切り出し、8 バイト刻みの空き区画の鎖で使い回す。送った区画は世代を 2 進め、位置は `sent` の輪の表。
+  「中身なし」と「own 1 つ」の 2 種類の enum はポインタ 1 つ（`Module::niche`。種類の番号と中身の場所は `enum_tag` / `enum_payload` を通す）。
+  呼び出しの深さは関数の最初の引数（`FnGen.depth`）。リストの頭と要素の中の数には TBAA の印（`TBAA_HEADER` / `TBAA_ELEMENT`）。
+  最適化に頼る書き出しを変えたら `WARD_NATIVE=o2 cargo test`（-O2 と LTO）も走らせる。
 
 ## 設計の決めごと
 
