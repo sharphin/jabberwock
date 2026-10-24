@@ -82,6 +82,11 @@ thread_local! {
     static IS_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// 同時に動かしてよいスレッドの数（main のほか）。環境変数 `JW_MAX_THREADS`（スレッドを作れないときのテスト用。jw_rt.c の `max_threads` と同じ）
+pub fn max_threads() -> Option<usize> {
+    std::env::var("JW_MAX_THREADS").ok().and_then(|s| s.trim().parse().ok())
+}
+
 /// このスレッドを spawn で作ったものとして印をつける
 pub fn mark_worker() {
     IS_WORKER.with(|w| w.set(true));
@@ -236,10 +241,15 @@ impl World {
         }
     }
 
-    pub fn started(&self) {
-        let mut st = self.lock();
+    /// 上限（`max_threads`）の中で、もう 1 つスレッドを始めてよいか（`lock` で持った錠の中で呼ぶ）
+    pub fn may_start(&self, st: &State) -> bool {
+        !matches!(max_threads(), Some(m) if st.alive > m)
+    }
+
+    /// スレッドを始めた（`lock` で持った錠の中で呼ぶ）
+    pub fn started_locked(&self, st: &mut State) {
         st.alive += 1;
-        self.changed(&mut st);
+        self.changed(st);
     }
 
     /// スレッドが終わった（結果を task に置く）

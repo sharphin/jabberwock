@@ -1727,6 +1727,7 @@ struct FnGen {
             let size = "ptrtoint (ptr getelementptr (" + args_t + ", ptr null, i32 1) to i64)";
             let argp = b.val("call ptr @jw_spawn_args(i64 " + size + ")");
             let sent = m.site(span, "ほかのスレッドへ送られた");
+            let at = m.site(span, "");
             for (i, x) in vals {
                 if i == 0 { continue; }
                 let lt = m.lt(x.t)?;
@@ -1742,7 +1743,7 @@ struct FnGen {
             let rt = ty.inner(want);
             let rsize = m.sizeof(rt)?;
             let dropf = if m.needs_drop(rt)? { m.helper("Drop", rt) } else { "null" };
-            let t = b.val("call ptr @jw_spawn(ptr " + thunk + ", ptr " + argp + ", i64 " + rsize + ", ptr " + dropf + ")");
+            let t = b.val("call ptr @jw_spawn(ptr " + thunk + ", ptr " + argp + ", i64 " + rsize + ", ptr " + dropf + ", ptr " + at + ")");
             return Ok(llvm.vt(t, ty.cl(want)));
         }
         if name == "chan" {

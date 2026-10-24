@@ -109,7 +109,7 @@ declare void @jw_chan_release(ptr, ptr)
 declare void @jw_chan_send(ptr, ptr, ptr)
 declare i32 @jw_chan_recv(ptr, ptr, ptr)
 declare void @jw_chan_close(ptr, ptr)
-declare ptr @jw_spawn(ptr, ptr, i64, ptr)
+declare ptr @jw_spawn(ptr, ptr, i64, ptr, ptr)
 declare ptr @jw_spawn_args(i64)
 declare void @jw_task_join(ptr, ptr, ptr)
 declare void @jw_task_drop(ptr, ptr)
@@ -3498,6 +3498,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let size = format!("ptrtoint (ptr getelementptr ({}, ptr null, i32 1) to i64)", args_t);
                 let args = self.b.val(format!("call ptr @jw_spawn_args(i64 {})", size));
                 let sent = self.m.site(span, "ほかのスレッドへ送られた");
+                let at = self.m.site(span, "");
                 for (i, (v, t)) in caps.iter().enumerate() {
                     let lt = self.m.lt(t)?;
                     let p = self.b.val(format!("getelementptr {}, ptr {}, i32 0, i32 {}", args_t, args, i));
@@ -3511,7 +3512,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let Ty::Task(r) = want else { return Err("spawn の型".to_string()) };
                 let rsize = self.m.sizeof(r)?;
                 let drop = if self.m.needs_drop(r)? { self.m.helper(H::Drop, r) } else { "null".to_string() };
-                let t = self.b.val(format!("call ptr @jw_spawn(ptr {}, ptr {}, i64 {}, ptr {})", thunk, args, rsize, drop));
+                let t = self.b.val(format!("call ptr @jw_spawn(ptr {}, ptr {}, i64 {}, ptr {}, ptr {})", thunk, args, rsize, drop, at));
                 Ok((t, want.clone()))
             }
             "chan" => {

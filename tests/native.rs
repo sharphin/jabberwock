@@ -322,3 +322,65 @@ fn own_in_a_view_through_generics_and_builtins() {
         assert!(o.error.is_some() && o.output.is_empty(), "{}", src);
     }
 }
+
+#[test]
+fn view_mark_is_kept_or_dropped_where_it_should_be() {
+    // 写しの印（`RefVal.view`）: ref として受け取る所（match ref・for・map・sort_by・借り直し・ref の interface）では消え、own の型の場所（own の interface も）では残る
+    let runs = [
+        ("u_matchref", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct O { Option<own P> o; }\nfn main() {\n    let O[] os = [O { o: Some(own P { x: 1 }) }];\n    for o in os {\n        match ref o.o {\n            case Some(p) -> { let bx = Box { v: p }; print(get(ref bx).x); }\n            case None -> print(0);\n        }\n    }\n}"),
+        ("u_nested_for", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 2 }] }];\n    for s in ss { for p in s.ps { let bx = Box { v: p }; print(get(ref bx).x); } }\n}"),
+        ("u_map", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { (own P)[] ps; }\nfn main() {\n    let S[] ss = [S { ps: [own P { x: 3 }] }];\n    for s in ss { let rs = s.ps.map((p) -> p); let bx = Box { v: rs[0] }; print(get(ref bx).x); }\n}"),
+        ("u_sortby", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nfn main() {\n    let (own P)[] mut ps = [own P { x: 2 }, own P { x: 1 }];\n    ps.sort_by((a, b) -> { let bx = Box { v: a }; get(ref bx).x < b.x });\n    print(ps[0].x);\n}"),
+        ("u_mapfor", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct M { (own P)[str] m; }\nfn main() {\n    let M[] ms = [M { m: [\"a\": own P { x: 8 }] }];\n    for x in ms { for (k, v) in x.m { let bx = Box { v: v }; print(k, get(ref bx).x); } }\n}"),
+        ("u_arrfor", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct A { (own P)[2] a; }\nfn main() {\n    let A[] as2 = [A { a: [own P { x: 9 }, own P { x: 10 }] }];\n    for x in as2 { for p in x.a { let bx = Box { v: p }; print(get(ref bx).x); } }\n}"),
+        ("u_closure", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nfn main() {\n    let a = own P { x: 4 };\n    let f = () -> { let r = ref a; let bx = Box { v: r }; get(ref bx).x };\n    print(f());\n}"),
+        ("u_closure_view", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { own P b; }\nfn main() {\n    let s = S { b: own P { x: 5 } };\n    let f = () -> { let bx = Box { v: ref s.b }; get(ref bx).x };\n    print(f());\n}"),
+        ("u_field_ref", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { own P b; }\nstruct R { ref P r; }\nfn main() {\n    let S[] ss = [S { b: own P { x: 6 } }];\n    for s in ss { let rr = R { r: ref s.b }; let bx = Box { v: rr.r }; print(get(ref bx).x); }\n}"),
+        ("u_this", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct S { own P b; fn i64 g() { let bx = Box { v: ref b }; get(ref bx).x } }\nfn main() {\n    let S[] ss = [S { b: own P { x: 7 } }];\n    for s in ss { print(s.g()); }\n}"),
+        ("u_iface_ref", "interface Shape { fn i64 area(); }\nstruct Sq { i64 w; fn i64 area() { w * w } }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { own Sq s; }\nfn i64 area_of(ref Shape s) { s.area() }\nfn main() {\n    let H[] hs = [H { s: own Sq { w: 3 } }];\n    for h in hs { print(area_of(h.s)); let ref Shape r = ref h.s; let bx = Box { v: r }; print(get(ref bx).area()); }\n}"),
+        ("k_iface_own", "interface Shape { fn i64 area(); }\nstruct Sq { i64 w; fn i64 area() { w * w } }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { own Sq s; }\nfn main() {\n    let H[] hs = [H { s: own Sq { w: 3 } }];\n    for h in hs { let own Shape x = h.s; print(x.area()); }\n}"),
+        ("k_iface_generic", "interface Shape { fn i64 area(); }\nstruct Sq { i64 w; fn i64 area() { w * w } }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct H { own Sq s; }\nstruct G { Box<own Shape> b; }\nfn main() {\n    let G[] gs = [G { b: Box { v: own Sq { w: 2 } } }];\n    for g in gs { let x = get(g.b); print(x.area()); }\n}"),
+        ("k_arrfor_take", "struct P { i64 x; }\nstruct Box<T> { T v; }\nfn T get<T>(ref Box<T> b) { b.v }\nstruct A { (own P)[2] a; }\nfn main() {\n    let A[] as2 = [A { a: [own P { x: 9 }, own P { x: 10 }] }];\n    for x in as2 { for p in x.a { let bx = Box { v: p }; print(get(ref bx).x); } let q = x.a[0]; print(q.x); }\n}"),
+    ];
+    for (name, src) in runs.iter() {
+        let o = jabberwock::run_source(src, false);
+        assert_eq!(o.error.is_none(), name.starts_with("u_"), "{}: {:?}", name, o.error.as_ref().map(|d| d.title.clone()));
+        same_as_interp(name, src);
+    }
+}
+
+#[test]
+fn spawn_fails_with_an_error_when_no_thread_can_be_made() {
+    // スレッドを作れないとき（環境変数 JW_MAX_THREADS で上限を下げて起こす）は、spawn の位置でエラー。固まらない。
+    // 環境変数はほかのテストに効かないよう、コマンドの jabberwock と実行ファイルにだけ渡す
+    let sent = "struct P { i64 x; }\nfn main() {\n    let p = own P { x: 1 };\n    let t = spawn(() -> p.x);\n    print(t.join());\n}";
+    // 1 つめのスレッドが待っているあいだに 2 つめを作る（上限 1 なら必ず作れない）
+    let blocked = "fn main() {\n    let chan<i64> c = chan();\n    let w = spawn(() -> c.recv());\n    let t = spawn(() -> 2);\n    \
+                   c.send(1);\n    print(w.join(), t.join());\n}";
+    for (name, src, limit) in [("spawn_fail_sent", sent, "0"), ("spawn_fail_blocked", blocked, "1")] {
+        let dir = std::env::temp_dir().join(format!("jw-native-test-{}-{}", std::process::id(), name));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("main.jw"), src).expect("writes source");
+        let o = Command::new(env!("CARGO_BIN_EXE_jabberwock"))
+            .arg("main.jw")
+            .current_dir(&dir)
+            .env("JW_MAX_THREADS", limit)
+            .output()
+            .expect("runs jabberwock");
+        let want = String::from_utf8_lossy(&o.stderr).to_string();
+        assert_eq!(o.status.code(), Some(1), "{}: {}", name, want);
+        assert!(want.starts_with("error: スレッドを作れませんでした\n"), "{}: {}", name, want);
+        assert!(want.contains("ここで spawn した"), "{}: {}", name, want);
+        if have_clang() {
+            let ll = llvm_build(src, &no_modules, "main.jw", false).expect("lowers to LLVM");
+            let exe = native::compile(&ll, &dir, name, "-O1").expect("clang compiles");
+            let out = Command::new(&exe).env("JW_MAX_THREADS", limit).output().expect("runs");
+            assert_eq!(out.status.code(), Some(1), "{}", name);
+            assert_eq!(String::from_utf8_lossy(&out.stderr), want, "{}: エラー表示", name);
+            // 上限がなければふつうに動く
+            let out = Command::new(&exe).output().expect("runs");
+            assert_eq!(out.status.code(), Some(0), "{}: {}", name, String::from_utf8_lossy(&out.stderr));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

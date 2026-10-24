@@ -447,14 +447,14 @@ impl<'a> Machine<'a> {
                 let fi = fi as usize;
                 let span = *span;
                 let caps: Vec<Portable> = caps.into_iter().map(|c| self.it.export(c, span)).collect();
-                Ok(self.it.start_thread(span, Box::new(move |it: &mut Interp| {
+                self.it.start_thread(span, Box::new(move |it: &mut Interp| {
                     let prog = (it.world.load_ir.as_ref().expect("IR world"))();
                     it.set_structs(prog.structs.clone());
                     let args: Vec<Value> = caps.into_iter().map(|c| it.import(c)).collect();
                     // 1 回だけ呼ぶので、取り込んだ値は写しにせずそのまま渡す
                     let mut m = Machine { prog: &prog, it, depth: 0, views: Vec::new() };
                     m.call(fi, args, Vec::new(), span)
-                })))
+                }))
             }
             Rvalue::Builtin(name, ops, span) => {
                 let vals = self.operands(f, locs, ops)?;

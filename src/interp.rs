@@ -165,6 +165,14 @@ fn is_view(v: &Value) -> bool {
     }
 }
 
+/// ref の型の名前で受け取る値から、写しの印を消す（中身の場所は同じ。取り出せないのは own の型の場所だけ）
+fn unview(v: Value) -> Value {
+    match v {
+        Value::Ref(r) => Value::Ref(RefVal { view: false, ..r }),
+        other => other,
+    }
+}
+
 impl Value {
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
@@ -625,41 +633,54 @@ impl Interp {
             Callee::Ir(_) => unreachable!("IR functions run only in ir::exec"),
         };
         let caps: Vec<Portable> = caps.into_iter().map(|c| self.export(c, span)).collect();
-        Ok(self.start_thread(span, Box::new(move |it: &mut Interp| {
+        self.start_thread(span, Box::new(move |it: &mut Interp| {
             let prog = (it.world.load)();
             it.run_entry(prog, entry, caps, span)
-        })))
+        }))
     }
 
-    /// 新しいスレッドを始めて、その task を返す。`run` は新しい `Interp`（同じ world・入力）で動く
-    pub(crate) fn start_thread(&mut self, span: Span, run: ThreadBody) -> Value {
+    /// 新しいスレッドを始めて、その task を返す。`run` は新しい `Interp`（同じ world・入力）で動く。
+    /// 作れなければエラー（生きているスレッドの数には入れない。錠を持ったまま作るので、新しいスレッドが先に終わって数を減らすことはない）
+    pub(crate) fn start_thread(&mut self, span: Span, run: ThreadBody) -> R<Value> {
         let task = Arc::new(Task::default());
         let world = self.world.clone();
-        world.started();
-        let (t2, input, args) = (task.clone(), self.input.clone(), self.args.clone());
-        std::thread::Builder::new()
-            .stack_size(1 << 30)
-            .spawn(move || {
-                crate::threads::mark_worker();
-                let mut it = Interp::new(false);
-                it.world = world.clone();
-                it.input = input;
-                it.args = args;
-                match run(&mut it) {
-                    Ok(v) => {
-                        let p = it.export(v, span);
-                        let leaked = it.heap.live();
-                        world.finished(&t2, Ok(p), leaked);
+        let (w2, t2, input, args) = (world.clone(), task.clone(), self.input.clone(), self.args.clone());
+        let mut st = world.lock();
+        let made = if !world.may_start(&st) {
+            None
+        } else {
+            std::thread::Builder::new()
+                .stack_size(1 << 30)
+                .spawn(move || {
+                    crate::threads::mark_worker();
+                    let world = w2;
+                    let mut it = Interp::new(false);
+                    it.world = world.clone();
+                    it.input = input;
+                    it.args = args;
+                    match run(&mut it) {
+                        Ok(v) => {
+                            let p = it.export(v, span);
+                            let leaked = it.heap.live();
+                            world.finished(&t2, Ok(p), leaked);
+                        }
+                        Err(d) => {
+                            world.fail(d);
+                            let leaked = it.heap.live();
+                            world.finished(&t2, Err(()), leaked);
+                        }
                     }
-                    Err(d) => {
-                        world.fail(d);
-                        let leaked = it.heap.live();
-                        world.finished(&t2, Err(()), leaked);
-                    }
-                }
-            })
-            .expect("failed to spawn a thread");
-        Value::Task(task)
+                })
+                .ok()
+        };
+        if made.is_none() {
+            // 送るはずだった値は run と一緒に捨てる（own のスロットは送ったときにもう空けてある）
+            return Err(Diagnostic::new("スレッドを作れませんでした")
+                .primary(span, "ここで spawn した")
+                .note("OS のスレッドの数か、メモリが足りません"));
+        }
+        world.started_locked(&mut st);
+        Ok(Value::Task(task))
     }
 
     /// main が終わったあと: ほかのスレッドを待ち、どれかのエラーがあればそれを返す
@@ -1372,7 +1393,8 @@ impl Interp {
                         mutable: r.mutable,
                         view: false,
                     }),
-                    other => other,
+                    // 写しの中の own（印のある ref）も、ref として受け取るので印を消す
+                    other => unview(other),
                 },
             };
             if b == "_" {
@@ -1443,7 +1465,8 @@ impl Interp {
                     view: false,
                 }),
                 other if other.moves() => self.view_of(other, var_span, &what),
-                other => other,
+                // 写しのリストの own の要素（印のある ref）は、ref の x として受け取るので印を消す
+                other => unview(other),
             })
             .collect();
         let ran = !views.is_empty();
@@ -2810,7 +2833,7 @@ impl Interp {
                     view: false,
                 }),
                 other if other.moves() => self.view_of(other, span, &what),
-                other => other,
+                other => unview(other),
             })
             .collect();
         let mut views = views.into_iter();
@@ -2871,7 +2894,8 @@ impl Interp {
                     return v; // sort は整数・小数・文字列だけ（コピーできる）
                 }
                 // own の要素は own の先を借りた ref。構造体などは写しを一時的なスロットに置いて借りる
-                let v = self.view_of(v, span, &what);
+                // own の要素は ref の引数として渡すので、写しの印は付けない
+                let v = unview(self.view_of(v, span, &what));
                 if !v.moves() {
                     return v;
                 }

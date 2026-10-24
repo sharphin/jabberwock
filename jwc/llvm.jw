@@ -35,7 +35,7 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare void @jw_chan_send(ptr, ptr, ptr)\n" +
     "declare i32 @jw_chan_recv(ptr, ptr, ptr)\n" +
     "declare void @jw_chan_close(ptr, ptr)\n" +
-    "declare ptr @jw_spawn(ptr, ptr, i64, ptr)\n" +
+    "declare ptr @jw_spawn(ptr, ptr, i64, ptr, ptr)\n" +
     "declare ptr @jw_spawn_args(i64)\n" +
     "declare void @jw_task_join(ptr, ptr, ptr)\n" +
     "declare void @jw_task_drop(ptr, ptr)\n" +

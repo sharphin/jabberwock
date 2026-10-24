@@ -39,8 +39,9 @@ static void cond_wait(WCond *c, WLock *l) { SleepConditionVariableSRW(c, l, 0xFF
 static void cond_broadcast(WCond *c) { WakeAllConditionVariable(c); }
 typedef void *WThread;
 static unsigned long __stdcall thread_start(void *arg);
-static void thread_new(WThread *t, void *arg) {
+static int thread_new(WThread *t, void *arg) {
     *t = CreateThread(NULL, (size_t)256 << 20, thread_start, arg, 0x00010000 /* STACK_SIZE_PARAM_IS_A_RESERVATION */, NULL);
+    return *t != NULL;
 }
 static void thread_join(WThread t) {
     WaitForSingleObject(t, 0xFFFFFFFFul);
@@ -58,12 +59,13 @@ static void cond_wait(WCond *c, WLock *l) { pthread_cond_wait(c, l); }
 static void cond_broadcast(WCond *c) { pthread_cond_broadcast(c); }
 typedef pthread_t WThread;
 static void *thread_start(void *arg);
-static void thread_new(WThread *t, void *arg) {
+static int thread_new(WThread *t, void *arg) {
     pthread_attr_t a;
     pthread_attr_init(&a);
     pthread_attr_setstacksize(&a, (size_t)256 << 20);
-    pthread_create(t, &a, thread_start, arg);
+    int r = pthread_create(t, &a, thread_start, arg);
     pthread_attr_destroy(&a);
+    return r == 0;
 }
 static void thread_join(WThread t) { pthread_join(t, NULL); }
 #endif
@@ -1663,8 +1665,21 @@ static void *thread_start(void *arg) {
     return 0;
 }
 
-// spawn: thunk(args, 戻り値の置き場) を新しいスレッドで動かす。args は malloc したもの（終わったら解放する）
-WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop) {
+// 同時に動かしてよいスレッドの数（main のほか。環境変数 JW_MAX_THREADS、スレッドを作れないときのテスト用）。-1 なら上限なし。g_lock の中で呼ぶ
+static int64_t max_threads(void) {
+    static int64_t m = -2;
+    if (m == -2) {
+        const char *s = getenv("JW_MAX_THREADS");
+        char *end = NULL;
+        m = s && *s ? strtoll(s, &end, 10) : -1;
+        if (m < 0 || (end && *end)) m = -1;
+    }
+    return m;
+}
+
+// spawn: thunk(args, 戻り値の置き場) を新しいスレッドで動かす。args は malloc したもの（終わったら解放する）。
+// 作れなければ at でエラー（生きているスレッドの数には入れない。錠を持ったまま作るので、新しいスレッドが先に終わって数を減らすことはない）
+WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop, const WSite *at) {
     WTask *t = calloc(1, sizeof(WTask));
     t->thunk = thunk;
     t->args = args;
@@ -1673,10 +1688,15 @@ WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop) {
     t->drop = drop;
     g_threaded = 1;
     lock(&g_lock);
+    int64_t m = max_threads();
+    if ((m >= 0 && g_alive - 1 >= m) || !thread_new(&t->thread, t)) {
+        unlock(&g_lock);
+        begin_error("スレッドを作れませんでした");
+        finish_error(at, "ここで spawn した", "OS のスレッドの数か、メモリが足りません");
+    }
     g_alive++;
     changed();
     unlock(&g_lock);
-    thread_new(&t->thread, t);
     return t;
 }
 

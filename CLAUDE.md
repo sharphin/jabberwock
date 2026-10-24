@@ -167,7 +167,7 @@
   構造体などムーブする要素は、写し（`view_of` で中の own を読むだけの ref にしたもの）を一時的なスロットに置いて ref で渡し、周回ごとに `vacate` する。
   写しの中の own（own の配列）を値として取り出すのはエラー（型は own なのに中身が写しになるため）。型検査が `p.f` / `a[i]` / `*p` の型を見て `Expr.takes_own` を立て、
   interp はそれを値として読むとエラー（型の引数 `T` の場所は型で分からないので、`view_of` が写しの ref に付ける印 `RefVal.view` を `is_view` で見る。
-  借り直した ref（`make_ref`）は印を消す）。IR の exec は copy_out の行き先の型（`holds_own`）、llvm.rs / jwc の Hazard は own なら必ず真。
+  借り直した ref（`make_ref`）と、ref の型で受け取る match ref・for・map・sort_by の要素は印を消す（`unview`）。IR の exec は copy_out の行き先の型（`holds_own`）、llvm.rs / jwc の Hazard は own なら必ず真。
 
 - モジュール: `modules::Loader` が `use` をたどってファイルを読み（使われる側が先。輪はエラー）、各ファイルを
   `Parser::with_modules` で解析する。パーサは `geom . 名前` の 3 トークンを 1 つの名前 `geom.名前` にまとめ（`merge_paths`。pub でなければエラー。`.` のすぐあとの名前はフィールドなのでまとめない）、
@@ -235,6 +235,8 @@
   関数の番号で 1 回だけ呼ぶ（取り込んだ値は写しにしない）。lower は spawn に渡すクロージャを `once` で書き出し（取り込んだ値はそのままの型の変数）、
   関数の値は作らずに `spawn!(関数の番号, 取り込む値...)` にする。
   デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
+  スレッドを作れなければ spawn の位置でエラー（`start_thread` / jw_rt.c の `jw_spawn`。錠を持ったまま作り、作れてから `alive` を足す）。
+  環境変数 `JW_MAX_THREADS` で上限を下げて起こせる（`threads::max_threads` / jw_rt.c の `max_threads`）。
 - ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
   LLVM は jw_rt.c の `jw_read_file` などと `result_of`（`Result<T, str>` を作る）。エラーの文は OS の文を使わず、interp と jw_rt.c で一字一句そろえる。
   `exit` は `World.exit`（終了コードを覚えて `exit_marker` で全スレッドを止める）。`run_inner` / `ir_mismatch` がそれをエラーでなく終了として扱う。
