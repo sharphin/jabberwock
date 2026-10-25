@@ -24,6 +24,8 @@
 | ファイル入出力 | [file-io.md](file-io.md) |
 | 通信 | [networking.md](networking.md) |
 | 共通資源管理 | [resource-management.md](resource-management.md) |
+| 資源型・runtime ABI詳細 | [resource-abi.md](resource-abi.md) |
+| alice・Rust版・jwc連携 | [compiler-integration.md](compiler-integration.md) |
 | aliceの拡張 | [alice-native.md](alice-native.md) |
 | GUI・描画詳細 | [gui-rendering.md](gui-rendering.md) |
 | PostgreSQL | [postgresql.md](postgresql.md) |

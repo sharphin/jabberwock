@@ -3,7 +3,8 @@
 状態: 実装前の仕様。ここで定める新形式、設定、コマンドは現在のaliceには未実装。
 [現在のパッケージ仕様](packages.md)、[標準ライブラリの読み込み](standard-library-loading.md)、
 [ネイティブ依存・ビルド管理](alice-native.md) を前提に、設定の書式と解決規則を定める。
-資源ABIの具体的な配置やGUI内部の設計を、この文書で確定したとは扱わない。
+資源ABIの具体的な配置は [資源ABI詳細](resource-abi.md)、連携形式は [compiler連携](compiler-integration.md) に定める。
+GUI内部の設計を、この文書で確定したとは扱わない。
 
 ## ファイルの責任と版
 
@@ -95,7 +96,7 @@ capabilities = ["postgres"]
 
 build-protocolの版は対応する形式が明示された版だけを受け付ける。
 単にcompilerが返した番号の大小で互換と推定せず、そのcompilerが要求版をサポートするか確認する。
-例のresource-abiの1は初期ABI用に予約する番号で、メモリ配置の確定や対応compilerの存在を意味しない。
+例のresource-abiの1は初期ABI用の設計番号で、対応compilerの実装完了を意味しない。
 資源ABIは選択したcompiler・標準配布・使用する全パッケージで一致させ、複数版を混在させない。
 
 pathはmanifestのあるディレクトリを基準に解決し、従来どおり絶対パスと親への相対パスも許す。
@@ -339,7 +340,7 @@ CIが意図的にskipした構成は、別の記録として扱い合格数へ�
 
 設定解決はaliceが一度行い、module ID・ソースsnapshot・有効設定・能力・ABIをまとめた版付きの連携情報を渡す。
 Rust版の組み込み経路とjwcの外部経路で同じ情報を使い、jwcが利用者設定や依存先を独自に探し直さない。
-workerにも同じ解決結果を渡す。連携情報の具体的なbinary/JSON配置はcompiler連携設計で確定する。
+workerにも同じ解決結果を渡す。連携情報のJSON schemaとsnapshot配置はcompiler連携設計に従う。
 受け側で形式・内容hash・直接依存・ABIを検証し、その情報だけを内部操作の特権を与える根拠にしない。
 通常実行で外部副作用を重ねて起こさない規則も維持する。
 

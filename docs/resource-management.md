@@ -3,6 +3,8 @@
 状態: 実装前の設計。以下の資源型・ABI・検査は提案であり、実装済みではない。
 [全体方針](standard-libraries.md)、[ファイル](file-io.md)、[通信](networking.md)、[PostgreSQL](postgresql.md)、
 [GUI・描画](gui-rendering.md) が共用する所有・解放の契約を定める。
+型・token・C境界・各実行器への反映は [資源ABI詳細](resource-abi.md)、
+snapshotとcompilerの連携形式は [compiler連携](compiler-integration.md) に定める。
 
 ## 言語の型
 
@@ -34,8 +36,9 @@ Durationは単位を持つ非負の値、Deadlineは同じ時計上の絶対時�
 最初はプロセス内の資源表で管理する。slot、generation、kind、所有／写しの区別を持つ内部tokenを使い、
 OSの番号・生ポインタ・libpqのポインタをユーザーの値から直接取り出せないようにする。
 
-C側tokenの候補はu64のslotとgeneration、u32のkindとownership tagで、24バイト・8バイト整列とする。
-これはABI案であり、コンパイラの型を単純なユーザー構造体へ置き換えるものではない。
+C側tokenはABI v1の設計としてu64のslotとgeneration、u32のkindとaccessで24バイト・8バイト整列とする。
+slotはcontext namespaceも含み、別の実行Worldのtokenを取り違えない。
+これは実装前のABI設計であり、コンパイラの型を単純なユーザー構造体へ置き換えるものではない。
 ABIに版を付け、サイズ・整列・フィールド位置・初期化状態をRust/C/LLVM/jwcで検証する。
 
 資源表のentryは、世代、種類、Open/Busy/Closing/Closed/Brokenの状態、所有スレッド、native payload、

@@ -4,7 +4,8 @@
 [全体方針](standard-libraries.md)、[現在のパッケージ仕様](packages.md)、
 [aliceのネイティブ依存](alice-native.md) に接続する読み込みの契約を定める。
 設定ファイル全体の正式仕様は [aliceの設定仕様](alice-configuration.md) に定める。
-資源ABIの確定、GUI内部の詳細設計は、この文書の完了とは別に扱う。
+資源ABIとcompilerの受け渡しは [資源ABI詳細](resource-abi.md)、[compiler連携](compiler-integration.md) に定める。
+GUI内部の詳細設計は、この文書の完了とは別に扱う。
 
 ## 現在の動作と維持するもの
 

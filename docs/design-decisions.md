@@ -701,3 +701,10 @@ let x = pick(true, 1, 2);
 - v1の読み飛ばし・path文字列の扱いを互換経路に残し、新形式では未知キー・重複・不正な型を拒否する。
 - パッケージの能力要求と利用者のSDK/DLL選択を分け、直接依存・ABI・内容に基づく再ビルドの契約を維持する。
 - 設定検査と実際のprobe/buildを分け、未検証や条件不足を合格として扱わない。新設定やCLIは現行aliceに未実装。
+
+## 資源型・runtime ABI・compiler連携（設計、未実装。2026-10-25）
+
+- [資源ABI詳細](resource-abi.md) に、型・Owner/View・24バイトtoken・context分離・世代・C境界・共通の値を定めた。
+- [compiler連携](compiler-integration.md) に、compiler情報、snapshot bundle、JSON要求/応答、共通backendとbootstrapを定めた。
+- 内部操作の登録と依存の公開範囲を別々に検証する。requestの分類や内容hashだけを特権や信頼の証明にしない。
+- 型検査からjwc・C・LLVMまでの対応と安全性1〜7の拡張を完了条件とする。既存の検証成功を新機能へ自動で流用しない。
