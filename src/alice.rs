@@ -42,7 +42,7 @@ fn current_project() -> jabberwock::project::Project {
 fn render_in(p: &jabberwock::project::Project, d: &jabberwock::diag::Diagnostic, main: &str, files: &[(String, String)]) -> String {
     jabberwock::render_named(d, main, files, &|m| match p.modules.get(m) {
         Some(f) => shown(p, f),
-        None => format!("{}.jw", m),
+        None => format!("{}.jw", m.trim_start_matches('*')),
     })
 }
 

@@ -51,7 +51,7 @@ pub fn no_modules(_: &str) -> Option<String> {
 
 /// 診断を、読んだファイルの中の位置で出す。`main` は最初のファイルの名前、モジュールは `名前.jw`
 pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String {
-    render_named(d, main, files, &|m| format!("{}.jw", m))
+    render_named(d, main, files, &|m| format!("{}.jw", m.trim_start_matches('*')))
 }
 
 /// `render` の、モジュールのファイルの表示名を `name_of(モジュール名)` で決めるもの（パッケージでは src/geom.jw など）
@@ -249,7 +249,7 @@ pub fn llvm_build_with(
 ) -> Result<(String, ir::llvm::Stats), String> {
     let (prog, files) = parse(src, read);
     let names: Vec<String> =
-        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.jw", m) }).collect();
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.jw", m.trim_start_matches('*')) }).collect();
     let prog = prog.map_err(|d| render(&d, main, &files))?;
     let (_, info) = types::check_with_info(&prog).map_err(|d| render(&d, main, &files))?;
     let mut irp = ir::lower::lower(&prog, &info).map_err(|r| format!("まだ IR に書き出せない書き方があります: {}\n", r))?;
@@ -477,7 +477,7 @@ fn native_mismatch(irp: &ir::Program, files: &[(String, String)], want: &Expecte
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let trace = std::env::var_os("JW_NATIVE_TRACE").is_some();
     let names: Vec<String> =
-        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { "main.jw".to_string() } else { format!("{}.jw", m) }).collect();
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { "main.jw".to_string() } else { format!("{}.jw", m.trim_start_matches('*')) }).collect();
     let sources: Vec<String> = files.iter().map(|(_, t)| t.clone()).collect();
     let ll = match ir::llvm::emit(irp, &names, &sources) {
         Ok(t) => t,

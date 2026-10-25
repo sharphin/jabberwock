@@ -55,7 +55,7 @@ fn modules_come_from_src_and_dependencies() {
     write(&d.join("nums/src/lib.jw"), "pub fn i64 zero() { 0 }\n");
     let p = Project::load(&d.join("app")).unwrap();
     let names: Vec<&str> = p.modules.keys().map(|s| s.as_str()).collect();
-    assert_eq!(names, ["nums", "shapes", "sq", "util"]);
+    assert_eq!(names, ["*nums", "*shapes", "shapes/sq", "util"]);
     assert_eq!(Project::find(&d.join("app/src")).as_deref(), Some(d.join("app").as_path()));
     let read = p.reader();
     let src = fs::read_to_string(p.main_file()).unwrap();
@@ -63,10 +63,10 @@ fn modules_come_from_src_and_dependencies() {
     assert!(o.error.is_none(), "{:?}", o.error.map(|d| d.title));
     assert_eq!(o.output, "4 1\n");
 
-    // 同じ名前のモジュールが 2 か所・名前の違う依存先・ライブラリでない依存先はエラー
-    write(&d.join("app/src/sq.jw"), "pub fn i64 sq(i64 x) { x }\n");
-    assert!(Project::load(&d.join("app")).unwrap_err().contains("モジュール `sq` が 2 か所"));
-    fs::remove_file(d.join("app/src/sq.jw")).unwrap();
+    // 依存先の名前と同じ名前のモジュール・名前の違う依存先・ライブラリでない依存先はエラー
+    write(&d.join("app/src/nums.jw"), "pub fn i64 zero() { 0 }\n");
+    assert!(Project::load(&d.join("app")).unwrap_err().contains("依存先のパッケージ `nums` が同じ名前"));
+    fs::remove_file(d.join("app/src/nums.jw")).unwrap();
     write(&d.join("nums/alice.toml"), "[package]\nname = \"numbers\"\n");
     assert!(Project::load(&d.join("app")).unwrap_err().contains("名前が `numbers`"));
     write(&d.join("nums/alice.toml"), "[package]\nname = \"nums\"\n");
@@ -74,6 +74,58 @@ fn modules_come_from_src_and_dependencies() {
     assert!(Project::load(&d.join("app")).unwrap_err().contains("src/lib.jw がありません"));
     write(&d.join("app/alice.toml"), "[package]\nname = \"app\"\n[dependencies]\nnone = { path = \"../none\" }\n");
     assert!(Project::load(&d.join("app")).unwrap_err().contains("フォルダがありません"));
+    let _ = fs::remove_dir_all(&d);
+}
+
+fn run_app(p: &Project) -> Result<String, String> {
+    let read = p.reader();
+    let src = fs::read_to_string(p.main_file()).unwrap();
+    let o = jabberwock::run_program(&src, &read, false, true, Box::new(std::io::Cursor::new(Vec::new())), Vec::new());
+    match o.error {
+        Some(e) => Err(format!("{}: {:?}", e.title, e.note)),
+        None => Ok(o.output),
+    }
+}
+
+#[test]
+fn each_package_has_its_own_names() {
+    let d = tmp("space");
+    write(&d.join("app/alice.toml"), "[package]\nname = \"app\"\n[dependencies]\nshapes = { path = \"../shapes\" }\n");
+    // app の util と shapes の util は別のモジュール
+    write(&d.join("app/src/util.jw"), "pub fn str who() { \"app\" }\n");
+    write(&d.join("app/src/main.jw"), "use shapes;\nuse util;\nfn main() { print(util.who(), shapes.who(), shapes.area(3)); }\n");
+    write(&d.join("shapes/alice.toml"), "[package]\nname = \"shapes\"\n[dependencies]\nnums = { path = \"../nums\" }\n");
+    write(
+        &d.join("shapes/src/lib.jw"),
+        "use util;\nuse nums;\npub struct Sq { i64 n }\npub fn str who() { util.who() }\npub fn i64 area(i64 x) { let s = Sq { n: util.sq(x) }; s.n + nums.zero() }\n",
+    );
+    write(&d.join("shapes/src/util.jw"), "pub fn str who() { \"shapes\" }\npub fn i64 sq(i64 x) { x * x }\n");
+    write(&d.join("nums/alice.toml"), "[package]\nname = \"nums\"\n");
+    write(&d.join("nums/src/lib.jw"), "pub fn i64 zero() { 0 }\n");
+    let p = Project::load(&d.join("app")).unwrap();
+    assert_eq!(run_app(&p).unwrap(), "app shapes 9\n");
+
+    // 依存先の中のモジュールは外から見えない
+    write(&d.join("app/src/main.jw"), "use util;\nfn main() { print(util.sq(2)); }\n");
+    let e = run_app(&p).unwrap_err();
+    assert!(e.contains("`sq`"), "{}", e);
+
+    // 依存先の中の `use` は、自分にないモジュールを app から借りない
+    fs::remove_file(d.join("shapes/src/util.jw")).unwrap();
+    write(&d.join("app/src/util.jw"), "pub fn str who() { \"app\" }\npub fn i64 sq(i64 x) { x * x }\n");
+    write(&d.join("app/src/main.jw"), "use shapes;\nfn main() { print(shapes.who()); }\n");
+    let p = Project::load(&d.join("app")).unwrap();
+    let e = run_app(&p).unwrap_err();
+    assert!(e.contains("見つかりません"), "{}", e);
+    write(&d.join("shapes/src/util.jw"), "pub fn str who() { \"shapes\" }\npub fn i64 sq(i64 x) { x * x }\n");
+
+    // スレッドの中で読み直しても同じモジュールになる
+    write(
+        &d.join("app/src/main.jw"),
+        "use shapes;\nuse util;\nfn main() {\n    let t = spawn(() -> shapes.who() + \"/\" + util.who());\n    print(t.join(), shapes.area(2));\n}\n",
+    );
+    let p = Project::load(&d.join("app")).unwrap();
+    assert_eq!(run_app(&p).unwrap(), "shapes/app 4\n");
     let _ = fs::remove_dir_all(&d);
 }
 

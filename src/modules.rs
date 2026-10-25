@@ -5,6 +5,15 @@
 //! （`parser::merge_paths`。`pub` でない名前はそこでエラー）。なので、型検査・解析・実行は
 //! 全部をまとめた 1 つのプログラムとして扱える。
 //! `use` が輪になるのはエラー（読む順が決まらないため。Go と同じ）。
+//!
+//! パッケージ（alice）のために、モジュールを探すときの問い合わせは 3 種類（`read` に渡す名前）:
+//! - `名前`: 最初のパッケージのモジュール（パッケージでないときは同じフォルダの 名前.jw）。読んだモジュールの名前もそのまま
+//! - `*名前`: 依存先のパッケージ `名前` の src/lib.jw。モジュールの名前は `名前`（そのパッケージの中は `名前` の空間）
+//! - `空間/名前`: 依存先のパッケージ `空間` の中のモジュール。モジュールの名前は `空間/名前` で、`use 名前;` と書いたファイルの中の
+//!   `名前.x` を `空間/名前.x` に書き換える（`Qualify.aliases`）。なので別のパッケージに同じ名前のモジュールがあってよい
+//!
+//! 依存先の中の `use` は、まず自分の空間（`空間/名前`）、なければ依存先のパッケージ（`*名前`）を探す。最初のパッケージの中の `use` は
+//! `名前` → `*名前` の順。`files` の名前は問い合わせた名前のまま（スレッドが同じ問い合わせで読み直せるように）。
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,13 +32,15 @@ pub struct Loader<'a> {
     infos: HashMap<String, ModuleInfo>,
     /// 今読んでいる途中のモジュール（輪を見つけるため）
     loading: Vec<String>,
+    /// 依存先のパッケージの lib.jw として読んだモジュール（その中の `use` は自分の空間から探す）
+    libs: HashSet<String>,
     parts: Vec<Program>,
 }
 
 impl<'a> Loader<'a> {
     /// `read` はモジュール名からソースを返す（見つからなければ None）
     pub fn new(read: &'a dyn Fn(&str) -> Option<String>) -> Self {
-        Loader { read, files: Vec::new(), infos: HashMap::new(), loading: Vec::new(), parts: Vec::new() }
+        Loader { read, files: Vec::new(), infos: HashMap::new(), loading: Vec::new(), libs: HashSet::new(), parts: Vec::new() }
     }
 
     /// 最初のファイルと、そこから `use` でたどれるモジュールをすべて読み、1 つのプログラムにする
@@ -43,7 +54,20 @@ impl<'a> Loader<'a> {
             fns: Vec::new(),
             uses: Vec::new(),
             public: Vec::new(),
-            modules: self.files.iter().skip(1).map(|(n, _)| n.clone()).collect(),
+            // 変数につけられない名前: モジュールの名前と、`空間/名前` の書いた名前
+            modules: {
+                let mut ms: Vec<String> = Vec::new();
+                for (n, _) in self.files.iter().skip(1) {
+                    let n = n.trim_start_matches('*');
+                    ms.push(n.to_string());
+                    if let Some((_, short)) = n.split_once('/') {
+                        if !ms.iter().any(|m| m == short) {
+                            ms.push(short.to_string());
+                        }
+                    }
+                }
+                ms
+            },
             consts: Vec::new(),
         };
         for p in self.parts.drain(..) {
@@ -68,30 +92,60 @@ impl<'a> Loader<'a> {
             })
             .collect();
         self.loading.push(name.to_string());
+        // 依存先のパッケージの中なら、その空間
+        let space: Option<String> = match name.split_once('/') {
+            Some((sp, _)) => Some(sp.to_string()),
+            None if self.libs.contains(name) => Some(name.to_string()),
+            None => None,
+        };
+        // 書いた名前 → モジュールの名前
+        let mut keys: HashMap<String, String> = HashMap::new();
         for (u, span) in &uses {
-            if self.infos.contains_key(u) {
+            if keys.contains_key(u) {
                 continue;
             }
-            if self.loading.contains(u) {
-                return Err(Diagnostic::new(format!("モジュール `{}` の use が輪になっています", u))
-                    .primary(*span, "ここで使うと、読む順が決まらない")
-                    .note("共通の部分を別のモジュールに分けてください"));
+            // (問い合わせ, モジュールの名前)
+            let candidates: Vec<(String, String)> = match &space {
+                Some(sp) => vec![(format!("{}/{}", sp, u), format!("{}/{}", sp, u)), (format!("*{}", u), u.clone())],
+                None => vec![(u.clone(), u.clone()), (format!("*{}", u), u.clone())],
+            };
+            let mut found = None;
+            for (query, key) in candidates {
+                if self.loading.contains(&key) {
+                    return Err(Diagnostic::new(format!("モジュール `{}` の use が輪になっています", u))
+                        .primary(*span, "ここで使うと、読む順が決まらない")
+                        .note("共通の部分を別のモジュールに分けてください"));
+                }
+                // `*名前` は依存先のパッケージだけ（最初のパッケージの同じ名前のモジュールは使わない）
+                if self.infos.contains_key(&key) && (!query.starts_with('*') || self.libs.contains(&key)) {
+                    found = Some(key);
+                    break;
+                }
+                if let Some(text) = (self.read)(&query) {
+                    if query.starts_with('*') {
+                        self.libs.insert(key.clone());
+                    }
+                    self.files.push((query, text));
+                    let info = self.module(&key, self.files.len() - 1)?;
+                    self.infos.insert(key.clone(), info);
+                    found = Some(key);
+                    break;
+                }
             }
-            let Some(text) = (self.read)(u) else {
+            let Some(key) = found else {
                 return Err(Diagnostic::new(format!("モジュール `{}` が見つかりません", u))
                     .primary(*span, format!("同じフォルダに {}.jw がない", u)));
             };
-            self.files.push((u.clone(), text));
-            let info = self.module(u, self.files.len() - 1)?;
-            self.infos.insert(u.clone(), info);
+            keys.insert(u.clone(), key);
         }
         self.loading.pop();
         let deps: HashMap<String, ModuleInfo> =
-            uses.iter().map(|(u, _)| (u.clone(), self.infos[u].clone())).collect();
+            uses.iter().map(|(u, _)| (u.clone(), self.infos[&keys[u]].clone())).collect();
+        let aliases: HashMap<String, String> = keys.into_iter().filter(|(u, k)| u != k).collect();
         let mut prog = Parser::with_modules(toks, &deps)?.parse_program()?;
         let info = info_of(&prog);
         if !name.is_empty() {
-            qualify(&mut prog, name, &info);
+            qualify(&mut prog, name, &info, &aliases);
             prog.consts = prog.consts.iter().map(|c| format!("{}.{}", name, c)).collect();
         }
         self.parts.push(prog);
@@ -129,9 +183,11 @@ struct Qualify<'a> {
     /// 型として書ける名前（構造体・enum・interface）
     types: HashSet<String>,
     enums: HashSet<String>,
+    /// `use 名前;` で読んだ依存先の中のモジュールの、書いた名前 → モジュールの名前（`sq` → `mathx/sq`）
+    aliases: &'a HashMap<String, String>,
 }
 
-fn qualify(p: &mut Program, module: &str, info: &ModuleInfo) {
+fn qualify(p: &mut Program, module: &str, info: &ModuleInfo, aliases: &HashMap<String, String>) {
     let of = |k: NameKind| -> HashSet<String> {
         info.names.iter().filter(|(_, (kind, _))| *kind == k).map(|(n, _)| n.clone()).collect()
     };
@@ -146,6 +202,7 @@ fn qualify(p: &mut Program, module: &str, info: &ModuleInfo) {
             .filter(|(_, (k, _))| *k != NameKind::Fn)
             .map(|(n, _)| n.clone())
             .collect(),
+        aliases,
     };
     for s in &mut p.structs {
         s.name = q.name(&s.name);
@@ -184,6 +241,15 @@ impl<'a> Qualify<'a> {
         format!("{}.{}", self.module, n)
     }
 
+    /// ほかのモジュールの名前（`sq.f`）を、モジュールの本当の名前に（`mathx/sq.f`）
+    fn alias(&self, n: &mut String) {
+        if let Some((m, rest)) = n.split_once('.') {
+            if let Some(k) = self.aliases.get(m) {
+                *n = format!("{}.{}", k, rest);
+            }
+        }
+    }
+
     /// 関数の形（引数・戻り値の型と、型の引数の条件）
     fn sig(&self, f: &mut FnDef) {
         for p in &mut f.params {
@@ -196,6 +262,8 @@ impl<'a> Qualify<'a> {
             for b in bs {
                 if self.types.contains(b.as_str()) {
                     *b = self.name(b);
+                } else {
+                    self.alias(b);
                 }
             }
         }
@@ -207,6 +275,7 @@ impl<'a> Qualify<'a> {
             TypeKind::Name(n) | TypeKind::App(n, _) if self.types.contains(n.as_str()) && !tps.contains(n) => {
                 *n = self.name(n);
             }
+            TypeKind::Name(n) | TypeKind::App(n, _) => self.alias(n),
             _ => {}
         }
         match &mut t.kind {
@@ -280,6 +349,8 @@ impl<'a> Qualify<'a> {
             ExprKind::Var(n) => {
                 if self.fns.contains(n.as_str()) {
                     *n = self.name(n);
+                } else {
+                    self.alias(n);
                 }
             }
             ExprKind::Call(n, args) => {
@@ -287,18 +358,24 @@ impl<'a> Qualify<'a> {
                     matches!(n.split_once('.'), Some((s, _)) if self.structs.contains(s) || self.enums.contains(s));
                 if self.fns.contains(n.as_str()) || static_call {
                     *n = self.name(n);
+                } else {
+                    self.alias(n);
                 }
                 args.iter_mut().for_each(|a| self.expr(a, tps));
             }
             ExprKind::StructLit(n, inits) => {
                 if self.structs.contains(n.as_str()) {
                     *n = self.name(n);
+                } else {
+                    self.alias(n);
                 }
                 inits.iter_mut().for_each(|i| self.expr(&mut i.value, tps));
             }
             ExprKind::Variant { enum_name, args, .. } => {
                 if self.enums.contains(enum_name.as_str()) {
                     *enum_name = self.name(enum_name);
+                } else {
+                    self.alias(enum_name);
                 }
                 args.iter_mut().for_each(|a| self.expr(a, tps));
             }

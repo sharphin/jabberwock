@@ -8,8 +8,9 @@
 //! tests/*.jw          `alice test` で 1 本ずつ動かす。tests/名前.out があれば出力と比べる
 //! target/             build の出力（debug / release）
 //! ```
-//! 依存先は手元のフォルダだけ（`foo = { path = "../foo" }`）。依存先の src/lib.jw がモジュール `foo` になり、
-//! 依存先の src のほかのモジュールも同じ名前の空間で探す（同じ名前が 2 か所にあればエラー）。
+//! 依存先は手元のフォルダだけ（`foo = { path = "../foo" }`）。依存先の src/lib.jw がモジュール `foo` になる。
+//! 名前の空間はパッケージごと: `modules` のキーは modules.rs の問い合わせの形で、自分の src は `名前`、
+//! 依存先 foo の lib.jw は `*foo`、foo の src のほかのファイルは `foo/名前`（foo の中からだけ見える）。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -24,7 +25,7 @@ pub struct Project {
     pub name: String,
     /// 依存先の (名前, フォルダ)。書いた順
     pub deps: Vec<(String, PathBuf)>,
-    /// モジュール名 → ファイル（自分の src と依存先）
+    /// 問い合わせ（`名前` / `*依存先` / `依存先/名前`）→ ファイル
     pub modules: BTreeMap<String, PathBuf>,
 }
 
@@ -149,7 +150,7 @@ impl Project {
         let m = read_manifest(root)?;
         let mut p = Project { root: root.to_path_buf(), name: m.name.clone(), deps: Vec::new(), modules: BTreeMap::new() };
         // 自分の src（main と lib は入口なので除く。lib はパッケージの名前で使う）
-        p.add_dir(&root.join("src"), &m.name)?;
+        p.add_dir(&root.join("src"), "", &m.name)?;
         if root.join("src").join("lib.jw").is_file() {
             p.add(&m.name, root.join("src").join("lib.jw"), &m.name)?;
         }
@@ -173,8 +174,14 @@ impl Project {
             if !lib.is_file() {
                 return Err(format!("依存先 `{}` に src/lib.jw がありません（ライブラリではありません）", name));
             }
-            p.add(&name, lib, &name)?;
-            p.add_dir(&dir.join("src"), &name)?;
+            if name == m.name {
+                return Err(format!("依存先 `{}` が、このパッケージと同じ名前です", name));
+            }
+            if p.modules.contains_key(&name) {
+                return Err(format!("モジュール `{}` と依存先のパッケージ `{}` が同じ名前です（`use {};` がどちらか決まらない）", name, name, name));
+            }
+            p.add(&format!("*{}", name), lib, &name)?;
+            p.add_dir(&dir.join("src"), &format!("{}/", name), &name)?;
             seen.push((name.clone(), dir.clone()));
             p.deps.push((name.clone(), dir.clone()));
             for (n, d) in dm.deps.iter().rev() {
@@ -184,7 +191,8 @@ impl Project {
         Ok(p)
     }
 
-    fn add_dir(&mut self, src: &Path, pkg: &str) -> Result<(), String> {
+    /// src の *.jw を、`前置き + ファイル名` の問い合わせで読めるようにする
+    fn add_dir(&mut self, src: &Path, prefix: &str, pkg: &str) -> Result<(), String> {
         let Ok(rd) = fs::read_dir(src) else { return Ok(()) };
         let mut files: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
         files.sort();
@@ -196,7 +204,7 @@ impl Project {
             if stem == "main" || stem == "lib" || !is_name(&stem) {
                 continue;
             }
-            self.add(&stem, f, pkg)?;
+            self.add(&format!("{}{}", prefix, stem), f, pkg)?;
         }
         Ok(())
     }
