@@ -417,3 +417,71 @@ fn the_detector_sees_crashes() {
     assert!(sh("echo 'error: 型が合いません' >&2; exit 1").is_none());
     assert!(sh("sleep 10").is_none());
 }
+
+/// 書き出した LLVM の中の、LLVM では未定義になりうる命令（0 や -1 での割り算・幅以上のずらし）の前に、
+/// 守りの計算があるかを見る。UBSan は C から作るときに足す検査なので、書き出した LLVM には効かない。その代わり。
+/// 守りの形は llvm.rs の `binary` / `shift` が書くもの（割る数は 0 と比べてから、符号つきは -1 を 1 に置き換える `select`、
+/// ずらす数は幅 - 1 で頭打ちにする `select`）。新しく危ない命令を書き出したら、ここにも形を足す
+const DANGER: [&str; 7] = ["sdiv", "srem", "udiv", "urem", "shl", "lshr", "ashr"];
+
+#[test]
+fn generated_code_guards_undefined_operations() {
+    let mut seen: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut bad = Vec::new();
+    let mut extra: Vec<String> = Vec::new();
+    // 型ごとに、変数と定数で割る・ずらす
+    for t in ["i8", "i16", "i32", "i64", "u8", "u32", "u64"] {
+        extra.push(format!(
+            "fn f({t} a, {t} b) {{ print(a / b, a % b, a << b, a >> b, a / 3, a % 7, a << 3, a >> 2); }}\nfn main() {{ f(100, 3); }}"
+        ));
+    }
+    for (n, src) in seeds().iter().chain(extra.iter()).enumerate() {
+        let Ok(ll) = jabberwock::llvm_build(src, &jabberwock::no_modules, "main.jw", false) else { continue };
+        for f in ll.split("\ndefine ").skip(1) {
+            let lines: Vec<&str> = f.lines().map(|l| l.trim()).collect();
+            let def = |v: &str| lines.iter().find_map(|l| l.strip_prefix(&format!("{} = ", v)));
+            for (i, l) in lines.iter().enumerate() {
+                let Some((_, rhs)) = l.split_once(" = ") else { continue };
+                let mut w = rhs.split_whitespace();
+                let word = w.next().unwrap_or("");
+                let Some(&op) = DANGER.iter().find(|&&d| d == word) else { continue };
+                let (Some(ty), Some(_), Some(y)) = (w.next(), w.next(), w.next()) else { continue };
+                let bits: i128 = ty[1..].parse().unwrap_or(0);
+                *seen.entry(op).or_default() += 1;
+                let before = &lines[..i];
+                let has = |s: &str| before.iter().any(|b| b.ends_with(s));
+                let ok = match op {
+                    "udiv" | "urem" => y.parse::<i128>().map(|c| c != 0).unwrap_or(false) || has(&format!("icmp eq {} {}, 0", ty, y)),
+                    "sdiv" | "srem" => {
+                        // %s = select i1 %m, T 1, T %y0  かつ  %m = icmp eq T %y0, -1  かつ  %y0 を 0 と比べてある
+                        let s = def(y).unwrap_or("");
+                        let p: Vec<&str> = s.split([' ', ',']).filter(|p| !p.is_empty()).collect();
+                        p.len() == 7 && p[0] == "select" && p[4] == "1" && {
+                            let y0 = p[6];
+                            def(p[2]) == Some(&format!("icmp eq {} {}, -1", ty, y0))
+                                && (y0.parse::<i128>().map(|c| c != 0).unwrap_or(false) || has(&format!("icmp eq {} {}, 0", ty, y0)))
+                        }
+                    }
+                    _ => {
+                        // 定数なら幅より小さい。変数なら（trunc を通した）幅 - 1 で頭打ちにする select
+                        let small = |c: &str| c.parse::<i128>().map(|c| (0..bits).contains(&c)).unwrap_or(false);
+                        let mut s = def(y).unwrap_or("");
+                        if let Some(r) = s.strip_prefix("trunc i64 ") {
+                            s = def(r.split_whitespace().next().unwrap_or("")).unwrap_or("");
+                        }
+                        let p: Vec<&str> = s.split([' ', ',']).filter(|p| !p.is_empty()).collect();
+                        small(y) || (p.len() == 7 && p[0] == "select" && p[4] == (bits - 1).to_string())
+                    }
+                };
+                if !ok {
+                    bad.push(format!("種 {}: 守りのない {}: {}", n, op, l));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+    // 調べる命令が本当に出ていること（形が変わって何も見なくなっていないか）
+    for op in DANGER {
+        assert!(seen.get(op).copied().unwrap_or(0) > 0, "{} を 1 つも見ていません: {:?}", op, seen);
+    }
+}

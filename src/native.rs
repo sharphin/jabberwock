@@ -28,12 +28,19 @@ fn extra_flags() -> Vec<String> {
     std::env::var("JW_CFLAGS").map(|v| v.split_whitespace().map(|s| s.to_string()).collect()).unwrap_or_default()
 }
 
-/// `JW_CFLAGS` に AddressSanitizer があれば、書き出した関数にも印をつけて検査させる（`.ll` の関数は印がないと検査されない）
+/// `JW_CFLAGS` に sanitizer（address / thread / memory）があれば、書き出した関数にも印をつけて検査させる
+/// （`.ll` の関数は印がないと検査されない。C の実行時ライブラリは clang がそのまま検査する）
 fn instrument(ll: &str) -> std::borrow::Cow<'_, str> {
-    if extra_flags().iter().any(|f| f.starts_with("-fsanitize=") && f.contains("address")) {
-        std::borrow::Cow::Owned(ll.replace(") {\nentry:", ") sanitize_address {\nentry:"))
-    } else {
+    let flags = extra_flags();
+    let attrs: Vec<&str> = [("address", "sanitize_address"), ("thread", "sanitize_thread"), ("memory", "sanitize_memory")]
+        .iter()
+        .filter(|(k, _)| flags.iter().any(|f| f.starts_with("-fsanitize=") && f[11..].split(',').any(|x| x == *k)))
+        .map(|(_, a)| *a)
+        .collect();
+    if attrs.is_empty() {
         std::borrow::Cow::Borrowed(ll)
+    } else {
+        std::borrow::Cow::Owned(ll.replace(") {\nentry:", &format!(") {} {{\nentry:", attrs.join(" "))))
     }
 }
 

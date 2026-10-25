@@ -21,6 +21,8 @@ jabberwock の安全は「設計」と「実装」の 2 段で考える。
 | `tests/robust.rs` の `mutated_programs_do_not_crash` | 例とテストのプログラムを壊したもの（ふつう 150 本、`JW_ROBUST=本数`）で落ちない |
 | `tests/robust.rs` の `memory_attacks_stop_with_an_error` | メモリ破壊・情報漏洩を狙うプログラム 16 本が、interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さない |
 | `JW_ROBUST_ASAN=1` | 上の実行ファイルを ASan（メモリの壊れ）と UBSan（C の未定義の動き）つきで作る。例のプログラムもすべて流す |
+| `tests/robust.rs` の `generated_code_guards_undefined_operations` | 書き出した LLVM の割り算・ずらしの前に、0 / -1 / 幅以上を避ける守りがあるか（UBSan の代わり。llvm.rs の守りの形を見る） |
+| `JW_CFLAGS=-fsanitize=...` | `JW_NATIVE=1` や fuzz.rs の実行ファイルを sanitizer つきで作る。address / thread / memory は書き出した関数にも印を付ける（native.rs の `instrument`） |
 
 「落ちる」は、panic・スタックあふれ・内部エラー・シグナルでの終了。時間切れ（3 秒）は合格にしている。
 
@@ -34,7 +36,23 @@ jabberwock の安全は「設計」と「実装」の 2 段で考える。
 
 ASan/UBSan をつけた実行では、メモリの壊れと未定義の動きは見つかっていない。
 
+## 自動で流す仕組み（.github/workflows/safety.yml）
+
+push と PR では短く、毎晩（日本時間 3:00）は 20 倍の本数で流す。手で動かすときは `scale` で倍率を決める。種は実行の番号で毎回変える。
+落ちたら、入力を `dump-*` として残す。
+
+| 仕事 | 中身 | 下の項目 |
+|---|---|---|
+| robust | 堅牢性テスト全部を ASan/UBSan つきで。push と毎晩は、壊したプログラムも実行ファイルで動かす | 2・4・8 |
+| fuzz-asan | fuzz.rs を ASan/UBSan つきで、-O1 と -O2・LTO。push と毎晩は全テストを ASan/UBSan の実行ファイルで突き合わせる | 1・5 |
+| tsan | スレッドと実行ファイルのテストを TSan つきで（倍率の回数くり返す） | 3 |
+| msan | 全テストを MSan つきの実行ファイルで突き合わせる | 6 |
+| jwc | jwc を作り、fuzz.rs で jwc の実行ファイルとも比べる | 7 |
+
 ## まだ確かめていないこと
+
+下の 1〜7 は、上の仕組みで流し始めた（2026-10-25）。流していても、部品（作るプログラムの種類）が足りなければ見つからないので、
+「流している」と「確かめ終わった」は別。部品を足したら、ここに書く。
 
 大事な順。
 
@@ -46,10 +64,10 @@ ASan/UBSan をつけた実行では、メモリの壊れと未定義の動きは
 3. **スレッドのデータ競合**。送れる型は型検査で決めているが、実行時ライブラリ（jw_rt.c）の錠の使い方は TSan で調べていない。
    やること: スレッドのテストを `-fsanitize=thread` で作って流す。
 4. **作り出した LLVM の未定義の動き**。UBSan は C から作るときに足す検査なので、jabberwock が書き出した LLVM には効かない
-   （ASan は `sanitize_address` を付けて効かせている）。ずらす数・割り算などは手で書いた検査で守っているが、機械では確かめていない。
-   やること: 書き出しの中の危ない命令（shl / lshr / ashr / sdiv / srem / getelementptr inbounds など）の前に検査があるかを見るテスト。
-5. **最適化をかけた実行ファイル**。robust.rs は `-O1` だけ。`-O2` と LTO は、未定義の動きを前提に検査を消すことがある。
-   やること: `JW_NATIVE=o2` でも攻撃プログラムを流す。
+   （ASan・TSan・MSan は関数に印を付けて効かせている）。割り算とずらしは `generated_code_guards_undefined_operations` が守りの形を見る。
+   ほかの命令（読み書きの場所の計算など）はまだ見ていない。
+5. **最適化をかけた実行ファイル**。`-O2` と LTO は、未定義の動きを前提に検査を消すことがある。robust.rs の実行ファイルは
+   `jabberwock build` と同じ -O2 と LTO で作る。fuzz.rs と `JW_NATIVE=1` はふだん -O1 で、`JW_NATIVE=o2` で -O2 と LTO。
 6. **初期化していないメモリを読まないか（情報漏洩）**。使い回した区画に前の値が残っていても、言語からは読めない作りだが、
    実行時ライブラリの間違いで読めてしまわないかは MSan で調べていない。攻撃プログラムでは「隠した値が出ない」ことだけ見ている。
 7. **jwc（自己ホスト版）が作る実行ファイル**。Rust 版と同じ LLVM を出すことは突き合わせているが、robust.rs は jwc を流していない。
@@ -65,11 +83,12 @@ ASan/UBSan をつけた実行では、メモリの壊れと未定義の動きは
 ## 動かし方
 
 ```
-cargo test --test robust                      # ふだん（15 秒ほど）
+cargo test --test robust                      # ふだん（20 秒ほど）
 JW_ROBUST=20000 cargo test --test robust      # 変異を増やす（JW_ROBUST_SEED で始めの種）
 JW_ROBUST_NATIVE=1 cargo test --test robust   # 変異も実行ファイルで動かす
 JW_ROBUST_ASAN=1 cargo test --test robust     # ASan / UBSan つき（clang の実行時ライブラリが要る）
 JW_ROBUST_DUMP=フォルダ                        # 落ちた入力をファイルに残す
+JW_NATIVE=1 JW_CFLAGS="-fsanitize=thread" cargo test --test threads   # TSan（MSan は -fsanitize=memory）
 ```
 
 落ち方を見つけて直したら、`tests/robust.rs` の `hostile` に入力を足し、上の「見つけて直したもの」に書く。

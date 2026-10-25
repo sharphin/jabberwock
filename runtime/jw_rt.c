@@ -116,6 +116,14 @@ void jw_flush(void) {
     if (g_threaded) unlock(&out_lock);
 }
 
+// エラーと exit で終わる: 片づけずに終わる（atexit の処理も動かさない。ほかのスレッドがまだ動いていても
+// 後始末と競合しない。LeakSanitizer も、片づけない終わり方を漏れと見なさない）
+static _Noreturn void quit(int code) {
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(code);
+}
+
 static void out_write(const char *p, size_t n) {
     if (out_len + n > out_cap) {
         size_t cap = out_cap ? out_cap * 2 : 1 << 16;
@@ -242,7 +250,7 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
         // --release: 使った位置だけ
         fprintf(stderr, " --> %s:%d:%d\n", at->file, at->line, at->col);
         fprintf(stderr, "  = %s\n", label ? label : "");
-        exit(1);
+        quit(1);
     }
     int order[MAXL], main_file = at->fileno;
     for (int i = 0; i < nlabels; i++) order[i] = i;
@@ -302,7 +310,7 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
         spaces(width);
         fprintf(stderr, " = note: %s\n", note);
     }
-    exit(1);
+    quit(1);
 }
 
 _Noreturn void jw_fail(const char *title, const WSite *at, const char *label, const char *note) {
@@ -314,7 +322,7 @@ _Noreturn void jw_fail(const char *title, const WSite *at, const char *label, co
 _Noreturn void jw_bug(const char *what) {
     jw_flush();
     fprintf(stderr, "内部エラー: %s\n", what);
-    exit(2);
+    quit(2);
 }
 
 static int same_site(const WSite *a, const WSite *b) {
@@ -591,7 +599,8 @@ void *jw_view_target(void *v, const WSite *use) {
     return c->target;
 }
 
-void *jw_view_target_nocheck(void *v) { return CELL(v)->target; }
+// 写しでなければ v のまま（書き出しは写しかどうかを見る前に呼んで select で選ぶことがある。own の中身を読まないように）
+void *jw_view_target_nocheck(void *v) { return IS_VIEW(v) ? CELL(v)->target : v; }
 uint64_t jw_view_gen(void *v) { return CELL(v)->gen; }
 const WSite *jw_view_site(void *v) { return CELL(v)->site; }
 
@@ -2339,7 +2348,7 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
 
 void jw_exit(int64_t code) {
     jw_flush();
-    exit((int)code);
+    quit((int)code);
 }
 
 // ---------------------------------------------------------------- 入口

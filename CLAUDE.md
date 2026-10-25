@@ -30,7 +30,7 @@
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
 | `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
 | `src/ir/llvm.rs` | IR → LLVM のテキスト（`jabberwock --ll`）。書き出せない書き方は `Err(理由)` |
-| `src/native.rs` | clang を呼んで実行ファイルを作る（`jabberwock build`。実行時ライブラリはコンパイラの中に入れてある）。環境変数 `JW_CFLAGS` を clang に足す（`-fsanitize=address` なら関数に `sanitize_address` も付ける） |
+| `src/native.rs` | clang を呼んで実行ファイルを作る（`jabberwock build`。実行時ライブラリはコンパイラの中に入れてある）。環境変数 `JW_CFLAGS` を clang に足す（`-fsanitize=` の address / thread / memory なら、書き出した関数にも `sanitize_*` を付ける。`instrument`） |
 | `runtime/jw_rt.c` | 実行時ライブラリ（区画と世代・文字列・リスト・辞書・出力・エラー） |
 | `src/ir/analyze.rs` | IR の上で ref の世代チェックを消す解析（`Proj::Deref` の `Check` を書く） |
 | `tests/examples.rs` | 言語の基本動作 |
@@ -65,7 +65,7 @@
 | `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/fuzz.rs` | 差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
-| `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す**。確かめた範囲と残りは docs/safety-testing.md |
+| `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す**。`generated_code_guards_undefined_operations` は書き出した割り算・ずらしの守りの形を見る（llvm.rs の守りを変えたら直す）。確かめた範囲と残りは docs/safety-testing.md、CI は `.github/workflows/safety.yml`（毎晩は 20 倍） |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件
