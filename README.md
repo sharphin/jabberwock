@@ -45,7 +45,8 @@ fn main() {
 - 変数は普段は書き換え不可。書き換えるものだけ `let mut`（引数は `fn f(i64 mut a)`）。
 - `ref` は読むだけ、`ref mut` は書き換えてよい借用。`ref mut` で借りられるのは mut の持ち主だけ。
 - `x += 1` などの複合代入と、文としての `i++` / `i--` がある（`print(i++)` のように式の中では使えない）。
-- 組み込み関数は `print` `drop` `assert` `read_line` `args` `spawn` `chan`。全部の決まりは [docs/spec.md](docs/spec.md)。
+- 組み込み関数は `print` `eprint` `drop` `assert` `read_line` `args` `spawn` `chan` `exit` `read_file` `write_file` `run_command` `chr`。全部の決まりは [docs/spec.md](docs/spec.md)。
+- 数のメソッドは `x.sqrt()`・`x.abs()`・`x.max(y)`・`x.min(y)`（整数は `abs` / `max` / `min`）。
 
 ## ループと if 式
 
@@ -183,6 +184,37 @@ let Pair<str> q = Pair { a: "x", b: "y" };
 
 - 型の引数は、引数・フィールド・入れる先の型から決まる。`T` を比べたりメソッドを呼んだりするには条件（`<T: ordered>`・`<T: Shape>`）をつける。
 
+## リスト・辞書・クロージャ・文字列の埋め込み
+
+```
+let i64[] mut xs = [3, 1, 2];
+xs.push(5);
+xs.sort();
+let i64[str] mut ages = ["mio": 7];       // 辞書は「値の型[キーの型]」
+ages["ken"] = 9;
+for (name, age) in ages { print("{name} は {age} 歳"); }   // 入れた順に回る
+let k = 10;
+print(xs.filter((x) -> x > 2).map((x) -> x * k));        // [30, 50]
+```
+
+- リストの要素を借りた ref は、push・pop・sort など要素が動く操作のあとで使うとエラーになる（時系列つき）。
+- 文字列には `split`・`trim`・`lines`・`find`・`replace` などのメソッドがある。
+
+## スレッド
+
+```
+let chan<i64> c = chan();
+let t = spawn(() -> { c.send(42); "done" });
+print(c.recv(), t.join());                // Some(42) done
+```
+
+- スレッドへ送れるのは、ほかのスレッドと共有されない値だけ（型検査が調べる）。own を送ると送った側では使えなくなる。
+- みんなが待ちに入ったら、デッドロックとしてエラーになる。
+
+## モジュール
+
+`use geom;` で同じフォルダの `geom.jw` を読み、`pub` をつけた名前を `geom.area(p)` のように使う。
+
 ## エラーは時系列で出る
 
 ```
@@ -201,7 +233,7 @@ error: 無効になった参照を使いました (dangling reference)
 
 ## 静的解析で検査を消す
 
-実行前に `src/analyze.rs` がプログラムを読み、「借りた先は必ず生きている」と証明できた `*r` の
+実行前にプログラムを読み（インタプリタは `src/analyze.rs`、実行ファイルは IR の上の `src/ir/analyze.rs`）、「借りた先は必ず生きている」と証明できた `*r` の
 世代チェックを消す。証明できない箇所だけ実行時の検査が残る。
 
 - `let r = ref a;` のあと、`a` が再代入・ムーブ・`drop`・スコープ終了されていない間の `*r` は安全。
@@ -224,9 +256,27 @@ count = 3
 - 解析は保守的。分からないところは検査を残す（安全側）。
 - 整数のあふれはその型の幅で一周する（定数どうしの計算なら警告が出る）。
 - 小数は `f64` だけ（`f32` はまだ）。未実装のものは [docs/spec.md の 11 章](docs/spec.md#11-未実装決定済みのもの)。
-- 速さはまだ詰めていない（次の段階）。
+
+## 速さ
+
+`jabberwock build` の実行ファイルを Go・C++（clang++ -O2）と比べたものは [bench/README.md](bench/README.md)。
+2026-10-25 の 12 本では、9 本で Go より速い（spectralnorm は同じくらい）。C++ とは 8 本で同じくらい（差が 5% 以内）かそれより速い。
+Go に負けているのは bst（確保と解放）と chan（スレッドの待ち合わせ）。
+
+## セルフホスト
+
+`jwc/` は jabberwock で書いた jabberwock のコンパイラ。Rust 版と同じ IR と LLVM のテキストを一字一句同じに出し、jwc 自身もコンパイルできる。
+
+```
+cargo run --release -- build -o jwc1 jwc/main.jw   # Rust 版で 1 代目の jwc を作る
+./jwc1 build -o jwc2 jwc/main.jw                    # 1 代目で 2 代目を作る（数分かかる。ほとんどは clang）
+./jwc2 build examples/fib.jw
+```
+
+くわしくは [docs/self-hosting.md](docs/self-hosting.md)。
 
 ## 次の一手
 
-1. 速さ: Go より速く、できるだけ C++ に近づける
-2. セルフホスト
+1. 実行時に見つけているエラーの一部を、型検査で実行前に見つけるようにする
+2. ベンチマークの残りの項目（[bench/README.md](bench/README.md) の「まだやっていないこと」）
+3. パッケージの管理とライブラリ
