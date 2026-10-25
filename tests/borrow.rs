@@ -35,6 +35,21 @@ struct Line { Point a; Point b; }
 ";
 
 #[test]
+fn mutable_refs_can_alias_and_coexist_with_a_readonly_ref() {
+    let src = "
+fn main() {
+    let mut n = 1;
+    let r = ref n;
+    let a = ref mut n;
+    let b = ref mut n;
+    *a += 2;
+    *b += *r;
+    print(n, *r, *a, *b);
+}";
+    assert_eq!(ok(src), "6 6 6 6\n");
+}
+
+#[test]
 fn borrow_plain_variables_and_fields() {
     let src = format!("{SHAPES}
 fn shift(ref mut Point p, i64 d) {{
