@@ -278,10 +278,58 @@ pub fn create(dir: &Path, lib: bool) -> Result<(), String> {
     w(dir.join(".gitignore"), "/target\n")?;
     if lib {
         w(dir.join("src").join("lib.jw"), "pub fn i64 add(i64 a, i64 b) {\n    a + b\n}\n")?;
-        w(dir.join("tests").join("add.jw"), &format!("use {};\n\nfn main() {{\n    print({}.add(2, 3));\n}}\n", name, name))?;
-        w(dir.join("tests").join("add.out"), "5\n")?;
+        w(
+            dir.join("tests").join("add.jw"),
+            &format!("use {};\n\nfn test_add() {{\n    assert({}.add(2, 3) == 5);\n}}\n\nfn test_zero() {{\n    assert({}.add(0, 0) == 0);\n}}\n", name, name, name),
+        )?;
     } else {
         w(dir.join("src").join("main.jw"), "fn main() {\n    print(\"Hello, world!\");\n}\n")?;
     }
     Ok(())
+}
+
+/// テストのファイルの中身: `main` があるか、トップレベルの `fn test_名前()` の名前（書いた順）。
+/// 引数か戻り値のある `test_` の関数は `Err`（テストの関数は `fn test_名前()` の形だけ）
+pub struct TestFile {
+    pub has_main: bool,
+    pub fns: Vec<String>,
+}
+
+pub fn test_file(src: &str) -> Result<TestFile, String> {
+    use crate::lexer::{lex, Tok};
+    let toks = lex(src).map_err(|d| d.title)?;
+    let mut t = TestFile { has_main: false, fns: Vec::new() };
+    let mut depth = 0usize;
+    for (i, k) in toks.iter().enumerate() {
+        match &k.tok {
+            Tok::LBrace => depth += 1,
+            Tok::RBrace => depth = depth.saturating_sub(1),
+            Tok::Fn if depth == 0 => {
+                // fn 名前( か fn 型 名前(
+                let name_at = |j: usize| match toks.get(j).map(|x| &x.tok) {
+                    Some(Tok::Ident(n)) => Some(n.clone()),
+                    _ => None,
+                };
+                let first = name_at(i + 1);
+                let second = name_at(i + 2);
+                let line = k.span.line;
+                match (first, matches!(toks.get(i + 2).map(|x| &x.tok), Some(Tok::LParen))) {
+                    (Some(n), true) if n == "main" => t.has_main = true,
+                    (Some(n), true) if n.starts_with("test_") => {
+                        if !matches!(toks.get(i + 3).map(|x| &x.tok), Some(Tok::RParen)) {
+                            return Err(format!("{} 行目: テストの関数 `{}` は引数なしにしてください（`fn {}()`）", line, n, n));
+                        }
+                        t.fns.push(n);
+                    }
+                    _ => {
+                        if let Some(n) = second.filter(|n| n.starts_with("test_")) {
+                            return Err(format!("{} 行目: テストの関数 `{}` は戻り値なしにしてください（`fn {}()`）", line, n, n));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }

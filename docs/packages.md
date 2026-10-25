@@ -6,7 +6,7 @@
 
 ```
 alice new app          # 実行ファイルのパッケージ（src/main.jw）
-alice new mathx --lib  # ライブラリ（src/lib.jw と tests/add.jw）
+alice new mathx --lib  # ライブラリ（src/lib.jw と、関数ごとのテスト tests/add.jw）
 ```
 
 ```
@@ -49,14 +49,42 @@ mathx = { path = "../mathx" }   # 手元のフォルダ（alice.toml からの�
 | `alice build [--release]` | src/main.jw から target/debug/名前（`--release` は target/release）を作る。実行ファイルがソース・依存先・alice.toml より新しければ作り直さない |
 | `alice run [-- 引数...]` | src/main.jw をインタプリタで動かす（clang がいらない） |
 | `alice run --native [-- 引数...]` | build してから実行ファイルを動かす（`--release` も使える） |
-| `alice test` | tests/*.jw を名前の順にインタプリタで動かす。エラーか 0 でない `exit` で失敗。tests/名前.out があれば、出力が同じでなければ失敗 |
+| `alice test [名前の一部]` | tests/*.jw を名前の順にインタプリタで動かす（下の「テスト」）。名前の一部を書くと、その文字を含むテストだけ |
 
 どれも、今のフォルダから上へたどって alice.toml を探す。パッケージを使わないときは今までどおり `jabberwock ファイル.jw` / `jabberwock build ファイル.jw`。
 エラーの位置は、パッケージの中のファイルならパッケージからの道筋で出す（`src/util.jw:3:5`）。
+
+## テスト
+
+tests/*.jw には 2 つの書き方がある。
+
+```
+// tests/add.jw: main のないファイル。fn test_名前() を 1 本ずつ別に動かす
+use mathx;
+
+fn test_add() {
+    assert(mathx.add(2, 3) == 5);
+}
+
+fn test_zero() {
+    assert(mathx.add(0, 0) == 0);
+}
+```
+
+```
+// tests/hello.jw: main のあるファイルは 1 本のテスト。tests/hello.out があれば、出力が同じでなければ失敗
+fn main() {
+    print("hi");
+}
+```
+
+- 失敗するのは、エラー（`assert` の失敗・ダングリングなどの実行時エラー・型のエラー）と、0 でない `exit`。
+- テストの関数はトップレベルの `fn test_名前()`（引数も戻り値もなし）。ほかの関数は手伝いとして使える。
+- 1 本ずつ別に動かすので、あるテストの失敗やリークはほかのテストに響かない。表示は `tests/add.jw::test_add`。
+- main と `fn test_...()` は同じファイルに書けない。
 
 ## まだやっていないこと
 
 - git やネット上の置き場からの取得、版の指定と依存の解決、lockfile
 - パッケージごとの名前の空間（今はすべてのモジュールが 1 つの空間）
-- `alice test` のテストを関数ごとに書く形（今は 1 ファイル 1 本）
 - jwc（自己ホスト版）のパッケージ

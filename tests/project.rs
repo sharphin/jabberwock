@@ -92,7 +92,7 @@ fn new_run_and_test_commands() {
     // ライブラリの tests は最初から通る
     let (c, out, _) = jw(&d.join("mathx"), &["test"]);
     assert_eq!(c, 0, "{}", out);
-    assert!(out.contains("test tests/add.jw ... ok") && out.contains("1 本成功・0 本失敗"), "{}", out);
+    assert!(out.contains("test tests/add.jw::test_add ... ok") && out.contains("2 本成功・0 本失敗"), "{}", out);
 
     // 依存先を足して、引数も渡す
     write(&app.join("alice.toml"), "[package]\nname = \"app\"\n\n[dependencies]\nmathx = { path = \"../mathx\" }\n");
@@ -119,6 +119,37 @@ fn new_run_and_test_commands() {
     assert!(out.contains("test tests/wrong.jw ... 失敗") && out.contains("出力が違います"), "{}", out);
     assert!(out.contains("test tests/boom.jw ... 失敗") && out.contains("tests/boom.jw:1:"), "{}", out);
     assert!(out.contains("1 本成功・2 本失敗"), "{}", out);
+
+    // 関数ごとのテスト（main のないファイル）。1 本ずつ別に動かし、名前の一部で選べる
+    for f in ["good", "wrong", "boom"] {
+        fs::remove_file(app.join(format!("tests/{}.jw", f))).unwrap();
+    }
+    write(
+        &app.join("tests/fns.jw"),
+        "use mathx;\n\nfn i64 two() { 2 }\n\nfn test_ok() {\n    assert(mathx.add(1, 1) == two());\n}\n\nfn test_ng() {\n    assert(mathx.add(1, 1) == 3);\n}\n\nfn test_exit() {\n    exit(3);\n}\n",
+    );
+    let (c, out, _) = jw(&app, &["test"]);
+    assert_eq!(c, 1);
+    assert!(out.contains("test tests/fns.jw::test_ok ... ok"), "{}", out);
+    assert!(out.contains("test tests/fns.jw::test_ng ... 失敗") && out.contains("assert に失敗しました") && out.contains("tests/fns.jw:10:"), "{}", out);
+    assert!(out.contains("test tests/fns.jw::test_exit ... 失敗") && out.contains("exit(3)"), "{}", out);
+    assert!(out.contains("1 本成功・2 本失敗"), "{}", out);
+    let (c, out, _) = jw(&app, &["test", "test_ok"]);
+    assert_eq!(c, 0, "{}", out);
+    assert!(out.contains("1 本成功・0 本失敗"), "{}", out);
+    assert_eq!(jw(&app, &["test", "nothing"]).0, 1);
+    // 形の違うテストの関数・main と混ぜる・何もない
+    for (src, want) in [
+        ("fn test_a(i64 x) {}\n", "引数なし"),
+        ("fn i64 test_a() { 1 }\n", "戻り値なし"),
+        ("fn main() {}\nfn test_a() {}\n", "main のあるファイル"),
+        ("fn helper() {}\n", "ありません"),
+    ] {
+        write(&app.join("tests/fns.jw"), src);
+        let (c, out, _) = jw(&app, &["test"]);
+        assert_eq!(c, 1, "{}", src);
+        assert!(out.contains(want), "{}: {}", src, out);
+    }
 
     // パッケージの外
     let (c, _, err) = jw(&std::env::temp_dir(), &["test"]);

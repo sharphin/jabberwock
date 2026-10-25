@@ -5,7 +5,7 @@ const USAGE: &str = "使い方: alice <コマンド>
   new <名前> [--lib]              新しいパッケージを作る（--lib はライブラリ）
   build [--release]               target/debug（release）に実行ファイルを作る（clang が要る）
   run [--native] [-- 引数...]      src/main.jw を動かす（--native は実行ファイルを作って動かす）
-  test                            tests/*.jw を 1 本ずつ動かす（tests/名前.out があれば出力と比べる）";
+  test [名前の一部]                tests/*.jw を動かす（main のないファイルは fn test_名前() を 1 本ずつ。tests/名前.out があれば出力と比べる）";
 
 fn main() {
     let rest: Vec<String> = env::args().skip(2).collect();
@@ -210,12 +210,18 @@ fn project_run(args: Vec<String>) {
     }
 }
 
-/// `alice test`: tests/*.jw を 1 本ずつ interp で動かす。エラーか 0 でない exit で失敗、tests/名前.out があれば出力も比べる
+/// テスト 1 本: (表示の名前, 動かすソースか、動かせない理由, 期待する出力とそのファイルの名前)
+type Case = (String, Result<String, String>, Option<(String, String)>);
+
+/// `alice test [名前の一部]`: tests/*.jw を interp で動かす。
+/// main のあるファイルは 1 本のテスト（tests/名前.out があれば出力も比べる）。main のないファイルは、`fn test_名前()` を 1 本ずつ別に動かす。
+/// エラー（assert の失敗も）か 0 でない exit で失敗
 fn project_test(args: Vec<String>) {
-    if !args.is_empty() {
-        eprintln!("使い方: alice test");
+    if args.len() > 1 || args.iter().any(|a| a.starts_with('-')) {
+        eprintln!("使い方: alice test [名前の一部]");
         process::exit(2);
     }
+    let filter = args.first().cloned();
     let p = current_project();
     let tests = p.tests();
     if tests.is_empty() {
@@ -224,32 +230,73 @@ fn project_test(args: Vec<String>) {
     }
     let read = p.reader();
     let (mut ok, mut failed) = (0, Vec::new());
-    for t in &tests {
-        let name = shown(&p, t);
-        let src = read_or_exit(t);
+    let mut ran = 0;
+    // 1 本動かして、失敗ならその理由
+    let run = |src: &str, name: &str, want: Option<(String, String)>| -> Option<String> {
         let input = Box::new(std::io::Cursor::new(Vec::new()));
-        let o = jabberwock::run_program(&src, &read, false, true, input, Vec::new());
-        let want = fs::read_to_string(t.with_extension("out")).ok();
-        let problem = if let Some(d) = &o.error {
-            Some(render_in(&p, d, &name, &o.files))
+        let o = jabberwock::run_program(src, &read, false, true, input, Vec::new());
+        if let Some(d) = &o.error {
+            Some(render_in(&p, d, name, &o.files))
         } else if o.exit_code.unwrap_or(0) != 0 {
             Some(format!("exit({}) で終わりました\n", o.exit_code.unwrap_or(0)))
         } else {
-            match &want {
-                Some(w) if *w != o.output => Some(format!("出力が違います\n--- 期待（{}）\n{}--- 実際\n{}", shown(&p, &t.with_extension("out")), w, o.output)),
+            match want {
+                Some((w, wname)) if w != o.output => Some(format!("出力が違います\n--- 期待（{}）\n{}--- 実際\n{}", wname, w, o.output)),
                 _ => None,
             }
-        };
-        match problem {
-            None => {
-                println!("test {} ... ok", name);
-                ok += 1;
+        }
+    };
+    for t in &tests {
+        let file = shown(&p, t);
+        let src = read_or_exit(t);
+        let mut cases: Vec<Case> = Vec::new();
+        match jabberwock::project::test_file(&src) {
+            Err(e) => cases.push((file.clone(), Err(e), None)),
+            Ok(tf) if tf.has_main => {
+                if !tf.fns.is_empty() {
+                    cases.push((file.clone(), Err("main のあるファイルに `fn test_...()` は書けません（関数ごとのテストは main なしのファイルに）".to_string()), None));
+                } else {
+                    let out = t.with_extension("out");
+                    let want = fs::read_to_string(&out).ok().map(|w| (w, shown(&p, &out)));
+                    cases.push((file.clone(), Ok(src.clone()), want));
+                }
             }
-            Some(why) => {
-                println!("test {} ... 失敗", name);
-                failed.push((name, why));
+            Ok(tf) if tf.fns.is_empty() => {
+                cases.push((file.clone(), Err("`fn main()` も `fn test_名前()` もありません".to_string()), None))
+            }
+            Ok(tf) => {
+                for f in tf.fns {
+                    // 最後に main を足して、その関数だけ呼ぶ（位置は元のファイルのまま）
+                    cases.push((format!("{}::{}", file, f), Ok(format!("{}\nfn main() {{\n    {}();\n}}\n", src, f)), None));
+                }
             }
         }
+        for (name, src, want) in cases {
+            if let Some(f) = &filter {
+                if !name.contains(f.as_str()) {
+                    continue;
+                }
+            }
+            ran += 1;
+            let problem = match src {
+                Err(e) => Some(format!("{}\n", e)),
+                Ok(src) => run(&src, &file, want),
+            };
+            match problem {
+                None => {
+                    println!("test {} ... ok", name);
+                    ok += 1;
+                }
+                Some(why) => {
+                    println!("test {} ... 失敗", name);
+                    failed.push((name, why));
+                }
+            }
+        }
+    }
+    if ran == 0 {
+        println!("`{}` に当てはまるテストがありません", filter.unwrap_or_default());
+        process::exit(1);
     }
     for (name, why) in &failed {
         println!("\n---- {} ----\n{}", name, why);
