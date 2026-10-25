@@ -6364,3 +6364,33 @@ fn main() {
     let f = () -> { *o = 2; };
     f();
 }
+#####
+fn T scalar_id<T>(T x) { x }
+fn i64 scalar_add(i64 n) { n + 1 }
+fn main() {
+    let i64[] mut xs = [1];
+    let p = ref mut xs[0];
+    for i in range(4) {
+        if scalar_id(true) { *p += scalar_add(i); }
+    }
+    print(*p);
+}
+#####
+fn i64 scalar_id(i64 n) { n }
+fn i64 change(ref mut i64[] xs) { xs.push(2); 3 }
+fn main() {
+    let i64[] mut xs = [1];
+    let p = ref xs[0];
+    print(scalar_id(change(ref mut xs)));
+    print(*p);
+}
+#####
+fn change(ref mut i64[] xs) { xs.push(2); }
+fn call(fn() f) { f(); }
+fn main() {
+    let i64[] mut xs = [1];
+    let p = ref xs[0];
+    let q = ref mut xs;
+    call(() -> change(q));
+    print(*p);
+}

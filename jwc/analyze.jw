@@ -144,6 +144,21 @@ fn bool may_hold_list(ref ty.Ty t) {
     !(k == "Int" || k == "Float" || k == "Bool" || k == "Str" || k == "Unit" || k == "Never" || k == "Ref")
 }
 
+// 呼び出し元のリストへ届く引数も取り込みもない直接呼び出し。
+// Ref は may_hold_list では false だが、ここでは必ず除く。
+fn bool scalar(ref ty.Ty t) {
+    let k = ty.tag(t);
+    k == "Int" || k == "Float" || k == "Bool" || k == "Str" || k == "Unit" || k == "Never"
+}
+
+fn bool scalar_call(ref ir.Func f) {
+    if f.captures != 0 || !scalar(f.ret) { return false; }
+    for i in range(f.params) {
+        if !scalar(f.locals[i].t) { return false; }
+    }
+    true
+}
+
 /// 変数 x に入れ直した。古い own は解放されるが、変数の場所はそのまま
 fn kill_value(ref mut Facts facts, i64 x) {
     remove(ref mut facts, x);
@@ -177,6 +192,8 @@ struct Cx {
     bool rec;
     // 関数ごとの引数の数
     i64[] arity;
+    // true の直接呼び出しは呼び出し元のリストに届かない
+    bool[] scalar_calls;
     // 関数ごとの「呼ばれたか」と、引数ごとの「いつも安全な ref が渡されたか」
     bool[] called;
     bool[][] calls;
@@ -466,7 +483,7 @@ struct Cx {
             case Call(fi, ops, s) -> {
                 let safe = operands(ops, ref mut facts);
                 record(fi, safe);
-                kill_elems(ref mut facts);
+                if fi < 0 || fi >= scalar_calls.len() || !scalar_calls[fi] { kill_elems(ref mut facts); }
                 0
             }
             case Closure(fi, ops) -> {
@@ -522,7 +539,7 @@ struct Cx {
     }
 }
 
-fn Cx new_cx(bool set, bool rec, ref i64[] arity, ref ir.Func f) {
+fn Cx new_cx(bool set, bool rec, ref i64[] arity, ref bool[] scalar_calls, ref ir.Func f) {
     let bool[] mut l_own = [];
     let bool[] mut l_ptr = [];
     let bool[] mut l_hold = [];
@@ -542,7 +559,7 @@ fn Cx new_cx(bool set, bool rec, ref i64[] arity, ref ir.Func f) {
             calls.push([]);
         }
     }
-    Cx { set: set, rec: rec, arity: arity.map((x) -> x), called: called, calls: calls, l_own: l_own, l_ptr: l_ptr, l_hold: l_hold, l_list: l_list }
+    Cx { set: set, rec: rec, arity: arity.map((x) -> x), scalar_calls: scalar_calls.map((x) -> x), called: called, calls: calls, l_own: l_own, l_ptr: l_ptr, l_hold: l_hold, l_list: l_list }
 }
 
 /// 各ブロックの入口で成り立つ事実（どこからも来ないブロックは `has` が false）
@@ -551,7 +568,7 @@ struct Entry {
     Facts[] facts;
 }
 
-fn Entry fixpoint(ref mut ir.Func f, ref bool[] pinned) {
+fn Entry fixpoint(ref mut ir.Func f, ref bool[] pinned, ref bool[] scalar_calls) {
     let n = f.blocks.len();
     let bool[] mut has = [];
     let Facts[] mut entry = [];
@@ -570,7 +587,7 @@ fn Entry fixpoint(ref mut ir.Func f, ref bool[] pinned) {
     has[0] = true;
     entry[0] = start;
     let i64[] noarity = [];
-    let mut cx = new_cx(false, false, noarity, f);
+    let mut cx = new_cx(false, false, noarity, scalar_calls, f);
     let i64[] mut work = [0];
     while work.len() > 0 {
         let b = match work.pop() {
@@ -600,8 +617,10 @@ pub fn analyze(ref mut ir.Program prog) {
     // 引数ごとに「Pinned か」。楽観的に全部 true から始め、反例が出たら false にする（減る一方なので止まる）
     let i64[] mut arity = [];
     let bool[][] mut pinned = [];
+    let bool[] mut scalar_calls = [];
     for f in prog.fns {
         arity.push(f.params);
+        scalar_calls.push(scalar_call(f));
         let bool[] mut ps = [];
         for i in range(f.params) { ps.push(true); }
         pinned.push(ps);
@@ -614,8 +633,8 @@ pub fn analyze(ref mut ir.Program prog) {
             calls.push([]);
         }
         for fi in range(n) {
-            let entry = fixpoint(ref mut prog.fns[fi], pinned[fi]);
-            let mut cx = new_cx(true, true, arity, prog.fns[fi]);
+            let entry = fixpoint(ref mut prog.fns[fi], pinned[fi], scalar_calls);
+            let mut cx = new_cx(true, true, arity, scalar_calls, prog.fns[fi]);
             cx.called = called.drain();
             cx.calls = calls.drain();
             for b in range(prog.fns[fi].blocks.len()) {
