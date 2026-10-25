@@ -167,6 +167,9 @@ fn Items no_items() {
     Items { fields: [], field_types: [], variants: [], methods: [], mspans: [], statics: [], sspans: [] }
 }
 
+/// 入れ子の深さの上限（Rust 版の parser::MAX_NEST と同じ）
+const MAX_NEST = 256;
+
 struct Parser {
     lexer.Token[] toks;
     i64 pos;
@@ -196,6 +199,8 @@ struct Parser {
     // 次に読む呼び出しには this をつけない（`for i in range(...)`）
     bool raw_call;
     i64[] borrow_lambdas;
+    // 今の入れ子の深さ（式・ブロック・型・形）。MAX_NEST を超えたらエラー
+    i64 nest;
 
     fn str peek() { toks[pos].kind }
 
@@ -223,6 +228,11 @@ struct Parser {
         while peek() == ";" {
             bump();
         }
+    }
+
+    fn diag.Diag too_deep() {
+        diag.error_note("入れ子が深すぎます", span(), "ここで {MAX_NEST} 段を超えた",
+            "式・ブロック・型・形の入れ子を合わせて数えます。途中を関数や変数に分けてください")
     }
 
     fn diag.Diag unexpected(str expected) {
@@ -819,6 +829,14 @@ struct Parser {
 
     /// `{ 文; 文; 式 }`
     fn mut Result<ast.Block, diag.Diag> parse_block() {
+        if nest >= MAX_NEST { return Err(too_deep()); }
+        nest += 1;
+        let r = parse_block_in();
+        nest -= 1;
+        r
+    }
+
+    fn mut Result<ast.Block, diag.Diag> parse_block_in() {
         expect("{{", "`{{`")?;
         push_scope();
         let r = block_rest();
@@ -1067,6 +1085,14 @@ struct Parser {
 
     /// `case` に書く値
     fn mut Result<ast.Pat, diag.Diag> parse_pat() {
+        if nest >= MAX_NEST { return Err(too_deep()); }
+        nest += 1;
+        let r = parse_pat_in();
+        nest -= 1;
+        r
+    }
+
+    fn mut Result<ast.Pat, diag.Diag> parse_pat_in() {
         let start = span();
         let k = peek();
         if k == "int" {
@@ -1273,6 +1299,14 @@ struct Parser {
 
     /// 型: `i64`、`Player`、`own T`、`ref T`、`ref mut T`、`fn R(A)`、`(T)`、`T[3]`、`T[]`、`V[K]`
     fn mut Result<ast.TypeExpr, diag.Diag> parse_type() {
+        if nest >= MAX_NEST { return Err(too_deep()); }
+        nest += 1;
+        let r = parse_type_in();
+        nest -= 1;
+        r
+    }
+
+    fn mut Result<ast.TypeExpr, diag.Diag> parse_type_in() {
         let start = span();
         let k = peek();
         let mut t = ast.no_type();
@@ -1412,6 +1446,14 @@ struct Parser {
     }
 
     fn mut Result<ast.Expr, diag.Diag> parse_unary() {
+        if nest >= MAX_NEST { return Err(too_deep()); }
+        nest += 1;
+        let r = parse_unary_in();
+        nest -= 1;
+        r
+    }
+
+    fn mut Result<ast.Expr, diag.Diag> parse_unary_in() {
         let k = peek();
         if k == "-" || k == "!" || k == "~" {
             let start = bump();
@@ -1815,7 +1857,7 @@ pub fn Result<ast.Program, diag.Diag> parse_with(lexer.Token[] toks, ref str[] m
         enum_names: enum_names, struct_names: struct_names, enum_variants: variants,
         bind_ready: false, in_method: false, this_fields: [], this_methods: [], this_statics: [], owner: "",
         locals: [], marks: [], use_consts: false, in_const: false, const_names: [], const_vals: [],
-        raw_call: false, borrow_lambdas: [],
+        raw_call: false, borrow_lambdas: [], nest: 0,
     };
     p.parse_program()
 }

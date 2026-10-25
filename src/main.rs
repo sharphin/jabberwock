@@ -1,6 +1,10 @@
 use std::{env, fs, process};
 
 fn main() {
+    jabberwock::main_in_big_stack(real_main);
+}
+
+fn real_main() {
     if env::args().nth(1).as_deref() == Some("build") {
         build(env::args().skip(2).collect());
         return;

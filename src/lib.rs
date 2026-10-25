@@ -339,6 +339,14 @@ fn ir_reloader(files: &[(String, String)]) -> Box<dyn Fn() -> ir::Program + Send
     })
 }
 
+/// コマンドの入口。構文解析や型検査も入れ子をたどる再帰なので、実行と同じ大きなスタックで動かす
+pub fn main_in_big_stack(f: fn()) {
+    let t = std::thread::Builder::new().stack_size(1 << 30).spawn(f).expect("failed to spawn main thread");
+    if t.join().is_err() {
+        std::process::exit(101);
+    }
+}
+
 fn in_big_stack(f: impl FnOnce() -> Outcome + Send) -> Outcome {
     std::thread::scope(|s| {
         std::thread::Builder::new()

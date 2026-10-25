@@ -187,6 +187,9 @@
   呼び出し・構造体 / enum の値の式で決めた型の引数（`targs`。`instantiate` が `pending_targs` に置き、`expr_ctx` が受け取る）。
   キーは構文木の中の式のアドレスなので、`Program` を書き換えないこと。数だけの式（`is_const_tree`）は根だけ記録する。
   式をたどるのは `ast::walk_block` / `walk_expr`。
+- 入れ子の深さ: パーサの `nested` が `parse_block` / `parse_pat` / `parse_type` / `parse_unary` に入るたびに数え、`MAX_NEST`（256）を超えたらエラー
+  （本体は `*_in`。埋め込みの中の式を読む sub の Parser も深さを引き継ぐ。jwc/parser.jw も同じ数え方で同じエラー）。後ろの段の再帰はこれで抑える。
+  コマンドの `main` は `main_in_big_stack` で全体を 1 GiB のスタックで動かす。文字列の長さの上限は `STR_MAX`（2^62。interp と jw_rt.c）。
 - 深い再帰（呼び出しの深さ 5000）で Rust のスタックがあふれないよう、`exec_stmt` / `eval_kind` の枠を大きくしない（大きな処理は `#[inline(never)]` の別関数へ。`exec_for_each` など）。
   テストは `cargo test --no-fail-fast` で全部のファイルを走らせて確かめる（スタックあふれは途中で止まり、後ろのテストが走らない）。
 - 辞書: `Value::Map(Box<MapVal>)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。

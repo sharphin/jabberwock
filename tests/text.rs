@@ -22,6 +22,15 @@ fn err(body: &str) -> jabberwock::diag::Diagnostic {
 }
 
 #[test]
+fn repeat_checks_the_length_before_allocating() {
+    assert_eq!(main_ok("print(\"ab\".repeat(3), \"\".repeat(9223372036854775807), \"x\".repeat(0), \"|\");"), "ababab   |\n");
+    let d = err("print(\"abc\".repeat(9223372036854775807));");
+    assert_eq!(d.title, "くり返した文字列が長すぎます");
+    assert_eq!(d.note.as_deref(), Some("文字列は 2^62 バイトまで"));
+    assert_eq!(err("print(\"ab\".repeat(-1));").title, "負の回数はくり返せません");
+}
+
+#[test]
 fn string_methods_count_characters() {
     let o = main_ok("
     let s = \"日本語テキスト\";

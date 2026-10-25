@@ -222,6 +222,15 @@ fn ast_and_parser_errors() {
     ];
     let dir = std::env::temp_dir().join(format!("jw-jwc-ast-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // 入れ子の深さの上限（ちょうど上限まではよく、超えるとエラー）
+    let deep = |n: usize| format!("fn main() {{ print({}1{}); }}", "(".repeat(n), ")".repeat(n));
+    let mut cases: Vec<String> = cases.iter().map(|c| c.to_string()).collect();
+    cases.push(deep(jabberwock::parser::MAX_NEST - 3));
+    cases.push(deep(jabberwock::parser::MAX_NEST - 2));
+    cases.push(deep(10000));
+    cases.push(format!("fn f({}i64 x) {{}}", "own ".repeat(10000)));
+    cases.push(format!("fn main() {{ match o {{ case {}x{} -> 1; }} }}", "Some(".repeat(10000), ")".repeat(10000)));
+    cases.push(format!("fn main() {{ {}{} }}", "if a { ".repeat(10000), "}".repeat(10000)));
     for (i, c) in cases.iter().enumerate() {
         let p = dir.join(format!("case{}.jw", i));
         std::fs::write(&p, c).unwrap();

@@ -280,3 +280,32 @@ fn shop_example() {
     assert!(out.contains("売上 708 円\n"), "{}", out);
     assert!(out.ends_with("在庫が少ない: [りんご, みかん]\n"), "{}", out);
 }
+
+#[test]
+fn deep_nesting_is_an_error_not_a_crash() {
+    use jabberwock::parser::MAX_NEST;
+    let parens = |n: usize| format!("fn main() {{ print({}1{}); }}", "(".repeat(n), ")".repeat(n));
+    // fn の本体のブロック・print の引数・いちばん内側の 1 で 3 段
+    assert_eq!(ok(&parens(MAX_NEST - 3)), "1\n");
+    for src in [
+        parens(MAX_NEST - 2),
+        parens(100_000),
+        format!("fn main() {{ print({}1); }}", "- ".repeat(100_000)),
+        format!("fn main() {{ {}{} }}", "if true { ".repeat(100_000), "}".repeat(100_000)),
+        format!("fn f({}i64 x) {{}}\nfn main() {{}}", "own ".repeat(100_000)),
+        format!("fn main() {{ let x = {}1{}; }}", "[".repeat(100_000), "]".repeat(100_000)),
+        format!("fn main() {{ match o {{ case {}x{} -> 1; }} }}", "Some(".repeat(100_000), ")".repeat(100_000)),
+    ] {
+        let d = err(&src);
+        assert_eq!(d.title, "入れ子が深すぎます", "{}", &src[..40]);
+    }
+    // コマンドも（構文解析を大きなスタックで動かすので）エラーで止まる
+    let dir = std::env::temp_dir().join(format!("jw-deep-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("deep.jw");
+    fs::write(&f, parens(100_000)).unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_jabberwock")).arg(&f).output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("入れ子が深すぎます"));
+    let _ = fs::remove_dir_all(&dir);
+}

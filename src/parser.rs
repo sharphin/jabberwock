@@ -40,7 +40,12 @@ pub struct Parser {
     struct_names: Vec<String>,
     /// ファイル中の enum ごとの種類の名前。`Shape.make()` が種類でなければ静的メソッドの呼び出し
     enum_variants: HashMap<String, Vec<String>>,
+    /// 今の入れ子の深さ（式・ブロック・型・形）。`MAX_NEST` を超えたらエラー（深い入れ子でスタックがあふれないように）
+    depth: usize,
 }
+
+/// 入れ子の深さの上限。あとの段（型検査・実行・書き出し）も入れ子をたどる再帰なので、ここで止める
+pub const MAX_NEST: usize = 256;
 
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
@@ -62,7 +67,7 @@ impl Parser {
         enum_names.push("Option".to_string());
         enum_names.push("Result".to_string());
         let enum_variants = scan_variants(&toks);
-        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names, enum_variants }
+        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names, enum_variants, depth: 0 }
     }
 
     /// `use` したモジュールのあるファイルを読む。`geom.area` は 1 つの名前 `geom.area` にまとめる
@@ -87,6 +92,19 @@ impl Parser {
             }
         }
         Ok(p)
+    }
+
+    /// 入れ子を 1 段深くして f を読む
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        if self.depth >= MAX_NEST {
+            return Err(Diagnostic::new("入れ子が深すぎます")
+                .primary(self.span(), format!("ここで {} 段を超えた", MAX_NEST))
+                .note("式・ブロック・型・形の入れ子を合わせて数えます。途中を関数や変数に分けてください"));
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
     }
 
     fn peek(&self) -> &Tok {
@@ -621,6 +639,10 @@ impl Parser {
     /// `{ 文; 文; 式 }`。文の終わりには `;` が要る（`{ }` で終わる if / while などは不要）。
     /// 最後の `;` のない式がブロックの値になる。
     fn parse_block(&mut self) -> R<Block> {
+        self.nested(|p| p.parse_block_in())
+    }
+
+    fn parse_block_in(&mut self) -> R<Block> {
         self.expect(Tok::LBrace, "`{`")?;
         let mut stmts = Vec::new();
         let mut tail = false;
@@ -827,6 +849,10 @@ impl Parser {
 
     /// `case` に書く値。今のところリテラルだけ。
     fn parse_pat(&mut self) -> R<(Pat, Span)> {
+        self.nested(|p| p.parse_pat_in())
+    }
+
+    fn parse_pat_in(&mut self) -> R<(Pat, Span)> {
         let start = self.span();
         let pat = match self.peek().clone() {
             Tok::Int(n) => Pat::Int(n),
@@ -1004,6 +1030,10 @@ impl Parser {
 
     /// 型: `i64`、`Player`、`own T`、`ref T`、`ref mut T`
     fn parse_type(&mut self) -> R<TypeExpr> {
+        self.nested(|p| p.parse_type_in())
+    }
+
+    fn parse_type_in(&mut self) -> R<TypeExpr> {
         let start = self.span();
         let kind = match self.peek().clone() {
             Tok::Own => {
@@ -1146,6 +1176,10 @@ impl Parser {
     /// `.f` はさらに強い（`ref p.x` は `ref (p.x)`、`*p.x` は `*(p.x)`）。
     /// `own` は右側の式全体を取る（`own n * 2` は `own (n * 2)`）。
     fn parse_unary(&mut self) -> R<Expr> {
+        self.nested(|p| p.parse_unary_in())
+    }
+
+    fn parse_unary_in(&mut self) -> R<Expr> {
         match self.peek().clone() {
             Tok::Minus => {
                 let start = self.bump().span;
@@ -1295,6 +1329,7 @@ impl Parser {
                                 enum_names: self.enum_names.clone(),
                                 struct_names: self.struct_names.clone(),
                                 enum_variants: self.enum_variants.clone(),
+                                depth: self.depth,
                             };
                             let e = sub.parse_expr()?;
                             if *sub.peek() != Tok::Eof {

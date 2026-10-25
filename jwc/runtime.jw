@@ -632,6 +632,9 @@ static void bytes_free(void *p, size_t n) {{
 
 // 文字列の区画の大きさは長さだけで決まる（解放のときも長さから求める）。
 // 大きいもの（malloc）は 2 のべき乗に切り上げるので、後ろに足す（jw_str_append）ときに毎回は取り直さない
+// 文字列の長さの上限（バイト）。str_bytes の切り上げがあふれないように（interp の STR_MAX と同じ）
+#define STR_MAX ((int64_t)1 << 62)
+
 static size_t str_bytes(int64_t len) {{
     size_t n = sizeof(WStr) + (size_t)len + 1;
     if (((n + 15) >> 4) <= SCLASS) return n;
@@ -1697,9 +1700,17 @@ WStr *jw_str_repeat(WStr *s, int64_t k, const WSite *at) {{
         begin_error("負の回数はくり返せません");
         finish_error(at, label, NULL);
     }}
-    WSb *b = jw_sb_new();
-    for (int64_t i = 0; i < k; i++) jw_sb_str(b, s);
-    return jw_sb_finish(b);
+    if (s->len == 0 || k == 0) return jw_str_new("", 0);
+    // 長さ × 回数が上限を超えるなら、確保する前にエラー（interp の str_method と同じ）
+    if (k > STR_MAX / s->len) {{
+        char label[64];
+        snprintf(label, sizeof label, "repeat(%lld)", (long long)k);
+        begin_error("くり返した文字列が長すぎます");
+        finish_error(at, label, "文字列は 2^62 バイトまで");
+    }}
+    WStr *r = str_alloc(s->len * k);
+    for (int64_t i = 0; i < k; i++) memcpy(r->data + i * s->len, s->data, (size_t)s->len);
+    return r;
 }}
 
 // Rust の `trim().parse::<i64>()`

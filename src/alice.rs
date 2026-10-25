@@ -8,6 +8,10 @@ const USAGE: &str = "使い方: alice <コマンド>
   test [名前の一部]                tests/*.jw を動かす（main のないファイルは fn test_名前() を 1 本ずつ。tests/名前.out があれば出力と比べる）";
 
 fn main() {
+    jabberwock::main_in_big_stack(real_main);
+}
+
+fn real_main() {
     let rest: Vec<String> = env::args().skip(2).collect();
     match env::args().nth(1).as_deref() {
         Some("new") => project_new(rest),

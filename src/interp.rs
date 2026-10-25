@@ -3201,6 +3201,9 @@ pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>) -> Value {
 }
 
 /// 文字列のメソッド。位置と長さは文字単位（バイトではない）
+/// 文字列の長さの上限（バイト）。jw_rt.c の STR_MAX と同じ
+const STR_MAX: i64 = 1 << 62;
+
 pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
     let s = |i: usize| match &vals[i] {
         Value::Str(x) => Ok(x.clone()),
@@ -3257,7 +3260,23 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
             if k < 0 {
                 return Err(Diagnostic::new("負の回数はくり返せません").primary(span, format!("repeat({})", k)));
             }
-            string(text.repeat(k as usize))
+            if text.is_empty() || k == 0 {
+                return Ok(string(String::new()));
+            }
+            // 長さ × 回数が上限を超えるなら、確保する前にエラー（jw_rt.c の jw_str_repeat と同じ）
+            if k * text.len() as i128 > STR_MAX as i128 {
+                return Err(Diagnostic::new("くり返した文字列が長すぎます")
+                    .primary(span, format!("repeat({})", k))
+                    .note("文字列は 2^62 バイトまで"));
+            }
+            let mut out = String::new();
+            if out.try_reserve_exact(text.len() * k as usize).is_err() {
+                return Err(Diagnostic::new("メモリが足りません").primary(span, format!("repeat({})", k)));
+            }
+            for _ in 0..k {
+                out.push_str(text);
+            }
+            string(out)
         }
         "to_int" => match text.trim().parse::<i64>() {
             Ok(v) => some(Value::Int(v as i128, IntTy::I64)),
