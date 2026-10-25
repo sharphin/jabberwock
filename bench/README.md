@@ -4,6 +4,9 @@
 `RUNS=回数`（既定 5）・`JW=jabberwock の場所`・`BENCH_OUT=作業フォルダ`。出力が C++ と違えば `!!` の行が出る。
 要るもの: `cargo build --release` 済みの jabberwock・clang（clang++）・cc・go・rustc。時間と最大メモリは `measure.c`（fork して `wait4` の rusage を読む。Linux 用）で取る。
 
+解析の変更前後だけを比べる実験は `experiments/` に置く。`experiments/scalar-call.jw` は数値の補助関数の呼び出し後に残る要素 ref の検査を測るもの。
+通常の言語間比較には混ぜない。再現手順・結果・限界は [docs/scalar-call-handoff.md](../docs/scalar-call-handoff.md) にある。
+
 | 名前 | 中身 | 主に見るもの |
 |---|---|---|
 | fib | fib(40) | 関数呼び出し（呼び出しの深さの確認） |

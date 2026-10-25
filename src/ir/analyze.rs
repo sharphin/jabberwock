@@ -7,6 +7,7 @@
 //!   * 引数の ref は、すべての呼び出し元が生きている ref を渡すなら、関数の中ずっと安全（Pinned。関数をまたいで繰り返し決める）。
 //!   * リストの要素を借りた ref（`ref mut ps[i]`）は、要素を動かしうる操作（リストの操作・呼び出し・リストを持ちうる値の上書きや解放）が
 //!     どこにもないあいだ安全（RefElem）。ほかの名前から同じリストに届きうるので、名前ではなく操作の種類で消す。
+//!     ただし、取り込みがなく数・真偽・文字列だけを値渡しする直接呼び出しは、呼び出し元のリストに届かないので事実を残せる。
 //!
 //! 基本ブロックの上の前向きのデータフロー解析で、合流では両方で成り立つ事実だけを残す。
 //! 証明できない `*p` は `Check::Required` のまま（実行時に検査する）。デバッグビルドでは、消した検査も実行時に確かめる。
@@ -55,6 +56,14 @@ fn may_hold_list(t: &Ty) -> bool {
     !matches!(t, Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..))
 }
 
+/// 呼び出し元のリストへ届く値を受け取らない関数。
+/// ref はリストを持たなくても別名から要素を動かせるので、may_hold_list とは分ける。
+/// 文字列は不変の値。暗黙の this や取り込みも含め、引数をすべて調べる。
+fn scalar_call(f: &Func) -> bool {
+    let scalar = |t: &Ty| matches!(t, Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never);
+    f.captures == 0 && scalar(&f.ret) && f.locals[..f.params].iter().all(|l| scalar(&l.ty))
+}
+
 /// 変数 `x` に入れ直した。古い own は解放されるが、変数の場所はそのまま
 fn kill_value(facts: &mut Facts, x: Local) {
     facts.remove(&x);
@@ -76,14 +85,15 @@ pub fn analyze(prog: &mut Program) -> Stats {
     // 引数ごとに「Pinned か」。楽観的に全部 true から始め、反例が出たら false にする（減る一方なので止まる）
     let mut pinned: Vec<Vec<bool>> = prog.fns.iter().map(|f| vec![true; f.params]).collect();
     let tables: Vec<usize> = prog.fns.iter().map(|f| f.params).collect();
+    let scalar_calls: Vec<bool> = prog.fns.iter().map(scalar_call).collect();
     loop {
         let mut calls: Vec<Option<Vec<bool>>> = vec![None; n];
         for (fi, pin) in pinned.iter().enumerate() {
-            let entry = fixpoint(&prog.fns[fi], pin);
+            let entry = fixpoint(&prog.fns[fi], pin, &scalar_calls);
             let f = &mut prog.fns[fi];
             for (b, facts) in entry.into_iter().enumerate() {
                 let Some(mut facts) = facts else { continue };
-                let mut cx = Cx { set: true, calls: Some(&mut calls), arity: &tables, locals: &f.locals };
+                let mut cx = Cx { set: true, calls: Some(&mut calls), arity: &tables, scalar_calls: &scalar_calls, locals: &f.locals };
                 let block = &mut f.blocks[b];
                 for inst in block.insts.iter_mut() {
                     cx.inst(inst, &mut facts);
@@ -125,7 +135,7 @@ pub fn analyze(prog: &mut Program) -> Stats {
 }
 
 /// 各ブロックの入口で成り立つ事実（どこからも来ないブロックは None）
-fn fixpoint(f: &Func, pinned: &[bool]) -> Vec<Option<Facts>> {
+fn fixpoint(f: &Func, pinned: &[bool], scalar_calls: &[bool]) -> Vec<Option<Facts>> {
     let mut entry: Vec<Option<Facts>> = vec![None; f.blocks.len()];
     let mut start = Facts::new();
     for i in 0..f.params {
@@ -140,7 +150,7 @@ fn fixpoint(f: &Func, pinned: &[bool]) -> Vec<Option<Facts>> {
     let mut work = vec![0];
     while let Some(b) = work.pop() {
         let mut facts = entry[b].clone().expect("queued blocks have facts");
-        let mut cx = Cx { set: false, calls: None, arity: &[], locals: &f.locals };
+        let mut cx = Cx { set: false, calls: None, arity: &[], scalar_calls, locals: &f.locals };
         for inst in blocks[b].insts.iter_mut() {
             cx.inst(inst, &mut facts);
         }
@@ -174,6 +184,8 @@ struct Cx<'a> {
     calls: Option<&'a mut Vec<Option<Vec<bool>>>>,
     /// 関数ごとの引数の数
     arity: &'a [usize],
+    /// true の直接呼び出しだけは、呼び出し元のリストに届かない
+    scalar_calls: &'a [bool],
     locals: &'a [LocalDecl],
 }
 
@@ -401,7 +413,11 @@ impl<'a> Cx<'a> {
             Rvalue::Call(fi, ops, _) => {
                 let safe = self.operands(ops, facts);
                 self.record(*fi, safe);
-                kill_elems(facts);
+                // 引数の評価による無効化は、上の operands が既に反映している。
+                // 不明な番号も安全側。関数値と interface の呼び出しは従来どおり消す。
+                if self.scalar_calls.get(*fi) != Some(&true) {
+                    kill_elems(facts);
+                }
                 None
             }
             Rvalue::Closure(fi, ops) => {

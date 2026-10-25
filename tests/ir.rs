@@ -100,3 +100,94 @@ fn refs_to_list_elements_skip_the_check_until_the_list_may_change() {
     let t = ir(&format!("{}fn set(ref mut P[] ps) {{\n    let p = ref mut ps[0];\n    p.x = 1;\n    p.x = p.x + 1;\n}}\nfn main() {{\n    let P[] mut ps = [P {{ x: 1 }}];\n    set(ref mut ps);\n}}", head));
     assert_eq!(t.matches("(*!").count(), 0, "{}", t);
 }
+
+#[test]
+fn scalar_direct_calls_preserve_element_refs_across_blocks() {
+    let src = "
+fn T id<T>(T x) { x }
+fn i64 add(i64 x) { x + 1 }
+fn str label(str s) { s + \"!\" }
+fn main() {
+    let i64[] mut xs = [1];
+    let p = ref mut xs[0];
+    let mut n = 0;
+    for i in range(4) {
+        n = add(n);
+        if id(true) { *p += n; } else { *p = 0; }
+    }
+    print(*p, label(\"ok\"));
+}";
+    let t = ir(src);
+    assert!(!t.contains("(*!"), "{}", t);
+    let on = run_source(src, false);
+    let off = jabberwock::run_source_with(src, false, false);
+    assert!(on.error.is_none(), "{:?}", on.error);
+    assert_eq!(on.output, "11 ok!\n");
+    assert_eq!(on.output, off.output);
+    assert_eq!(on.live_objects, 0);
+}
+
+#[test]
+fn scalar_call_does_not_hide_mutation_while_evaluating_arguments() {
+    let src = "
+fn i64 id(i64 n) { n }
+fn i64 change(ref mut i64[] xs) { xs.push(2); 3 }
+fn main() {
+    let i64[] mut xs = [1];
+    let p = ref xs[0];
+    print(id(change(ref mut xs)));
+    print(*p);
+}";
+    let t = ir(src);
+    assert!(t.contains("(*!"), "{}", t);
+    let on = run_source(src, false);
+    let off = jabberwock::run_source_with(src, false, false);
+    assert_eq!(on.output, "3\n");
+    assert_eq!(on.output, off.output);
+    let a = on.error.expect("element ref must dangle");
+    let b = off.error.expect("unoptimized must also fail");
+    assert!(a.title.contains("dangling"), "{}", a.title);
+    assert_eq!(a.render("test.jw", src), b.render("test.jw", src));
+}
+
+#[test]
+fn callbacks_and_ref_receivers_still_invalidate_element_facts() {
+    for (head, body) in [
+        ("fn change(ref mut i64[] xs) { xs.push(2); }", "change(ref mut xs);"),
+        ("fn change(ref mut i64[] xs) { xs.push(2); } fn call(fn() f) { f(); }", "let q = ref mut xs; call(() -> change(q));"),
+        ("fn change(ref mut i64[] xs) { xs.push(2); }", "let q = ref mut xs; let f = () -> change(q); f();"),
+        ("", "let f = () -> 7; print(f()); xs.push(2);"),
+    ] {
+        let src = format!("{}\nfn main() {{\n    let i64[] mut xs = [1];\n    let p = ref xs[0];\n    {}\n    print(*p);\n}}", head, body);
+        let t = ir(&src);
+        assert!(t.contains("(*!"), "{}", t);
+        let on = run_source(&src, false);
+        let off = jabberwock::run_source_with(&src, false, false);
+        assert_eq!(on.output, off.output);
+        let a = on.error.expect("element ref must dangle");
+        let b = off.error.expect("unoptimized must also fail");
+        assert!(a.title.contains("dangling"), "{}", a.title);
+        assert_eq!(a.render("test.jw", &src), b.render("test.jw", &src));
+    }
+}
+
+#[test]
+fn scalar_call_errors_keep_output_and_diagnostics() {
+    let src = "
+fn i64 divide(i64 n) { print(\"helper\"); 10 / n }
+fn main() {
+    let i64[] mut xs = [1];
+    let p = ref mut xs[0];
+    print(\"before\", *p);
+    let n = divide(0);
+    *p += n;
+}";
+    let on = run_source(src, false);
+    let off = jabberwock::run_source_with(src, false, false);
+    assert_eq!(on.output, "before 1\nhelper\n");
+    assert_eq!(on.output, off.output);
+    assert_eq!(
+        on.error.expect("division by zero").render("test.jw", src),
+        off.error.expect("division by zero").render("test.jw", src)
+    );
+}
