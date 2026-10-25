@@ -18,6 +18,7 @@
 能力IDの候補はfs、net、tls_client、postgres、window、draw2d、image、guiとする。
 能力ごとに、対応する対象環境・ABI・内部ソース・リンク指定・配布物を、ツールが知る定義に登録する。
 たとえばguiはwindowとdraw2dを必要とし、Windowsのdraw2dはD3D11/DXGI/Direct2D/DirectWriteを利用する。
+WindowsのguiにはTSF/COMとUI Automationの接続も登録する。詳細な依存と終了順は [GUI内部仕様](gui-internals.md) に従う。
 postgresのTLSはlibpqの依存であり、netのTLSクライアントと無条件に同じ能力とは扱わない。
 imageはencoded画像の復号用の追加能力。raw pixelだけの描画には要求せず、WindowsではWICなどの依存を登録する。
 

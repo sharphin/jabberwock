@@ -38,6 +38,7 @@ Pathや時計の値には、別の登録型OpaqueValue(id)を使えるように�
 Pathはencodingと不変のOS byte列を保持し、言語上は複製でき、送信時は所有するデータへコピーする。
 Instant/Duration/Deadlineは固定幅の値を複製できるが、利用時にはclockの同一性を確認する。
 OpaqueValueの登録も検証した定義元に限り、ユーザーが同名structや任意のfieldから内部値を生成できないようにする。
+GUIのNodeIdや入力batchのCopy/Send/世代と利用制約は [GUI内部仕様](gui-internals.md) に定める。
 一般のCPU画像・色・座標のrecordは、中身に応じた既存のムーブ・送信規則とAPI境界の検査を使う。
 
 ## 所有値・写し・既存の実行器

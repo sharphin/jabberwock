@@ -3,6 +3,7 @@
 状態: 実装前の詳細設計。以下の型・API・設定は提案であり、現行機能ではない。
 Windows先行、ゲームにも使える描画基盤という合意に基づく。
 [全体方針](standard-libraries.md)、[共通資源管理](resource-management.md)、[alice拡張](alice-native.md) と整合させる。
+widget tree、配置、入力の消費、TSFとUI Automationの具体的な契約は [GUI内部仕様](gui-internals.md) に定める。
 
 ## 構成と初期範囲
 
@@ -15,7 +16,7 @@ Windows先行、ゲームにも使える描画基盤という合意に基づく�
 | アプリ | イベントの解釈、ゲーム状態・業務状態の更新、I/O workerとの連携 |
 
 ゲームはWindow・入力・Rendererだけを使える。GUIは同じFrameへ描画でき、アプリのループを独占しない。
-初期はWindows 10/11 x64とD3D feature level 11.0以上を想定する。
+初期はWindows 10 1809以降/Windows 11 x64とD3D feature level 11.0以上を想定する。
 Linuxの実描画、3Dの公開API、任意shader、音声、動画、タッチ・ゲームパッドは後の範囲とする。
 Linuxの公開APIはここで確定せず、Windows固有の型を公開しないことで別backendを接続できる構造を保つ。
 
@@ -24,7 +25,7 @@ Linuxの公開APIはここで確定せず、Windows固有の型を公開しな�
 | API | 契約 |
 |---|---|
 | `create_window(options)` | `Result<Window, GuiError>`。title、論理サイズ、サイズ変更可否など |
-| `Window.poll_events()` | 待たずに所有するイベント列を返す。GUI資源の作成スレッドで呼ぶ |
+| `Window.poll_events()` | 待たずに所有するEventBatchを返す。GUI資源の作成スレッドで呼ぶ |
 | `Window.wait_events(deadline)` | イベントまたは期限まで待つ。無限のbusy loopにしない |
 | `Window.info()` | 論理サイズ、物理描画サイズ、DPI倍率、フォーカス、最小化状態の値 |
 | `Window.request_redraw()` | 再描画の要求。即座にユーザーコードを呼び返さない |
@@ -41,7 +42,7 @@ Linuxの公開APIはここで確定せず、Windows固有の型を公開しな�
 | `Frame.abort()` | Frameを消費し、蓄積した処理と内部leaseを解放する |
 | `Texture.from_rgba8(renderer, size, pixels, options)` | 検査した画像を所有するTextureにする |
 | `create_gui(window, options)` | GUIの状態とwidget treeを所有するGuiContext |
-| `GuiContext.update(events, time)` | 入力・レイアウトを進め、所有するGUIイベントを返す |
+| `GuiContext.update(batch, now)` | batchを消費し、GUIイベントとゲーム用の残り入力、再描画・期限を返す |
 | `GuiContext.close()` | GUIの所有値を消費。Window自体を閉じず、IME・focus・native連携を解除 |
 | `GuiContext.draw(frame)` | 同じWindowに属するFrameへGUIを描く |
 
@@ -56,7 +57,7 @@ COMが必要な機能は同じスレッドで初期化・終了し、自分が�
 
 Window procedureはOSの状態を更新してイベントを蓄積するだけとし、描画や任意のユーザー関数を直接呼ばない。
 WM_PAINTもOS側のpaint処理を完結させてRedrawRequestedへ変換し、user callbackで再入させない。
-返すイベントは所有する値とし、OSの一時バッファへのrefやポインタを含めない。
+返すイベントはbatch内の所有する値とし、OSの一時バッファへのrefやポインタを含めない。
 
 初期イベントはCloseRequested、Resized、DpiChanged、FocusChanged、RedrawRequested、
 KeyDown/Up、PointerMove/Button/Wheel、TextInput、Compositionを候補とする。
@@ -132,11 +133,11 @@ GuiContextのwidget状態はWindowに属し、特定Rendererを常に所有す�
 
 ## widget treeとアプリのイベント
 
-初期GUIは保持するwidget treeを第一案とする。
+初期GUIは保持するwidget treeとする。Windowごとに一つのGuiContextを持つ。
 NodeIdはGuiContextの同一性と世代を持ち、削除したnode・異なるcontext・再利用した番号を検出する。
 作成・親子付け・削除で循環を許さず、深さ・node数・文字サイズを上限で検査する。
 
-初期部品はPanel、Row/Column、Label、Button、TextInputを候補とする。
+初期部品はPanel、Row、Column、Label、Button、単一行TextInputとする。
 最小/最大サイズ・余白・配置を持つ小さいlayoutから始め、CSS互換を目標にしない。
 APIはnodeの作成、文字・状態・layoutの設定、削除、focusの要求を提供する。
 削除は子のNodeId、focus、capture、compositionも整合した状態へ戻す。
@@ -153,7 +154,7 @@ UTF-8/UTF-16の対応を管理し、surrogateやUTF-8 byteの途中へカーソ�
 caret・選択・hit testはOSの文字処理とDirectWriteのlayoutに合わせ、独自のbyte単位の処理で代用しない。
 日本語、結合文字、emoji、双方向文字、複数行の対応範囲を実際に試験して記録する。
 
-IME候補位置、composition、確定、focus移動、編集途中の削除、clipboardの所有と文字コードを扱う。
+IMEはTSFを用い、候補位置、composition、確定、focus移動、編集途中の削除、clipboardの所有と文字コードを扱う。
 clipboardを開いたままにしない。取得したOS領域を解放・unlockした後にその領域へのrefを返さない。
 
 自前描画の部品にはWindows UI Automationへの対応が必要になる。

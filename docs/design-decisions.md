@@ -708,3 +708,11 @@ let x = pick(true, 1, 2);
 - [compiler連携](compiler-integration.md) に、compiler情報、snapshot bundle、JSON要求/応答、共通backendとbootstrapを定めた。
 - 内部操作の登録と依存の公開範囲を別々に検証する。requestの分類や内容hashだけを特権や信頼の証明にしない。
 - 型検査からjwc・C・LLVMまでの対応と安全性1〜7の拡張を完了条件とする。既存の検証成功を新機能へ自動で流用しない。
+
+## Windows GUI内部仕様（設計、未実装。2026-10-25）
+
+- [gui-internals.md](gui-internals.md) に保持型tree、六種類の初期widget、DIP配置、公開操作と上限を定めた。
+- raw入力batchとゲーム用の残り入力を分け、focus/capture・キーのup・再送・overflowを規定する。
+- 日本語IMEはTSF、アクセシビリティはUI Automationを使い、native lock・別thread照会・遅い通知・終了時の寿命を扱う。
+- 通常入力とcomposition、UTF-8/UTF-16/graphemeを区別する。実機IME/Narratorの確認とmock/WARPの成功を分ける。
+- 初期GUIはWindows 10 1809以降/Windows 11 x64、TextInputは単一行。公開API全体と個別C操作の確定・実装完了は別に扱う。

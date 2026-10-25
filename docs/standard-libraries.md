@@ -11,7 +11,7 @@
 - 今回の安全性検証1〜7を保ち、新しい機能にも同じ検証を加える。
 
 ここから先の細部は実装方針の提案。公開APIと配布方法は実装時に仕様書へ反映する。
-最初の対応環境はWindows 10/11の64ビットを想定する。
+最初のGUI対応環境はWindows 10 1809以降/Windows 11の64ビットを想定する。
 
 ## 個別設計書
 
@@ -28,6 +28,7 @@
 | alice・Rust版・jwc連携 | [compiler-integration.md](compiler-integration.md) |
 | aliceの拡張 | [alice-native.md](alice-native.md) |
 | GUI・描画詳細 | [gui-rendering.md](gui-rendering.md) |
+| GUI内部仕様 | [gui-internals.md](gui-internals.md) |
 | PostgreSQL | [postgresql.md](postgresql.md) |
 
 設計書はこの一覧から参照できる。実装は資源管理・ビルド基盤を先に整え、各個別設計の完了条件に従う。

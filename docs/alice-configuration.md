@@ -4,7 +4,7 @@
 [現在のパッケージ仕様](packages.md)、[標準ライブラリの読み込み](standard-library-loading.md)、
 [ネイティブ依存・ビルド管理](alice-native.md) を前提に、設定の書式と解決規則を定める。
 資源ABIの具体的な配置は [資源ABI詳細](resource-abi.md)、連携形式は [compiler連携](compiler-integration.md) に定める。
-GUI内部の設計を、この文書で確定したとは扱わない。
+GUI内部の契約は [GUI内部仕様](gui-internals.md) に定める。
 
 ## ファイルの責任と版
 
