@@ -309,7 +309,14 @@ pub fn run_program(
 fn reloader(files: &[(String, String)], elide: bool) -> Box<dyn Fn() -> ast::Program + Send + Sync> {
     let files = files.to_vec();
     Box::new(move || {
-        let read = |name: &str| files.iter().skip(1).find(|(n, _)| n == name).map(|(_, s)| s.clone());
+        // 依存先の lib.jw の問い合わせ `空間*名前` は、ファイルの名前 `*名前` で探す（使えるかは最初に読んだときに確かめた）
+        let read = |name: &str| {
+            let name = match name.split_once('*') {
+                Some((_, u)) => format!("*{}", u),
+                None => name.to_string(),
+            };
+            files.iter().skip(1).find(|(n, _)| *n == name).map(|(_, s)| s.clone())
+        };
         let (prog, _) = parse(&files[0].1, &read);
         let prog = prog.expect("parsed before");
         types::check_with_info(&prog).expect("checked before");

@@ -178,10 +178,11 @@
   モジュールの中の定義と参照は `qualify` が `geom.名前` に書き換える。全部を 1 つの `Program` にまとめるので、types / analyze / interp は
   モジュールを知らない（types だけ、モジュールの中で関数と同じ名前の変数を弾くために `Checker.module` を見る。メソッド名は `rsplit_once('.')` で分ける）。
   `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `jabberwock::render`。
-  パッケージの名前の空間: 読む関数への問い合わせは `名前`（自分のパッケージ）/ `*名前`（依存先の lib.jw。キーは `名前` で `Loader.libs` に入れる）/
-  `P/名前`（依存先 P の中のモジュール。キーも `P/名前`）。依存先の中からは `P/u` → `*u`、それ以外からは `u` → `*u` の順に試す。
-  書いた名前とキーが違えば `Qualify.alias` が `u.f` を `P/u.f` に書き換える。`Outcome.files` の名前は問い合わせそのもの（スレッドの `reloader` が同じ順に読み直せるように）。
-  表示するときは `*` を外す。project.rs の `modules` のキーも問い合わせの形。
+  パッケージの名前の空間: 読む関数への問い合わせは `名前`（自分のパッケージ）/ `空間*名前`（依存先の lib.jw。最初のパッケージからは `*名前`。
+  キーは `名前` で `Loader.libs` に入れる）/ `P/名前`（依存先 P の中のモジュール。キーも `P/名前`）。依存先 P の中からは `P/u` → `P*u`、それ以外からは `u` → `*u` の順に試す。
+  `空間*名前` は読んだことがあっても毎回問い合わせる（project.rs の `reader` が `direct` で、直接の依存先かを確かめる）。
+  書いた名前とキーが違えば `Qualify.alias` が `u.f` を `P/u.f` に書き換える。`Outcome.files` の名前は `名前` / `*名前` / `P/名前`（スレッドの `reloader` は
+  `空間*名前` を `*名前` で探す）。表示するときは `*` を外す。project.rs の `modules` のキーも同じ形。
 - IR への準備（設計は `docs/ir-design.md`）: `types::check_with_info` が `TypeInfo` を返す。式の型（`expr_ty`）と、
   呼び出し・構造体 / enum の値の式で決めた型の引数（`targs`。`instantiate` が `pending_targs` に置き、`expr_ctx` が受け取る）。
   キーは構文木の中の式のアドレスなので、`Program` を書き換えないこと。数だけの式（`is_const_tree`）は根だけ記録する。

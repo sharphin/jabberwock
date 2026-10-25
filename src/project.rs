@@ -11,6 +11,7 @@
 //! 依存先は手元のフォルダだけ（`foo = { path = "../foo" }`）。依存先の src/lib.jw がモジュール `foo` になる。
 //! 名前の空間はパッケージごと: `modules` のキーは modules.rs の問い合わせの形で、自分の src は `名前`、
 //! 依存先 foo の lib.jw は `*foo`、foo の src のほかのファイルは `foo/名前`（foo の中からだけ見える）。
+//! `use foo;` で使えるのは、alice.toml に書いた直接の依存先だけ（`reader` が `空間*foo` の問い合わせを `direct` で確かめる）。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -27,6 +28,8 @@ pub struct Project {
     pub deps: Vec<(String, PathBuf)>,
     /// 問い合わせ（`名前` / `*依存先` / `依存先/名前`）→ ファイル
     pub modules: BTreeMap<String, PathBuf>,
+    /// パッケージ → alice.toml に書いた依存先の名前（自分は ""）。`use` で使えるのはこれだけ
+    pub direct: BTreeMap<String, Vec<String>>,
 }
 
 /// alice.toml の中身（読めた部分だけ）
@@ -148,7 +151,8 @@ impl Project {
     /// root の alice.toml を読み、依存先も含めてモジュールの場所を決める
     pub fn load(root: &Path) -> Result<Project, String> {
         let m = read_manifest(root)?;
-        let mut p = Project { root: root.to_path_buf(), name: m.name.clone(), deps: Vec::new(), modules: BTreeMap::new() };
+        let mut p = Project { root: root.to_path_buf(), name: m.name.clone(), deps: Vec::new(), modules: BTreeMap::new(), direct: BTreeMap::new() };
+        p.direct.insert(String::new(), m.deps.iter().map(|(n, _)| n.clone()).collect());
         // 自分の src（main と lib は入口なので除く。lib はパッケージの名前で使う）
         p.add_dir(&root.join("src"), "", &m.name)?;
         if root.join("src").join("lib.jw").is_file() {
@@ -182,6 +186,7 @@ impl Project {
             }
             p.add(&format!("*{}", name), lib, &name)?;
             p.add_dir(&dir.join("src"), &format!("{}/", name), &name)?;
+            p.direct.insert(name.clone(), dm.deps.iter().map(|(n, _)| n.clone()).collect());
             seen.push((name.clone(), dir.clone()));
             p.deps.push((name.clone(), dir.clone()));
             for (n, d) in dm.deps.iter().rev() {
@@ -226,7 +231,20 @@ impl Project {
     /// `use 名前;` を読む関数
     pub fn reader(&self) -> impl Fn(&str) -> Option<String> + Sync + Send + 'static {
         let modules = self.modules.clone();
-        move |name: &str| modules.get(name).and_then(|f| fs::read_to_string(f).ok())
+        let direct = self.direct.clone();
+        move |name: &str| {
+            let file = match name.split_once('*') {
+                // 依存先の lib.jw は、use を書いたパッケージが直接の依存先にしたものだけ
+                Some((space, u)) => {
+                    if !direct.get(space).into_iter().flatten().any(|d| d == u) {
+                        return None;
+                    }
+                    modules.get(&format!("*{}", u))
+                }
+                None => modules.get(name),
+            };
+            file.and_then(|f| fs::read_to_string(f).ok())
+        }
     }
 
     /// 入口のファイル（src/main.jw）

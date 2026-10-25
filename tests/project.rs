@@ -119,13 +119,24 @@ fn each_package_has_its_own_names() {
     assert!(e.contains("見つかりません"), "{}", e);
     write(&d.join("shapes/src/util.jw"), "pub fn str who() { \"shapes\" }\npub fn i64 sq(i64 x) { x * x }\n");
 
-    // スレッドの中で読み直しても同じモジュールになる
+    // 依存先の依存先は、alice.toml に書かなければ使えない
+    write(&d.join("app/src/main.jw"), "use nums;\nfn main() { print(nums.zero()); }\n");
+    let e = run_app(&p).unwrap_err();
+    assert!(e.contains("`nums` が見つかりません"), "{}", e);
     write(
-        &d.join("app/src/main.jw"),
-        "use shapes;\nuse util;\nfn main() {\n    let t = spawn(() -> shapes.who() + \"/\" + util.who());\n    print(t.join(), shapes.area(2));\n}\n",
+        &d.join("app/alice.toml"),
+        "[package]\nname = \"app\"\n[dependencies]\nshapes = { path = \"../shapes\" }\nnums = { path = \"../nums\" }\n",
     );
     let p = Project::load(&d.join("app")).unwrap();
-    assert_eq!(run_app(&p).unwrap(), "shapes/app 4\n");
+    assert_eq!(run_app(&p).unwrap(), "0\n");
+
+    // スレッドの中で読み直しても同じモジュールになる（nums は app と shapes の両方から使う）
+    write(
+        &d.join("app/src/main.jw"),
+        "use shapes;\nuse util;\nuse nums;\nfn main() {\n    let t = spawn(() -> shapes.who() + \"/\" + util.who());\n    print(t.join(), shapes.area(2), nums.zero());\n}\n",
+    );
+    let p = Project::load(&d.join("app")).unwrap();
+    assert_eq!(run_app(&p).unwrap(), "shapes/app 4 0\n");
     let _ = fs::remove_dir_all(&d);
 }
 

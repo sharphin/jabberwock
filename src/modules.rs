@@ -8,11 +8,12 @@
 //!
 //! パッケージ（alice）のために、モジュールを探すときの問い合わせは 3 種類（`read` に渡す名前）:
 //! - `名前`: 最初のパッケージのモジュール（パッケージでないときは同じフォルダの 名前.jw）。読んだモジュールの名前もそのまま
-//! - `*名前`: 依存先のパッケージ `名前` の src/lib.jw。モジュールの名前は `名前`（そのパッケージの中は `名前` の空間）
+//! - `*名前` / `空間*名前`: 依存先のパッケージ `名前` の src/lib.jw（`空間` は use を書いたパッケージ。読む関数は、
+//!   そのパッケージが直接の依存先として書いたものだけ返す）。モジュールの名前は `名前`（そのパッケージの中は `名前` の空間）
 //! - `空間/名前`: 依存先のパッケージ `空間` の中のモジュール。モジュールの名前は `空間/名前` で、`use 名前;` と書いたファイルの中の
 //!   `名前.x` を `空間/名前.x` に書き換える（`Qualify.aliases`）。なので別のパッケージに同じ名前のモジュールがあってよい
 //!
-//! 依存先の中の `use` は、まず自分の空間（`空間/名前`）、なければ依存先のパッケージ（`*名前`）を探す。最初のパッケージの中の `use` は
+//! 依存先の中の `use` は、まず自分の空間（`空間/名前`）、なければ依存先のパッケージ（`空間*名前`）を探す。最初のパッケージの中の `use` は
 //! `名前` → `*名前` の順。`files` の名前は問い合わせた名前のまま（スレッドが同じ問い合わせで読み直せるように）。
 
 use std::collections::{HashMap, HashSet};
@@ -104,9 +105,10 @@ impl<'a> Loader<'a> {
             if keys.contains_key(u) {
                 continue;
             }
-            // (問い合わせ, モジュールの名前)
+            // (問い合わせ, モジュールの名前)。依存先の lib.jw の問い合わせは `空間*名前`（最初のパッケージなら `*名前`）で、
+            // 読む関数は、その空間のパッケージが直接の依存先として書いたものだけ返す
             let candidates: Vec<(String, String)> = match &space {
-                Some(sp) => vec![(format!("{}/{}", sp, u), format!("{}/{}", sp, u)), (format!("*{}", u), u.clone())],
+                Some(sp) => vec![(format!("{}/{}", sp, u), format!("{}/{}", sp, u)), (format!("{}*{}", sp, u), u.clone())],
                 None => vec![(u.clone(), u.clone()), (format!("*{}", u), u.clone())],
             };
             let mut found = None;
@@ -116,15 +118,25 @@ impl<'a> Loader<'a> {
                         .primary(*span, "ここで使うと、読む順が決まらない")
                         .note("共通の部分を別のモジュールに分けてください"));
                 }
-                // `*名前` は依存先のパッケージだけ（最初のパッケージの同じ名前のモジュールは使わない）
-                if self.infos.contains_key(&key) && (!query.starts_with('*') || self.libs.contains(&key)) {
+                let lib = query.contains('*');
+                if !lib && self.infos.contains_key(&key) {
                     found = Some(key);
                     break;
                 }
+                // 依存先のパッケージは、読んだことがあっても毎回この空間から使えるかを問い合わせる
                 if let Some(text) = (self.read)(&query) {
-                    if query.starts_with('*') {
-                        self.libs.insert(key.clone());
+                    // `*名前` は依存先のパッケージだけ（最初のパッケージの同じ名前のモジュールは使わない）
+                    if lib && self.infos.contains_key(&key) && self.libs.contains(&key) {
+                        found = Some(key);
+                        break;
                     }
+                    let query = if lib {
+                        self.libs.insert(key.clone());
+                        // ファイルの名前はどの空間から読んでも `*名前`
+                        format!("*{}", u)
+                    } else {
+                        query
+                    };
                     self.files.push((query, text));
                     let info = self.module(&key, self.files.len() - 1)?;
                     self.infos.insert(key.clone(), info);
