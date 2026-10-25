@@ -665,3 +665,62 @@ let x = pick(true, 1, 2);
   main のないファイルだけを関数ごとのテストにし、main のあるファイルは今までどおり 1 本（混ぜるとどちらを動かすか分かりにくいのでエラー）。
   動かし方は、ファイルの最後に `fn main() { test_名前(); }` を足して 1 本ずつ別に動かす（位置は元のファイルのまま。テストどうしが響かない）。
   見つけるのは字句解析だけ（`{` の深さが 0 の `fn`）。構文のエラーは動かしたときにふつうに出る。
+
+## 標準ライブラリとWindows向けGUIの方針（設計、未実装。2026-10-25）
+
+- ファイル入出力・通信・PostgreSQL・GUIを扱う。GUIはWindows先行で、Linuxは今後検討する。
+- ゲームの描画にも使えるよう、ウィンドウ・入力・描画をGUI部品から分ける。
+- WindowsはWin32・Direct3D 11・DirectWriteを使う方向で進める。文字を描画先へ出す接続としてDirect2Dとの相互運用を検討する。
+- 詳細な層分け、資源の所有・解放、aliceのリンク・再ビルド、段階ごとの完了条件は [standard-libraries.md](standard-libraries.md)。
+- API名や型の表現は提案段階。ここに記載した機能を実装済みとは扱わない。
+
+## PostgreSQLライブラリの設計（未実装。2026-10-25）
+
+- libpqを使う案で、接続・パラメータ・NULL/bytea・トランザクション・配布・検証条件を具体化した。
+- TransactionがConnectionを所有し、COMMITの結果が分からない場合はUnknownとして返す。SQLは自動再実行しない。
+- 詳細は [postgresql.md](postgresql.md)。記載したAPI・設定・機能を実装済みとは扱わない。
+
+## 外部ライブラリの個別設計書（未実装。2026-10-25）
+
+- [ファイル入出力](file-io.md)、[通信](networking.md)、[共通資源管理](resource-management.md)、
+  [alice拡張](alice-native.md)、[GUI・描画詳細](gui-rendering.md) を順に設計した。
+- 公開API、所有と解放、失敗時の状態、OS依存、実行器への影響、完了条件を記録する。
+- [全体方針](standard-libraries.md) を入口とし、[PostgreSQL](postgresql.md) とも所有・期限・配布の契約を合わせる。
+- 設計書の完成と機能の実装・検証の完了を区別する。ここで新しい文法・ABI・実行時機能を追加したわけではない。
+
+## 標準ライブラリの配置・読み込み（設計、未実装。2026-10-25）
+
+- [配置・読み込み仕様](standard-library-loading.md) に、標準importと別名、配布ルート、可視性、互換性を定めた。
+- 従来の裸のuseと直接依存を維持する。標準はstd.fsなどを明示し、GUI・PostgreSQLは同梱パッケージを直接依存として選ぶ。
+- TCP/DNSとTLSはstd.net/std.tlsに分ける。読み込んだグラフから能力を選び、各実行器・workerで同じsnapshotを使う。
+- 正式な設定仕様、資源ABI、jwc連携の実装完了を意味しない。設計上の試験条件と実際の合格を区別する。
+
+## aliceの正式な設定仕様（設計、未実装。2026-10-25）
+
+- [alice-configuration.md](alice-configuration.md) にmanifest v2、machine/利用者設定、CLIと優先順位を定めた。
+- v1の読み飛ばし・path文字列の扱いを互換経路に残し、新形式では未知キー・重複・不正な型を拒否する。
+- パッケージの能力要求と利用者のSDK/DLL選択を分け、直接依存・ABI・内容に基づく再ビルドの契約を維持する。
+- 設定検査と実際のprobe/buildを分け、未検証や条件不足を合格として扱わない。新設定やCLIは現行aliceに未実装。
+
+## 資源型・runtime ABI・compiler連携（設計、未実装。2026-10-25）
+
+- [資源ABI詳細](resource-abi.md) に、型・Owner/View・24バイトtoken・context分離・世代・C境界・共通の値を定めた。
+- [compiler連携](compiler-integration.md) に、compiler情報、snapshot bundle、JSON要求/応答、共通backendとbootstrapを定めた。
+- 内部操作の登録と依存の公開範囲を別々に検証する。requestの分類や内容hashだけを特権や信頼の証明にしない。
+- 型検査からjwc・C・LLVMまでの対応と安全性1〜7の拡張を完了条件とする。既存の検証成功を新機能へ自動で流用しない。
+
+## Windows GUI内部仕様（設計、未実装。2026-10-25）
+
+- [gui-internals.md](gui-internals.md) に保持型tree、六種類の初期widget、DIP配置、公開操作と上限を定めた。
+- raw入力batchとゲーム用の残り入力を分け、focus/capture・キーのup・再送・overflowを規定する。
+- 日本語IMEはTSF、アクセシビリティはUI Automationを使い、native lock・別thread照会・遅い通知・終了時の寿命を扱う。
+- 通常入力とcomposition、UTF-8/UTF-16/graphemeを区別する。実機IME/Narratorの確認とmock/WARPの成功を分ける。
+- 初期GUIはWindows 10 1809以降/Windows 11 x64、TextInputは単一行。公開API全体と個別C操作の確定・実装完了は別に扱う。
+
+## 標準ライブラリ初期版の残り設計を具体化（未実装。2026-10-25）
+
+- [公開API](public-apis.md) の149操作・142型、[個別C ABI](native-operations.md)、[カタログ/登録表](catalog-registry.md) をまとめた。
+- registry.jsonを正本にCヘッダー・一覧・schema/例を生成し、参照・所有・ID・配置と契約lockの一致を検査する。
+- [公開契約](stdlib-v1-contracts.md) に部分進捗・COMMIT結果・所有受渡しとcodec、初期の既定値/上限を確定した。
+- Window/Draw/Guiのエラーを分け、TLSの期限付きclose、libpq 18/SCRAMの初期adapter、Unsupportedの範囲を明示した。
+- [設計範囲と実装への引渡し](stdlib-design-status.md) に実装・OS結合・実機確認の残りを区別した。設計検査の成功は機能実装の成功ではない。
