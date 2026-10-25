@@ -16,14 +16,14 @@ cargo run -- examples/words.jw "a b a"        # ファイル名のあとの引�
 cargo test
 ```
 
-パッケージ（cargo を小さくしたもの。くわしくは [docs/packages.md](docs/packages.md)）:
+パッケージは別のコマンド `alice`（cargo にあたるもの。`cargo build --release` で target/release/alice もできる。くわしくは [docs/packages.md](docs/packages.md)）:
 
 ```
-jabberwock new app            # app/jabberwock.toml と src/main.jw を作る（--lib でライブラリ）
+alice new app                 # app/alice.toml と src/main.jw を作る（--lib でライブラリ）
 cd app
-jabberwock run                # src/main.jw を動かす（--native で実行ファイルを作って動かす）
-jabberwock build --release    # target/release/app を作る（変わっていなければ作り直さない）
-jabberwock test               # tests/*.jw を動かし、tests/名前.out があれば出力と比べる
+alice run                     # src/main.jw を動かす（--native で実行ファイルを作って動かす）
+alice build --release         # target/release/app を作る（変わっていなければ作り直さない）
+alice test                    # tests/*.jw を動かし、tests/名前.out があれば出力と比べる
 ```
 
 ## 言語の見た目
@@ -289,4 +289,4 @@ cargo run --release -- build -o jwc1 jwc/main.jw   # Rust 版で 1 代目の jwc
 
 1. 実行時に見つけているエラーの一部を、型検査で実行前に見つけるようにする
 2. ベンチマークの残りの項目（[bench/README.md](bench/README.md) の「まだやっていないこと」）
-3. パッケージ: 手元の依存先だけはできた（docs/packages.md）。ネットからの取得・版の指定と、標準ライブラリ
+3. パッケージ（`alice`）: 手元の依存先だけはできた（docs/packages.md）。ネットからの取得・版の指定と、標準ライブラリ

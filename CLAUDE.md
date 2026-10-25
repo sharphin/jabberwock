@@ -24,7 +24,7 @@
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
-| `src/project.rs` | パッケージ（jabberwock.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは `main.rs` の `project_*`。説明は docs/packages.md |
+| `src/project.rs` | パッケージ（alice.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは別の実行ファイル `alice`（`src/alice.rs` の `project_*`）。説明は docs/packages.md |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
@@ -56,7 +56,7 @@
 | `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも）。区画の確保・使い回し・別スレッドでの解放・`Option<own T>`・文字列の長さを、interp と -O1 / -O2 で突き合わせる（`same_as_interp`） |
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
-| `tests/project.rs` | パッケージ（jabberwock.toml・依存先・`new` / `run` / `test` / `build` のコマンド） |
+| `tests/project.rs` | パッケージ（alice.toml・依存先・`alice new` / `run` / `test` / `build`） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |

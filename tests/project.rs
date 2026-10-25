@@ -1,4 +1,4 @@
-//! パッケージ（jabberwock.toml・`jabberwock new` / `build` / `run` / `test`）
+//! パッケージ（alice.toml と `alice` コマンドの new / build / run / test）
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ fn write(p: &Path, s: &str) {
 }
 
 fn jw(dir: &Path, args: &[&str]) -> (i32, String, String) {
-    let o = Command::new(env!("CARGO_BIN_EXE_jabberwock")).args(args).current_dir(dir).output().expect("runs");
+    let o = Command::new(env!("CARGO_BIN_EXE_alice")).args(args).current_dir(dir).output().expect("runs");
     (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string())
 }
 
@@ -44,14 +44,14 @@ fn manifest() {
 #[test]
 fn modules_come_from_src_and_dependencies() {
     let d = tmp("load");
-    write(&d.join("app/jabberwock.toml"), "[package]\nname = \"app\"\n[dependencies]\nshapes = { path = \"../shapes\" }\n");
+    write(&d.join("app/alice.toml"), "[package]\nname = \"app\"\n[dependencies]\nshapes = { path = \"../shapes\" }\n");
     write(&d.join("app/src/main.jw"), "use shapes;\nuse util;\nfn main() { print(shapes.area(2), util.one()); }\n");
     write(&d.join("app/src/util.jw"), "pub fn i64 one() { 1 }\n");
     // 依存先の依存先も読む
-    write(&d.join("shapes/jabberwock.toml"), "[package]\nname = \"shapes\"\n[dependencies]\nnums = { path = \"../nums\" }\n");
+    write(&d.join("shapes/alice.toml"), "[package]\nname = \"shapes\"\n[dependencies]\nnums = { path = \"../nums\" }\n");
     write(&d.join("shapes/src/lib.jw"), "use nums;\nuse sq;\npub fn i64 area(i64 x) { sq.sq(x) + nums.zero() }\n");
     write(&d.join("shapes/src/sq.jw"), "pub fn i64 sq(i64 x) { x * x }\n");
-    write(&d.join("nums/jabberwock.toml"), "[package]\nname = \"nums\"\n");
+    write(&d.join("nums/alice.toml"), "[package]\nname = \"nums\"\n");
     write(&d.join("nums/src/lib.jw"), "pub fn i64 zero() { 0 }\n");
     let p = Project::load(&d.join("app")).unwrap();
     let names: Vec<&str> = p.modules.keys().map(|s| s.as_str()).collect();
@@ -67,12 +67,12 @@ fn modules_come_from_src_and_dependencies() {
     write(&d.join("app/src/sq.jw"), "pub fn i64 sq(i64 x) { x }\n");
     assert!(Project::load(&d.join("app")).unwrap_err().contains("モジュール `sq` が 2 か所"));
     fs::remove_file(d.join("app/src/sq.jw")).unwrap();
-    write(&d.join("nums/jabberwock.toml"), "[package]\nname = \"numbers\"\n");
+    write(&d.join("nums/alice.toml"), "[package]\nname = \"numbers\"\n");
     assert!(Project::load(&d.join("app")).unwrap_err().contains("名前が `numbers`"));
-    write(&d.join("nums/jabberwock.toml"), "[package]\nname = \"nums\"\n");
+    write(&d.join("nums/alice.toml"), "[package]\nname = \"nums\"\n");
     fs::remove_file(d.join("nums/src/lib.jw")).unwrap();
     assert!(Project::load(&d.join("app")).unwrap_err().contains("src/lib.jw がありません"));
-    write(&d.join("app/jabberwock.toml"), "[package]\nname = \"app\"\n[dependencies]\nnone = { path = \"../none\" }\n");
+    write(&d.join("app/alice.toml"), "[package]\nname = \"app\"\n[dependencies]\nnone = { path = \"../none\" }\n");
     assert!(Project::load(&d.join("app")).unwrap_err().contains("フォルダがありません"));
     let _ = fs::remove_dir_all(&d);
 }
@@ -95,7 +95,7 @@ fn new_run_and_test_commands() {
     assert!(out.contains("test tests/add.jw ... ok") && out.contains("1 本成功・0 本失敗"), "{}", out);
 
     // 依存先を足して、引数も渡す
-    write(&app.join("jabberwock.toml"), "[package]\nname = \"app\"\n\n[dependencies]\nmathx = { path = \"../mathx\" }\n");
+    write(&app.join("alice.toml"), "[package]\nname = \"app\"\n\n[dependencies]\nmathx = { path = \"../mathx\" }\n");
     write(&app.join("src/main.jw"), "use mathx;\nfn main() {\n    print(mathx.add(2, 3), args());\n}\n");
     let (c, out, err) = jw(&app, &["run", "--", "x", "y"]);
     assert_eq!((c, out.as_str()), (0, "5 [x, y]\n"), "{}", err);
@@ -123,7 +123,7 @@ fn new_run_and_test_commands() {
     // パッケージの外
     let (c, _, err) = jw(&std::env::temp_dir(), &["test"]);
     assert_eq!(c, 1);
-    assert!(err.contains("jabberwock.toml が見つかりません"), "{}", err);
+    assert!(err.contains("alice.toml が見つかりません"), "{}", err);
     let _ = fs::remove_dir_all(&d);
 }
 

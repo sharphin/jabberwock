@@ -12,5 +12,9 @@ path = "src/lib.rs"
 name = "jabberwock"
 path = "src/main.rs"
 
+[[bin]]
+name = "alice"
+path = "src/alice.rs"
+
 [profile.release]
 opt-level = 3

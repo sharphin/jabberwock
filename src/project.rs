@@ -1,11 +1,11 @@
-//! パッケージ（`jabberwock new` / `build` / `run` / `test`）。cargo を小さくしたもの。
+//! パッケージ（`alice new` / `build` / `run` / `test`）。cargo を小さくしたもの（コマンドは src/alice.rs）。
 //!
 //! 形:
 //! ```text
-//! jabberwock.toml     名前と依存先（下の書き方だけ読む）
+//! alice.toml          名前と依存先（下の書き方だけ読む）
 //! src/main.jw         実行ファイルの入口（ライブラリなら src/lib.jw）
 //! src/*.jw            モジュール（`use geom;` で src/geom.jw）
-//! tests/*.jw          `jabberwock test` で 1 本ずつ動かす。tests/名前.out があれば出力と比べる
+//! tests/*.jw          `alice test` で 1 本ずつ動かす。tests/名前.out があれば出力と比べる
 //! target/             build の出力（debug / release）
 //! ```
 //! 依存先は手元のフォルダだけ（`foo = { path = "../foo" }`）。依存先の src/lib.jw がモジュール `foo` になり、
@@ -15,11 +15,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const MANIFEST: &str = "jabberwock.toml";
+pub const MANIFEST: &str = "alice.toml";
 
 #[derive(Debug, Clone)]
 pub struct Project {
-    /// jabberwock.toml のあるフォルダ
+    /// alice.toml のあるフォルダ
     pub root: PathBuf,
     pub name: String,
     /// 依存先の (名前, フォルダ)。書いた順
@@ -28,7 +28,7 @@ pub struct Project {
     pub modules: BTreeMap<String, PathBuf>,
 }
 
-/// jabberwock.toml の中身（読めた部分だけ）
+/// alice.toml の中身（読めた部分だけ）
 #[derive(Debug, Default, PartialEq)]
 pub struct Manifest {
     pub name: String,
@@ -132,7 +132,7 @@ fn is_name(s: &str) -> bool {
 }
 
 impl Project {
-    /// `dir` から上へたどって jabberwock.toml を探す
+    /// `dir` から上へたどって alice.toml を探す
     pub fn find(dir: &Path) -> Option<PathBuf> {
         let mut d = Some(dir);
         while let Some(x) = d {
@@ -144,7 +144,7 @@ impl Project {
         None
     }
 
-    /// root の jabberwock.toml を読み、依存先も含めてモジュールの場所を決める
+    /// root の alice.toml を読み、依存先も含めてモジュールの場所を決める
     pub fn load(root: &Path) -> Result<Project, String> {
         let m = read_manifest(root)?;
         let mut p = Project { root: root.to_path_buf(), name: m.name.clone(), deps: Vec::new(), modules: BTreeMap::new() };
@@ -231,7 +231,7 @@ impl Project {
         self.root.join("target").join(if release { "release" } else { "debug" }).join(&self.name)
     }
 
-    /// 作り直しが要るか（実行ファイルが、ソース・依存先・jabberwock.toml のどれよりも古いか）
+    /// 作り直しが要るか（実行ファイルが、ソース・依存先・alice.toml のどれよりも古いか）
     pub fn stale(&self, exe: &Path) -> bool {
         let Ok(built) = fs::metadata(exe).and_then(|m| m.modified()) else { return true };
         let mut inputs = vec![self.root.join(MANIFEST), self.main_file()];
@@ -259,7 +259,7 @@ fn read_manifest(dir: &Path) -> Result<Manifest, String> {
     parse_manifest(&text).map_err(|e| format!("{}: {}", dir.display(), e))
 }
 
-/// `jabberwock new 名前 [--lib]`: フォルダと最初のファイルを作る
+/// `alice new 名前 [--lib]`: フォルダと最初のファイルを作る
 pub fn create(dir: &Path, lib: bool) -> Result<(), String> {
     let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
     if !is_name(&name) {
