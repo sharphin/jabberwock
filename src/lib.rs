@@ -10,6 +10,7 @@ pub mod lexer;
 pub mod modules;
 pub mod native;
 pub mod parser;
+pub mod project;
 mod sort;
 pub mod threads;
 pub mod types;
@@ -50,8 +51,13 @@ pub fn no_modules(_: &str) -> Option<String> {
 
 /// 診断を、読んだファイルの中の位置で出す。`main` は最初のファイルの名前、モジュールは `名前.jw`
 pub fn render(d: &Diagnostic, main: &str, files: &[(String, String)]) -> String {
+    render_named(d, main, files, &|m| format!("{}.jw", m))
+}
+
+/// `render` の、モジュールのファイルの表示名を `name_of(モジュール名)` で決めるもの（パッケージでは src/geom.jw など）
+pub fn render_named(d: &Diagnostic, main: &str, files: &[(String, String)], name_of: &dyn Fn(&str) -> String) -> String {
     let names: Vec<String> =
-        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.jw", m) }).collect();
+        files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { name_of(m) }).collect();
     let fs: Vec<(&str, &str)> = names.iter().zip(files).map(|(n, (_, s))| (n.as_str(), s.as_str())).collect();
     if fs.is_empty() {
         return d.render(main, "");

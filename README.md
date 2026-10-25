@@ -16,6 +16,16 @@ cargo run -- examples/words.jw "a b a"        # ファイル名のあとの引�
 cargo test
 ```
 
+パッケージ（cargo を小さくしたもの。くわしくは [docs/packages.md](docs/packages.md)）:
+
+```
+jabberwock new app            # app/jabberwock.toml と src/main.jw を作る（--lib でライブラリ）
+cd app
+jabberwock run                # src/main.jw を動かす（--native で実行ファイルを作って動かす）
+jabberwock build --release    # target/release/app を作る（変わっていなければ作り直さない）
+jabberwock test               # tests/*.jw を動かし、tests/名前.out があれば出力と比べる
+```
+
 ## 言語の見た目
 
 ```
@@ -260,8 +270,8 @@ count = 3
 ## 速さ
 
 `jabberwock build` の実行ファイルを Go・C++（clang++ -O2）と比べたものは [bench/README.md](bench/README.md)。
-2026-10-25 の 12 本では、9 本で Go より速い（spectralnorm は同じくらい）。C++ とは 8 本で同じくらい（差が 5% 以内）かそれより速い。
-Go に負けているのは bst（確保と解放）と chan（スレッドの待ち合わせ）。
+Rust の版も足した 21 本（2026-10-25）では、15 本で Go より速い。計算だけのものは C++・Rust とほぼ同じで、確保と解放が多いもの（shortlived・binarytrees）は一番速い。
+Go に負けているのは bst・chan・pingpong（スレッドの待ち合わせ）・refmut・linkedlist。
 
 ## セルフホスト
 
@@ -279,4 +289,4 @@ cargo run --release -- build -o jwc1 jwc/main.jw   # Rust 版で 1 代目の jwc
 
 1. 実行時に見つけているエラーの一部を、型検査で実行前に見つけるようにする
 2. ベンチマークの残りの項目（[bench/README.md](bench/README.md) の「まだやっていないこと」）
-3. パッケージの管理とライブラリ
+3. パッケージ: 手元の依存先だけはできた（docs/packages.md）。ネットからの取得・版の指定と、標準ライブラリ
