@@ -19,6 +19,7 @@
 
 | 対象 | 設計書 |
 |---|---|
+| 標準ライブラリの配置・読み込み | [standard-library-loading.md](standard-library-loading.md) |
 | ファイル入出力 | [file-io.md](file-io.md) |
 | 通信 | [networking.md](networking.md) |
 | 共通資源管理 | [resource-management.md](resource-management.md) |
@@ -43,7 +44,8 @@
 ユーザーが作る構造体のフィールドは型が公開されると公開されるため、`struct Window { i64 handle; }` のような
 実装でOSハンドルを安全に隠せるとは扱わない。
 
-現在は平坦なモジュールとパス依存を利用する。`use std.gui;` のような階層的なimportを追加済みとはしない。
+現在は平坦なモジュールとパス依存を利用する。`use std.fs;` のような標準importを追加済みとはしない。
+追加する記法、配布ルート、名前の衝突、選択式の同梱パッケージは [配置・読み込み仕様](standard-library-loading.md) に定める。
 jwcはaliceのパッケージに未対応なので、自己ホスト側のパッケージ対応も別の作業として含める。
 
 ## 層の分け方
@@ -144,6 +146,7 @@ Windowsのパスは内部でUTF-16へ変換し、文字コードと埋め込みN
 ### 通信
 
 最初は同期TCP・DNS・タイムアウトを実装する。GUIスレッドをブロックする操作はworkerへ分ける。
+公開モジュールはTCP/DNSのstd.netとTLSクライアントのstd.tlsに分け、TCPだけでTLSを要求しない。
 短い送受信、EOF、半切断、接続失敗、タイムアウトを区別する。
 WindowsではWinsockの初期化と終了、SOCKETの幅、INVALID_SOCKETを内部で扱う。
 TLSは検証済みのOS機能または既存ライブラリを使い、証明書と接続先名を検証する。TLS自体は自作しない。

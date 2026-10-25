@@ -10,6 +10,10 @@ TCPクライアント・サーバー、IPv4/IPv6、DNS、期限付きの送受�
 公開APIは同期式とし、GUIではworker内で利用する。UDP、HTTP、WebSocket、TLSサーバー、公開された非同期API、
 接続プール、接続済み資源のスレッド移動は後の範囲とする。
 
+公開モジュールは [配置・読み込み仕様](standard-library-loading.md) に従い、TCP/DNSをstd.net、
+TLSクライアントをstd.tlsへ分ける。std.tlsはstd.netのTcpStreamと共通の期限型を使う。
+std.netだけの利用でtls_client能力やTLSのネイティブ依存を要求しない。
+
 PostgreSQLは [libpqの設計](postgresql.md) に従い、独自のTCP/TLS上でDBプロトコルを実装しない。
 libpqのTLSと本ライブラリのTLSでは、信頼する証明書の取得方法などが異なりうることを明記する。
 
