@@ -47,7 +47,41 @@ enum H {
 /// プログラム全体を LLVM のテキストにする。`files` はファイルの番号から名前。
 /// `sources` はファイルの中身（エラーでソースの行を出すため）。空なら位置だけ出す（`--release`）
 pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
+    emit_with(prog, files, sources, Opts::default()).map(|(t, _)| t)
+}
+
+/// 書き出しの切り替え（ベンチマークで検査の費用を分けて測るため。ふだんは `Opts::default()`）
+#[derive(Clone, Copy, Debug)]
+pub struct Opts {
+    /// ref の世代を確かめる（false なら安全でない。上限値を測るだけ）
+    pub gen: bool,
+    /// 添字の範囲を確かめる（false なら安全でない）
+    pub bounds: bool,
+    /// 実行時に通った検査の数を数え、終わるときに標準エラーへ `[checks] ...` と出す（Linux の dprintf を使う）
+    pub count: bool,
+}
+
+impl Default for Opts {
+    fn default() -> Self {
+        Opts { gen: true, bounds: true, count: false }
+    }
+}
+
+/// 書き出した検査の数（場所の数。実行時の回数ではない）
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Stats {
+    /// 世代を確かめる場所
+    pub gen: usize,
+    /// 解析が世代の検査を消した場所
+    pub elided: usize,
+    /// 添字の範囲を確かめる場所
+    pub bounds: usize,
+}
+
+/// `emit` に切り替えを渡したもの。書き出した検査の数も返す
+pub fn emit_with(prog: &Program, files: &[String], sources: &[String], opts: Opts) -> G<(String, Stats)> {
     let mut m = Module::new(prog, files);
+    m.opts = opts;
     for (i, f) in prog.fns.iter().enumerate() {
         FnGen::new(&mut m, f, i).run()?;
     }
@@ -74,7 +108,28 @@ pub fn emit(prog: &Program, files: &[String], sources: &[String]) -> G<String> {
         entries.join(", "),
         entries.len()
     );
-    Ok(m.output())
+    if opts.count {
+        // 終わるとき（exit でも）に数を出す
+        let fmt = m.cstr("[checks] gen %lld elided %lld bounds %lld\n");
+        let _ = writeln!(
+            m.globals,
+            "@jw.count.gen = global i64 0\n@jw.count.elided = global i64 0\n@jw.count.bounds = global i64 0\n\
+             declare i32 @dprintf(i32, ptr, ...)\n\
+             define internal void @jw.count.report() {{\n  %g = load i64, ptr @jw.count.gen\n  %e = load i64, ptr @jw.count.elided\n  \
+             %b = load i64, ptr @jw.count.bounds\n  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr {}, i64 %g, i64 %e, i64 %b)\n  ret void\n}}\n\
+             @llvm.global_dtors = appending global [1 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 65535, ptr @jw.count.report, ptr null }}]",
+            fmt
+        );
+    }
+    let stats = m.stats;
+    Ok((m.output(), stats))
+}
+
+/// 数える版なら、数を 1 つ足す（`what` は gen / elided / bounds）
+fn count(b: &mut B, o: &Opts, what: &str) {
+    if o.count {
+        b.op(format!("atomicrmw add ptr @jw.count.{}, i64 1 monotonic", what));
+    }
 }
 
 /// 型にもとづく別名の情報（TBAA）。リストの頭（要素の領域・長さ）と、リスト・辞書の要素の中の数やポインタは
@@ -308,6 +363,8 @@ struct Module<'p> {
     /// interface として使った構造体の型の番号（type id）
     tids: Vec<Ty>,
     n: usize,
+    opts: Opts,
+    stats: Stats,
 }
 
 impl<'p> Module<'p> {
@@ -326,6 +383,8 @@ impl<'p> Module<'p> {
             todo: Vec::new(),
             tids: Vec::new(),
             n: 0,
+            opts: Opts::default(),
+            stats: Stats::default(),
         }
     }
 
@@ -1286,7 +1345,9 @@ impl<'p> Module<'p> {
                 } else {
                     (b.val("load ptr, ptr %p"), None)
                 };
-                let target = own_target(b, &p, true, "%use");
+                let o = self.opts;
+                self.stats.gen += 1;
+                let target = own_target(b, &p, o.gen, "%use", &o);
                 match tid {
                     None => {
                         let f = self.helper(H::Show, x);
@@ -1299,7 +1360,9 @@ impl<'p> Module<'p> {
                 let iface = is_iface_ptr(t);
                 let rt = if iface { "%iref" } else { "%ref" };
                 let r = b.val(format!("load {}, ptr %p", rt));
-                let addr = check_ref(b, rt, &r, "%use");
+                let o = self.opts;
+                self.stats.gen += 1;
+                let addr = check_ref(b, rt, &r, "%use", &o);
                 if iface {
                     let tid = b.val(format!("extractvalue %iref {}, 4", r));
                     self.dispatch_show(b, &tid, &addr, &d1)?;
@@ -1773,7 +1836,7 @@ fn store_key(m: &mut Module, b: &mut B, k: &Ty, kv: &str, dst: &str) -> G<()> {
 }
 
 /// own（または写し）の先。写しなら世代を確かめる（`check` が false なら確かめない）
-fn own_target(b: &mut B, p: &str, check: bool, use_site: &str) -> String {
+fn own_target(b: &mut B, p: &str, check: bool, use_site: &str, o: &Opts) -> String {
     let bits = b.val(format!("ptrtoint ptr {} to i64", p));
     let tag = b.val(format!("and i64 {}, 1", bits));
     let isv = b.val(format!("icmp ne i64 {}, 0", tag));
@@ -1785,8 +1848,10 @@ fn own_target(b: &mut B, p: &str, check: bool, use_site: &str) -> String {
     b.op(format!("br i1 {}, label %{}, label %{}", isv, yes, join));
     b.label(&yes);
     let t = if check {
+        count(b, o, "gen");
         b.val(format!("call ptr @jw_view_target(ptr {}, ptr {})", p, use_site))
     } else {
+        count(b, o, "elided");
         b.val(format!("call ptr @jw_view_target_nocheck(ptr {})", p))
     };
     b.br(&join);
@@ -1794,9 +1859,13 @@ fn own_target(b: &mut B, p: &str, check: bool, use_site: &str) -> String {
     b.val(format!("phi ptr [ {}, %{} ], [ {}, %{} ]", p, from, t, yes))
 }
 
-/// ref の世代を確かめて、指す先を返す
-fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str) -> String {
+/// ref の世代を確かめて、指す先を返す（`o.gen` が false なら確かめない）
+fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str, o: &Opts) -> String {
     let addr = b.val(format!("extractvalue {} {}, 0", rt, r));
+    if !o.gen {
+        return addr;
+    }
+    count(b, o, "gen");
     let blk = b.val(format!("extractvalue {} {}, 1", rt, r));
     let gen = b.val(format!("extractvalue {} {}, 2", rt, r));
     let site = b.val(format!("extractvalue {} {}, 3", rt, r));
@@ -2218,7 +2287,14 @@ impl<'m, 'p> FnGen<'m, 'p> {
         for (k, pr) in p.proj.iter().enumerate() {
             match pr {
                 Proj::Deref(check, span) => {
-                    let check = *check != Check::Elided;
+                    let o = self.m.opts;
+                    let elided = *check == Check::Elided;
+                    if elided {
+                        self.m.stats.elided += 1;
+                    } else {
+                        self.m.stats.gen += 1;
+                    }
+                    let check = !elided && o.gen;
                     let use_site = self.m.site(*span, "");
                     match r.ty.clone() {
                         Ty::Own(x) => {
@@ -2229,7 +2305,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             } else {
                                 self.b.val(format!("load ptr, ptr {}", r.ptr))
                             };
-                            let t = own_target(&mut self.b, &raw, check, &use_site);
+                            let t = own_target(&mut self.b, &raw, check, &use_site, &o);
                             r.ptr = t.clone();
                             r.block = Some(t);
                             r.ty = *x;
@@ -2239,8 +2315,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                             let rt = if iface { "%iref" } else { "%ref" };
                             let v = self.b.val(format!("load {}, ptr {}", rt, r.ptr));
                             let addr = if check {
-                                check_ref(&mut self.b, rt, &v, &use_site)
+                                check_ref(&mut self.b, rt, &v, &use_site, &o)
                             } else {
+                                if elided {
+                                    count(&mut self.b, &o, "elided");
+                                }
                                 self.b.val(format!("extractvalue {} {}, 0", rt, v))
                             };
                             if iface {
@@ -2346,6 +2425,12 @@ impl<'m, 'p> FnGen<'m, 'p> {
     fn index(&mut self, kv: &str, kt: &Ty, len: &str, span: Span) -> G<String> {
         let Ty::Int(t) = kt else { return Err("整数でない添字".to_string()) };
         let i = widen(&mut self.b, kv, *t);
+        let o = self.m.opts;
+        self.m.stats.bounds += 1;
+        if !o.bounds {
+            return Ok(i);
+        }
+        count(&mut self.b, &o, "bounds");
         let bad = if t.signed() {
             let neg = self.b.val(format!("icmp slt i64 {}, 0", i));
             let big = self.b.val(format!("icmp sge i64 {}, {}", i, len));

@@ -227,15 +227,30 @@ pub fn llvm_text(src: &str, read: Reader, main: &str) -> Result<String, String> 
 /// `jabberwock build` 用の LLVM IR。`release` なら実行時エラーは使った位置だけ出す（ソースを入れない）。
 /// 書けないときは、表示する文（ソースの行つきのエラー）を返す
 pub fn llvm_build(src: &str, read: Reader, main: &str, release: bool) -> Result<String, String> {
+    llvm_build_with(src, read, main, release, true, ir::llvm::Opts::default()).map(|(t, _)| t)
+}
+
+/// `llvm_build` に測定用の切り替えを足したもの（`jabberwock build --no-elide` など）。`elide` が false なら検査を消す解析をしない。
+/// 書き出した検査の数も返す（`--stats`）
+pub fn llvm_build_with(
+    src: &str,
+    read: Reader,
+    main: &str,
+    release: bool,
+    elide: bool,
+    opts: ir::llvm::Opts,
+) -> Result<(String, ir::llvm::Stats), String> {
     let (prog, files) = parse(src, read);
     let names: Vec<String> =
         files.iter().enumerate().map(|(i, (m, _))| if i == 0 { main.to_string() } else { format!("{}.jw", m) }).collect();
     let prog = prog.map_err(|d| render(&d, main, &files))?;
     let (_, info) = types::check_with_info(&prog).map_err(|d| render(&d, main, &files))?;
     let mut irp = ir::lower::lower(&prog, &info).map_err(|r| format!("まだ IR に書き出せない書き方があります: {}\n", r))?;
-    ir::analyze::analyze(&mut irp);
+    if elide {
+        ir::analyze::analyze(&mut irp);
+    }
     let sources: Vec<String> = if release { Vec::new() } else { files.iter().map(|(_, t)| t.clone()).collect() };
-    ir::llvm::emit(&irp, &names, &sources).map_err(|r| format!("まだ LLVM に書き出せない書き方があります: {}\n", r))
+    ir::llvm::emit_with(&irp, &names, &sources, opts).map_err(|r| format!("まだ LLVM に書き出せない書き方があります: {}\n", r))
 }
 
 /// 実行せずに型検査だけして、警告と読んだファイルを返す（エラーがあれば警告は空。エラーは実行時に返る）

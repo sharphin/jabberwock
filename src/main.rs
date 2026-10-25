@@ -127,14 +127,27 @@ fn main() {
 
 /// `jabberwock build [--release] [-o 出力] <file.jw>`: LLVM に書き出し、clang で実行ファイルを作る
 fn build(args: Vec<String>) {
-    let usage = "使い方: jabberwock build [--release] [-o 出力] <file.jw>";
+    let usage = "使い方: jabberwock build [--release] [-o 出力] [測定用の切り替え] <file.jw>";
     let mut release = false;
+    // 測定用（ベンチマークで検査の費用を分ける）。--no-gen-checks / --no-bounds-checks / --unchecked は安全でない
+    let mut elide = true;
+    let mut stats = false;
+    let mut opts = jabberwock::ir::llvm::Opts::default();
     let mut out = None;
     let mut path = None;
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--release" => release = true,
+            "--no-elide" => elide = false,
+            "--no-gen-checks" => opts.gen = false,
+            "--no-bounds-checks" => opts.bounds = false,
+            "--unchecked" => {
+                opts.gen = false;
+                opts.bounds = false;
+            }
+            "--count-checks" => opts.count = true,
+            "--stats" => stats = true,
             "-o" => match it.next() {
                 Some(o) => out = Some(o),
                 None => {
@@ -146,6 +159,13 @@ fn build(args: Vec<String>) {
                 eprintln!("{}", usage);
                 eprintln!("  --release  実行時エラーは使った位置だけ出す（ソースを実行ファイルに入れない）");
                 eprintln!("  -o 出力     実行ファイルの名前（なければファイル名から .jw を除いたもの）");
+                eprintln!("測定用（ベンチマークで検査の費用を分けるため）:");
+                eprintln!("  --no-elide          検査を消す解析をしない（世代の検査を全部残す）");
+                eprintln!("  --no-gen-checks     ref の世代を確かめない（安全でない。上限値を測るだけ）");
+                eprintln!("  --no-bounds-checks  添字の範囲を確かめない（安全でない）");
+                eprintln!("  --unchecked         上の 2 つの両方");
+                eprintln!("  --count-checks      実行時に通った検査の数を、終わるときに標準エラーへ出す（Linux）");
+                eprintln!("  --stats             書き出した検査の場所の数を出す");
                 process::exit(0);
             }
             _ if path.is_none() => path = Some(a),
@@ -172,8 +192,13 @@ fn build(args: Vec<String>) {
     for w in warnings {
         eprint!("{}", jabberwock::render(&w, &path, &files));
     }
-    let ll = match jabberwock::llvm_build(&src, &read, &path, release) {
-        Ok(t) => t,
+    let ll = match jabberwock::llvm_build_with(&src, &read, &path, release, elide, opts) {
+        Ok((t, st)) => {
+            if stats {
+                eprintln!("[stats] 世代の検査 {} か所・解析で消した {} か所・添字の検査 {} か所", st.gen, st.elided, st.bounds);
+            }
+            t
+        }
         Err(e) => {
             eprint!("{}", e);
             process::exit(1);

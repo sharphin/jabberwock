@@ -11,6 +11,8 @@ jabberwock --ll hello.jw               # 書き出した LLVM IR を見るだけ
 
 - 最適化は `-O2`。clang は `PATH` の `clang` を使う。別のものは環境変数 `JW_CLANG` で指定する（例 `JW_CLANG=C:\LLVM\bin\clang.exe`）。
 - まだ書き出せない書き方があると、理由を出して止まる（インタプリタでは動く）。
+- 測定用の切り替え（bench/run.sh が使う）: `--no-elide`（世代の検査を全部残す）・`--no-gen-checks` / `--no-bounds-checks` / `--unchecked`（検査を消す。**安全でない**）・
+  `--count-checks`（実行時に通った検査の数を、終わるときに標準エラーへ `[checks] gen .. elided .. bounds ..` と出す。Linux）・`--stats`（書き出した検査の場所の数）。
 - GitHub Actions（`.github/workflows/test.yml`）が main への push ごとに、Linux と Windows で全テストを実行ファイルとの突き合わせ（`JW_NATIVE=1`）つきで走らせる。Windows は公式の LLVM と Visual Studio（下の B）の組み合わせで確かめている（A の llvm-mingw はまだ確かめていない）。
 
 ## Windows で clang を入れる

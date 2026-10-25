@@ -400,3 +400,42 @@ fn temporary_receiver_frees_its_owns_with_the_same_reason() {
     same_as_interp("temp_this_field", &format!("{}fn main() {{\n    let u = mk(4).bb();\n    print(u.x);\n}}", head));
     same_as_interp("temp_this_list", &format!("{}fn main() {{\n    let u = mk(4).first();\n    print(u.x);\n}}", head));
 }
+
+#[test]
+fn measurement_builds_keep_the_output_and_count_checks() {
+    // ベンチマーク用の切り替え（bench/run.sh）: 検査を全部残す・全部消す・数える。正しいプログラムなら出力は同じ
+    if !have_clang() {
+        return;
+    }
+    use jabberwock::ir::llvm::Opts;
+    let src = "struct P { i64 x; }\nfn i64 sum(ref P[] ps) {\n    let mut s = 0;\n    for i in range(ps.len()) { s += ps[i].x; }\n    s\n}\n\
+               fn main() {\n    let P[] mut ps = [];\n    for i in range(10) { ps.push(P { x: i }); }\n    let r = ref ps[3];\n    print(sum(ps), r.x);\n}";
+    let dir = std::env::temp_dir().join(format!("jw-native-test-{}-measure", std::process::id()));
+    let variants = [
+        ("normal", true, Opts::default()),
+        ("all", false, Opts::default()),
+        ("none", true, Opts { gen: false, bounds: false, count: false }),
+        ("count", true, Opts { count: true, ..Opts::default() }),
+    ];
+    for (name, elide, opts) in variants {
+        let (ll, st) = jabberwock::llvm_build_with(src, &no_modules, "main.jw", false, elide, opts).expect("lowers to LLVM");
+        assert!(st.bounds > 0, "{}: {:?}", name, st);
+        if !elide {
+            assert_eq!(st.elided, 0, "{}: {:?}", name, st);
+        }
+        let exe = native::compile(&ll, &dir, name, "-O1").expect("clang compiles");
+        let out = Command::new(&exe).output().expect("runs");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "45 3\n", "{}", name);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if opts.count {
+            // 添字は 10 回（sum の中）と ps[3]、世代は r.x の 1 回
+            assert!(err.starts_with("[checks] gen "), "{}", err);
+            let n: Vec<u64> = err.split_whitespace().filter_map(|w| w.parse().ok()).collect();
+            assert_eq!(n.len(), 3, "{}", err);
+            assert!(n[2] >= 11, "{}", err);
+        } else {
+            assert!(err.is_empty(), "{}: {}", name, err);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
