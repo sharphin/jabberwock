@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "catalog_version": {
+      "const": 1
+    },
+    "catalog_kind": {
+      "enum": [
+        "design-example",
+        "installed"
+      ]
+    },
+    "distribution_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384
+    },
+    "stdlib_build_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "registry_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtime_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtime_manifest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+          "maxLength": 1024
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777216
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "resource_abi": {
+      "const": 1
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "x86_64-unknown-linux-gnu",
+          "x86_64-pc-windows-msvc"
+        ]
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "visibility": {
+            "enum": [
+              "public",
+              "private"
+            ]
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 1024
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 16777216
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "bytes",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "imports": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "uniqueItems": true,
+            "maxItems": 16384
+          },
+          "allowed_importers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "uniqueItems": true,
+            "maxItems": 16384
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "draw2d",
+                "fs",
+                "gui",
+                "image",
+                "net",
+                "postgres",
+                "tls_client",
+                "window"
+              ]
+            },
+            "uniqueItems": true,
+            "maxItems": 8
+          },
+          "resource_abi": {
+            "const": 1
+          }
+        },
+        "required": [
+          "id",
+          "visibility",
+          "source",
+          "imports",
+          "allowed_importers",
+          "capabilities",
+          "resource_abi"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 16384
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+            "maxLength": 1024
+          },
+          "manifest": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 1024
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 16777216
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "bytes",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+                "maxLength": 1024
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 16777216
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "bytes",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "uniqueItems": true,
+            "maxItems": 16384
+          },
+          "standard_modules": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "uniqueItems": true,
+            "maxItems": 16384
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "draw2d",
+                "fs",
+                "gui",
+                "image",
+                "net",
+                "postgres",
+                "tls_client",
+                "window"
+              ]
+            },
+            "uniqueItems": true,
+            "maxItems": 8
+          },
+          "resource_abi": {
+            "const": 1
+          }
+        },
+        "required": [
+          "name",
+          "root",
+          "manifest",
+          "entry",
+          "dependencies",
+          "standard_modules",
+          "capabilities",
+          "resource_abi"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 4096
+    }
+  },
+  "required": [
+    "catalog_version",
+    "catalog_kind",
+    "distribution_id",
+    "stdlib_build_id",
+    "registry_sha256",
+    "runtime_sha256",
+    "runtime_manifest",
+    "resource_abi",
+    "targets",
+    "modules",
+    "packages"
+  ],
+  "additionalProperties": false
+}

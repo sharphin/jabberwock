@@ -1,0 +1,7657 @@
+{
+  "schema_version": 1,
+  "api_version": 1,
+  "resource_abi": 1,
+  "codec_version": 1,
+  "state": "design-only",
+  "modules": [
+    {
+      "name": "std.fs",
+      "source": "standard",
+      "capabilities": [
+        "fs"
+      ],
+      "dependencies": []
+    },
+    {
+      "name": "std.time",
+      "source": "standard",
+      "capabilities": [],
+      "dependencies": []
+    },
+    {
+      "name": "std.net",
+      "source": "standard",
+      "capabilities": [
+        "net"
+      ],
+      "dependencies": [
+        "std.time"
+      ]
+    },
+    {
+      "name": "std.tls",
+      "source": "standard",
+      "capabilities": [
+        "net",
+        "tls_client"
+      ],
+      "dependencies": [
+        "std.net",
+        "std.time"
+      ]
+    },
+    {
+      "name": "postgres",
+      "source": "bundled",
+      "capabilities": [
+        "postgres"
+      ],
+      "dependencies": [
+        "std.fs",
+        "std.time"
+      ]
+    },
+    {
+      "name": "window",
+      "source": "bundled",
+      "capabilities": [
+        "window"
+      ],
+      "dependencies": [
+        "std.time"
+      ]
+    },
+    {
+      "name": "draw2d",
+      "source": "bundled",
+      "capabilities": [
+        "draw2d"
+      ],
+      "dependencies": [
+        "window"
+      ]
+    },
+    {
+      "name": "image",
+      "source": "bundled",
+      "capabilities": [
+        "image"
+      ],
+      "dependencies": [
+        "std.fs"
+      ]
+    },
+    {
+      "name": "gui",
+      "source": "bundled",
+      "capabilities": [
+        "gui"
+      ],
+      "dependencies": [
+        "std.time",
+        "window",
+        "draw2d"
+      ]
+    }
+  ],
+  "types": {
+    "std.fs.Path": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "encoding",
+          "type": "u32"
+        },
+        {
+          "name": "bytes",
+          "type": "list<u8>"
+        }
+      ],
+      "value_id": 1
+    },
+    "std.fs.File": {
+      "kind": "resource",
+      "resource_kind": 1,
+      "copy": false,
+      "send": false
+    },
+    "std.fs.IoErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "NotFound",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "AlreadyExists",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "PermissionDenied",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "InvalidPath",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "InvalidEncoding",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "WrongKind",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "Closed",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "Busy",
+          "tag": 7,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 8,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 9,
+          "fields": []
+        },
+        {
+          "name": "NoProgress",
+          "tag": 10,
+          "fields": []
+        },
+        {
+          "name": "InvalidArgument",
+          "tag": 11,
+          "fields": []
+        },
+        {
+          "name": "OsError",
+          "tag": 12,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.IoError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "std.fs.IoErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "std.fs.Creation": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Existing",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Create",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "NewOnly",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Truncate",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "CreateOrTruncate",
+          "tag": 4,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.SeekOrigin": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Start",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Current",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "End",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.Replace": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "NoReplace",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Replace",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.Follow": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "NoFollow",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Follow",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.FileKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Regular",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Directory",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Link",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Other",
+          "tag": 3,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.WindowsShare": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "read",
+          "type": "bool"
+        },
+        {
+          "name": "write",
+          "type": "bool"
+        },
+        {
+          "name": "delete",
+          "type": "bool"
+        }
+      ],
+      "default": {
+        "read": true,
+        "write": true,
+        "delete": true
+      }
+    },
+    "std.fs.OpenOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "read",
+          "type": "bool"
+        },
+        {
+          "name": "write",
+          "type": "bool"
+        },
+        {
+          "name": "creation",
+          "type": "std.fs.Creation"
+        },
+        {
+          "name": "append",
+          "type": "bool"
+        },
+        {
+          "name": "windows_share",
+          "type": "option<std.fs.WindowsShare>"
+        }
+      ],
+      "default": {
+        "read": true,
+        "write": false,
+        "creation": {
+          "variant": "Existing",
+          "fields": {}
+        },
+        "append": false,
+        "windows_share": null
+      }
+    },
+    "std.fs.WriteMode": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "creation",
+          "type": "std.fs.Creation"
+        },
+        {
+          "name": "append",
+          "type": "bool"
+        },
+        {
+          "name": "windows_share",
+          "type": "option<std.fs.WindowsShare>"
+        }
+      ]
+    },
+    "std.fs.UnixTime": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "seconds",
+          "type": "i64"
+        },
+        {
+          "name": "nanoseconds",
+          "type": "u32"
+        }
+      ]
+    },
+    "std.fs.Metadata": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "std.fs.FileKind"
+        },
+        {
+          "name": "length",
+          "type": "u64"
+        },
+        {
+          "name": "read_only",
+          "type": "bool"
+        },
+        {
+          "name": "modified",
+          "type": "option<std.fs.UnixTime>"
+        }
+      ]
+    },
+    "std.fs.Entry": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "name",
+          "type": "std.fs.Path"
+        },
+        {
+          "name": "path",
+          "type": "std.fs.Path"
+        },
+        {
+          "name": "kind",
+          "type": "option<std.fs.FileKind>"
+        }
+      ]
+    },
+    "std.fs.ReadChunk": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Data",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "bytes",
+              "type": "list<u8>"
+            }
+          ]
+        },
+        {
+          "name": "Eof",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "std.fs.WriteFailure": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "error",
+          "type": "std.fs.IoError"
+        },
+        {
+          "name": "written",
+          "type": "u64"
+        },
+        {
+          "name": "may_have_written_more",
+          "type": "bool"
+        },
+        {
+          "name": "target_may_have_changed",
+          "type": "bool"
+        }
+      ]
+    },
+    "std.time.Duration": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "nanoseconds",
+          "type": "u64"
+        }
+      ],
+      "value_id": 2
+    },
+    "std.time.Instant": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "clock_id",
+          "type": "u64"
+        },
+        {
+          "name": "nanoseconds",
+          "type": "u64"
+        }
+      ],
+      "value_id": 3
+    },
+    "std.time.Deadline": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "clock_id",
+          "type": "u64"
+        },
+        {
+          "name": "nanoseconds",
+          "type": "u64"
+        },
+        {
+          "name": "mode",
+          "type": "u32"
+        },
+        {
+          "name": "reserved",
+          "type": "u32"
+        }
+      ],
+      "value_id": 4
+    },
+    "std.time.TimeErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "InvalidArgument",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Overflow",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "WrongClock",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "NativeError",
+          "tag": 3,
+          "fields": []
+        }
+      ]
+    },
+    "std.time.TimeError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "std.time.TimeErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "std.net.IpAddress": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "family",
+          "type": "u32"
+        },
+        {
+          "name": "address",
+          "type": "array<u8,16>"
+        }
+      ],
+      "value_id": 5
+    },
+    "std.net.SocketAddress": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "family",
+          "type": "u32"
+        },
+        {
+          "name": "port",
+          "type": "u16"
+        },
+        {
+          "name": "reserved",
+          "type": "u16"
+        },
+        {
+          "name": "address",
+          "type": "array<u8,16>"
+        },
+        {
+          "name": "scope",
+          "type": "u32"
+        },
+        {
+          "name": "reserved2",
+          "type": "u32"
+        }
+      ],
+      "value_id": 6
+    },
+    "std.net.TcpListener": {
+      "kind": "resource",
+      "resource_kind": 2,
+      "copy": false,
+      "send": false
+    },
+    "std.net.TcpStream": {
+      "kind": "resource",
+      "resource_kind": 3,
+      "copy": false,
+      "send": false
+    },
+    "std.net.NetErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Resolve",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Refused",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Timeout",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "PeerReset",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "UnexpectedEof",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "Tls",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "InvalidArgument",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "Closed",
+          "tag": 7,
+          "fields": []
+        },
+        {
+          "name": "Busy",
+          "tag": 8,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 9,
+          "fields": []
+        },
+        {
+          "name": "NoProgress",
+          "tag": 10,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 11,
+          "fields": []
+        },
+        {
+          "name": "OsError",
+          "tag": 12,
+          "fields": []
+        }
+      ]
+    },
+    "std.net.NetError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "std.net.NetErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "std.net.Target": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Address",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "address",
+              "type": "std.net.SocketAddress"
+            }
+          ]
+        },
+        {
+          "name": "Host",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "host",
+              "type": "str"
+            },
+            {
+              "name": "port",
+              "type": "u16"
+            }
+          ]
+        }
+      ]
+    },
+    "std.net.BindOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "backlog",
+          "type": "u32"
+        },
+        {
+          "name": "reuse_address",
+          "type": "bool"
+        },
+        {
+          "name": "ipv6_only",
+          "type": "bool"
+        }
+      ],
+      "default": {
+        "backlog": 128,
+        "reuse_address": false,
+        "ipv6_only": true
+      }
+    },
+    "std.net.Accepted": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "stream",
+          "type": "std.net.TcpStream"
+        },
+        {
+          "name": "peer",
+          "type": "std.net.SocketAddress"
+        }
+      ]
+    },
+    "std.net.ReadFailure": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "error",
+          "type": "std.net.NetError"
+        },
+        {
+          "name": "partial",
+          "type": "list<u8>"
+        }
+      ]
+    },
+    "std.net.WriteFailure": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "error",
+          "type": "std.net.NetError"
+        },
+        {
+          "name": "written",
+          "type": "u64"
+        },
+        {
+          "name": "may_have_written_more",
+          "type": "bool"
+        }
+      ]
+    },
+    "std.net.ReadChunk": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Data",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "bytes",
+              "type": "list<u8>"
+            }
+          ]
+        },
+        {
+          "name": "Eof",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "std.tls.TlsStream": {
+      "kind": "resource",
+      "resource_kind": 4,
+      "copy": false,
+      "send": false
+    },
+    "std.tls.ServerName": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Dns",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "name",
+              "type": "str"
+            }
+          ]
+        },
+        {
+          "name": "Ip",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "address",
+              "type": "std.net.IpAddress"
+            }
+          ]
+        }
+      ]
+    },
+    "std.tls.MinimumVersion": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Tls12",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Tls13",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "std.tls.Options": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "minimum",
+          "type": "std.tls.MinimumVersion"
+        }
+      ],
+      "default": {
+        "minimum": {
+          "variant": "Tls12",
+          "fields": {}
+        }
+      }
+    },
+    "postgres.Connection": {
+      "kind": "resource",
+      "resource_kind": 5,
+      "copy": false,
+      "send": false
+    },
+    "postgres.Transaction": {
+      "kind": "resource",
+      "resource_kind": 6,
+      "copy": false,
+      "send": false
+    },
+    "postgres.Execution": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "NotSent",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "MayHaveRun",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Completed",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "postgres.PgErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Configuration",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Connect",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Authentication",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Tls",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "Timeout",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "Server",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "Type",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 7,
+          "fields": []
+        },
+        {
+          "name": "Closed",
+          "tag": 8,
+          "fields": []
+        },
+        {
+          "name": "Busy",
+          "tag": 9,
+          "fields": []
+        },
+        {
+          "name": "InvalidArgument",
+          "tag": 10,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 11,
+          "fields": []
+        },
+        {
+          "name": "Transport",
+          "tag": 12,
+          "fields": []
+        },
+        {
+          "name": "Protocol",
+          "tag": 13,
+          "fields": []
+        },
+        {
+          "name": "NotFound",
+          "tag": 14,
+          "fields": []
+        },
+        {
+          "name": "Ambiguous",
+          "tag": 15,
+          "fields": []
+        }
+      ]
+    },
+    "postgres.PgError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "postgres.PgErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        },
+        {
+          "name": "sqlstate",
+          "type": "option<str>"
+        },
+        {
+          "name": "execution",
+          "type": "postgres.Execution"
+        }
+      ]
+    },
+    "postgres.Security": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "VerifyFull",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "ca_file",
+              "type": "std.fs.Path"
+            }
+          ]
+        },
+        {
+          "name": "LoopbackPlain",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "postgres.ConnectOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "host",
+          "type": "str"
+        },
+        {
+          "name": "port",
+          "type": "u16"
+        },
+        {
+          "name": "database",
+          "type": "str"
+        },
+        {
+          "name": "user",
+          "type": "str"
+        },
+        {
+          "name": "password",
+          "type": "str"
+        },
+        {
+          "name": "security",
+          "type": "postgres.Security"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline"
+        }
+      ]
+    },
+    "postgres.QueryOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline"
+        },
+        {
+          "name": "max_rows",
+          "type": "u64"
+        },
+        {
+          "name": "max_columns",
+          "type": "u32"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64"
+        }
+      ]
+    },
+    "postgres.Isolation": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "ReadCommitted",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "RepeatableRead",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Serializable",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "postgres.TxOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "isolation",
+          "type": "postgres.Isolation"
+        },
+        {
+          "name": "read_only",
+          "type": "bool"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline"
+        }
+      ]
+    },
+    "postgres.Param": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Null",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "oid",
+              "type": "option<u32>"
+            }
+          ]
+        },
+        {
+          "name": "Bool",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "value",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "I64",
+          "tag": 2,
+          "fields": [
+            {
+              "name": "value",
+              "type": "i64"
+            }
+          ]
+        },
+        {
+          "name": "F64",
+          "tag": 3,
+          "fields": [
+            {
+              "name": "value",
+              "type": "f64"
+            }
+          ]
+        },
+        {
+          "name": "Text",
+          "tag": 4,
+          "fields": [
+            {
+              "name": "value",
+              "type": "str"
+            }
+          ]
+        },
+        {
+          "name": "Bytes",
+          "tag": 5,
+          "fields": [
+            {
+              "name": "value",
+              "type": "list<u8>"
+            }
+          ]
+        }
+      ]
+    },
+    "postgres.Cell": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Null",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Text",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "value",
+              "type": "str"
+            }
+          ]
+        },
+        {
+          "name": "Bytes",
+          "tag": 2,
+          "fields": [
+            {
+              "name": "value",
+              "type": "list<u8>"
+            }
+          ]
+        }
+      ]
+    },
+    "postgres.Column": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "name",
+          "type": "str"
+        },
+        {
+          "name": "oid",
+          "type": "u32"
+        }
+      ]
+    },
+    "postgres.Row": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "cells",
+          "type": "list<postgres.Cell>"
+        }
+      ]
+    },
+    "postgres.Command": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "tag",
+          "type": "str"
+        },
+        {
+          "name": "affected_rows",
+          "type": "option<u64>"
+        }
+      ]
+    },
+    "postgres.QueryResult": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Command",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "command",
+              "type": "postgres.Command"
+            }
+          ]
+        },
+        {
+          "name": "Rows",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "columns",
+              "type": "list<postgres.Column>"
+            },
+            {
+              "name": "rows",
+              "type": "list<postgres.Row>"
+            },
+            {
+              "name": "command",
+              "type": "postgres.Command"
+            }
+          ]
+        }
+      ]
+    },
+    "postgres.BeginFailure": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "error",
+          "type": "postgres.PgError"
+        },
+        {
+          "name": "connection",
+          "type": "option<postgres.Connection>"
+        }
+      ]
+    },
+    "postgres.TxOutcome": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Committed",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "RolledBack",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Unknown",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "postgres.TxEnd": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "outcome",
+          "type": "postgres.TxOutcome"
+        },
+        {
+          "name": "connection",
+          "type": "option<postgres.Connection>"
+        },
+        {
+          "name": "error",
+          "type": "option<postgres.PgError>"
+        }
+      ]
+    },
+    "window.Window": {
+      "kind": "resource",
+      "resource_kind": 7,
+      "copy": false,
+      "send": false
+    },
+    "window.WindowErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "InvalidArgument",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Closed",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Busy",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "NativeError",
+          "tag": 5,
+          "fields": []
+        }
+      ]
+    },
+    "window.WindowError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "window.WindowErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "window.Point": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "x",
+          "type": "f64"
+        },
+        {
+          "name": "y",
+          "type": "f64"
+        }
+      ]
+    },
+    "window.Size": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "width",
+          "type": "f64"
+        },
+        {
+          "name": "height",
+          "type": "f64"
+        }
+      ]
+    },
+    "window.PixelSize": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "width",
+          "type": "u32"
+        },
+        {
+          "name": "height",
+          "type": "u32"
+        }
+      ]
+    },
+    "window.Viewport": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "logical",
+          "type": "window.Size"
+        },
+        {
+          "name": "physical",
+          "type": "window.PixelSize"
+        },
+        {
+          "name": "dpi",
+          "type": "f64"
+        },
+        {
+          "name": "revision",
+          "type": "u64"
+        }
+      ]
+    },
+    "window.WindowId": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "slot",
+          "type": "u64"
+        },
+        {
+          "name": "generation",
+          "type": "u64"
+        }
+      ],
+      "value_id": 7
+    },
+    "window.Options": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "title",
+          "type": "str"
+        },
+        {
+          "name": "size",
+          "type": "window.Size"
+        },
+        {
+          "name": "resizable",
+          "type": "bool"
+        }
+      ],
+      "default": {
+        "title": "",
+        "size": {
+          "width": 1280.0,
+          "height": 720.0
+        },
+        "resizable": true
+      }
+    },
+    "window.Info": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "id",
+          "type": "window.WindowId"
+        },
+        {
+          "name": "viewport",
+          "type": "window.Viewport"
+        },
+        {
+          "name": "focused",
+          "type": "bool"
+        },
+        {
+          "name": "minimized",
+          "type": "bool"
+        },
+        {
+          "name": "visible",
+          "type": "bool"
+        },
+        {
+          "name": "screen_x",
+          "type": "i64"
+        },
+        {
+          "name": "screen_y",
+          "type": "i64"
+        }
+      ]
+    },
+    "window.Key": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Unknown",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Tab",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Enter",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Space",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "Escape",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "Backspace",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "Delete",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "Insert",
+          "tag": 7,
+          "fields": []
+        },
+        {
+          "name": "Left",
+          "tag": 8,
+          "fields": []
+        },
+        {
+          "name": "Right",
+          "tag": 9,
+          "fields": []
+        },
+        {
+          "name": "Up",
+          "tag": 10,
+          "fields": []
+        },
+        {
+          "name": "Down",
+          "tag": 11,
+          "fields": []
+        },
+        {
+          "name": "Home",
+          "tag": 12,
+          "fields": []
+        },
+        {
+          "name": "End",
+          "tag": 13,
+          "fields": []
+        },
+        {
+          "name": "PageUp",
+          "tag": 14,
+          "fields": []
+        },
+        {
+          "name": "PageDown",
+          "tag": 15,
+          "fields": []
+        },
+        {
+          "name": "Shift",
+          "tag": 16,
+          "fields": []
+        },
+        {
+          "name": "Control",
+          "tag": 17,
+          "fields": []
+        },
+        {
+          "name": "Alt",
+          "tag": 18,
+          "fields": []
+        },
+        {
+          "name": "Meta",
+          "tag": 19,
+          "fields": []
+        },
+        {
+          "name": "CapsLock",
+          "tag": 20,
+          "fields": []
+        },
+        {
+          "name": "NumLock",
+          "tag": 21,
+          "fields": []
+        },
+        {
+          "name": "ScrollLock",
+          "tag": 22,
+          "fields": []
+        },
+        {
+          "name": "Pause",
+          "tag": 23,
+          "fields": []
+        },
+        {
+          "name": "PrintScreen",
+          "tag": 24,
+          "fields": []
+        },
+        {
+          "name": "KeyA",
+          "tag": 25,
+          "fields": []
+        },
+        {
+          "name": "KeyB",
+          "tag": 26,
+          "fields": []
+        },
+        {
+          "name": "KeyC",
+          "tag": 27,
+          "fields": []
+        },
+        {
+          "name": "KeyD",
+          "tag": 28,
+          "fields": []
+        },
+        {
+          "name": "KeyE",
+          "tag": 29,
+          "fields": []
+        },
+        {
+          "name": "KeyF",
+          "tag": 30,
+          "fields": []
+        },
+        {
+          "name": "KeyG",
+          "tag": 31,
+          "fields": []
+        },
+        {
+          "name": "KeyH",
+          "tag": 32,
+          "fields": []
+        },
+        {
+          "name": "KeyI",
+          "tag": 33,
+          "fields": []
+        },
+        {
+          "name": "KeyJ",
+          "tag": 34,
+          "fields": []
+        },
+        {
+          "name": "KeyK",
+          "tag": 35,
+          "fields": []
+        },
+        {
+          "name": "KeyL",
+          "tag": 36,
+          "fields": []
+        },
+        {
+          "name": "KeyM",
+          "tag": 37,
+          "fields": []
+        },
+        {
+          "name": "KeyN",
+          "tag": 38,
+          "fields": []
+        },
+        {
+          "name": "KeyO",
+          "tag": 39,
+          "fields": []
+        },
+        {
+          "name": "KeyP",
+          "tag": 40,
+          "fields": []
+        },
+        {
+          "name": "KeyQ",
+          "tag": 41,
+          "fields": []
+        },
+        {
+          "name": "KeyR",
+          "tag": 42,
+          "fields": []
+        },
+        {
+          "name": "KeyS",
+          "tag": 43,
+          "fields": []
+        },
+        {
+          "name": "KeyT",
+          "tag": 44,
+          "fields": []
+        },
+        {
+          "name": "KeyU",
+          "tag": 45,
+          "fields": []
+        },
+        {
+          "name": "KeyV",
+          "tag": 46,
+          "fields": []
+        },
+        {
+          "name": "KeyW",
+          "tag": 47,
+          "fields": []
+        },
+        {
+          "name": "KeyX",
+          "tag": 48,
+          "fields": []
+        },
+        {
+          "name": "KeyY",
+          "tag": 49,
+          "fields": []
+        },
+        {
+          "name": "KeyZ",
+          "tag": 50,
+          "fields": []
+        },
+        {
+          "name": "Digit0",
+          "tag": 51,
+          "fields": []
+        },
+        {
+          "name": "Digit1",
+          "tag": 52,
+          "fields": []
+        },
+        {
+          "name": "Digit2",
+          "tag": 53,
+          "fields": []
+        },
+        {
+          "name": "Digit3",
+          "tag": 54,
+          "fields": []
+        },
+        {
+          "name": "Digit4",
+          "tag": 55,
+          "fields": []
+        },
+        {
+          "name": "Digit5",
+          "tag": 56,
+          "fields": []
+        },
+        {
+          "name": "Digit6",
+          "tag": 57,
+          "fields": []
+        },
+        {
+          "name": "Digit7",
+          "tag": 58,
+          "fields": []
+        },
+        {
+          "name": "Digit8",
+          "tag": 59,
+          "fields": []
+        },
+        {
+          "name": "Digit9",
+          "tag": 60,
+          "fields": []
+        },
+        {
+          "name": "F1",
+          "tag": 61,
+          "fields": []
+        },
+        {
+          "name": "F2",
+          "tag": 62,
+          "fields": []
+        },
+        {
+          "name": "F3",
+          "tag": 63,
+          "fields": []
+        },
+        {
+          "name": "F4",
+          "tag": 64,
+          "fields": []
+        },
+        {
+          "name": "F5",
+          "tag": 65,
+          "fields": []
+        },
+        {
+          "name": "F6",
+          "tag": 66,
+          "fields": []
+        },
+        {
+          "name": "F7",
+          "tag": 67,
+          "fields": []
+        },
+        {
+          "name": "F8",
+          "tag": 68,
+          "fields": []
+        },
+        {
+          "name": "F9",
+          "tag": 69,
+          "fields": []
+        },
+        {
+          "name": "F10",
+          "tag": 70,
+          "fields": []
+        },
+        {
+          "name": "F11",
+          "tag": 71,
+          "fields": []
+        },
+        {
+          "name": "F12",
+          "tag": 72,
+          "fields": []
+        },
+        {
+          "name": "F13",
+          "tag": 73,
+          "fields": []
+        },
+        {
+          "name": "F14",
+          "tag": 74,
+          "fields": []
+        },
+        {
+          "name": "F15",
+          "tag": 75,
+          "fields": []
+        },
+        {
+          "name": "F16",
+          "tag": 76,
+          "fields": []
+        },
+        {
+          "name": "F17",
+          "tag": 77,
+          "fields": []
+        },
+        {
+          "name": "F18",
+          "tag": 78,
+          "fields": []
+        },
+        {
+          "name": "F19",
+          "tag": 79,
+          "fields": []
+        },
+        {
+          "name": "F20",
+          "tag": 80,
+          "fields": []
+        },
+        {
+          "name": "F21",
+          "tag": 81,
+          "fields": []
+        },
+        {
+          "name": "F22",
+          "tag": 82,
+          "fields": []
+        },
+        {
+          "name": "F23",
+          "tag": 83,
+          "fields": []
+        },
+        {
+          "name": "F24",
+          "tag": 84,
+          "fields": []
+        }
+      ]
+    },
+    "window.MouseButton": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Left",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Right",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Middle",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "X1",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "X2",
+          "tag": 4,
+          "fields": []
+        }
+      ]
+    },
+    "window.ResetReason": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "FocusLost",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "CaptureLost",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Overflow",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Gap",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "GuiCaptureChanged",
+          "tag": 4,
+          "fields": []
+        }
+      ]
+    },
+    "window.CompositionPhase": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Start",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Update",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Commit",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Cancel",
+          "tag": 3,
+          "fields": []
+        }
+      ]
+    },
+    "window.PointerAction": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Move",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Down",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Up",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Wheel",
+          "tag": 3,
+          "fields": []
+        }
+      ]
+    },
+    "window.WheelUnit": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Lines",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Pages",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "window.KeyEvent": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "key",
+          "type": "window.Key"
+        },
+        {
+          "name": "scan_code",
+          "type": "u32"
+        },
+        {
+          "name": "down",
+          "type": "bool"
+        },
+        {
+          "name": "repeat",
+          "type": "bool"
+        },
+        {
+          "name": "modifiers",
+          "type": "u32"
+        },
+        {
+          "name": "native_handled",
+          "type": "bool"
+        }
+      ]
+    },
+    "window.PointerEvent": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "action",
+          "type": "window.PointerAction"
+        },
+        {
+          "name": "button",
+          "type": "option<window.MouseButton>"
+        },
+        {
+          "name": "position",
+          "type": "window.Point"
+        },
+        {
+          "name": "wheel_x",
+          "type": "f64"
+        },
+        {
+          "name": "wheel_y",
+          "type": "f64"
+        },
+        {
+          "name": "wheel_unit",
+          "type": "window.WheelUnit"
+        }
+      ]
+    },
+    "window.CompositionData": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "edit_id",
+          "type": "u64"
+        },
+        {
+          "name": "phase",
+          "type": "window.CompositionPhase"
+        },
+        {
+          "name": "text",
+          "type": "str"
+        },
+        {
+          "name": "start_utf16",
+          "type": "u32"
+        },
+        {
+          "name": "end_utf16",
+          "type": "u32"
+        },
+        {
+          "name": "cursor_utf16",
+          "type": "u32"
+        },
+        {
+          "name": "native_handled",
+          "type": "bool"
+        }
+      ]
+    },
+    "window.Event": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "CloseRequested",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "request_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "Resized",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "viewport",
+              "type": "window.Viewport"
+            }
+          ]
+        },
+        {
+          "name": "DpiChanged",
+          "tag": 2,
+          "fields": [
+            {
+              "name": "viewport",
+              "type": "window.Viewport"
+            }
+          ]
+        },
+        {
+          "name": "FocusChanged",
+          "tag": 3,
+          "fields": [
+            {
+              "name": "focused",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "RedrawRequested",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "Key",
+          "tag": 5,
+          "fields": [
+            {
+              "name": "event",
+              "type": "window.KeyEvent"
+            }
+          ]
+        },
+        {
+          "name": "Pointer",
+          "tag": 6,
+          "fields": [
+            {
+              "name": "event",
+              "type": "window.PointerEvent"
+            }
+          ]
+        },
+        {
+          "name": "TextInput",
+          "tag": 7,
+          "fields": [
+            {
+              "name": "text",
+              "type": "str"
+            },
+            {
+              "name": "edit_id",
+              "type": "option<u64>"
+            },
+            {
+              "name": "native_handled",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "Composition",
+          "tag": 8,
+          "fields": [
+            {
+              "name": "event",
+              "type": "window.CompositionData"
+            }
+          ]
+        },
+        {
+          "name": "InputReset",
+          "tag": 9,
+          "fields": [
+            {
+              "name": "reason",
+              "type": "window.ResetReason"
+            }
+          ]
+        }
+      ]
+    },
+    "window.EventRecord": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "sequence",
+          "type": "u64"
+        },
+        {
+          "name": "timestamp_ns",
+          "type": "u64"
+        },
+        {
+          "name": "viewport_revision",
+          "type": "u64"
+        },
+        {
+          "name": "event",
+          "type": "window.Event"
+        }
+      ]
+    },
+    "window.EventBatch": {
+      "kind": "opaque",
+      "copy": false,
+      "send": true,
+      "fields": [
+        {
+          "name": "window",
+          "type": "window.WindowId"
+        },
+        {
+          "name": "batch_id",
+          "type": "u64"
+        },
+        {
+          "name": "first_sequence",
+          "type": "u64"
+        },
+        {
+          "name": "last_sequence",
+          "type": "u64"
+        },
+        {
+          "name": "viewport",
+          "type": "window.Viewport"
+        },
+        {
+          "name": "events",
+          "type": "list<window.EventRecord>"
+        }
+      ],
+      "value_id": 8
+    },
+    "window.GameInputBatch": {
+      "kind": "opaque",
+      "copy": false,
+      "send": true,
+      "fields": [
+        {
+          "name": "window",
+          "type": "window.WindowId"
+        },
+        {
+          "name": "batch_id",
+          "type": "u64"
+        },
+        {
+          "name": "first_sequence",
+          "type": "u64"
+        },
+        {
+          "name": "last_sequence",
+          "type": "u64"
+        },
+        {
+          "name": "viewport",
+          "type": "window.Viewport"
+        },
+        {
+          "name": "events",
+          "type": "list<window.EventRecord>"
+        }
+      ],
+      "value_id": 9
+    },
+    "draw2d.Renderer": {
+      "kind": "resource",
+      "resource_kind": 8,
+      "copy": false,
+      "send": false
+    },
+    "draw2d.Frame": {
+      "kind": "resource",
+      "resource_kind": 9,
+      "copy": false,
+      "send": false
+    },
+    "draw2d.Texture": {
+      "kind": "resource",
+      "resource_kind": 10,
+      "copy": false,
+      "send": false
+    },
+    "draw2d.TextLayout": {
+      "kind": "resource",
+      "resource_kind": 11,
+      "copy": false,
+      "send": false
+    },
+    "draw2d.DrawErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "InvalidArgument",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Closed",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Busy",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "WrongWindow",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "WrongDevice",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "DeviceLost",
+          "tag": 7,
+          "fields": []
+        },
+        {
+          "name": "SurfaceUnavailable",
+          "tag": 8,
+          "fields": []
+        },
+        {
+          "name": "NativeError",
+          "tag": 9,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.DrawError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "draw2d.DrawErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "draw2d.Point": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "x",
+          "type": "f64"
+        },
+        {
+          "name": "y",
+          "type": "f64"
+        }
+      ]
+    },
+    "draw2d.Rect": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "x",
+          "type": "f64"
+        },
+        {
+          "name": "y",
+          "type": "f64"
+        },
+        {
+          "name": "width",
+          "type": "f64"
+        },
+        {
+          "name": "height",
+          "type": "f64"
+        }
+      ]
+    },
+    "draw2d.PixelSize": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "width",
+          "type": "u32"
+        },
+        {
+          "name": "height",
+          "type": "u32"
+        }
+      ]
+    },
+    "draw2d.Color": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "red",
+          "type": "f64"
+        },
+        {
+          "name": "green",
+          "type": "f64"
+        },
+        {
+          "name": "blue",
+          "type": "f64"
+        },
+        {
+          "name": "alpha",
+          "type": "f64"
+        }
+      ]
+    },
+    "draw2d.Transform": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "m11",
+          "type": "f64"
+        },
+        {
+          "name": "m12",
+          "type": "f64"
+        },
+        {
+          "name": "m21",
+          "type": "f64"
+        },
+        {
+          "name": "m22",
+          "type": "f64"
+        },
+        {
+          "name": "dx",
+          "type": "f64"
+        },
+        {
+          "name": "dy",
+          "type": "f64"
+        }
+      ]
+    },
+    "draw2d.Adapter": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "HardwarePreferred",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "HardwareRequired",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Warp",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.Sampling": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Nearest",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Linear",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.RendererOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "adapter",
+          "type": "draw2d.Adapter"
+        }
+      ],
+      "default": {
+        "adapter": {
+          "variant": "HardwarePreferred",
+          "fields": {}
+        }
+      }
+    },
+    "draw2d.RendererInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "warp",
+          "type": "bool"
+        },
+        {
+          "name": "feature_level",
+          "type": "u32"
+        },
+        {
+          "name": "max_texture_size",
+          "type": "u32"
+        },
+        {
+          "name": "device_generation",
+          "type": "u64"
+        }
+      ]
+    },
+    "draw2d.TextureOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "sampling",
+          "type": "draw2d.Sampling"
+        },
+        {
+          "name": "stride",
+          "type": "option<u64>"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64"
+        }
+      ],
+      "default": {
+        "sampling": {
+          "variant": "Linear",
+          "fields": {}
+        },
+        "stride": null,
+        "max_bytes": 67108864
+      }
+    },
+    "draw2d.Wrap": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "NoWrap",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "WordWrap",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.Weight": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Normal",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Bold",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.FontFamily": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "SystemUi",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Named",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "family",
+              "type": "str"
+            }
+          ]
+        }
+      ]
+    },
+    "draw2d.TextStyle": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "family",
+          "type": "draw2d.FontFamily"
+        },
+        {
+          "name": "size",
+          "type": "option<f64>"
+        },
+        {
+          "name": "weight",
+          "type": "draw2d.Weight"
+        },
+        {
+          "name": "wrap",
+          "type": "draw2d.Wrap"
+        }
+      ],
+      "default": {
+        "family": {
+          "variant": "SystemUi",
+          "fields": {}
+        },
+        "size": null,
+        "weight": {
+          "variant": "Normal",
+          "fields": {}
+        },
+        "wrap": {
+          "variant": "NoWrap",
+          "fields": {}
+        }
+      }
+    },
+    "draw2d.TextOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "style",
+          "type": "draw2d.TextStyle"
+        },
+        {
+          "name": "max_width",
+          "type": "option<f64>"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64"
+        }
+      ]
+    },
+    "draw2d.TextInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "width",
+          "type": "f64"
+        },
+        {
+          "name": "height",
+          "type": "f64"
+        },
+        {
+          "name": "lines",
+          "type": "u32"
+        }
+      ]
+    },
+    "draw2d.SkipReason": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Minimized",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "ZeroSize",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Occluded",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.FrameStart": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Ready",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "frame",
+              "type": "draw2d.Frame"
+            }
+          ]
+        },
+        {
+          "name": "Skipped",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "reason",
+              "type": "draw2d.SkipReason"
+            }
+          ]
+        }
+      ]
+    },
+    "draw2d.PresentOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "vsync",
+          "type": "bool"
+        }
+      ],
+      "default": {
+        "vsync": true
+      }
+    },
+    "draw2d.PresentState": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Presented",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Skipped",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Occluded",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "draw2d.PresentInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "state",
+          "type": "draw2d.PresentState"
+        }
+      ]
+    },
+    "image.ImageErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "InvalidInput",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Io",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "NativeError",
+          "tag": 4,
+          "fields": []
+        }
+      ]
+    },
+    "image.ImageError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "image.ImageErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "image.CpuImage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "width",
+          "type": "u32"
+        },
+        {
+          "name": "height",
+          "type": "u32"
+        },
+        {
+          "name": "stride",
+          "type": "u64"
+        },
+        {
+          "name": "pixels",
+          "type": "list<u8>"
+        }
+      ]
+    },
+    "image.Limits": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "max_encoded_bytes",
+          "type": "u64"
+        },
+        {
+          "name": "max_pixels",
+          "type": "u64"
+        },
+        {
+          "name": "max_decoded_bytes",
+          "type": "u64"
+        }
+      ],
+      "default": {
+        "max_encoded_bytes": 16777216,
+        "max_pixels": 16777216,
+        "max_decoded_bytes": 67108864
+      }
+    },
+    "gui.GuiContext": {
+      "kind": "resource",
+      "resource_kind": 12,
+      "copy": false,
+      "send": false
+    },
+    "gui.NodeId": {
+      "kind": "opaque",
+      "copy": true,
+      "send": true,
+      "fields": [
+        {
+          "name": "context_slot",
+          "type": "u64"
+        },
+        {
+          "name": "context_generation",
+          "type": "u64"
+        },
+        {
+          "name": "node_slot",
+          "type": "u32"
+        },
+        {
+          "name": "node_generation",
+          "type": "u32"
+        }
+      ],
+      "value_id": 10
+    },
+    "gui.GuiErrorKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "InvalidNode",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "WrongWidget",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "InvalidArgument",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "InvalidText",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "LimitExceeded",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "AlreadyAttached",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "Closed",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "Busy",
+          "tag": 7,
+          "fields": []
+        },
+        {
+          "name": "Unsupported",
+          "tag": 8,
+          "fields": []
+        },
+        {
+          "name": "NativeError",
+          "tag": 9,
+          "fields": []
+        }
+      ]
+    },
+    "gui.GuiError": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "gui.GuiErrorKind"
+        },
+        {
+          "name": "operation",
+          "type": "str"
+        },
+        {
+          "name": "os_code",
+          "type": "option<i64>"
+        }
+      ]
+    },
+    "gui.WidgetKind": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Panel",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Row",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Column",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Label",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "Button",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "TextInput",
+          "tag": 5,
+          "fields": []
+        }
+      ]
+    },
+    "gui.Align": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Start",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Center",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "End",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Stretch",
+          "tag": 3,
+          "fields": []
+        }
+      ]
+    },
+    "gui.Justify": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Start",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Center",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "End",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "SpaceBetween",
+          "tag": 3,
+          "fields": []
+        }
+      ]
+    },
+    "gui.Visibility": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Visible",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Hidden",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Collapsed",
+          "tag": 2,
+          "fields": []
+        }
+      ]
+    },
+    "gui.FocusChange": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Applied",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Pending",
+          "tag": 1,
+          "fields": []
+        }
+      ]
+    },
+    "gui.Length": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Auto",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Px",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "value",
+              "type": "f64"
+            }
+          ]
+        },
+        {
+          "name": "Fill",
+          "tag": 2,
+          "fields": [
+            {
+              "name": "weight",
+              "type": "f64"
+            }
+          ]
+        }
+      ]
+    },
+    "gui.Insets": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "left",
+          "type": "f64"
+        },
+        {
+          "name": "top",
+          "type": "f64"
+        },
+        {
+          "name": "right",
+          "type": "f64"
+        },
+        {
+          "name": "bottom",
+          "type": "f64"
+        }
+      ],
+      "default": {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0
+      }
+    },
+    "gui.Layout": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "width",
+          "type": "gui.Length"
+        },
+        {
+          "name": "height",
+          "type": "gui.Length"
+        },
+        {
+          "name": "min_width",
+          "type": "f64"
+        },
+        {
+          "name": "min_height",
+          "type": "f64"
+        },
+        {
+          "name": "max_width",
+          "type": "option<f64>"
+        },
+        {
+          "name": "max_height",
+          "type": "option<f64>"
+        },
+        {
+          "name": "margin",
+          "type": "gui.Insets"
+        },
+        {
+          "name": "padding",
+          "type": "option<gui.Insets>"
+        },
+        {
+          "name": "align_x",
+          "type": "gui.Align"
+        },
+        {
+          "name": "align_y",
+          "type": "gui.Align"
+        },
+        {
+          "name": "justify",
+          "type": "gui.Justify"
+        }
+      ],
+      "default": {
+        "width": {
+          "variant": "Auto",
+          "fields": {}
+        },
+        "height": {
+          "variant": "Auto",
+          "fields": {}
+        },
+        "min_width": 0.0,
+        "min_height": 0.0,
+        "max_width": null,
+        "max_height": null,
+        "margin": {
+          "left": 0.0,
+          "top": 0.0,
+          "right": 0.0,
+          "bottom": 0.0
+        },
+        "padding": null,
+        "align_x": {
+          "variant": "Stretch",
+          "fields": {}
+        },
+        "align_y": {
+          "variant": "Stretch",
+          "fields": {}
+        },
+        "justify": {
+          "variant": "Start",
+          "fields": {}
+        }
+      }
+    },
+    "gui.SystemColor": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "WindowBackground",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "WindowText",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "ButtonFace",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "ButtonText",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "GrayText",
+          "tag": 4,
+          "fields": []
+        },
+        {
+          "name": "Highlight",
+          "tag": 5,
+          "fields": []
+        },
+        {
+          "name": "HighlightText",
+          "tag": 6,
+          "fields": []
+        },
+        {
+          "name": "Border",
+          "tag": 7,
+          "fields": []
+        }
+      ]
+    },
+    "gui.ColorSpec": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "System",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "role",
+              "type": "gui.SystemColor"
+            }
+          ]
+        },
+        {
+          "name": "Rgba",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "color",
+              "type": "draw2d.Color"
+            }
+          ]
+        }
+      ]
+    },
+    "gui.Palette": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "background",
+          "type": "gui.ColorSpec"
+        },
+        {
+          "name": "foreground",
+          "type": "gui.ColorSpec"
+        },
+        {
+          "name": "border",
+          "type": "gui.ColorSpec"
+        }
+      ]
+    },
+    "gui.Theme": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "System",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Custom",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "palette",
+              "type": "gui.Palette"
+            }
+          ]
+        }
+      ]
+    },
+    "gui.Style": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "background",
+          "type": "gui.ColorSpec"
+        },
+        {
+          "name": "foreground",
+          "type": "gui.ColorSpec"
+        },
+        {
+          "name": "border",
+          "type": "gui.ColorSpec"
+        },
+        {
+          "name": "border_width",
+          "type": "f64"
+        }
+      ]
+    },
+    "gui.Semantics": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "name",
+          "type": "option<str>"
+        },
+        {
+          "name": "help",
+          "type": "option<str>"
+        },
+        {
+          "name": "automation_id",
+          "type": "option<str>"
+        },
+        {
+          "name": "labelled_by",
+          "type": "option<gui.NodeId>"
+        }
+      ],
+      "default": {
+        "name": null,
+        "help": null,
+        "automation_id": null,
+        "labelled_by": null
+      }
+    },
+    "gui.Selection": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "anchor_utf8",
+          "type": "u64"
+        },
+        {
+          "name": "active_utf8",
+          "type": "u64"
+        }
+      ]
+    },
+    "gui.TextInputOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "read_only",
+          "type": "bool"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64"
+        },
+        {
+          "name": "placeholder",
+          "type": "str"
+        }
+      ],
+      "default": {
+        "read_only": false,
+        "max_bytes": 1048576,
+        "placeholder": ""
+      }
+    },
+    "gui.WidgetSpec": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Panel",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "block_background",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "Row",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "gap",
+              "type": "f64"
+            },
+            {
+              "name": "block_background",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "Column",
+          "tag": 2,
+          "fields": [
+            {
+              "name": "gap",
+              "type": "f64"
+            },
+            {
+              "name": "block_background",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "Label",
+          "tag": 3,
+          "fields": [
+            {
+              "name": "text",
+              "type": "str"
+            },
+            {
+              "name": "style",
+              "type": "option<draw2d.TextStyle>"
+            }
+          ]
+        },
+        {
+          "name": "Button",
+          "tag": 4,
+          "fields": [
+            {
+              "name": "text",
+              "type": "str"
+            },
+            {
+              "name": "style",
+              "type": "option<draw2d.TextStyle>"
+            }
+          ]
+        },
+        {
+          "name": "TextInput",
+          "tag": 5,
+          "fields": [
+            {
+              "name": "initial_text",
+              "type": "str"
+            },
+            {
+              "name": "style",
+              "type": "option<draw2d.TextStyle>"
+            },
+            {
+              "name": "options",
+              "type": "gui.TextInputOptions"
+            }
+          ]
+        }
+      ]
+    },
+    "gui.GuiLimits": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "nodes",
+          "type": "u32"
+        },
+        {
+          "name": "depth",
+          "type": "u32"
+        },
+        {
+          "name": "text_bytes",
+          "type": "u64"
+        },
+        {
+          "name": "total_text_bytes",
+          "type": "u64"
+        },
+        {
+          "name": "events",
+          "type": "u32"
+        },
+        {
+          "name": "uia_actions",
+          "type": "u32"
+        },
+        {
+          "name": "owned_bytes",
+          "type": "u64"
+        }
+      ],
+      "default": {
+        "nodes": 4096,
+        "depth": 128,
+        "text_bytes": 1048576,
+        "total_text_bytes": 8388608,
+        "events": 4096,
+        "uia_actions": 128,
+        "owned_bytes": 67108864
+      }
+    },
+    "gui.GuiOptions": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "theme",
+          "type": "gui.Theme"
+        },
+        {
+          "name": "limits",
+          "type": "gui.GuiLimits"
+        }
+      ],
+      "default": {
+        "theme": {
+          "variant": "System",
+          "fields": {}
+        },
+        "limits": {
+          "nodes": 4096,
+          "depth": 128,
+          "text_bytes": 1048576,
+          "total_text_bytes": 8388608,
+          "events": 4096,
+          "uia_actions": 128,
+          "owned_bytes": 67108864
+        }
+      }
+    },
+    "gui.CompositionInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "preview",
+          "type": "str"
+        },
+        {
+          "name": "replacement",
+          "type": "gui.Selection"
+        },
+        {
+          "name": "cursor_utf8",
+          "type": "u64"
+        }
+      ]
+    },
+    "gui.NodeInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "gui.WidgetKind"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
+        },
+        {
+          "name": "effective_enabled",
+          "type": "bool"
+        },
+        {
+          "name": "visibility",
+          "type": "gui.Visibility"
+        },
+        {
+          "name": "bounds",
+          "type": "option<draw2d.Rect>"
+        },
+        {
+          "name": "tree_revision",
+          "type": "u64"
+        },
+        {
+          "name": "layout_revision",
+          "type": "u64"
+        }
+      ]
+    },
+    "gui.LayoutInfo": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "tree_revision",
+          "type": "u64"
+        },
+        {
+          "name": "layout_revision",
+          "type": "u64"
+        },
+        {
+          "name": "needs_redraw",
+          "type": "bool"
+        }
+      ]
+    },
+    "gui.InputSource": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Pointer",
+          "tag": 0,
+          "fields": []
+        },
+        {
+          "name": "Keyboard",
+          "tag": 1,
+          "fields": []
+        },
+        {
+          "name": "Automation",
+          "tag": 2,
+          "fields": []
+        },
+        {
+          "name": "Programmatic",
+          "tag": 3,
+          "fields": []
+        },
+        {
+          "name": "Ime",
+          "tag": 4,
+          "fields": []
+        }
+      ]
+    },
+    "gui.Event": {
+      "kind": "enum",
+      "variants": [
+        {
+          "name": "Clicked",
+          "tag": 0,
+          "fields": [
+            {
+              "name": "node",
+              "type": "gui.NodeId"
+            },
+            {
+              "name": "source",
+              "type": "gui.InputSource"
+            }
+          ]
+        },
+        {
+          "name": "TextChanged",
+          "tag": 1,
+          "fields": [
+            {
+              "name": "node",
+              "type": "gui.NodeId"
+            },
+            {
+              "name": "revision",
+              "type": "u64"
+            },
+            {
+              "name": "source",
+              "type": "gui.InputSource"
+            }
+          ]
+        },
+        {
+          "name": "Submitted",
+          "tag": 2,
+          "fields": [
+            {
+              "name": "node",
+              "type": "gui.NodeId"
+            },
+            {
+              "name": "source",
+              "type": "gui.InputSource"
+            }
+          ]
+        },
+        {
+          "name": "FocusChanged",
+          "tag": 3,
+          "fields": [
+            {
+              "name": "previous",
+              "type": "option<gui.NodeId>"
+            },
+            {
+              "name": "current",
+              "type": "option<gui.NodeId>"
+            }
+          ]
+        },
+        {
+          "name": "CompositionChanged",
+          "tag": 4,
+          "fields": [
+            {
+              "name": "node",
+              "type": "gui.NodeId"
+            },
+            {
+              "name": "state",
+              "type": "option<gui.CompositionInfo>"
+            }
+          ]
+        },
+        {
+          "name": "EditRejected",
+          "tag": 5,
+          "fields": [
+            {
+              "name": "node",
+              "type": "gui.NodeId"
+            },
+            {
+              "name": "error",
+              "type": "gui.GuiError"
+            }
+          ]
+        },
+        {
+          "name": "ActionFailed",
+          "tag": 6,
+          "fields": [
+            {
+              "name": "node",
+              "type": "option<gui.NodeId>"
+            },
+            {
+              "name": "error",
+              "type": "gui.GuiError"
+            }
+          ]
+        },
+        {
+          "name": "InputReset",
+          "tag": 7,
+          "fields": [
+            {
+              "name": "reason",
+              "type": "window.ResetReason"
+            }
+          ]
+        },
+        {
+          "name": "StateResyncRequired",
+          "tag": 8,
+          "fields": [
+            {
+              "name": "tree_revision",
+              "type": "u64"
+            }
+          ]
+        }
+      ]
+    },
+    "gui.CaptureState": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "keyboard",
+          "type": "bool"
+        },
+        {
+          "name": "pointer",
+          "type": "bool"
+        }
+      ]
+    },
+    "gui.GuiUpdate": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "events",
+          "type": "list<gui.Event>"
+        },
+        {
+          "name": "remaining_input",
+          "type": "window.GameInputBatch"
+        },
+        {
+          "name": "capture_state",
+          "type": "gui.CaptureState"
+        },
+        {
+          "name": "needs_redraw",
+          "type": "bool"
+        },
+        {
+          "name": "next_deadline",
+          "type": "option<std.time.Deadline>"
+        }
+      ]
+    },
+    "gui.UpdateFailure": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "error",
+          "type": "gui.GuiError"
+        },
+        {
+          "name": "batch",
+          "type": "window.EventBatch"
+        }
+      ]
+    }
+  },
+  "operations": [
+    {
+      "id": 65537,
+      "module": "std.fs",
+      "name": "Path.from_text",
+      "symbol": "jw_fs_path_from_text_v1",
+      "params": [
+        {
+          "name": "text",
+          "type": "str",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.fs.Path,std.fs.IoError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65538,
+      "module": "std.fs",
+      "name": "Path.to_text",
+      "symbol": "jw_fs_path_to_text_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.Path",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<str,std.fs.IoError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65539,
+      "module": "std.fs",
+      "name": "Path.display",
+      "symbol": "jw_fs_path_display_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.Path",
+          "mode": "ref"
+        }
+      ],
+      "returns": "str",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65540,
+      "module": "std.fs",
+      "name": "Path.file_name",
+      "symbol": "jw_fs_path_file_name_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.Path",
+          "mode": "ref"
+        }
+      ],
+      "returns": "option<std.fs.Path>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65541,
+      "module": "std.fs",
+      "name": "Path.join",
+      "symbol": "jw_fs_path_join_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.Path",
+          "mode": "ref"
+        },
+        {
+          "name": "child",
+          "type": "std.fs.Path",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.fs.Path,std.fs.IoError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65542,
+      "module": "std.fs",
+      "name": "Path.absolute",
+      "symbol": "jw_fs_path_absolute_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.Path",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.fs.Path,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65543,
+      "module": "std.fs",
+      "name": "Path.canonical",
+      "symbol": "jw_fs_path_canonical_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.Path",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.fs.Path,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65544,
+      "module": "std.fs",
+      "name": "WindowsShare.defaults",
+      "symbol": "jw_fs_windows_share_defaults_v1",
+      "params": [],
+      "returns": "std.fs.WindowsShare",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ],
+      "default_result": {
+        "read": true,
+        "write": true,
+        "delete": true
+      }
+    },
+    {
+      "id": 65545,
+      "module": "std.fs",
+      "name": "OpenOptions.defaults",
+      "symbol": "jw_fs_open_options_defaults_v1",
+      "params": [],
+      "returns": "std.fs.OpenOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ],
+      "default_result": {
+        "read": true,
+        "write": false,
+        "creation": {
+          "variant": "Existing",
+          "fields": {}
+        },
+        "append": false,
+        "windows_share": null
+      }
+    },
+    {
+      "id": 65546,
+      "module": "std.fs",
+      "name": "open",
+      "symbol": "jw_fs_open_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "options",
+          "type": "std.fs.OpenOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<std.fs.File,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65547,
+      "module": "std.fs",
+      "name": "read_bytes",
+      "symbol": "jw_fs_read_bytes_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "limit",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<list<u8>,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65548,
+      "module": "std.fs",
+      "name": "read_text",
+      "symbol": "jw_fs_read_text_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "limit",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<str,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65549,
+      "module": "std.fs",
+      "name": "read_dir",
+      "symbol": "jw_fs_read_dir_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "limit",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<list<std.fs.Entry>,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65550,
+      "module": "std.fs",
+      "name": "write_bytes",
+      "symbol": "jw_fs_write_bytes_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "mode",
+          "type": "std.fs.WriteMode",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,std.fs.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65551,
+      "module": "std.fs",
+      "name": "metadata",
+      "symbol": "jw_fs_metadata_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "follow",
+          "type": "std.fs.Follow",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.fs.Metadata,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65552,
+      "module": "std.fs",
+      "name": "create_dir",
+      "symbol": "jw_fs_create_dir_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65553,
+      "module": "std.fs",
+      "name": "remove_file",
+      "symbol": "jw_fs_remove_file_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65554,
+      "module": "std.fs",
+      "name": "remove_empty_dir",
+      "symbol": "jw_fs_remove_empty_dir_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65555,
+      "module": "std.fs",
+      "name": "rename",
+      "symbol": "jw_fs_rename_v1",
+      "params": [
+        {
+          "name": "source",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "target",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "replace",
+          "type": "std.fs.Replace",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65556,
+      "module": "std.fs",
+      "name": "File.read",
+      "symbol": "jw_fs_file_read_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.fs.ReadChunk,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65557,
+      "module": "std.fs",
+      "name": "File.write",
+      "symbol": "jw_fs_file_write_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<u64,std.fs.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65558,
+      "module": "std.fs",
+      "name": "File.write_all",
+      "symbol": "jw_fs_file_write_all_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<unit,std.fs.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65559,
+      "module": "std.fs",
+      "name": "File.seek",
+      "symbol": "jw_fs_file_seek_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        },
+        {
+          "name": "offset",
+          "type": "i64",
+          "mode": "value"
+        },
+        {
+          "name": "origin",
+          "type": "std.fs.SeekOrigin",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<u64,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65560,
+      "module": "std.fs",
+      "name": "File.length",
+      "symbol": "jw_fs_file_length_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<u64,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65561,
+      "module": "std.fs",
+      "name": "File.metadata",
+      "symbol": "jw_fs_file_metadata_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.fs.Metadata,std.fs.IoError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65562,
+      "module": "std.fs",
+      "name": "File.set_length",
+      "symbol": "jw_fs_file_set_length_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        },
+        {
+          "name": "length",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65563,
+      "module": "std.fs",
+      "name": "File.flush",
+      "symbol": "jw_fs_file_flush_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65564,
+      "module": "std.fs",
+      "name": "File.sync",
+      "symbol": "jw_fs_file_sync_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 65565,
+      "module": "std.fs",
+      "name": "File.close",
+      "symbol": "jw_fs_file_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.fs.File",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,std.fs.IoError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "fs"
+      ]
+    },
+    {
+      "id": 131073,
+      "module": "std.time",
+      "name": "now",
+      "symbol": "jw_time_now_v1",
+      "params": [],
+      "returns": "result<std.time.Instant,std.time.TimeError>",
+      "effects": [
+        "clock"
+      ],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131074,
+      "module": "std.time",
+      "name": "elapsed",
+      "symbol": "jw_time_elapsed_v1",
+      "params": [
+        {
+          "name": "since",
+          "type": "std.time.Instant",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.time.Duration,std.time.TimeError>",
+      "effects": [
+        "clock"
+      ],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131075,
+      "module": "std.time",
+      "name": "Duration.from_millis",
+      "symbol": "jw_time_duration_from_millis_v1",
+      "params": [
+        {
+          "name": "value",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.time.Duration,std.time.TimeError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131076,
+      "module": "std.time",
+      "name": "Duration.from_seconds",
+      "symbol": "jw_time_duration_from_seconds_v1",
+      "params": [
+        {
+          "name": "value",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.time.Duration,std.time.TimeError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131077,
+      "module": "std.time",
+      "name": "Duration.from_nanos",
+      "symbol": "jw_time_duration_from_nanos_v1",
+      "params": [
+        {
+          "name": "value",
+          "type": "u64",
+          "mode": "value"
+        }
+      ],
+      "returns": "std.time.Duration",
+      "effects": [],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131078,
+      "module": "std.time",
+      "name": "Duration.nanos",
+      "symbol": "jw_time_duration_nanos_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.time.Duration",
+          "mode": "ref"
+        }
+      ],
+      "returns": "u64",
+      "effects": [],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131079,
+      "module": "std.time",
+      "name": "Deadline.infinite",
+      "symbol": "jw_time_deadline_infinite_v1",
+      "params": [],
+      "returns": "std.time.Deadline",
+      "effects": [],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131080,
+      "module": "std.time",
+      "name": "deadline_after",
+      "symbol": "jw_time_deadline_after_v1",
+      "params": [
+        {
+          "name": "duration",
+          "type": "std.time.Duration",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.time.Deadline,std.time.TimeError>",
+      "effects": [
+        "clock"
+      ],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 131081,
+      "module": "std.time",
+      "name": "deadline_at",
+      "symbol": "jw_time_deadline_at_v1",
+      "params": [
+        {
+          "name": "instant",
+          "type": "std.time.Instant",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.time.Deadline,std.time.TimeError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": []
+    },
+    {
+      "id": 196609,
+      "module": "std.net",
+      "name": "IpAddress.v4",
+      "symbol": "jw_net_ip_address_v4_v1",
+      "params": [
+        {
+          "name": "bytes",
+          "type": "array<u8,4>",
+          "mode": "ref"
+        }
+      ],
+      "returns": "std.net.IpAddress",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196610,
+      "module": "std.net",
+      "name": "IpAddress.v6",
+      "symbol": "jw_net_ip_address_v6_v1",
+      "params": [
+        {
+          "name": "bytes",
+          "type": "array<u8,16>",
+          "mode": "ref"
+        }
+      ],
+      "returns": "std.net.IpAddress",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196611,
+      "module": "std.net",
+      "name": "SocketAddress.create",
+      "symbol": "jw_net_socket_address_create_v1",
+      "params": [
+        {
+          "name": "ip",
+          "type": "std.net.IpAddress",
+          "mode": "value"
+        },
+        {
+          "name": "port",
+          "type": "u16",
+          "mode": "value"
+        },
+        {
+          "name": "scope",
+          "type": "u32",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.net.SocketAddress,std.net.NetError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196612,
+      "module": "std.net",
+      "name": "SocketAddress.ip",
+      "symbol": "jw_net_socket_address_ip_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.SocketAddress",
+          "mode": "ref"
+        }
+      ],
+      "returns": "std.net.IpAddress",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196613,
+      "module": "std.net",
+      "name": "SocketAddress.port",
+      "symbol": "jw_net_socket_address_port_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.SocketAddress",
+          "mode": "ref"
+        }
+      ],
+      "returns": "u16",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196614,
+      "module": "std.net",
+      "name": "SocketAddress.scope",
+      "symbol": "jw_net_socket_address_scope_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.SocketAddress",
+          "mode": "ref"
+        }
+      ],
+      "returns": "u32",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196615,
+      "module": "std.net",
+      "name": "BindOptions.defaults",
+      "symbol": "jw_net_bind_options_defaults_v1",
+      "params": [],
+      "returns": "std.net.BindOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ],
+      "default_result": {
+        "backlog": 128,
+        "reuse_address": false,
+        "ipv6_only": true
+      }
+    },
+    {
+      "id": 196616,
+      "module": "std.net",
+      "name": "resolve",
+      "symbol": "jw_net_resolve_v1",
+      "params": [
+        {
+          "name": "host",
+          "type": "str",
+          "mode": "ref"
+        },
+        {
+          "name": "port",
+          "type": "u16",
+          "mode": "value"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<list<std.net.SocketAddress>,std.net.NetError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196617,
+      "module": "std.net",
+      "name": "connect",
+      "symbol": "jw_net_connect_v1",
+      "params": [
+        {
+          "name": "target",
+          "type": "std.net.Target",
+          "mode": "move"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.net.TcpStream,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196618,
+      "module": "std.net",
+      "name": "bind",
+      "symbol": "jw_net_bind_v1",
+      "params": [
+        {
+          "name": "address",
+          "type": "std.net.SocketAddress",
+          "mode": "value"
+        },
+        {
+          "name": "options",
+          "type": "std.net.BindOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<std.net.TcpListener,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196619,
+      "module": "std.net",
+      "name": "TcpListener.accept",
+      "symbol": "jw_net_tcp_listener_accept_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpListener",
+          "mode": "mut"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.net.Accepted,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196620,
+      "module": "std.net",
+      "name": "TcpListener.address",
+      "symbol": "jw_net_tcp_listener_address_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpListener",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.net.SocketAddress,std.net.NetError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196621,
+      "module": "std.net",
+      "name": "TcpListener.close",
+      "symbol": "jw_net_tcp_listener_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpListener",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196622,
+      "module": "std.net",
+      "name": "TcpStream.read",
+      "symbol": "jw_net_tcp_stream_read_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "mut"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64",
+          "mode": "value"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.net.ReadChunk,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196623,
+      "module": "std.net",
+      "name": "TcpStream.read_exact",
+      "symbol": "jw_net_tcp_stream_read_exact_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "mut"
+        },
+        {
+          "name": "bytes",
+          "type": "u64",
+          "mode": "value"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<list<u8>,std.net.ReadFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196624,
+      "module": "std.net",
+      "name": "TcpStream.write",
+      "symbol": "jw_net_tcp_stream_write_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "mut"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<u64,std.net.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196625,
+      "module": "std.net",
+      "name": "TcpStream.write_all",
+      "symbol": "jw_net_tcp_stream_write_all_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "mut"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.net.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196626,
+      "module": "std.net",
+      "name": "TcpStream.local_address",
+      "symbol": "jw_net_tcp_stream_local_address_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.net.SocketAddress,std.net.NetError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196627,
+      "module": "std.net",
+      "name": "TcpStream.peer_address",
+      "symbol": "jw_net_tcp_stream_peer_address_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<std.net.SocketAddress,std.net.NetError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196628,
+      "module": "std.net",
+      "name": "TcpStream.shutdown_write",
+      "symbol": "jw_net_tcp_stream_shutdown_write_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 196629,
+      "module": "std.net",
+      "name": "TcpStream.close",
+      "symbol": "jw_net_tcp_stream_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.net.TcpStream",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net"
+      ]
+    },
+    {
+      "id": 262145,
+      "module": "std.tls",
+      "name": "Options.defaults",
+      "symbol": "jw_tls_options_defaults_v1",
+      "params": [],
+      "returns": "std.tls.Options",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ],
+      "default_result": {
+        "minimum": {
+          "variant": "Tls12",
+          "fields": {}
+        }
+      }
+    },
+    {
+      "id": 262146,
+      "module": "std.tls",
+      "name": "connect",
+      "symbol": "jw_tls_connect_v1",
+      "params": [
+        {
+          "name": "target",
+          "type": "std.net.Target",
+          "mode": "move"
+        },
+        {
+          "name": "name",
+          "type": "std.tls.ServerName",
+          "mode": "move"
+        },
+        {
+          "name": "options",
+          "type": "std.tls.Options",
+          "mode": "move"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.tls.TlsStream,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ]
+    },
+    {
+      "id": 262147,
+      "module": "std.tls",
+      "name": "start_tls",
+      "symbol": "jw_tls_start_tls_v1",
+      "params": [
+        {
+          "name": "stream",
+          "type": "std.net.TcpStream",
+          "mode": "move"
+        },
+        {
+          "name": "name",
+          "type": "std.tls.ServerName",
+          "mode": "move"
+        },
+        {
+          "name": "options",
+          "type": "std.tls.Options",
+          "mode": "move"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.tls.TlsStream,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ]
+    },
+    {
+      "id": 262148,
+      "module": "std.tls",
+      "name": "TlsStream.read",
+      "symbol": "jw_tls_tls_stream_read_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.tls.TlsStream",
+          "mode": "mut"
+        },
+        {
+          "name": "max_bytes",
+          "type": "u64",
+          "mode": "value"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<std.net.ReadChunk,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ]
+    },
+    {
+      "id": 262149,
+      "module": "std.tls",
+      "name": "TlsStream.write",
+      "symbol": "jw_tls_tls_stream_write_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.tls.TlsStream",
+          "mode": "mut"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<u64,std.net.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ]
+    },
+    {
+      "id": 262150,
+      "module": "std.tls",
+      "name": "TlsStream.write_all",
+      "symbol": "jw_tls_tls_stream_write_all_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.tls.TlsStream",
+          "mode": "mut"
+        },
+        {
+          "name": "data",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.net.WriteFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ]
+    },
+    {
+      "id": 262151,
+      "module": "std.tls",
+      "name": "TlsStream.close",
+      "symbol": "jw_tls_tls_stream_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "std.tls.TlsStream",
+          "mode": "move"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,std.net.NetError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "net",
+        "tls_client"
+      ]
+    },
+    {
+      "id": 327681,
+      "module": "postgres",
+      "name": "connect",
+      "symbol": "jw_postgres_connect_v1",
+      "params": [
+        {
+          "name": "options",
+          "type": "postgres.ConnectOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<postgres.Connection,postgres.PgError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327682,
+      "module": "postgres",
+      "name": "QueryOptions.defaults",
+      "symbol": "jw_postgres_query_options_defaults_v1",
+      "params": [
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "postgres.QueryOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ],
+      "default_result": {
+        "deadline": {
+          "$param": "deadline"
+        },
+        "max_rows": 100000,
+        "max_columns": 1024,
+        "max_bytes": 67108864
+      }
+    },
+    {
+      "id": 327683,
+      "module": "postgres",
+      "name": "TxOptions.defaults",
+      "symbol": "jw_postgres_tx_options_defaults_v1",
+      "params": [
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "postgres.TxOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ],
+      "default_result": {
+        "isolation": {
+          "variant": "ReadCommitted",
+          "fields": {}
+        },
+        "read_only": false,
+        "deadline": {
+          "$param": "deadline"
+        }
+      }
+    },
+    {
+      "id": 327684,
+      "module": "postgres",
+      "name": "Connection.run",
+      "symbol": "jw_postgres_connection_run_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Connection",
+          "mode": "mut"
+        },
+        {
+          "name": "sql",
+          "type": "str",
+          "mode": "ref"
+        },
+        {
+          "name": "params",
+          "type": "list<postgres.Param>",
+          "mode": "ref"
+        },
+        {
+          "name": "options",
+          "type": "postgres.QueryOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<postgres.QueryResult,postgres.PgError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327685,
+      "module": "postgres",
+      "name": "Transaction.run",
+      "symbol": "jw_postgres_transaction_run_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Transaction",
+          "mode": "mut"
+        },
+        {
+          "name": "sql",
+          "type": "str",
+          "mode": "ref"
+        },
+        {
+          "name": "params",
+          "type": "list<postgres.Param>",
+          "mode": "ref"
+        },
+        {
+          "name": "options",
+          "type": "postgres.QueryOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<postgres.QueryResult,postgres.PgError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327686,
+      "module": "postgres",
+      "name": "Connection.begin",
+      "symbol": "jw_postgres_connection_begin_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Connection",
+          "mode": "move"
+        },
+        {
+          "name": "options",
+          "type": "postgres.TxOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<postgres.Transaction,postgres.BeginFailure>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327687,
+      "module": "postgres",
+      "name": "Connection.close",
+      "symbol": "jw_postgres_connection_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Connection",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,postgres.PgError>",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327688,
+      "module": "postgres",
+      "name": "Transaction.commit",
+      "symbol": "jw_postgres_transaction_commit_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Transaction",
+          "mode": "move"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "postgres.TxEnd",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327689,
+      "module": "postgres",
+      "name": "Transaction.rollback",
+      "symbol": "jw_postgres_transaction_rollback_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Transaction",
+          "mode": "move"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "postgres.TxEnd",
+      "effects": [
+        "write-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327690,
+      "module": "postgres",
+      "name": "QueryResult.column_index",
+      "symbol": "jw_postgres_query_result_column_index_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.QueryResult",
+          "mode": "ref"
+        },
+        {
+          "name": "name",
+          "type": "str",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<u32,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327691,
+      "module": "postgres",
+      "name": "Row.cell",
+      "symbol": "jw_postgres_row_cell_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Row",
+          "mode": "ref"
+        },
+        {
+          "name": "index",
+          "type": "u32",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<postgres.Cell,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327692,
+      "module": "postgres",
+      "name": "Cell.as_bool",
+      "symbol": "jw_postgres_cell_as_bool_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Cell",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<bool,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327693,
+      "module": "postgres",
+      "name": "Cell.as_i64",
+      "symbol": "jw_postgres_cell_as_i64_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Cell",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<i64,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327694,
+      "module": "postgres",
+      "name": "Cell.as_f64",
+      "symbol": "jw_postgres_cell_as_f64_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Cell",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<f64,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327695,
+      "module": "postgres",
+      "name": "Cell.as_text",
+      "symbol": "jw_postgres_cell_as_text_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Cell",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<str,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 327696,
+      "module": "postgres",
+      "name": "Cell.as_bytes",
+      "symbol": "jw_postgres_cell_as_bytes_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "postgres.Cell",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<list<u8>,postgres.PgError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "postgres"
+      ]
+    },
+    {
+      "id": 393217,
+      "module": "window",
+      "name": "Options.defaults",
+      "symbol": "jw_window_options_defaults_v1",
+      "params": [],
+      "returns": "window.Options",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ],
+      "default_result": {
+        "title": "",
+        "size": {
+          "width": 1280.0,
+          "height": 720.0
+        },
+        "resizable": true
+      }
+    },
+    {
+      "id": 393218,
+      "module": "window",
+      "name": "create_window",
+      "symbol": "jw_window_create_window_v1",
+      "params": [
+        {
+          "name": "options",
+          "type": "window.Options",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<window.Window,window.WindowError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393219,
+      "module": "window",
+      "name": "Window.poll_events",
+      "symbol": "jw_window_window_poll_events_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.Window",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<window.EventBatch,window.WindowError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393220,
+      "module": "window",
+      "name": "Window.wait_events",
+      "symbol": "jw_window_window_wait_events_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.Window",
+          "mode": "mut"
+        },
+        {
+          "name": "deadline",
+          "type": "std.time.Deadline",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<window.EventBatch,window.WindowError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393221,
+      "module": "window",
+      "name": "Window.info",
+      "symbol": "jw_window_window_info_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.Window",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<window.Info,window.WindowError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393222,
+      "module": "window",
+      "name": "Window.request_redraw",
+      "symbol": "jw_window_window_request_redraw_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.Window",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,window.WindowError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393223,
+      "module": "window",
+      "name": "Window.close",
+      "symbol": "jw_window_window_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.Window",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,window.WindowError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393224,
+      "module": "window",
+      "name": "EventBatch.events",
+      "symbol": "jw_window_event_batch_events_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.EventBatch",
+          "mode": "ref"
+        }
+      ],
+      "returns": "list<window.EventRecord>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 393225,
+      "module": "window",
+      "name": "GameInputBatch.events",
+      "symbol": "jw_window_game_input_batch_events_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "window.GameInputBatch",
+          "mode": "ref"
+        }
+      ],
+      "returns": "list<window.EventRecord>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "window"
+      ]
+    },
+    {
+      "id": 458753,
+      "module": "draw2d",
+      "name": "RendererOptions.defaults",
+      "symbol": "jw_draw2d_renderer_options_defaults_v1",
+      "params": [],
+      "returns": "draw2d.RendererOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ],
+      "default_result": {
+        "adapter": {
+          "variant": "HardwarePreferred",
+          "fields": {}
+        }
+      }
+    },
+    {
+      "id": 458754,
+      "module": "draw2d",
+      "name": "TextureOptions.defaults",
+      "symbol": "jw_draw2d_texture_options_defaults_v1",
+      "params": [],
+      "returns": "draw2d.TextureOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ],
+      "default_result": {
+        "sampling": {
+          "variant": "Linear",
+          "fields": {}
+        },
+        "stride": null,
+        "max_bytes": 67108864
+      }
+    },
+    {
+      "id": 458755,
+      "module": "draw2d",
+      "name": "TextStyle.defaults",
+      "symbol": "jw_draw2d_text_style_defaults_v1",
+      "params": [],
+      "returns": "draw2d.TextStyle",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ],
+      "default_result": {
+        "family": {
+          "variant": "SystemUi",
+          "fields": {}
+        },
+        "size": null,
+        "weight": {
+          "variant": "Normal",
+          "fields": {}
+        },
+        "wrap": {
+          "variant": "NoWrap",
+          "fields": {}
+        }
+      }
+    },
+    {
+      "id": 458756,
+      "module": "draw2d",
+      "name": "PresentOptions.defaults",
+      "symbol": "jw_draw2d_present_options_defaults_v1",
+      "params": [],
+      "returns": "draw2d.PresentOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ],
+      "default_result": {
+        "vsync": true
+      }
+    },
+    {
+      "id": 458757,
+      "module": "draw2d",
+      "name": "create_renderer",
+      "symbol": "jw_draw2d_create_renderer_v1",
+      "params": [
+        {
+          "name": "window",
+          "type": "window.Window",
+          "mode": "mut"
+        },
+        {
+          "name": "options",
+          "type": "draw2d.RendererOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<draw2d.Renderer,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458758,
+      "module": "draw2d",
+      "name": "create_text_layout",
+      "symbol": "jw_draw2d_create_text_layout_v1",
+      "params": [
+        {
+          "name": "text",
+          "type": "str",
+          "mode": "ref"
+        },
+        {
+          "name": "options",
+          "type": "draw2d.TextOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<draw2d.TextLayout,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458759,
+      "module": "draw2d",
+      "name": "Texture.from_rgba8",
+      "symbol": "jw_draw2d_texture_from_rgba8_v1",
+      "params": [
+        {
+          "name": "renderer",
+          "type": "draw2d.Renderer",
+          "mode": "mut"
+        },
+        {
+          "name": "size",
+          "type": "draw2d.PixelSize",
+          "mode": "move"
+        },
+        {
+          "name": "pixels",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "options",
+          "type": "draw2d.TextureOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<draw2d.Texture,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458760,
+      "module": "draw2d",
+      "name": "Renderer.info",
+      "symbol": "jw_draw2d_renderer_info_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Renderer",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<draw2d.RendererInfo,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458761,
+      "module": "draw2d",
+      "name": "Renderer.begin_frame",
+      "symbol": "jw_draw2d_renderer_begin_frame_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Renderer",
+          "mode": "mut"
+        },
+        {
+          "name": "clear",
+          "type": "draw2d.Color",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<draw2d.FrameStart,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458762,
+      "module": "draw2d",
+      "name": "Renderer.close",
+      "symbol": "jw_draw2d_renderer_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Renderer",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458763,
+      "module": "draw2d",
+      "name": "Texture.close",
+      "symbol": "jw_draw2d_texture_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Texture",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458764,
+      "module": "draw2d",
+      "name": "TextLayout.close",
+      "symbol": "jw_draw2d_text_layout_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.TextLayout",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458765,
+      "module": "draw2d",
+      "name": "TextLayout.info",
+      "symbol": "jw_draw2d_text_layout_info_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.TextLayout",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<draw2d.TextInfo,draw2d.DrawError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458766,
+      "module": "draw2d",
+      "name": "Frame.fill_rect",
+      "symbol": "jw_draw2d_frame_fill_rect_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "rect",
+          "type": "draw2d.Rect",
+          "mode": "move"
+        },
+        {
+          "name": "color",
+          "type": "draw2d.Color",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458767,
+      "module": "draw2d",
+      "name": "Frame.stroke_rect",
+      "symbol": "jw_draw2d_frame_stroke_rect_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "rect",
+          "type": "draw2d.Rect",
+          "mode": "move"
+        },
+        {
+          "name": "color",
+          "type": "draw2d.Color",
+          "mode": "move"
+        },
+        {
+          "name": "width",
+          "type": "f64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458768,
+      "module": "draw2d",
+      "name": "Frame.triangle",
+      "symbol": "jw_draw2d_frame_triangle_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "a",
+          "type": "draw2d.Point",
+          "mode": "move"
+        },
+        {
+          "name": "b",
+          "type": "draw2d.Point",
+          "mode": "move"
+        },
+        {
+          "name": "c",
+          "type": "draw2d.Point",
+          "mode": "move"
+        },
+        {
+          "name": "color",
+          "type": "draw2d.Color",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458769,
+      "module": "draw2d",
+      "name": "Frame.image",
+      "symbol": "jw_draw2d_frame_image_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "texture",
+          "type": "draw2d.Texture",
+          "mode": "ref"
+        },
+        {
+          "name": "source",
+          "type": "option<draw2d.Rect>",
+          "mode": "move"
+        },
+        {
+          "name": "target",
+          "type": "draw2d.Rect",
+          "mode": "move"
+        },
+        {
+          "name": "tint",
+          "type": "draw2d.Color",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458770,
+      "module": "draw2d",
+      "name": "Frame.text",
+      "symbol": "jw_draw2d_frame_text_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "layout",
+          "type": "draw2d.TextLayout",
+          "mode": "ref"
+        },
+        {
+          "name": "origin",
+          "type": "draw2d.Point",
+          "mode": "move"
+        },
+        {
+          "name": "color",
+          "type": "draw2d.Color",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458771,
+      "module": "draw2d",
+      "name": "Frame.push_clip",
+      "symbol": "jw_draw2d_frame_push_clip_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "rect",
+          "type": "draw2d.Rect",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458772,
+      "module": "draw2d",
+      "name": "Frame.pop_clip",
+      "symbol": "jw_draw2d_frame_pop_clip_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458773,
+      "module": "draw2d",
+      "name": "Frame.push_transform",
+      "symbol": "jw_draw2d_frame_push_transform_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        },
+        {
+          "name": "transform",
+          "type": "draw2d.Transform",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458774,
+      "module": "draw2d",
+      "name": "Frame.pop_transform",
+      "symbol": "jw_draw2d_frame_pop_transform_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458775,
+      "module": "draw2d",
+      "name": "Frame.finish",
+      "symbol": "jw_draw2d_frame_finish_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "move"
+        },
+        {
+          "name": "options",
+          "type": "draw2d.PresentOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<draw2d.PresentInfo,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 458776,
+      "module": "draw2d",
+      "name": "Frame.abort",
+      "symbol": "jw_draw2d_frame_abort_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "draw2d.Frame",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,draw2d.DrawError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "draw2d"
+      ]
+    },
+    {
+      "id": 524289,
+      "module": "image",
+      "name": "Limits.defaults",
+      "symbol": "jw_image_limits_defaults_v1",
+      "params": [],
+      "returns": "image.Limits",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "image"
+      ],
+      "default_result": {
+        "max_encoded_bytes": 16777216,
+        "max_pixels": 16777216,
+        "max_decoded_bytes": 67108864
+      }
+    },
+    {
+      "id": 524290,
+      "module": "image",
+      "name": "decode",
+      "symbol": "jw_image_decode_v1",
+      "params": [
+        {
+          "name": "encoded",
+          "type": "list<u8>",
+          "mode": "ref"
+        },
+        {
+          "name": "limits",
+          "type": "image.Limits",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<image.CpuImage,image.ImageError>",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "image"
+      ]
+    },
+    {
+      "id": 524291,
+      "module": "image",
+      "name": "load",
+      "symbol": "jw_image_load_v1",
+      "params": [
+        {
+          "name": "path",
+          "type": "std.fs.Path",
+          "mode": "value"
+        },
+        {
+          "name": "limits",
+          "type": "image.Limits",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<image.CpuImage,image.ImageError>",
+      "effects": [
+        "read-os"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "image"
+      ]
+    },
+    {
+      "id": 589825,
+      "module": "gui",
+      "name": "Insets.defaults",
+      "symbol": "jw_gui_insets_defaults_v1",
+      "params": [],
+      "returns": "gui.Insets",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ],
+      "default_result": {
+        "left": 0.0,
+        "top": 0.0,
+        "right": 0.0,
+        "bottom": 0.0
+      }
+    },
+    {
+      "id": 589826,
+      "module": "gui",
+      "name": "Layout.defaults",
+      "symbol": "jw_gui_layout_defaults_v1",
+      "params": [],
+      "returns": "gui.Layout",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ],
+      "default_result": {
+        "width": {
+          "variant": "Auto",
+          "fields": {}
+        },
+        "height": {
+          "variant": "Auto",
+          "fields": {}
+        },
+        "min_width": 0.0,
+        "min_height": 0.0,
+        "max_width": null,
+        "max_height": null,
+        "margin": {
+          "left": 0.0,
+          "top": 0.0,
+          "right": 0.0,
+          "bottom": 0.0
+        },
+        "padding": null,
+        "align_x": {
+          "variant": "Stretch",
+          "fields": {}
+        },
+        "align_y": {
+          "variant": "Stretch",
+          "fields": {}
+        },
+        "justify": {
+          "variant": "Start",
+          "fields": {}
+        }
+      }
+    },
+    {
+      "id": 589827,
+      "module": "gui",
+      "name": "Semantics.defaults",
+      "symbol": "jw_gui_semantics_defaults_v1",
+      "params": [],
+      "returns": "gui.Semantics",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ],
+      "default_result": {
+        "name": null,
+        "help": null,
+        "automation_id": null,
+        "labelled_by": null
+      }
+    },
+    {
+      "id": 589828,
+      "module": "gui",
+      "name": "TextInputOptions.defaults",
+      "symbol": "jw_gui_text_input_options_defaults_v1",
+      "params": [],
+      "returns": "gui.TextInputOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ],
+      "default_result": {
+        "read_only": false,
+        "max_bytes": 1048576,
+        "placeholder": ""
+      }
+    },
+    {
+      "id": 589829,
+      "module": "gui",
+      "name": "GuiLimits.defaults",
+      "symbol": "jw_gui_gui_limits_defaults_v1",
+      "params": [],
+      "returns": "gui.GuiLimits",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ],
+      "default_result": {
+        "nodes": 4096,
+        "depth": 128,
+        "text_bytes": 1048576,
+        "total_text_bytes": 8388608,
+        "events": 4096,
+        "uia_actions": 128,
+        "owned_bytes": 67108864
+      }
+    },
+    {
+      "id": 589830,
+      "module": "gui",
+      "name": "GuiOptions.defaults",
+      "symbol": "jw_gui_gui_options_defaults_v1",
+      "params": [],
+      "returns": "gui.GuiOptions",
+      "effects": [],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ],
+      "default_result": {
+        "theme": {
+          "variant": "System",
+          "fields": {}
+        },
+        "limits": {
+          "nodes": 4096,
+          "depth": 128,
+          "text_bytes": 1048576,
+          "total_text_bytes": 8388608,
+          "events": 4096,
+          "uia_actions": 128,
+          "owned_bytes": 67108864
+        }
+      }
+    },
+    {
+      "id": 589831,
+      "module": "gui",
+      "name": "create_gui",
+      "symbol": "jw_gui_create_gui_v1",
+      "params": [
+        {
+          "name": "window",
+          "type": "window.Window",
+          "mode": "mut"
+        },
+        {
+          "name": "options",
+          "type": "gui.GuiOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<gui.GuiContext,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589832,
+      "module": "gui",
+      "name": "GuiContext.root",
+      "symbol": "jw_gui_gui_context_root_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<gui.NodeId,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589833,
+      "module": "gui",
+      "name": "GuiContext.create",
+      "symbol": "jw_gui_gui_context_create_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "parent",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "spec",
+          "type": "gui.WidgetSpec",
+          "mode": "move"
+        },
+        {
+          "name": "layout",
+          "type": "gui.Layout",
+          "mode": "move"
+        },
+        {
+          "name": "semantics",
+          "type": "gui.Semantics",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<gui.NodeId,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589834,
+      "module": "gui",
+      "name": "GuiContext.reparent",
+      "symbol": "jw_gui_gui_context_reparent_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "parent",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "index",
+          "type": "u32",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589835,
+      "module": "gui",
+      "name": "GuiContext.remove",
+      "symbol": "jw_gui_gui_context_remove_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589836,
+      "module": "gui",
+      "name": "GuiContext.set_layout",
+      "symbol": "jw_gui_gui_context_set_layout_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "gui.Layout",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589837,
+      "module": "gui",
+      "name": "GuiContext.set_style",
+      "symbol": "jw_gui_gui_context_set_style_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "gui.Style",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589838,
+      "module": "gui",
+      "name": "GuiContext.set_text_style",
+      "symbol": "jw_gui_gui_context_set_text_style_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "draw2d.TextStyle",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589839,
+      "module": "gui",
+      "name": "GuiContext.set_input_options",
+      "symbol": "jw_gui_gui_context_set_input_options_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "gui.TextInputOptions",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589840,
+      "module": "gui",
+      "name": "GuiContext.set_semantics",
+      "symbol": "jw_gui_gui_context_set_semantics_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "gui.Semantics",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589841,
+      "module": "gui",
+      "name": "GuiContext.set_visibility",
+      "symbol": "jw_gui_gui_context_set_visibility_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "gui.Visibility",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589842,
+      "module": "gui",
+      "name": "GuiContext.set_selection",
+      "symbol": "jw_gui_gui_context_set_selection_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "gui.Selection",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589843,
+      "module": "gui",
+      "name": "GuiContext.set_gap",
+      "symbol": "jw_gui_gui_context_set_gap_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "f64",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589844,
+      "module": "gui",
+      "name": "GuiContext.set_block_background",
+      "symbol": "jw_gui_gui_context_set_block_background_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "bool",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589845,
+      "module": "gui",
+      "name": "GuiContext.set_enabled",
+      "symbol": "jw_gui_gui_context_set_enabled_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "value",
+          "type": "bool",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589846,
+      "module": "gui",
+      "name": "GuiContext.set_text",
+      "symbol": "jw_gui_gui_context_set_text_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        },
+        {
+          "name": "text",
+          "type": "str",
+          "mode": "ref"
+        }
+      ],
+      "returns": "result<u64,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589847,
+      "module": "gui",
+      "name": "GuiContext.text",
+      "symbol": "jw_gui_gui_context_text_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "ref"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<str,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589848,
+      "module": "gui",
+      "name": "GuiContext.selection",
+      "symbol": "jw_gui_gui_context_selection_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "ref"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<gui.Selection,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589849,
+      "module": "gui",
+      "name": "GuiContext.composition",
+      "symbol": "jw_gui_gui_context_composition_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "ref"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<option<gui.CompositionInfo>,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589850,
+      "module": "gui",
+      "name": "GuiContext.node_info",
+      "symbol": "jw_gui_gui_context_node_info_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "ref"
+        },
+        {
+          "name": "node",
+          "type": "gui.NodeId",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<gui.NodeInfo,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589851,
+      "module": "gui",
+      "name": "GuiContext.request_focus",
+      "symbol": "jw_gui_gui_context_request_focus_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "node",
+          "type": "option<gui.NodeId>",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<gui.FocusChange,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589852,
+      "module": "gui",
+      "name": "GuiContext.layout",
+      "symbol": "jw_gui_gui_context_layout_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<gui.LayoutInfo,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589853,
+      "module": "gui",
+      "name": "GuiContext.update",
+      "symbol": "jw_gui_gui_context_update_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "batch",
+          "type": "window.EventBatch",
+          "mode": "move"
+        },
+        {
+          "name": "now",
+          "type": "std.time.Instant",
+          "mode": "value"
+        }
+      ],
+      "returns": "result<gui.GuiUpdate,gui.UpdateFailure>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589854,
+      "module": "gui",
+      "name": "GuiContext.draw",
+      "symbol": "jw_gui_gui_context_draw_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "mut"
+        },
+        {
+          "name": "frame",
+          "type": "draw2d.Frame",
+          "mode": "mut"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    },
+    {
+      "id": 589855,
+      "module": "gui",
+      "name": "GuiContext.close",
+      "symbol": "jw_gui_gui_context_close_v1",
+      "params": [
+        {
+          "name": "self",
+          "type": "gui.GuiContext",
+          "mode": "move"
+        }
+      ],
+      "returns": "result<unit,gui.GuiError>",
+      "effects": [
+        "gui"
+      ],
+      "barrier": true,
+      "capabilities": [
+        "gui"
+      ]
+    }
+  ],
+  "reserved_operation_ids": []
+}
