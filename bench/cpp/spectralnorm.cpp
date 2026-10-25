@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdio>
 #include <vector>
 static double a(long i, long j) { return 1.0 / (double)((i + j) * (i + j + 1) / 2 + i + 1); }
@@ -25,5 +26,5 @@ int main() {
     for (int k = 0; k < 10; k++) { times_ata(u, tmp, v); times_ata(v, tmp, u); }
     double vbv = 0, vv = 0;
     for (int i = 0; i < n; i++) { vbv += u[i] * v[i]; vv += v[i] * v[i]; }
-    printf("%lld\n", (long long)(vbv / vv * 1e9));
+    printf("%lld\n", (long long)(std::sqrt(vbv / vv) * 1e9));
 }

@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 func a(i, j int) float64 { return 1.0 / float64((i+j)*(i+j+1)/2+i+1) }
 
@@ -46,5 +49,5 @@ func main() {
 		vbv += u[i] * v[i]
 		vv += v[i] * v[i]
 	}
-	fmt.Println(int64(vbv / vv * 1e9))
+	fmt.Println(int64(math.Sqrt(vbv/vv) * 1e9))
 }

@@ -439,3 +439,24 @@ fn measurement_builds_keep_the_output_and_count_checks() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn number_methods_match_interp() {
+    same_as_interp(
+        "nummeth",
+        "fn main() {
+    let x = 2.0;
+    let own f64 p = own 9.0;
+    print(x.sqrt(), (x - 5.0).abs(), x.max(3), x.min(1.5), p.sqrt(), (16.0).sqrt());
+    print((-1.0).sqrt(), (0.0 / 0.0).max(1.0), x.max(0.0 / 0.0));
+    let i32 a = -7;
+    let u8 b = 200;
+    let i64 m = -9223372036854775807 - 1;
+    let i8 n = -128;
+    let ref i32 r = ref a;
+    print(a.abs(), a.max(3), a.min(-10), b.max(100), b.min(201), b.abs(), m.abs(), n.abs(), r.abs());
+    let u64 big = 18446744073709551615;
+    print(big.max(1), big.min(1), (3 - 10).abs());
+}",
+    );
+}

@@ -426,10 +426,11 @@ impl<'a> Machine<'a> {
                 }
                 Ok(Value::Str(text_rc(shown?.as_str())))
             }
-            Rvalue::Builtin(name, ops, _) if name == "f64.to_bits" => match self.operands(f, locs, ops)?.as_slice() {
-                [Value::Float(x)] => Ok(Value::Int(x.to_bits() as i128, IntTy::U64)),
-                _ => unreachable!("to_bits on a float"),
-            },
+            Rvalue::Builtin(name, ops, _) if name.starts_with("f64.") || name.starts_with("int.") => {
+                let mut vals = self.operands(f, locs, ops)?;
+                let x = vals.remove(0);
+                Ok(crate::interp::num_method(x, &name[4..], vals))
+            }
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;
                 let Value::Str(text) = vals.remove(0) else { unreachable!("string method on a string") };

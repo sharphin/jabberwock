@@ -2477,6 +2477,35 @@ impl<'a> Checker<'a> {
     }
 
     /// `p.name(args)`。メソッドは `構造体名.name` という関数で、最初の引数が `this`（`ref 構造体`）
+    /// 数のメソッド。f64 は `to_bits` / `sqrt` / `abs` / `max` / `min`、整数は `abs` / `max` / `min`。
+    /// `max` / `min` の引数は receiver と同じ型（数の書き方はそれに合わせる）
+    fn num_method(&mut self, t: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
+        let float = matches!(t, Ty::Float);
+        let (arity, ret) = match name {
+            "to_bits" if float => (0, Ty::Int(IntTy::U64)),
+            "sqrt" if float => (0, Ty::Float),
+            "abs" => (0, t.clone()),
+            "max" | "min" => (1, t.clone()),
+            _ if float => {
+                return Err(Diagnostic::new(format!("f64 にメソッド `{}` はありません", name)).primary(
+                    span,
+                    "f64 のメソッドは `to_bits()`（ビットの並びを u64 で）・`sqrt()`・`abs()`・`max(y)`・`min(y)` だけです",
+                ))
+            }
+            _ => {
+                return Err(Diagnostic::new(format!("`{}` にメソッド `{}` はありません", t.show(), name))
+                    .primary(span, "整数のメソッドは `abs()`・`max(y)`・`min(y)` だけです"))
+            }
+        };
+        if args.len() != arity {
+            return Err(arity_error(name, arity, args.len(), span));
+        }
+        for a in args {
+            self.expect(a, t)?;
+        }
+        Ok(ret)
+    }
+
     fn method_call(
         &mut self,
         recv: &Expr,
@@ -2507,16 +2536,7 @@ impl<'a> Checker<'a> {
             Ty::List(elem) => return self.list_method(recv, &rt, elem, name, args, span),
             Ty::Map(k, v) => return self.map_method(recv, &rt, k, v, name, args, span),
             Ty::Str => return self.str_method(name, args, span),
-            Ty::Float => {
-                if name != "to_bits" {
-                    return Err(Diagnostic::new(format!("f64 にメソッド `{}` はありません", name))
-                        .primary(span, "f64 のメソッドは `to_bits()`（ビットの並びを u64 で）だけです"));
-                }
-                if !args.is_empty() {
-                    return Err(arity_error(name, 0, args.len(), span));
-                }
-                return Ok(Ty::Int(IntTy::U64));
-            }
+            Ty::Float | Ty::Int(_) => return self.num_method(&inner, name, args, span),
             Ty::Task(r) => return self.task_method(r, name, args, span),
             Ty::Chan(x) => return self.chan_method(x, name, args, span),
             Ty::Param(p) => {

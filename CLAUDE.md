@@ -254,7 +254,8 @@
   なので types より後ろは定数を知らない。`Program.consts`（モジュールの中は `geom.N`）は、変数に同じ名前をつけるのを types の `not_a_fn_name` が弾くためだけ。
 - ビット演算: `>>` は字句解析では `>` 2 つ（型の `>>` と区別）。パーサの `parse_binary` が、すき間なく並んだ `>` 2 つを `BinOp::Shr` にする。
   ずらす数は左と別の型でよい（types の `binary` が先に扱う。llvm.rs の `shift`）。
-- f64 のメソッドは `to_bits` だけ（interp の `eval_method`・lower の `f64.to_bits`）。
+- 数のメソッド: f64 は `to_bits` / `sqrt` / `abs` / `max` / `min`、整数は `abs` / `max` / `min`（types の `num_method`・interp の `num_method`（exec も使う）・
+  lower の `f64.名前` / `int.名前` の Builtin・llvm.rs は小数が intrinsic、整数が icmp + select。jwc の typeck / lower / llvmfn も同じ）。
 - 自己ホストに向けて足りないものの一覧は `docs/self-hosting.md`。
 - jwc（`jwc/`）: Rust 版の段ごとに、同じ出力を出す jabberwock のプログラムとして書く。突き合わせ用の出力を Rust 版にも足す（字句は `--tokens` / `token_dump`）。
   トークンは `Token { kind, text, num, span }`（kind は記号・予約語ならその字）。埋め込みのある文字列は平らに並べる（interp → lit / code と中のトークン → end）。

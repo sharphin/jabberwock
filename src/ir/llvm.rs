@@ -157,6 +157,10 @@ const PRELUDE: &str = r#"; jabberwock が書き出した LLVM IR
 @jw_depth = external thread_local(initialexec) global i64
 @jw.unset = private constant %site { ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }
 
+declare double @llvm.sqrt.f64(double)
+declare double @llvm.fabs.f64(double)
+declare double @llvm.maxnum.f64(double, double)
+declare double @llvm.minnum.f64(double, double)
 declare void @jw_print_begin()
 declare ptr @jw_chan_new(i64, ptr)
 declare void @jw_chan_retain(ptr)
@@ -3753,6 +3757,41 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
             "f64.to_bits" => Ok((self.b.val(format!("bitcast double {} to i64", vals[0].0)), Ty::Int(IntTy::U64))),
+            "f64.sqrt" | "f64.abs" => {
+                let f = if name == "f64.sqrt" { "sqrt" } else { "fabs" };
+                Ok((self.b.val(format!("call double @llvm.{}.f64(double {})", f, vals[0].0)), Ty::Float))
+            }
+            "f64.max" | "f64.min" => {
+                let f = if name == "f64.max" { "maxnum" } else { "minnum" };
+                let v = self.b.val(format!("call double @llvm.{}.f64(double {}, double {})", f, vals[0].0, vals[1].0));
+                Ok((v, Ty::Float))
+            }
+            // 整数の abs / max / min は比べて選ぶ（abs は一周する: 最小の値はそのまま）
+            _ if name.starts_with("int.") => {
+                let Ty::Int(i) = vals[0].1 else { unreachable!("an integer method on an integer") };
+                let lt = format!("i{}", i.bits());
+                let x = vals[0].0.clone();
+                let v = match &name[4..] {
+                    "abs" if !i.signed() => x,
+                    "abs" => {
+                        let n = self.b.val(format!("sub {} 0, {}", lt, x));
+                        let c = self.b.val(format!("icmp slt {} {}, 0", lt, x));
+                        self.b.val(format!("select i1 {}, {} {}, {} {}", c, lt, n, lt, x))
+                    }
+                    m => {
+                        let y = vals[1].0.clone();
+                        let cmp = match (m == "max", i.signed()) {
+                            (true, true) => "sgt",
+                            (true, false) => "ugt",
+                            (false, true) => "slt",
+                            (false, false) => "ult",
+                        };
+                        let c = self.b.val(format!("icmp {} {} {}, {}", cmp, lt, x, y));
+                        self.b.val(format!("select i1 {}, {} {}, {} {}", c, lt, x, lt, y))
+                    }
+                };
+                Ok((v, Ty::Int(i)))
+            }
             _ if name.starts_with("str.") => {
                 let r = self.str_method(&name[4..], &vals, span, want)?;
                 release(self, &vals);

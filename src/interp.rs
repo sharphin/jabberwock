@@ -2485,20 +2485,20 @@ impl Interp {
             let v = str_method(&text, name, vals, span)?;
             return Ok(self.adopt(v));
         }
-        // f64 のメソッド（`to_bits` だけ）
-        let float = match &rv {
-            Value::Float(x) => Some(*x),
+        // 数のメソッド（f64 の `to_bits` / `sqrt` / `abs` / `max` / `min`、整数の `abs` / `max` / `min`）
+        let num = match &rv {
+            Value::Float(_) | Value::Int(..) => Some(rv.clone()),
             Value::Own(_) | Value::Ref(_) => {
                 let (slot, path) = self.check_ptr(&rv, recv.span, Check::Required)?;
                 match self.at(slot, &path) {
-                    Value::Float(x) => Some(*x),
+                    v @ (Value::Float(_) | Value::Int(..)) => Some(v.clone()),
                     _ => None,
                 }
             }
             _ => None,
         };
-        if let Some(x) = float {
-            return Ok(Value::Int(x.to_bits() as i128, IntTy::U64));
+        if let Some(x) = num {
+            return Ok(num_method(x, name, vals));
         }
         // task と chan のメソッド
         let handle = match &rv {
@@ -3209,6 +3209,21 @@ pub(crate) fn none() -> Value {
 
 fn str_list<'a>(items: impl Iterator<Item = &'a str>) -> Value {
     Value::Array(items.map(|x| Value::Str(text_rc(x))).collect(), true)
+}
+
+/// 数のメソッド（types.rs の `num_method` が名前と引数を調べてある）。IR の exec も使う
+pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>) -> Value {
+    match (x, name, vals.as_slice()) {
+        (Value::Float(x), "to_bits", []) => Value::Int(x.to_bits() as i128, IntTy::U64),
+        (Value::Float(x), "sqrt", []) => Value::Float(x.sqrt()),
+        (Value::Float(x), "abs", []) => Value::Float(x.abs()),
+        (Value::Float(x), "max", [Value::Float(y)]) => Value::Float(x.max(*y)),
+        (Value::Float(x), "min", [Value::Float(y)]) => Value::Float(x.min(*y)),
+        (Value::Int(x, t), "abs", []) => Value::Int(t.wrap(x.abs()), t),
+        (Value::Int(x, t), "max", [Value::Int(y, _)]) => Value::Int(x.max(*y), t),
+        (Value::Int(x, t), "min", [Value::Int(y, _)]) => Value::Int(x.min(*y), t),
+        (_, name, _) => unreachable!("type checked: {}", name),
+    }
 }
 
 /// 文字列のメソッド。位置と長さは文字単位（バイトではない）

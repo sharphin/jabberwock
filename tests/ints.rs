@@ -246,3 +246,20 @@ fn constant_errors() {
     assert!(e("const A = 1; const A = 2; fn main() {}").contains("二重"));
     assert!(e("const A = 300; fn main() { let u8 b = A; }").contains("入りません"));
 }
+
+#[test]
+fn abs_max_min() {
+    let o = out("
+    let i32 a = -7;
+    let u8 b = 200;
+    let i64 m = -9223372036854775807 - 1;
+    let i8 n = -128;
+    let ref i32 r = ref a;
+    print(a.abs(), a.max(3), a.min(-10), b.max(100), b.min(201), b.abs(), m.abs(), n.abs(), r.abs());
+    let u64 big = 18446744073709551615;
+    print(big.max(1), big.min(1), (3 - 10).abs());");
+    assert_eq!(o, "7 3 -10 200 200 200 -9223372036854775808 -128 7\n18446744073709551615 1 7\n");
+    assert!(err("let i64 a = 1; print(a.sqrt());").title.contains("メソッド"));
+    let d = err("let i32 a = 1; let i64 b = 2; print(a.max(b));");
+    assert!(d.title.contains("型"), "{}", d.title);
+}

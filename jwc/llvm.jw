@@ -28,6 +28,10 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "@jw_depth = external thread_local(initialexec) global i64\n" +
     "@jw.unset = private constant %site {{ ptr null, i32 0, i32 0, i32 0, i32 0, ptr null, ptr null }}\n" +
     "\n" +
+    "declare double @llvm.sqrt.f64(double)\n" +
+    "declare double @llvm.fabs.f64(double)\n" +
+    "declare double @llvm.maxnum.f64(double, double)\n" +
+    "declare double @llvm.minnum.f64(double, double)\n" +
     "declare void @jw_print_begin()\n" +
     "declare ptr @jw_chan_new(i64, ptr)\n" +
     "declare void @jw_chan_retain(ptr)\n" +

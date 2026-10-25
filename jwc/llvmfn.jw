@@ -1891,6 +1891,36 @@ struct FnGen {
             return Ok(llvm.vt(b.val("load %list, ptr " + out), ty.Ty.List(own ty.Ty.Str)));
         }
         if name == "f64.to_bits" { return Ok(llvm.vt(b.val("bitcast double " + vals[0].v + " to i64"), ty.Ty.Int("u64"))); }
+        if name == "f64.sqrt" || name == "f64.abs" {
+            let f = if name == "f64.sqrt" { "sqrt" } else { "fabs" };
+            return Ok(llvm.vt(b.val("call double @llvm." + f + ".f64(double " + vals[0].v + ")"), ty.Ty.Float));
+        }
+        if name == "f64.max" || name == "f64.min" {
+            let f2 = if name == "f64.max" { "maxnum" } else { "minnum" };
+            let fv = b.val("call double @llvm." + f2 + ".f64(double " + vals[0].v + ", double " + vals[1].v + ")");
+            return Ok(llvm.vt(fv, ty.Ty.Float));
+        }
+        // 整数の abs / max / min は比べて選ぶ（abs は一周する: 最小の値はそのまま）
+        if name.starts_with("int.") {
+            let it = ty.int_of(vals[0].t);
+            let lt = "i{ty.bits(it)}";
+            let x = vals[0].v;
+            let mn = name.slice(4, name.len());
+            let mut r = x;
+            if mn == "abs" {
+                if ty.signed(it) {
+                    let n = b.val("sub " + lt + " 0, " + x);
+                    let c = b.val("icmp slt " + lt + " " + x + ", 0");
+                    r = b.val("select i1 " + c + ", " + lt + " " + n + ", " + lt + " " + x);
+                }
+            } else {
+                let y = vals[1].v;
+                let cmp = if mn == "max" { if ty.signed(it) { "sgt" } else { "ugt" } } else if ty.signed(it) { "slt" } else { "ult" };
+                let c2 = b.val("icmp " + cmp + " " + lt + " " + x + ", " + y);
+                r = b.val("select i1 " + c2 + ", " + lt + " " + x + ", " + lt + " " + y);
+            }
+            return Ok(llvm.vt(r, ty.Ty.Int(it)));
+        }
         if name.starts_with("str.") {
             let r = str_method(m, name.slice(4, name.len()), vals, span, want)?;
             release(vals, all);

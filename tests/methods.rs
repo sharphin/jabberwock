@@ -209,6 +209,8 @@ fn method_errors() {
     let d = e("let p = Point { x: 1, y: 1 };\np.len2(1);");
     assert!(d.title.contains("引数"), "{}", d.title);
     let d = e("let i64 n = 1;\nn.len2();");
+    assert!(d.title.contains("`i64` にメソッド `len2` はありません"), "{}", d.title);
+    let d = e("let b = true;\nb.len2();");
     assert!(d.title.contains("構造体と enum だけ"), "{}", d.title);
     let d = err("
 struct P {

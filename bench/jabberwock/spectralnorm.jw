@@ -36,5 +36,5 @@ fn main() {
     let mut vbv = 0.0;
     let mut vv = 0.0;
     for i in range(n) { vbv += u[i] * v[i]; vv += v[i] * v[i]; }
-    print((vbv / vv * 1000000000.0) as i64);
+    print(((vbv / vv).sqrt() * 1000000000.0) as i64);
 }

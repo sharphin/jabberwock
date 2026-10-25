@@ -109,3 +109,15 @@ fn parse_floats_and_read_bits() {
     );
     assert!(err("let x = 1.5; print(x.round());").title.contains("メソッド"));
 }
+
+#[test]
+fn sqrt_abs_max_min() {
+    let o = main_ok("
+    let x = 2.0;
+    let own f64 p = own 9.0;
+    print(x.sqrt(), (x - 5.0).abs(), x.max(3), x.min(1.5), p.sqrt(), (16.0).sqrt());
+    print((-1.0).sqrt(), (0.0 / 0.0).max(1.0), x.max(0.0 / 0.0));");
+    assert_eq!(o, "1.4142135623730951 3.0 3.0 1.5 3.0 4.0\nNaN 1.0 2.0\n");
+    assert!(err("let x = 1.5; print(x.max());").title.contains("引数"));
+    assert!(err("let x = 1.5; print(x.max(true));").title.contains("型"));
+}

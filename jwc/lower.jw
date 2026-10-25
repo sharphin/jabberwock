@@ -1610,14 +1610,12 @@ pub struct Lower {
         let mut vals = exprs(argv)?;
         let k = ty.tag(inner);
         let is_enum = k == "Enum";
-        if k == "Float" || k == "Str" {
+        if k == "Float" || k == "Int" || k == "Str" {
             let rp = recv_place(recv, temp_l, ptr)?;
             let x = if rp.t == -2 { ir.clone_op(temp_op) } else { ir.copy_of(ir.clone_place(rp.p)) };
             let ir.Operand[] mut opv = [x];
-            if k == "Str" {
-                for v in vals.drain() { opv.push(v); }
-            }
-            let bn = if k == "Float" { "f64." + name } else { "str." + name };
+            for v in vals.drain() { opv.push(v); }
+            let bn = if k == "Float" { "f64." + name } else if k == "Int" { "int." + name } else { "str." + name };
             let r = temp_of(et, ir.Rvalue.Builtin(bn, own opv, sp), sp);
             drop_temp_l(temp_l, sp);
             return Ok(r);
