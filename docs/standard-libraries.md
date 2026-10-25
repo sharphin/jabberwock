@@ -20,6 +20,7 @@
 | 対象 | 設計書 |
 |---|---|
 | 標準ライブラリの配置・読み込み | [standard-library-loading.md](standard-library-loading.md) |
+| aliceの正式な設定仕様 | [alice-configuration.md](alice-configuration.md) |
 | ファイル入出力 | [file-io.md](file-io.md) |
 | 通信 | [networking.md](networking.md) |
 | 共通資源管理 | [resource-management.md](resource-management.md) |

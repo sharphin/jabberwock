@@ -694,3 +694,10 @@ let x = pick(true, 1, 2);
 - 従来の裸のuseと直接依存を維持する。標準はstd.fsなどを明示し、GUI・PostgreSQLは同梱パッケージを直接依存として選ぶ。
 - TCP/DNSとTLSはstd.net/std.tlsに分ける。読み込んだグラフから能力を選び、各実行器・workerで同じsnapshotを使う。
 - 正式な設定仕様、資源ABI、jwc連携の実装完了を意味しない。設計上の試験条件と実際の合格を区別する。
+
+## aliceの正式な設定仕様（設計、未実装。2026-10-25）
+
+- [alice-configuration.md](alice-configuration.md) にmanifest v2、machine/利用者設定、CLIと優先順位を定めた。
+- v1の読み飛ばし・path文字列の扱いを互換経路に残し、新形式では未知キー・重複・不正な型を拒否する。
+- パッケージの能力要求と利用者のSDK/DLL選択を分け、直接依存・ABI・内容に基づく再ビルドの契約を維持する。
+- 設定検査と実際のprobe/buildを分け、未検証や条件不足を合格として扱わない。新設定やCLIは現行aliceに未実装。

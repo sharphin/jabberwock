@@ -211,7 +211,8 @@ libpqの既定のNOTICE出力も抑制し、接続の進行を始める前から
 ## 配布・alice・コンパイラへの影響
 
 PostgreSQLを使うパッケージだけが、登録済みのネイティブ能力 `postgres` を要求する案とする。
-alice.tomlの新しい書式は別途仕様化する。現在のaliceが任意のnative設定を認識するとは扱わない。
+alice.tomlとマシン別のlibpq指定は [aliceの設定仕様](alice-configuration.md) に定める。
+現在のaliceが任意のnative設定を認識するとは扱わない。
 任意のビルドスクリプトや任意のCソースを実行する機能へ、そのまま拡張しない。
 
 Windowsはまず明示したlibpq.dllを動的に読み込む案とし、DLLの探索を作業ディレクトリやPATHに任せない。
