@@ -290,6 +290,25 @@ struct LambdaScope {
     borrows: bool,
 }
 
+/// 固定長の配列の大きさの上限（8 バイトの数で 2^17 = 1 MiB）と、`[x; n]` のリストの上限（2^59 = 2^62 バイト）
+const ARRAY_CELLS: u64 = 1 << 17;
+const LIST_CELLS: u64 = 1 << 59;
+/// 大きさの数え方の頭打ち（jwc は i64 で数えるので、あふれない値にそろえる）
+const CELLS_CAP: u64 = 1 << 60;
+
+fn cap_mul(a: u64, b: u64) -> u64 {
+    let (a, b) = (a.min(CELLS_CAP), b.min(CELLS_CAP));
+    if a != 0 && b > CELLS_CAP / a {
+        CELLS_CAP
+    } else {
+        a * b
+    }
+}
+
+fn cap_add(a: u64, b: u64) -> u64 {
+    (a.min(CELLS_CAP) + b.min(CELLS_CAP)).min(CELLS_CAP)
+}
+
 struct Checker<'a> {
     structs: HashMap<&'a str, (&'a StructDef, Vec<Ty>)>,
     /// enum ごとの定義と、種類ごとの中身の型
@@ -531,7 +550,11 @@ impl<'a> Checker<'a> {
                 }
             }
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),
-            TypeKind::Array(inner, n) => Ty::Array(Box::new(self.resolve(inner)?), *n),
+            TypeKind::Array(inner, n) => {
+                let a = Ty::Array(Box::new(self.resolve(inner)?), *n);
+                self.check_size(&a, t.span)?;
+                a
+            }
             TypeKind::List(inner) => Ty::List(Box::new(self.resolve(inner)?)),
             TypeKind::Map(v, k) => {
                 let kt = self.resolve(k)?;
@@ -689,6 +712,42 @@ impl<'a> Checker<'a> {
     }
 
     /// enum の種類の一覧: (名前, 中身の型)。型の引数は置き換え済み
+    /// 値の大きさ（8 バイトの数で数えたおよその数。CELLS_CAP で頭打ち）。固定長の配列とその中の構造体・enum だけを中まで数える。
+    /// jwc/typeck.jw の `cells` と同じ数え方（途中で読んでいる enum は中身なし、深さ 32 で打ち切り）
+    fn cells(&self, t: &Ty, depth: usize) -> u64 {
+        if depth > 32 {
+            return 1;
+        }
+        match t {
+            Ty::Array(x, n) => cap_mul(*n, self.cells(x, depth + 1)),
+            Ty::Struct(n, args) => match self.structs.get(n.as_str()) {
+                Some((def, fields)) => {
+                    let map = Self::targs(&def.tparams, args);
+                    fields.iter().fold(0, |a, f| cap_add(a, self.cells(&subst(f, &map), depth + 1))).max(1)
+                }
+                None => 1,
+            },
+            Ty::Enum(..) => match self.variants_of(t) {
+                Some(vs) => cap_add(
+                    vs.iter().map(|(_, fs)| fs.iter().fold(0, |a, f| cap_add(a, self.cells(f, depth + 1)))).max().unwrap_or(0),
+                    1,
+                ),
+                None => 1,
+            },
+            _ => 1,
+        }
+    }
+
+    /// 固定長の配列は 1 MiB まで（値なので、実行ファイルではスタックに置く）
+    fn check_size(&self, t: &Ty, span: Span) -> R<()> {
+        match t {
+            Ty::Array(..) if self.cells(t, 0) > ARRAY_CELLS => Err(Diagnostic::new("配列が大きすぎます")
+                .primary(span, format!("`{}` は 1 MiB を超える", t.show()))
+                .note("固定長の配列は 1 MiB まで（値なので、実行ファイルではスタックに置きます）。大きいものはリスト（`i64[]` など）にしてください")),
+            _ => Ok(()),
+        }
+    }
+
     fn variants_of(&self, t: &Ty) -> Option<Vec<(String, Vec<Ty>)>> {
         match t {
             Ty::Enum(n, args) => {
@@ -1551,7 +1610,9 @@ impl<'a> Checker<'a> {
                         Some(t) => convert(x, &t, &elem),
                     }
                 }
-                Ok(Ty::Array(Box::new(elem), items.len() as u64))
+                let a = Ty::Array(Box::new(elem), items.len() as u64);
+                self.check_size(&a, e.span)?;
+                Ok(a)
             }
             ExprKind::MapLit(pairs) => {
                 let (kt, vt) = match hint {
@@ -1595,7 +1656,18 @@ impl<'a> Checker<'a> {
                         .primary(x.span, "own や構造体は 1 つしかない")
                         .note("`[a, b, c]` のように 1 つずつ書いてください"));
                 }
-                Ok(if list.get() { Ty::List(Box::new(t)) } else { Ty::Array(Box::new(t), *n) })
+                if list.get() {
+                    // リストの中身は 2^62 バイトまで（数の掛け算があふれないように。それより小さくても、確保できなければ実行時に止まる）
+                    if cap_mul(*n, self.cells(&t, 0)) > LIST_CELLS {
+                        return Err(Diagnostic::new("リストが大きすぎます")
+                            .primary(e.span, format!("{} 個は作れない", n))
+                            .note("リストの中身は 2^62 バイトまで"));
+                    }
+                    return Ok(Ty::List(Box::new(t)));
+                }
+                let a = Ty::Array(Box::new(t), *n);
+                self.check_size(&a, e.span)?;
+                Ok(a)
             }
             ExprKind::Interp(parts) => {
                 // print と同じく、どんな値でも文字にできる

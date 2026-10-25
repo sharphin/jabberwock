@@ -190,6 +190,8 @@
 - 入れ子の深さ: パーサの `nested` が `parse_block` / `parse_pat` / `parse_type` / `parse_unary` に入るたびに数え、`MAX_NEST`（256）を超えたらエラー
   （本体は `*_in`。埋め込みの中の式を読む sub の Parser も深さを引き継ぐ。jwc/parser.jw も同じ数え方で同じエラー）。後ろの段の再帰はこれで抑える。
   コマンドの `main` は `main_in_big_stack` で全体を 1 GiB のスタックで動かす。文字列の長さの上限は `STR_MAX`（2^62。interp と jw_rt.c）。
+  固定長の配列は 1 MiB まで（types の `check_size`。大きさは `cells` が 8 バイト単位で数え、`CELLS_CAP` で頭打ちにする。jwc/typeck.jw も同じ数え方。
+  Rust 版は読み終わっていない enum を種類なしに見るので、jwc は `EInfo.ready` でそろえる）。
 - 深い再帰（呼び出しの深さ 5000）で Rust のスタックがあふれないよう、`exec_stmt` / `eval_kind` の枠を大きくしない（大きな処理は `#[inline(never)]` の別関数へ。`exec_for_each` など）。
   テストは `cargo test --no-fail-fast` で全部のファイルを走らせて確かめる（スタックあふれは途中で止まり、後ろのテストが走らない）。
 - 辞書: `Value::Map(Box<MapVal>)`（入れた順の `entries` と、キーから位置を引く `index`）・`Ty::Map(キー, 値)`・`TypeKind::Map(値, キー)`。

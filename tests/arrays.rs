@@ -138,3 +138,20 @@ fn array_errors() {
     assert!(e("let a = [own 1];\nlet b = a[0];").title.contains("取り出せません"));
     assert!(e("let a = [1];\nprint(a.push(2));").title.contains("メソッド `push` はありません"));
 }
+
+#[test]
+fn arrays_are_at_most_one_mebibyte() {
+    // ちょうど 1 MiB（i64 が 131072 個）までは作れる。実行ファイルでもスタックに置ける
+    assert_eq!(ok("fn main() {\n    let mut a = [0; 131072];\n    a[131071] = 7;\n    print(a.len(), a[131071]);\n}"), "131072 7\n");
+    let e = |src: &str| err(src).title;
+    assert_eq!(e("fn main() { let a = [0; 131073]; }"), "配列が大きすぎます");
+    assert_eq!(e("fn main() { let a = [0; 9223372036854775807]; }"), "配列が大きすぎます");
+    assert_eq!(e("fn main() { let a = [[0; 1000]; 1000]; }"), "配列が大きすぎます");
+    assert_eq!(e("fn f(i64[200000] a) {}\nfn main() {}"), "配列が大きすぎます");
+    // 構造体と enum の中の配列も数える
+    assert_eq!(e("struct S { i64[100000] a; }\nfn main() { let S[2] b = [S { a: [0; 100000] }, S { a: [0; 100000] }]; }"), "配列が大きすぎます");
+    assert_eq!(e("fn main() { let Option<i64[100000]>[2] b = [None, None]; }"), "配列が大きすぎます");
+    // リストは 2^62 バイトまで（それより小さければ作れる）
+    assert_eq!(e("fn main() { let i64[] a = [0; 9223372036854775807]; }"), "リストが大きすぎます");
+    assert_eq!(ok("fn main() {\n    let i64[] a = [1; 1000000];\n    print(a.len());\n}"), "1000000\n");
+}

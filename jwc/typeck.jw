@@ -6,6 +6,28 @@ use ast;
 use diag;
 use ty;
 
+// 固定長の配列の大きさの上限（8 バイトの数で 2^17 = 1 MiB）と、`[x; n]` のリストの上限（2^59）。types.rs と同じ
+const ARRAY_CELLS = 131072;
+const LIST_CELLS = 576460752303423488;
+// 大きさの数え方の頭打ち（2^60）
+const CELLS_CAP = 1152921504606846976;
+
+fn i64 cap_u64(u64 n) {
+    if n > CELLS_CAP as u64 { CELLS_CAP } else { n as i64 }
+}
+
+fn i64 cap_mul(i64 a, i64 b) {
+    let x = if a > CELLS_CAP { CELLS_CAP } else { a };
+    let y = if b > CELLS_CAP { CELLS_CAP } else { b };
+    if x != 0 && y > CELLS_CAP / x { CELLS_CAP } else { x * y }
+}
+
+fn i64 cap_add(i64 a, i64 b) {
+    let x = if a > CELLS_CAP { CELLS_CAP } else { a };
+    let y = if b > CELLS_CAP { CELLS_CAP } else { b };
+    if x + y > CELLS_CAP { CELLS_CAP } else { x + y }
+}
+
 const ORDERED = "ordered";
 
 const STR_METHODS = "len, byte_len, chars, bytes, code, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int, to_float";
@@ -77,6 +99,8 @@ struct EInfo {
     str[] tparams;
     VInfo[] vs;
     i64 span;
+    // 中身の型を全部読んだか（Rust 版は読み終わるまで種類なしに見える。cells が同じ数になるように）
+    bool ready;
 }
 
 struct IMethod {
@@ -629,7 +653,11 @@ pub struct Checker {
                 if is_struct(n) { Ok(ty.Ty.Struct(n, own argv)) } else { Ok(ty.Ty.Enum(n, own argv)) }
             }
             case Ref(x, m) -> Ok(ty.Ty.Ref(own resolve_pointee(x)?, m));
-            case Array(x, n) -> Ok(ty.Ty.Array(own resolve(x)?, n));
+            case Array(x, n) -> {
+                let a = ty.Ty.Array(own resolve(x)?, n);
+                check_size(a, t.span)?;
+                Ok(a)
+            }
             case List(x) -> Ok(ty.Ty.List(own resolve(x)?));
             case Map(v, k) -> {
                 let kt = resolve(k)?;
@@ -780,6 +808,43 @@ pub struct Checker {
             return true;
         }
         false
+    }
+
+    /// 値の大きさ（8 バイトの数で数えたおよその数。CELLS_CAP で頭打ち）。types.rs の `cells` と同じ数え方
+    fn i64 cells(ref ty.Ty t, i64 depth) {
+        if depth > 32 { return 1; }
+        let k = ty.tag(t);
+        if k == "Array" {
+            return cap_mul(cap_u64(ty.arr_len(t)), cells(ty.inner(t), depth + 1));
+        }
+        if k == "Struct" {
+            let d = s_at[ty.name_of(t)];
+            let m = ty.targs(sdefs[d].tparams, ty.args_of(t));
+            let mut sum = 0;
+            for f in sdefs[d].tys { sum = cap_add(sum, cells(ty.subst(f, m), depth + 1)); }
+            return if sum > 1 { sum } else { 1 };
+        }
+        if k == "Enum" {
+            if !edefs[e_at[ty.name_of(t)]].ready { return 1; }
+            let mut most = 0;
+            for v in variants_of(t) {
+                let mut sum = 0;
+                for f in v.tys { sum = cap_add(sum, cells(f, depth + 1)); }
+                if sum > most { most = sum; }
+            }
+            return cap_add(most, 1);
+        }
+        1
+    }
+
+    /// 固定長の配列は 1 MiB まで（値なので、実行ファイルではスタックに置く）
+    fn Result<(), diag.Diag> check_size(ref ty.Ty t, i64 s) {
+        if ty.is(t, "Array") && cells(t, 0) > ARRAY_CELLS {
+            return Err(diag.make("配列が大きすぎます")
+                .at(s, "`{ty.show(t)}` は 1 MiB を超える")
+                .with_note("固定長の配列は 1 MiB まで（値なので、実行ファイルではスタックに置きます）。大きいものはリスト（`i64[]` など）にしてください"));
+        }
+        Ok(())
     }
 
     /// enum の種類の一覧（型の引数は置き換え済み）。enum でなければ空
@@ -1761,7 +1826,9 @@ pub struct Checker {
                 for (i, x) in items {
                     if done[i] { convert(x.id, tys[i], elem); } else { expect(x, elem)?; }
                 }
-                Ok(ty.Ty.Array(own elem, items.len() as u64))
+                let a = ty.Ty.Array(own elem, items.len() as u64);
+                check_size(a, e.span)?;
+                Ok(a)
             }
             case MapLit(kvs) -> {
                 let mut kt = ty.Ty.Unit;
@@ -1804,7 +1871,18 @@ pub struct Checker {
                         .at(x.span, "own や構造体は 1 つしかない")
                         .with_note("`[a, b, c]` のように 1 つずつ書いてください"));
                 }
-                Ok(if info.lists[e.id] { ty.Ty.List(own t) } else { ty.Ty.Array(own t, n) })
+                if info.lists[e.id] {
+                    // リストの中身は 2^62 バイトまで（数の掛け算があふれないように）
+                    if cap_mul(cap_u64(n), cells(t, 0)) > LIST_CELLS {
+                        return Err(diag.make("リストが大きすぎます")
+                            .at(e.span, "{n} 個は作れない")
+                            .with_note("リストの中身は 2^62 バイトまで"));
+                    }
+                    return Ok(ty.Ty.List(own t));
+                }
+                let a = ty.Ty.Array(own t, n);
+                check_size(a, e.span)?;
+                Ok(a)
             }
             case Interp(parts) -> {
                 // print と同じく、どんな値でも文字にできる
@@ -3135,7 +3213,7 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
         let VInfo[] mut vs = [];
         for v in en.variants { vs.push(VInfo { name: v.name, tys: [] }); }
         c.e_at[en.name] = c.edefs.len();
-        c.edefs.push(EInfo { name: en.name, tparams: en.tparams.map((x) -> x), vs: vs, span: en.span });
+        c.edefs.push(EInfo { name: en.name, tparams: en.tparams.map((x) -> x), vs: vs, span: en.span, ready: false });
     }
     for i in prog.interfaces {
         if c.is_struct(i.name) || c.is_enum(i.name) || c.is_iface(i.name) || i.name == ORDERED {
@@ -3167,6 +3245,7 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
             let tys = c.resolve_all(v.types)?;
             c.edefs[d].vs[j].tys = tys;
         }
+        c.edefs[d].ready = true;
     }
     for s in prog.structs { c.check_finite(s.name, s.span)?; }
     for en in prog.enums { c.check_finite(en.name, en.span)?; }

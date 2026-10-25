@@ -6394,3 +6394,23 @@ fn main() {
     call(() -> change(q));
     print(*p);
 }
+#####
+// 配列の大きさの上限（ちょうど 1 MiB まで）
+struct S { i64[1000] a; }
+enum E { A(S[10] s); B; }
+fn main() {
+    let mut a = [0; 131072];
+    a[1] = 2;
+    let E[12] es = [E.B, E.B, E.B, E.B, E.B, E.B, E.B, E.B, E.B, E.B, E.B, E.B];
+    let i64[] l = [7; 100];
+    print(a[1], es.len(), l.len());
+}
+#####
+fn main() { let a = [[0; 1000]; 1000]; }
+#####
+struct S { i64[100000] a; }
+fn main() { let S[2] b = [S { a: [0; 100000] }, S { a: [0; 100000] }]; }
+#####
+fn main() { let Option<i64[100000]>[2] b = [None, None]; }
+#####
+fn main() { let i64[] a = [0; 9223372036854775807]; }
