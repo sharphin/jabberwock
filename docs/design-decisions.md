@@ -673,3 +673,9 @@ let x = pick(true, 1, 2);
 - WindowsはWin32・Direct3D 11・DirectWriteを使う方向で進める。文字を描画先へ出す接続としてDirect2Dとの相互運用を検討する。
 - 詳細な層分け、資源の所有・解放、aliceのリンク・再ビルド、段階ごとの完了条件は [standard-libraries.md](standard-libraries.md)。
 - API名や型の表現は提案段階。ここに記載した機能を実装済みとは扱わない。
+
+## PostgreSQLライブラリの設計（未実装。2026-10-25）
+
+- libpqを使う案で、接続・パラメータ・NULL/bytea・トランザクション・配布・検証条件を具体化した。
+- TransactionがConnectionを所有し、COMMITの結果が分からない場合はUnknownとして返す。SQLは自動再実行しない。
+- 詳細は [postgresql.md](postgresql.md)。記載したAPI・設定・機能を実装済みとは扱わない。

@@ -136,6 +136,8 @@ UDP、HTTP、非同期I/OのAPIはこの同期基盤を確かめた後に設計�
 
 ### PostgreSQL
 
+詳細なAPI・状態・トランザクション・配布・検証条件は [PostgreSQLライブラリの設計](postgresql.md) を参照する。
+
 最初はlibpqを利用する案とする。必要なDLL・版・依存DLLの配布方法をalice側で決める。
 接続、パラメータ付き問い合わせ、結果取得、明示的なcommit/rollbackを最初の範囲とする。
 SQLの値は文字列の連結で渡さず、パラメータとして渡す。
