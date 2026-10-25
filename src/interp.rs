@@ -2258,7 +2258,12 @@ impl Interp {
                 if v.moves() {
                     return Err(Diagnostic::new("複製できない値は並べられません").primary(x.span, "ここ"));
                 }
-                let items = vec![v; *n as usize];
+                // 型検査の上限（2^59）の中でも確保できないことがある（repeat と同じく、確保する前に確かめる）
+                let mut items = Vec::new();
+                if items.try_reserve_exact(*n as usize).is_err() {
+                    return Err(Diagnostic::new("メモリが足りません").primary(e.span, format!("[x; {}]", n)));
+                }
+                items.resize(*n as usize, v);
                 Ok(if list.get() { self.new_list(items) } else { Value::Array(items, false) })
             }
             ExprKind::Interp(parts) => {

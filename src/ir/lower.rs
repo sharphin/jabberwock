@@ -1336,6 +1336,10 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 if self.moves(&self.ty(x))? {
                     return Err("ムーブする値を並べる".to_string());
                 }
+                if *n > 1 << 20 {
+                    // interp は確保できなければ「メモリが足りません」で止まる。IR では突き合わせない
+                    return Err("大きな [x; n]".to_string());
+                }
                 let v = self.expr(x)?;
                 self.temp_of(ty, Rvalue::Repeat(v, *n, list.get()), sp)
             }

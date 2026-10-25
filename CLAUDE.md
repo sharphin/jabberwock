@@ -30,7 +30,7 @@
 | `src/ir/lower.rs` | 構文木 → IR の書き出し。書き出せない書き方は `Err(理由)` |
 | `src/ir/exec.rs` | IR を実行する小さなインタプリタ（ヒープ・表示・計算は `Interp` のものを使う） |
 | `src/ir/llvm.rs` | IR → LLVM のテキスト（`jabberwock --ll`）。書き出せない書き方は `Err(理由)` |
-| `src/native.rs` | clang を呼んで実行ファイルを作る（`jabberwock build`。実行時ライブラリはコンパイラの中に入れてある） |
+| `src/native.rs` | clang を呼んで実行ファイルを作る（`jabberwock build`。実行時ライブラリはコンパイラの中に入れてある）。環境変数 `JW_CFLAGS` を clang に足す（`-fsanitize=address` なら関数に `sanitize_address` も付ける） |
 | `runtime/jw_rt.c` | 実行時ライブラリ（区画と世代・文字列・リスト・辞書・出力・エラー） |
 | `src/ir/analyze.rs` | IR の上で ref の世代チェックを消す解析（`Proj::Deref` の `Check` を書く） |
 | `tests/examples.rs` | 言語の基本動作 |
@@ -65,6 +65,7 @@
 | `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/fuzz.rs` | 差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
+| `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す** |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件
@@ -187,7 +188,8 @@
   呼び出し・構造体 / enum の値の式で決めた型の引数（`targs`。`instantiate` が `pending_targs` に置き、`expr_ctx` が受け取る）。
   キーは構文木の中の式のアドレスなので、`Program` を書き換えないこと。数だけの式（`is_const_tree`）は根だけ記録する。
   式をたどるのは `ast::walk_block` / `walk_expr`。
-- 入れ子の深さ: パーサの `nested` が `parse_block` / `parse_pat` / `parse_type` / `parse_unary` に入るたびに数え、`MAX_NEST`（256）を超えたらエラー
+- 入れ子の深さ: パーサの `nested`（中で `deeper`）が `parse_block` / `parse_pat` / `parse_type` / `parse_unary` に入るたびに数え、`MAX_NEST`（256）を超えたらエラー。
+  演算子・`as`・後ろにつく `.` / `[` / `?` の鎖も 1 つごとに `deeper` で数える（後ろの段は鎖を左に深い木として再帰でたどるため。抜けるときに元の深さへ戻す）
   （本体は `*_in`。埋め込みの中の式を読む sub の Parser も深さを引き継ぐ。jwc/parser.jw も同じ数え方で同じエラー）。後ろの段の再帰はこれで抑える。
   コマンドの `main` は `main_in_big_stack` で全体を 1 GiB のスタックで動かす。文字列の長さの上限は `STR_MAX`（2^62。interp と jw_rt.c）。
   固定長の配列は 1 MiB まで（types の `check_size`。大きさは `cells` が 8 バイト単位で数え、`CELLS_CAP` で頭打ちにする。jwc/typeck.jw も同じ数え方。

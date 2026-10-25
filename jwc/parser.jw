@@ -232,7 +232,14 @@ struct Parser {
 
     fn diag.Diag too_deep() {
         diag.error_note("入れ子が深すぎます", span(), "ここで {MAX_NEST} 段を超えた",
-            "式・ブロック・型・形の入れ子を合わせて数えます。途中を関数や変数に分けてください")
+            "式・ブロック・型・形の入れ子を合わせて数えます（演算子や `.` の鎖も 1 つごとに数えます）。途中を関数や変数に分けてください")
+    }
+
+    /// 入れ子を 1 段深くする（演算子・`as`・`.f` / `[i]` / `?` の鎖も 1 つごとに。呼んだ側が深さを戻す）
+    fn mut Result<(), diag.Diag> deeper() {
+        if nest >= MAX_NEST { return Err(too_deep()); }
+        nest += 1;
+        Ok(())
     }
 
     fn diag.Diag unexpected(str expected) {
@@ -1413,6 +1420,7 @@ struct Parser {
     }
 
     fn mut Result<ast.Expr, diag.Diag> parse_binary(i64 min_prec) {
+        let base = nest;
         let mut lhs = parse_cast()?;
         loop {
             // `>>` は `>` 2 つ（すき間なく並んだときだけ）
@@ -1425,23 +1433,29 @@ struct Parser {
             let op = if shr { ">>" } else { peek() };
             let prec = if shr { 8 } else { binop_prec(op) };
             if prec == 0 || prec < min_prec { break; }
+            deeper()?;
             bump();
             if shr { bump(); }
             let rhs = parse_binary(prec + 1)?;
             let s = diag.join(lhs.span, rhs.span);
             lhs = ast.mk(ast.ExprKind.Binary(op, own lhs, own rhs), s);
         }
+        nest = base;
         Ok(lhs)
     }
 
     /// `e as T`。前置演算子より弱く、`*` や `+` より強い
     fn mut Result<ast.Expr, diag.Diag> parse_cast() {
+        let base = nest;
         let mut e = parse_unary()?;
-        while eat("as") {
+        while peek() == "as" {
+            deeper()?;
+            bump();
             let t = parse_type()?;
             let s = diag.join(e.span, t.span);
             e = ast.mk(ast.ExprKind.Cast(own e, own t), s);
         }
+        nest = base;
         Ok(e)
     }
 
@@ -1485,8 +1499,11 @@ struct Parser {
 
     /// `.f`・`.m(...)`・`[i]`・`?`
     fn mut Result<ast.Expr, diag.Diag> parse_postfix() {
+        let base = nest;
         let mut e = parse_primary()?;
         loop {
+            let k = peek();
+            if k == "?" || k == "[" || k == "." { deeper()?; }
             if eat("?") {
                 let s = diag.join(e.span, toks[pos - 1].span);
                 e = ast.mk(ast.ExprKind.Try(own e), s);
@@ -1514,6 +1531,7 @@ struct Parser {
             let s = diag.join(e.span, fspan);
             e = ast.mk(ast.ExprKind.Field(own e, n), s);
         }
+        nest = base;
         Ok(e)
     }
 

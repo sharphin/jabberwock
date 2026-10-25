@@ -23,9 +23,24 @@ fn exe_name(name: &str) -> String {
     }
 }
 
+/// clang に足す引数（環境変数 `JW_CFLAGS`。空白で区切る）。堅牢性のテストで `-fsanitize=address,undefined` を足すため
+fn extra_flags() -> Vec<String> {
+    std::env::var("JW_CFLAGS").map(|v| v.split_whitespace().map(|s| s.to_string()).collect()).unwrap_or_default()
+}
+
+/// `JW_CFLAGS` に AddressSanitizer があれば、書き出した関数にも印をつけて検査させる（`.ll` の関数は印がないと検査されない）
+fn instrument(ll: &str) -> std::borrow::Cow<'_, str> {
+    if extra_flags().iter().any(|f| f.starts_with("-fsanitize=") && f.contains("address")) {
+        std::borrow::Cow::Owned(ll.replace(") {\nentry:", ") sanitize_address {\nentry:"))
+    } else {
+        std::borrow::Cow::Borrowed(ll)
+    }
+}
+
 fn run_clang(args: &[&str]) -> Result<(), String> {
     let out = Command::new(clang())
         .args(args)
+        .args(extra_flags())
         .output()
         .map_err(|e| format!("clang を起動できません（{}）: {}", clang(), e))?;
     if !out.status.success() {
@@ -57,7 +72,7 @@ fn compile_to(ll: &str, dir: &Path, name: &str, exe: &Path, opt: &str) -> Result
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let llp = dir.join(format!("{}.ll", name));
     let rt = dir.join("jw_rt.c");
-    fs::write(&llp, ll).map_err(|e| e.to_string())?;
+    fs::write(&llp, &*instrument(ll)).map_err(|e| e.to_string())?;
     fs::write(&rt, RUNTIME_C).map_err(|e| e.to_string())?;
     let mut args = vec![opt, path_str(&llp)?, path_str(&rt)?, "-o", path_str(exe)?, "-Wno-override-module"];
     link_flags(&mut args);
@@ -104,7 +119,7 @@ pub fn compile_with_cached_runtime(ll: &str, dir: &Path, name: &str) -> Result<P
         g.clone().expect("compiled")
     };
     let llp = dir.join(format!("{}.ll", name));
-    fs::write(&llp, ll).map_err(|e| e.to_string())?;
+    fs::write(&llp, &*instrument(ll)).map_err(|e| e.to_string())?;
     let exe = dir.join(exe_name(name));
     let mut args = vec![path_str(&llp)?, path_str(&obj)?, "-o", path_str(&exe)?, "-Wno-override-module"];
     args.extend(opt);

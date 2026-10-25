@@ -535,7 +535,9 @@ fn native_mismatch(irp: &ir::Program, files: &[(String, String)], want: &Expecte
     let diff = if stdout != *output {
         Some(format!("出力が違う\ninterp:\n{}\n実行ファイル:\n{}\n{}", output, stdout, stderr))
     } else if let Some(code) = want.exit {
-        if out.status.code() != Some(code) || !stderr.is_empty() {
+        // Unix の終了コードは下の 8 ビットだけ残る（exit(-1) は 255）
+        let low = |c: i32| if cfg!(unix) { c & 0xff } else { c };
+        if out.status.code().map(low) != Some(low(code)) || !stderr.is_empty() {
             Some(format!("終了が違う（interp exit {}・実行ファイル {:?}）\n{}", code, out.status.code(), stderr))
         } else {
             None

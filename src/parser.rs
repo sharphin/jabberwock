@@ -96,15 +96,22 @@ impl Parser {
 
     /// 入れ子を 1 段深くして f を読む
     fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
-        if self.depth >= MAX_NEST {
-            return Err(Diagnostic::new("入れ子が深すぎます")
-                .primary(self.span(), format!("ここで {} 段を超えた", MAX_NEST))
-                .note("式・ブロック・型・形の入れ子を合わせて数えます。途中を関数や変数に分けてください"));
-        }
-        self.depth += 1;
+        self.deeper()?;
         let r = f(self);
         self.depth -= 1;
         r
+    }
+
+    /// 入れ子を 1 段深くする。演算子・`as`・`.f` / `[i]` / `?` の鎖も 1 つごとに 1 段（構文木が深くなるため）。
+    /// 鎖を読み終えたら、呼んだ側が深さを戻す
+    fn deeper(&mut self) -> R<()> {
+        if self.depth >= MAX_NEST {
+            return Err(Diagnostic::new("入れ子が深すぎます")
+                .primary(self.span(), format!("ここで {} 段を超えた", MAX_NEST))
+                .note("式・ブロック・型・形の入れ子を合わせて数えます（演算子や `.` の鎖も 1 つごとに数えます）。途中を関数や変数に分けてください"));
+        }
+        self.depth += 1;
+        Ok(())
     }
 
     fn peek(&self) -> &Tok {
@@ -1137,6 +1144,7 @@ impl Parser {
     }
 
     fn parse_binary(&mut self, min_prec: u8) -> R<Expr> {
+        let base = self.depth;
         let mut lhs = self.parse_cast()?;
         loop {
             // `>>` は `>` 2 つ（型の引数の `Option<Option<i64>>` と区別するため、字句解析では分けておく）
@@ -1149,6 +1157,7 @@ impl Parser {
                 Some(x) if x.1 >= min_prec => x,
                 _ => break,
             };
+            self.deeper()?;
             self.bump();
             if shr {
                 self.bump();
@@ -1157,17 +1166,22 @@ impl Parser {
             let span = lhs.span.join(rhs.span);
             lhs = Expr::new(ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span);
         }
+        self.depth = base;
         Ok(lhs)
     }
 
     /// `e as T`。前置演算子より弱く、`*` や `+` より強い（Rust と同じ。`-x as u8` は `(-x) as u8`）
     fn parse_cast(&mut self) -> R<Expr> {
+        let base = self.depth;
         let mut e = self.parse_unary()?;
-        while self.eat(Tok::As) {
+        while *self.peek() == Tok::As {
+            self.deeper()?;
+            self.bump();
             let ty = self.parse_type()?;
             let span = e.span.join(ty.span);
             e = Expr::new(ExprKind::Cast(Box::new(e), ty), span);
         }
+        self.depth = base;
         Ok(e)
     }
 
@@ -1224,8 +1238,12 @@ impl Parser {
 
     /// `.f` と `?`（Err / None ならそのまま return する）
     fn parse_postfix(&mut self) -> R<Expr> {
+        let base = self.depth;
         let mut e = self.parse_primary()?;
         loop {
+            if matches!(self.peek(), Tok::Question | Tok::LBrack | Tok::Dot) {
+                self.deeper()?;
+            }
             if self.eat(Tok::Question) {
                 let span = e.span.join(self.toks[self.pos - 1].span);
                 e = Expr::new(ExprKind::Try(Box::new(e)), span);
@@ -1256,6 +1274,7 @@ impl Parser {
             let span = e.span.join(fspan);
             e = Expr::new(ExprKind::Field(Box::new(e), name, Cell::new(Check::Unvisited)), span);
         }
+        self.depth = base;
         Ok(e)
     }
 

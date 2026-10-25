@@ -231,6 +231,10 @@ fn ast_and_parser_errors() {
     cases.push(format!("fn f({}i64 x) {{}}", "own ".repeat(10000)));
     cases.push(format!("fn main() {{ match o {{ case {}x{} -> 1; }} }}", "Some(".repeat(10000), ")".repeat(10000)));
     cases.push(format!("fn main() {{ {}{} }}", "if a { ".repeat(10000), "}".repeat(10000)));
+    cases.push(format!("fn main() {{ print(1{}); }}", " + 1".repeat(10000)));
+    cases.push(format!("fn main() {{ print(x{}); }}", ".abs()".repeat(10000)));
+    cases.push(format!("fn main() {{ print(x{}); }}", " as u8".repeat(10000)));
+    cases.push(format!("fn main() {{ print(1{}); }}", " + 1".repeat(200)));
     for (i, c) in cases.iter().enumerate() {
         let p = dir.join(format!("case{}.jw", i));
         std::fs::write(&p, c).unwrap();
