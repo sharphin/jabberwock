@@ -57,7 +57,7 @@ pub struct Opts {
     pub gen: bool,
     /// 添字の範囲を確かめる（false なら安全でない）
     pub bounds: bool,
-    /// 実行時に通った検査の数を数え、終わるときに標準エラーへ `[checks] ...` と出す（Linux の dprintf を使う）
+    /// 実行時に通った検査の数を数え、終わるときに標準エラーへ `[checks] ...` と出す
     pub count: bool,
 }
 
@@ -109,16 +109,14 @@ pub fn emit_with(prog: &Program, files: &[String], sources: &[String], opts: Opt
         entries.len()
     );
     if opts.count {
-        // 終わるとき（exit でも）に数を出す
-        let fmt = m.cstr("[checks] gen %lld elided %lld bounds %lld\n");
+        // 正常終了時に数を出す（exit と実行時エラーは _Exit で終わるため対象外）
         let _ = writeln!(
             m.globals,
             "@jw.count.gen = global i64 0\n@jw.count.elided = global i64 0\n@jw.count.bounds = global i64 0\n\
-             declare i32 @dprintf(i32, ptr, ...)\n\
+             declare void @jw_report_checks(i64, i64, i64)\n\
              define internal void @jw.count.report() {{\n  %g = load i64, ptr @jw.count.gen\n  %e = load i64, ptr @jw.count.elided\n  \
-             %b = load i64, ptr @jw.count.bounds\n  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr {}, i64 %g, i64 %e, i64 %b)\n  ret void\n}}\n\
-             @llvm.global_dtors = appending global [1 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 65535, ptr @jw.count.report, ptr null }}]",
-            fmt
+             %b = load i64, ptr @jw.count.bounds\n  call void @jw_report_checks(i64 %g, i64 %e, i64 %b)\n  ret void\n}}\n\
+             @llvm.global_dtors = appending global [1 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 65535, ptr @jw.count.report, ptr null }}]"
         );
     }
     let stats = m.stats;

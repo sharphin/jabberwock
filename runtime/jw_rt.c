@@ -14,6 +14,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+// LLVM の計測版から呼ぶ。標準エラーの FILE は C 側で扱い、Windows でも同じ表示にする。
+void jw_report_checks(int64_t gen, int64_t elided, int64_t bounds) {
+    fprintf(stderr, "[checks] gen %lld elided %lld bounds %lld\n",
+            (long long)gen, (long long)elided, (long long)bounds);
+}
+
 // ---------------------------------------------------------------- スレッドの道具（錠と条件変数）
 
 #ifdef _WIN32
@@ -70,7 +76,8 @@ static int thread_new(WThread *t, void *arg) {
 static void thread_join(WThread t) { pthread_join(t, NULL); }
 #endif
 
-// spawn したことがあるか（なければ出力の錠を取らない）。最初の spawn の前に立てるので、ほかのスレッドからは立って見える
+// spawn したことがあるか（なければ出力の錠を取らない）。最初の spawn の前に立てる。
+// 複数スレッドで spawn と出力が重なるため、同じ 1 の書き込みでも不可分の操作にする。
 static int g_threaded;
 
 // 位置（ファイル・行・列・長さ）と、その位置の説明。解放の場所なら chain は「連鎖して解放された」の位置
@@ -111,9 +118,9 @@ static void flush_locked(void) {
 }
 
 void jw_flush(void) {
-    if (g_threaded) lock(&out_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&out_lock);
     flush_locked();
-    if (g_threaded) unlock(&out_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) unlock(&out_lock);
 }
 
 // エラーと exit で終わる: 片づけずに終わる（atexit の処理も動かさない。ほかのスレッドがまだ動いていても
@@ -138,7 +145,7 @@ static void out_write(const char *p, size_t n) {
 
 // 1 回の print のあいだ出力の錠を持つ（行が混ざらない）
 void jw_print_begin(void) {
-    if (g_threaded) lock(&out_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&out_lock);
 }
 
 // print の 1 つ分（first でなければ前に空白）
@@ -149,12 +156,12 @@ void jw_print_part(WStr *s, int32_t first) {
 
 void jw_print_end(void) {
     out_write("\n", 1);
-    if (g_threaded) unlock(&out_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) unlock(&out_lock);
 }
 
 // eprint: 標準エラーへ 1 行。先に標準出力を出しておく（端末で順番が入れ替わらないように）
 void jw_eprint_begin(void) {
-    if (g_threaded) lock(&out_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&out_lock);
     flush_locked();
 }
 
@@ -166,7 +173,7 @@ void jw_eprint_part(WStr *s, int32_t first) {
 void jw_eprint_end(void) {
     fputc('\n', stderr);
     fflush(stderr);
-    if (g_threaded) unlock(&out_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) unlock(&out_lock);
 }
 
 // ---------------------------------------------------------------- エラー
@@ -195,7 +202,7 @@ static WLock err_lock = WLOCK_INIT;
 
 static void begin_error(const char *title) {
     // エラーを出すのは 1 つのスレッドだけ（出したら終わる。錠は返さない）
-    if (g_threaded) lock(&err_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&err_lock);
     jw_flush();
     snprintf(err_title, sizeof err_title, "%s", title);
     nlabels = 0;
@@ -2031,7 +2038,7 @@ WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop, const WSite
     t->rsize = rsize > 0 ? rsize : 1;
     t->result = calloc(1, (size_t)t->rsize);
     t->drop = drop;
-    g_threaded = 1;
+    __atomic_store_n(&g_threaded, 1, __ATOMIC_RELAXED);
     lock(&g_lock);
     int64_t m = max_threads();
     if ((m >= 0 && g_alive - 1 >= m) || !thread_new(&t->thread, t)) {
@@ -2087,7 +2094,7 @@ static int all_done(void *p) {
 
 // main の終わり: ほかのスレッドが終わるのを待つ
 void jw_wait_all(const WSite *at) {
-    if (!g_threaded) return;
+    if (!__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) return;
     lock(&g_lock);
     wait_until(all_done, NULL, at);
     unlock(&g_lock);

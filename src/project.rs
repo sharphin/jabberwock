@@ -254,7 +254,8 @@ impl Project {
 
     /// build の出力
     pub fn exe_path(&self, release: bool) -> PathBuf {
-        self.root.join("target").join(if release { "release" } else { "debug" }).join(&self.name)
+        let name = if cfg!(windows) { format!("{}.exe", self.name) } else { self.name.clone() };
+        self.root.join("target").join(if release { "release" } else { "debug" }).join(name)
     }
 
     /// 作り直しが要るか（実行ファイルが、ソース・依存先・alice.toml のどれよりも古いか）

@@ -155,7 +155,7 @@ fn new_run_and_test_commands() {
     // ライブラリの tests は最初から通る
     let (c, out, _) = jw(&d.join("mathx"), &["test"]);
     assert_eq!(c, 0, "{}", out);
-    assert!(out.contains("test tests/add.jw::test_add ... ok") && out.contains("2 本成功・0 本失敗"), "{}", out);
+    assert!(out.replace('\\', "/").contains("test tests/add.jw::test_add ... ok") && out.contains("2 本成功・0 本失敗"), "{}", out);
 
     // 依存先を足して、引数も渡す
     write(&app.join("alice.toml"), "[package]\nname = \"app\"\n\n[dependencies]\nmathx = { path = \"../mathx\" }\n");

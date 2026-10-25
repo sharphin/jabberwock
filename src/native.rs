@@ -40,7 +40,26 @@ fn instrument(ll: &str) -> std::borrow::Cow<'_, str> {
     if attrs.is_empty() {
         std::borrow::Cow::Borrowed(ll)
     } else {
-        std::borrow::Cow::Owned(ll.replace(") {\nentry:", &format!(") {} {{\nentry:", attrs.join(" "))))
+        let mut ll = ll.replace(") {\nentry:", &format!(") {} {{\nentry:", attrs.join(" ")));
+        if attrs.contains(&"sanitize_memory") {
+            // clang が作る C の関数は noundef の引数を受け取る。宣言にも同じ約束を付け、
+            // MSan に呼び出しの手前で検査させる（ないと C 側が引数を初期化済みと見なす）。
+            ll = ll.lines().map(|line| {
+                if line.starts_with("declare ") && !line.contains("@llvm.") {
+                    if let Some((head, rest)) = line.split_once('(') {
+                        if let Some((params, tail)) = rest.split_once(')') {
+                            let params = params.split(", ").map(|p| {
+                                if p.is_empty() || p == "..." || p.contains("noundef") { p.to_string() }
+                                else { format!("{} noundef", p) }
+                            }).collect::<Vec<_>>().join(", ");
+                            return format!("{}({}){}", head, params, tail);
+                        }
+                    }
+                }
+                line.to_string()
+            }).collect::<Vec<_>>().join("\n");
+        }
+        std::borrow::Cow::Owned(ll)
     }
 }
 
@@ -94,6 +113,10 @@ fn compile_to(ll: &str, dir: &Path, name: &str, exe: &Path, opt: &str) -> Result
 fn link_flags(args: &mut Vec<&str>) {
     if cfg!(windows) {
         args.push("-lshell32");
+        // jwc が大きな構文木を再帰でたどるためのスタック。
+        let target = Command::new(clang()).arg("-dumpmachine").output().ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default();
+        args.push(if target.contains("gnu") { "-Wl,--stack,268435456" } else { "-Wl,/stack:268435456" });
     } else {
         args.push("-lm");
         args.push("-pthread");

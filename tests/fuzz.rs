@@ -9,7 +9,10 @@
 
 use std::process::Command;
 
-use jabberwock::{llvm_build, native, no_modules};
+use jabberwock::{llvm_build, llvm_build_with, native, no_modules};
+
+#[path = "support/attacks.rs"]
+mod attacks;
 
 const CASES: u64 = 40;
 
@@ -197,24 +200,37 @@ fn compare(name: &str, src: &str, jwc: Option<&str>) -> Option<Result<String, St
             return None;
         }
     };
+    let unchecked = jabberwock::run_source_with(src, false, false);
+    let diagnostic = |o: &jabberwock::Outcome| o.error.as_ref().map(|d| jabberwock::render(d, "main.jw", &o.files));
+    if (o.output.as_str(), diagnostic(&o), o.live_objects) != (unchecked.output.as_str(), diagnostic(&unchecked), unchecked.live_objects) {
+        return Some(Err("解析あり・なしのインタプリタが一致しない".to_string()));
+    }
     let want_err = o.error.as_ref().map(|d| jabberwock::render(d, "main.jw", &o.files));
     // 実行時ライブラリの .o を使い回すので、フォルダは全部の種で同じ（最後に消す）
     let dir = fuzz_dir();
     let mut exes = vec![native::compile_with_cached_runtime(&ll, &dir, name).expect("clang compiles")];
+    let (checked_ll, _) = llvm_build_with(src, &no_modules, "main.jw", false, false, Default::default()).expect("checked LLVM");
+    exes.push(native::compile_with_cached_runtime(&checked_ll, &dir, &format!("{}-checked", name)).expect("clang compiles checked LLVM"));
     if let Some(jwc) = jwc {
         // エラーに出るファイル名を interp と同じ main.jw にする
-        let sub = dir.join(format!("{}-jwc", name));
+        let sub = dir.join(format!("{}-jwc-input", name));
         std::fs::create_dir_all(&sub).expect("temp dir");
         std::fs::write(sub.join("main.jw"), src).expect("writes source");
-        let exe = sub.join("jwc-exe");
-        let b = Command::new(jwc).arg("build").arg("-o").arg(&exe).arg("main.jw").current_dir(&sub).output().expect("runs jwc");
+        // 自己ホストが書いた LLVM を同じ native 経路で計装する。
+        // jwc build は JW_CFLAGS を読まないため、sanitizer を付けたと誤認しない。
+        let b = Command::new(jwc).arg("--ll").arg("main.jw").current_dir(&sub).output().expect("runs jwc");
         if !b.status.success() {
-            return Some(Err(format!("jwc build: {}", String::from_utf8_lossy(&b.stderr))));
+            return Some(Err(format!("jwc --ll: {:?}: {}", b.status, String::from_utf8_lossy(&b.stderr))));
         }
+        let ll = String::from_utf8(b.stdout).expect("jwc LLVM is UTF-8");
+        if !ll.contains("define void @jw_main(") {
+            return Some(Err(format!("jwc が LLVM を出さなかった: {}", ll)));
+        }
+        let exe = native::compile_with_cached_runtime(&ll, &dir, &format!("{}-jwc", name)).expect("clang compiles jwc LLVM");
         exes.push(exe);
     }
-    for exe in exes {
-        let out = Command::new(&exe).env("JW_LEAKS", "1").current_dir(&dir).output().expect("runs");
+    for exe in &exes {
+        let out = Command::new(exe).env("JW_LEAKS", "1").current_dir(&dir).output().expect("runs");
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         let what = exe.display().to_string();
@@ -231,6 +247,11 @@ fn compare(name: &str, src: &str, jwc: Option<&str>) -> Option<Result<String, St
             _ => {}
         }
     }
+    for exe in &exes { let _ = std::fs::remove_file(exe); }
+    for suffix in [name.to_string(), format!("{}-checked", name), format!("{}-jwc", name)] {
+        let _ = std::fs::remove_file(dir.join(format!("{}.ll", suffix)));
+    }
+    let _ = std::fs::remove_dir_all(dir.join(format!("{}-jwc-input", name)));
     Some(Ok(o.error.map(|d| d.title).unwrap_or_else(|| "（正常に終わった）".to_string())))
 }
 
@@ -267,7 +288,7 @@ fn interp_and_executables_agree_on_generated_programs() {
             Err(_) => failed.push(format!("種 {}（IR とのずれ）:\n{}", seed, src)),
         }
     }
-    let _ = std::fs::remove_dir_all(fuzz_dir());
+    // cached runtime の .o は同じプロセスの別テストでも使うため残す。
     eprintln!("fuzz: {} 本のうち {} 本を比べた（残りは型エラー）", n, ran);
     for (k, c) in &kinds {
         eprintln!("  {:5} {}", c, k);
@@ -275,4 +296,54 @@ fn interp_and_executables_agree_on_generated_programs() {
     assert!(failed.is_empty(), "{} 本ずれた:\n\n{}", failed.len(), failed.join("\n\n"));
     // 型エラーで比べられないものばかりにならないように
     assert!(ran * 2 >= n as usize, "比べられたのは {} / {} 本だけ", ran, n);
+}
+
+/// 各操作を必ず実行し、期待する言語エラーで止まることを全バックエンドで確認する。
+#[test]
+fn typed_attacks_reach_their_checks() {
+    if !have_clang() { return; }
+    let jwc = std::env::var("JW_FUZZ_JWC").ok();
+    let seed = std::env::var("JW_FUZZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let mut cases: Vec<(String, String, &str)> = attacks::ATTACKS.iter().map(|(n, s, w)| (n.to_string(), s.to_string(), *w)).collect();
+    cases.extend(attacks::generated(seed));
+    let mut checked = 0;
+    for (name, src, want) in &cases {
+        if let Ok(d) = std::env::var("JW_FUZZ_DUMP") {
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(std::path::Path::new(&d).join(format!("attack-{}.jw", name)), src).unwrap();
+        }
+        let o = jabberwock::run_source_with(src, false, false);
+        assert!(!o.output.contains(attacks::SECRET), "{}: 秘密が漏れた", name);
+        if src.contains("reached") { assert_eq!(o.output, "reached\n", "{}: 攻撃まで到達しない: {:?}", name, o.error); }
+        let result = compare(&format!("attack-{}", name), src, jwc.as_deref()).unwrap_or_else(|| panic!("{}: 型エラーまたは未対応でスキップ: {}", name, src));
+        let kind = result.unwrap_or_else(|e| panic!("{}:\n{}\n{}", name, src, e));
+        assert!(kind.contains(want), "{}: 期待 {}、結果 {}", name, want, kind);
+        checked += 1;
+    }
+    eprintln!("typed attacks: {}/{} operations reached and checked", checked, cases.len());
+    // cached runtime の .o は同じプロセスの別テストでも使うため残す。
+}
+
+/// LLVM の演算の端（0・最小値/-1・幅以上のシフト・NaN/無限大の変換）。
+#[test]
+fn arithmetic_edges_agree_with_checked_execution() {
+    if !have_clang() { return; }
+    let jwc = std::env::var("JW_FUZZ_JWC").ok();
+    let mut cases = Vec::new();
+    for (ty, min, max) in [("i8", "-128", "127"), ("i16", "-32768", "32767"), ("i32", "-2147483648", "2147483647"),
+                           ("i64", "-9223372036854775808", "9223372036854775807"), ("u8", "0", "255"),
+                           ("u16", "0", "65535"), ("u32", "0", "4294967295"), ("u64", "0", "18446744073709551615")] {
+        for (a, b) in [(min, "1"), (max, "0"), (max, "3")] {
+            cases.push(format!("fn f({ty} a, {ty} b) {{ print(a + b, a - b, a * b, a / b, a % b); }} fn main() {{ f({a}, {b}); }}"));
+        }
+        if ty.starts_with('i') { cases.push(format!("fn f({ty} a, {ty} b) {{ print(a / b, a % b, a.abs()); }} fn main() {{ f({min}, -1); }}")); }
+        for shift in ["-1", "0", "63", "64", "9223372036854775807"] {
+            cases.push(format!("fn f({ty} a, i64 b) {{ print(a << b, a >> b); }} fn main() {{ f({max}, {shift}); }}"));
+        }
+        cases.push(format!("fn f(f64 a) {{ print(a as {ty}); }} fn main() {{ f(0.0 / 0.0); f(1.0 / 0.0); f(-1.0 / 0.0); }}"));
+    }
+    for (i, src) in cases.iter().enumerate() {
+        compare(&format!("arithmetic-{}", i), src, jwc.as_deref()).unwrap_or_else(|| panic!("型エラー: {}", src)).unwrap_or_else(|e| panic!("{}\n{}", src, e));
+    }
+    eprintln!("arithmetic edges: {} cases compared", cases.len());
 }

@@ -37,6 +37,7 @@ fn jwc() -> PathBuf {
 
 fn run_jwc(args: &[&str]) -> String {
     let out = Command::new(jwc()).args(args).output().expect("jwc を起動できる");
+    assert!(!out.stdout.is_empty(), "jwc の出力がありません: {:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 

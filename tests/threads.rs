@@ -257,3 +257,32 @@ fn main() {
 }";
     assert_eq!(ok(src), "3\n");
 }
+
+/// spawn を重ねながら出力し、own を別のスレッドへ渡して解放する。
+/// 最初の spawn 後も出力の錠の印を読み書きするため、同じ値の書き込みにも同期が要る。
+#[test]
+fn nested_spawns_print_and_transfer_ownership_concurrently() {
+    for workers in [2, 4, 8] {
+        let src = format!("struct P {{ i64 x; }}
+fn main() {{
+    let chan<own P> c = chan();
+    let task<()>[] mut ts = [];
+    for i in range({workers}) {{
+        ts.push(spawn(() -> {{
+            for j in range(8) {{
+                let t = spawn(() -> {{ print(\"tick\"); own P {{ x: i * 8 + j }} }});
+                c.send(t.join());
+            }}
+        }}));
+        print(\"tick\");
+    }}
+    let mut sum = 0;
+    for k in range({count}) {{ match c.recv() {{ case Some(p) -> {{ sum += p.x; }} case None -> {{}} }} }}
+    for t in ts {{ t.join(); }}
+    print(sum);
+}}", workers = workers, count = workers * 8);
+        let count = workers * 8;
+        let want = format!("{}{}\n", "tick\n".repeat(workers * 9), count * (count - 1) / 2);
+        assert_eq!(ok(&src), want);
+    }
+}

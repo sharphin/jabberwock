@@ -232,9 +232,30 @@ fn build(ref str[] a) {
     save(llp, ll);
     save(rt, runtime.source());
     // 実行時ライブラリの関数を書き出したコードの中に展開させるため、まず LTO（リンクのときに 2 つをまとめて最適化する）で作る。
-    // lld がない環境では LTO なしで作り直す。-lm と -pthread は Windows（llvm-mingw）でも使える
-    let ok = run_clang(clang, ["-O2", llp, rt, "-o", out, "-Wno-override-module", "-lm", "-pthread", "-flto", "-fuse-ld=lld"]) ||
-        run_clang(clang, ["-O2", llp, rt, "-o", out, "-Wno-override-module", "-lm", "-pthread"]);
+    // clang のプリプロセッサで対象 OS を調べる（MSVC 版 Windows に libm はない）。
+    let probe = out + ".target.c";
+    let target = out + ".target.txt";
+    save(probe, "#ifdef _WIN32\n#ifdef _MSC_VER\nwindows-msvc\n#else\nwindows-gnu\n#endif\n#else\nunix\n#endif\n");
+    if !run_clang(clang, ["-E", "-P", "-x", "c", probe, "-o", target]) { exit(1); }
+    let platform = match read_file(target) {
+        case Ok(s) -> s.trim();
+        case Err(e) -> { eprint(e); exit(1) }
+    };
+    let windows = platform.starts_with("windows");
+    if windows && !out.ends_with(".exe") { out += ".exe"; }
+    let str[] mut flags = ["-O2", llp, rt, "-o", out, "-Wno-override-module"];
+    if windows {
+        flags.push("-lshell32");
+        flags.push(if platform == "windows-msvc" { "-Wl,/stack:268435456" } else { "-Wl,--stack,268435456" });
+    } else {
+        flags.push("-lm");
+        flags.push("-pthread");
+    }
+    let mut lto = flags;
+    lto.push("-flto");
+    lto.push("-fuse-ld=lld");
+    // lld がない環境では LTO なしで作り直す。
+    let ok = run_clang(clang, lto) || run_clang(clang, flags);
     if !ok {
         eprint("clang が失敗しました");
         exit(1);
