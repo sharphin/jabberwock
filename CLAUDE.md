@@ -64,7 +64,7 @@
 | `jwc/` | jabberwock で書いた jabberwock のコンパイラ（設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw` / `--ir`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く）・`analyze.jw`（ir/analyze.rs の移植。事実は変数ごとの数 1 つを、分かっている変数だけ番号の順に並べる）・`llvm.jw`（ir/llvm.rs の Module: 型の形・手伝いの関数）・`llvmfn.jw`（FnGen と `emit`。Rust 版と同じ順に同じ番号をつける）。`--ll` も。`jwc build` で実行ファイルまで作れ、jwc 自身もコンパイルできる。`runtime.jw` は runtime/jw_rt.c を文字列にしたもの（手で直さず `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す） |
 | `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
-| `tests/fuzz.rs` | 解析あり・なしのAST/IRとネイティブ、jwc生成LLVMをsanitizer付きでも比べる。型の通る攻撃75件と演算の端76件はスキップを認めない。共通入力は tests/support/attacks.rs。差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
+| `tests/fuzz.rs` | 解析あり・なしのAST/IRとネイティブ、jwc生成LLVMをsanitizer付きでも比べる。型の通る攻撃78件と演算の端76件はスキップを認めない。共通入力は tests/support/attacks.rs。差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
 | `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す**。`generated_code_guards_undefined_operations` は書き出した割り算・ずらしの守りの形を見る（llvm.rs の守りを変えたら直す）。確かめた範囲と残りは docs/safety-testing.md・docs/safety-validation.md、CI は `.github/workflows/safety.yml`（毎晩は 20 倍） |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
@@ -296,7 +296,7 @@
   送る値は `H::Send` で準備する（own の区画は世代を進めて「ほかのスレッドへ送られた」、文字列は複製）。task の写しは下の 1 ビットを立てたポインタ（解放しない）。
   チャンネルのメソッドは場所のチャンネルを複製せずに読む（数を取り合わない）。出力は print 1 回のあいだ錠を持つ（`jw_print_begin`）。
   錠と条件変数は Linux は pthread、Windows は SRWLOCK（windows.h なしで宣言）。
-- 区画（LLVM）: 頭は世代だけの 8 バイト（llvm.rs の `-8`）。世代が奇数なら解放済みで、中身の 2 語目に解放した位置（`FREED_SITE`）。
+- 区画（LLVM）: 世代はCでも生成LLVMでもatomicのrelaxed load/storeで読む・書く（送信元の無効なrefが別スレッドで読むことがある。書き手は唯一の所有者だけ）。jwc/llvm.jw・llvmfn.jwも同じ。頭は世代だけの 8 バイト（llvm.rs の `-8`）。世代が奇数なら解放済みで、中身の 2 語目に解放した位置（`FREED_SITE`）。
   小さい区画は塊から切り出し、8 バイト刻みの空き区画の鎖で使い回す。送った区画は世代を 2 進め、位置は `sent` の輪の表。
   「中身なし」と「own 1 つ」の 2 種類の enum はポインタ 1 つ（`Module::niche`。種類の番号と中身の場所は `enum_tag` / `enum_payload` を通す）。
   リストの中身も区画の頭（世代）を持つ。要素を借りると頭の世代に `2 | LIST_SHARED` の印を付け（llvm.rs の `borrow_gen`）、

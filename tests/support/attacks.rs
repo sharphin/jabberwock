@@ -3,6 +3,9 @@ pub const SECRET: &str = "4242424242";
 
 /// (名前, プログラム, 止まるときのエラーの題に含まれる文)
 pub const ATTACKS: &[(&str, &str, &str)] = &[
+    ("sent-own-reuse", include_str!("../safety/sent-own-reuse.jw"), "無効になった参照"),
+    ("sent-list-reuse", include_str!("../safety/sent-list-reuse.jw"), "無効になった参照"),
+    ("sent-view-reuse", include_str!("../safety/sent-view-reuse.jw"), "無効になった参照"),
     ("drop_then_reuse", "fn main() {\n    let mut a = own 1;\n    let r = ref a;\n    drop(a);\n    let b = own 4242424242;\n    print(*r);\n    print(*b);\n}", "無効になった参照"),
     ("reassign_then_reuse", "fn main() {\n    let mut a = own 1;\n    let r = ref a;\n    a = own 4242424242;\n    print(*r);\n}", "無効になった参照"),
     ("moved_into_call", "fn eat(own i64 x) {}\nfn main() {\n    let a = own 1;\n    let r = ref a;\n    eat(a);\n    let b = own 4242424242;\n    print(*r, *b);\n}", "無効になった参照"),

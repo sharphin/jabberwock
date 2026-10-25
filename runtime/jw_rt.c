@@ -358,6 +358,11 @@ typedef struct WHdr {
 #define HDR(p) ((WHdr *)((char *)(p) - sizeof(WHdr)))
 #define FREED_SITE(p) (((const WSite **)(p))[1])
 
+// 所有者だけが世代を書き換えるが、送信元の無効な ref が別のスレッドで読むことはある。
+// 読み書きは不可分にする。書き手は唯一なので、加算も load/store でよい（read-modify-write は不要）。
+static uint64_t gen_get(void *p) { return __atomic_load_n(&HDR(p)->gen, __ATOMIC_RELAXED); }
+static void gen_set(void *p, uint64_t gen) { __atomic_store_n(&HDR(p)->gen, gen, __ATOMIC_RELAXED); }
+
 // 使い回した区画の、前の解放の位置（エラーで「ここで解放された」を出すため。古いものから消える）
 #define NREUSED 4096
 static _Thread_local struct {
@@ -378,7 +383,7 @@ static _Thread_local unsigned sent_n;
 
 // 世代 gen の ref を無効にした出来事（解放なら世代 gen+1、送った・要素が動いたなら表の中）の位置
 static const WSite *freed_at(void *block, uint64_t gen) {
-    if (HDR(block)->gen == gen + 1) return FREED_SITE(block);
+    if (gen_get(block) == gen + 1) return FREED_SITE(block);
     for (unsigned k = 0; k < NREUSED; k++) {
         unsigned i = (reused_n - 1 - k) % NREUSED;
         if (reused[i].block == block && reused[i].gen == gen + 1) return reused[i].freed;
@@ -493,9 +498,9 @@ static void *slab_take(size_t n) {
 static void remember_reuse(void *p) {
     unsigned i = reused_n++ % NREUSED;
     reused[i].block = p;
-    reused[i].gen = HDR(p)->gen;
+    reused[i].gen = gen_get(p);
     reused[i].freed = FREED_SITE(p);
-    HDR(p)->gen++;
+    gen_set(p, gen_get(p) + 1);
 }
 
 // 区画を確保する（生きている区画の数は数えない。リストの中身の区画はこれだけを使う）
@@ -509,7 +514,7 @@ static void *block_alloc(int64_t size) {
             remember_reuse(p);
         } else {
             WHdr *h = slab_take(sizeof(WHdr) + s);
-            h->gen = 0;
+            gen_set(h + 1, 0);
             p = h + 1;
         }
     } else {
@@ -528,7 +533,7 @@ static void *block_alloc(int64_t size) {
             char *raw = malloc(sizeof(WHdr) + s + 64);
             if (!raw) jw_bug("メモリが足りません");
             p = (void *)(((uintptr_t)raw + sizeof(WHdr) + 63) & ~(uintptr_t)63);
-            HDR(p)->gen = 0;
+            gen_set(p, 0);
         }
     }
     return p;
@@ -541,8 +546,7 @@ void *jw_alloc(int64_t size) {
 
 // 区画を解放する（生きている区画の数は数えない）
 static void block_free(void *p, int64_t size, const WSite *why) {
-    WHdr *h = HDR(p);
-    h->gen++;
+    gen_set(p, gen_get(p) + 1);
     FREED_SITE(p) = why;
     size_t s = round8(size);
     if (s / 8 <= NCLASS) {
@@ -563,7 +567,7 @@ void jw_free(void *p, int64_t size, const WSite *why) {
     block_free(p, size, why);
 }
 
-uint64_t jw_gen(void *p) { return HDR(p)->gen; }
+uint64_t jw_gen(void *p) { return gen_get(p); }
 
 // ---------------------------------------------------------------- own の読むだけの写し
 
@@ -587,7 +591,7 @@ void *jw_view(void *own, const WSite *site) {
         *c = *CELL(own);
     } else {
         c->target = own;
-        c->gen = HDR(own)->gen;
+        c->gen = gen_get(own);
         c->site = site;
     }
     return (void *)((uintptr_t)c | 1);
@@ -602,7 +606,7 @@ void jw_view_free(void *v) {
 // 写しの先（世代を確かめる）
 void *jw_view_target(void *v, const WSite *use) {
     WCell *c = CELL(v);
-    if (HDR(c->target)->gen != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
+    if (gen_get(c->target) != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
     return c->target;
 }
 
@@ -940,15 +944,15 @@ static char *list_new_data(int64_t bytes) {
     char *raw = malloc((size_t)(LIST_PAD + bytes));
     if (!raw) jw_bug("メモリが足りません");
     char *d = raw + LIST_PAD;
-    HDR(d)->gen = 0;
+    gen_set(d, 0);
     return d;
 }
 
 // 要素が動いた（interp の `list_moved`）
 void jw_list_moved(WList *l, const WSite *why) {
-    if (!l->data || !why || !(HDR(l->data)->gen & 2)) return;
+    if (!l->data || !why || !(gen_get(l->data) & 2)) return;
     remember_sent(l->data, why);
-    HDR(l->data)->gen = (HDR(l->data)->gen & ~(uint64_t)3) + 4;
+    gen_set(l->data, (gen_get(l->data) & ~(uint64_t)3) + 4);
 }
 
 // 長さ n まで入れられるようにする。取り直したら true
@@ -959,7 +963,7 @@ static int list_grow(WList *l, int64_t esize, int64_t n, const WSite *why) {
     int64_t bytes = list_bytes(esize, cap);
     if (!l->data) {
         l->data = list_new_data(bytes);
-    } else if (HDR(l->data)->gen & LIST_SHARED) {
+    } else if (gen_get(l->data) & LIST_SHARED) {
         char *nd = list_new_data(bytes);
         memcpy(nd, l->data, (size_t)(l->len * (esize ? esize : 1)));
         block_free(l->data, list_bytes(esize, l->cap), why);
@@ -1012,7 +1016,7 @@ void jw_list_reverse(WList *l, int64_t esize, const WSite *why) {
 // 中身の区画を解放する（要素の own は書き出したコードが先に解放する）
 void jw_list_free(WList *l, int64_t esize, const WSite *why) {
     if (!l->data) return;
-    if (HDR(l->data)->gen & LIST_SHARED) block_free(l->data, list_bytes(esize, l->cap), why);
+    if (gen_get(l->data) & LIST_SHARED) block_free(l->data, list_bytes(esize, l->cap), why);
     else free(l->data - LIST_PAD);
 }
 
@@ -2104,7 +2108,7 @@ void jw_wait_all(const WSite *at) {
 static void remember_sent(void *p, const WSite *why) {
     unsigned i = sent_n++ % NREUSED;
     sent[i].block = p;
-    sent[i].gen = HDR(p)->gen;
+    sent[i].gen = gen_get(p);
     sent[i].why = why;
 }
 
@@ -2112,7 +2116,7 @@ void jw_send_block(void *p, const WSite *why) {
     // 読むだけの写し（下の 1 ビット）は送れない（型検査と取り出しのエラーで来ないはず。来たら区画を壊す前に止める）
     if ((uintptr_t)p & 1) jw_bug("読むだけの写しをほかのスレッドへ送ろうとした");
     remember_sent(p, why);
-    HDR(p)->gen += 2;
+    gen_set(p, gen_get(p) + 2);
 }
 
 // ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）

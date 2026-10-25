@@ -286,3 +286,14 @@ fn main() {{
         assert_eq!(ok(&src), want);
     }
 }
+
+/// 送信元の古い ref（または own の写し）を検査中に、受信側が世代を変えても競合しない。
+#[test]
+fn sent_refs_can_be_checked_while_the_receiver_reuses_blocks() {
+    for src in [include_str!("safety/sent-own-reuse.jw"), include_str!("safety/sent-list-reuse.jw"), include_str!("safety/sent-view-reuse.jw")] {
+        let o = run_source(src, false);
+        let d = o.error.expect("sent reference must be rejected");
+        assert!(d.title.contains("無効になった参照"), "{}", d.render("main.jw", src));
+        assert!(o.output.is_empty());
+    }
+}

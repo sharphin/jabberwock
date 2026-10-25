@@ -477,11 +477,21 @@ fn generated_llvm_does_not_assume_unproved_address_or_integer_properties() {
     let dir = std::env::temp_dir().join(format!("jw-llvm-verify-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let verify = have_clang();
-    for src in seeds().into_iter().chain(attacks::generated(1).into_iter().map(|(_, src, _)| src)) {
+    for src in seeds().into_iter().chain(ATTACKS.iter().map(|(_, src, _)| src.to_string())).chain(attacks::generated(1).into_iter().map(|(_, src, _)| src)) {
         let Ok(ll) = jabberwock::llvm_build(&src, &jabberwock::no_modules, "main.jw", false) else { continue };
         for line in ll.lines().filter(|l| !l.trim_start().starts_with(';')) {
             for forbidden in ["getelementptr inbounds", " nsw ", " nuw ", " exact ", " = fptosi ", " = fptoui "] {
                 assert!(!line.contains(forbidden), "未証明の LLVM の前提 {}: {}", forbidden, line);
+            }
+        }
+        // 送信元の古い ref が読むため、区画ヘッダーは読み手も書き手も atomic にする。
+        for function in ll.split("\ndefine ").skip(1) {
+            let lines: Vec<&str> = function.lines().collect();
+            for header in lines.iter().filter(|l| l.contains(" = getelementptr i8, ptr ") && l.ends_with(", i64 -8")) {
+                let ptr = header.split_once(" = ").unwrap().0.trim();
+                for access in lines.iter().filter(|l| l.split(|c: char| c.is_whitespace() || c == ',').any(|v| v == ptr) && (l.contains("load ") || l.trim_start().starts_with("store "))) {
+                    assert!(access.contains("load atomic ") || access.contains("store atomic "), "世代番号の非atomicアクセス: {}", access);
+                }
             }
         }
         if verify {
