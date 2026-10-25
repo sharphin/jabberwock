@@ -238,7 +238,7 @@
   own の写し（下の 1 ビット）・interface の構造体の番号・変数の状態（null / `@jw.unset` / ムーブした位置）が要。
   実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す（jwc/llvm.jw の PRELUDE も）。jw_rt.c を直したら jwc/runtime.jw を作り直す（`JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date`）。
   実行時エラーは interp の `render_in` と一字一句同じに出す（突き合わせは全文を比べる）。interp のエラーの文を変えたら llvm.rs / jw_rt.c も直す。
-  測定用の切り替えは `llvm::Opts`（`emit_with`・lib.rs の `llvm_build_with`。世代の検査・添字の検査を消す、通った回数を `@jw.count.*` に数えて `llvm.global_dtors` で出す）。ふだんは `Opts::default()` で、jwc は持たない。
+  測定用の切り替えは `llvm::Opts`（`emit_with`・lib.rs の `llvm_build_with`。世代の検査・添字の検査を消す、通った回数を `@jw.count.*` に数えて `jw_main` の正常終了時に出す）。ふだんは `Opts::default()` で、jwc は持たない。
   `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
 - IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。
   事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `RefElem(x)`（x から届くリストの要素を指す。

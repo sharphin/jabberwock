@@ -31,8 +31,9 @@
 - jwcのbuildは `JW_CFLAGS` を読まないため、以前の比較は自己ホスト生成物のsanitizer試験になっていなかった。
   比較器はjwcが生成したLLVMを取得し、Rust版と同じ計装・コンパイル経路を使う。
 - Windowsではjwcの `-lm` 指定、計測版の `dprintf`、パッケージの出力名の `.exe`、改行形式に問題があった。
-  対象OSをclangのプリプロセッサで調べ、MSVC/MinGWのスタック指定を分ける。計測出力はCの `fprintf` を使う。
-  `.exe` をキャッシュ判定にも使い、ソースの改行をLFに固定する。
+  対象OSをclangのプリプロセッサで調べ、MSVC/MinGWのスタック指定を分ける。計測出力はCの `fprintf` を使い、COFFで実行されない場合がある `llvm.global_dtors` に依存せず、`jw_main` の正常終了時に呼ぶ。
+  `.exe` をキャッシュ判定にも使い、ソースの改行をLFに固定する。パス表記だけを比較するテストは区切りをそろえる。
+- jwcのLTO再試行では、引数リストをムーブせず複製する。LTOを拒否するclangラッパーを使った回帰テストで、通常リンクに戻って実行できることを確認する。
 
 ## LLVM のアドレス計算の確認
 
@@ -72,6 +73,14 @@ docs/safety-testing.md の項目8・9も別に残っており、「第三者コ�
 - 演算の端: 76/76件成功。jwc生成物でもASan/UBSan付きで成功。
 - LLVMの命令の前提検査とverifier: 371モジュール成功。
 - 生成LLVMのASan・MSan・TSan負例、CのUBSan・TSan負例: 成功。
-- 大量入力、MSan全体、ASan/UBSan全体、TSanの反復、GitHub CI: 最終結果の集計待ち。
+- 最適化付きASan/UBSan生成入力: 500本中467本を実行比較して成功、33本は型エラー。種10001〜10500。
+- TSan: native・threads・system・負例の42件を3回実行してすべて成功。CIでも同じ3回反復が成功。
+- MSan全体: CIで356件成功。直前の負例2件は別に成功。通常試験では環境変数で早期returnする負例・sanitized examplesは、対応する構成で別途実行する。
+- jwc生成物のCI: ASan/UBSanとMSanのそれぞれで、-O1は200本中185本、-O2＋LTOは100本中92本を比較して成功。攻撃75件と演算76件も各構成ですべて成功。
+- ASan/UBSan堅牢性: 7テスト成功。追加で変異1000本をネイティブでも試験した。極端な入力・変異では従来どおり3秒の時間切れを許すため、実行比較した生成入力の本数には足さない。
+- Windows追加修正の関連テスト23件、jwcのLTO再試行1件、Clippy（警告をエラー扱い）: 成功。
+- ASan/UBSan全体、jwcを含む追加の生成1000本、Windows CIの再確認: 最終結果の集計待ち。
+
+CIの根拠: [safety run 40194668194](https://github.com/sharphin/jabberwock/actions/runs/40194668194)。この実行の実装コミットは693c701。
 
 最後の行が残る間は、項目1〜7の最終合格とはしない。

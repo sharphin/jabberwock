@@ -91,8 +91,8 @@ pub fn emit_with(prog: &Program, files: &[String], sources: &[String], opts: Opt
     let site = m.site(mf.span, "");
     let _ = write!(
         m.code,
-        "define void @jw_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @jw_wait_all(ptr {})\n  ret void\n}}\n\n",
-        ret, main, site
+        "define void @jw_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @jw_wait_all(ptr {})\n{}  ret void\n}}\n\n",
+        ret, main, site, if opts.count { "  call void @jw.count.report()\n" } else { "" }
     );
     m.finish_helpers()?;
     let mut entries = Vec::new();
@@ -115,8 +115,7 @@ pub fn emit_with(prog: &Program, files: &[String], sources: &[String], opts: Opt
             "@jw.count.gen = global i64 0\n@jw.count.elided = global i64 0\n@jw.count.bounds = global i64 0\n\
              declare void @jw_report_checks(i64, i64, i64)\n\
              define internal void @jw.count.report() {{\n  %g = load i64, ptr @jw.count.gen\n  %e = load i64, ptr @jw.count.elided\n  \
-             %b = load i64, ptr @jw.count.bounds\n  call void @jw_report_checks(i64 %g, i64 %e, i64 %b)\n  ret void\n}}\n\
-             @llvm.global_dtors = appending global [1 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 65535, ptr @jw.count.report, ptr null }}]"
+             %b = load i64, ptr @jw.count.bounds\n  call void @jw_report_checks(i64 %g, i64 %e, i64 %b)\n  ret void\n}}"
         );
     }
     let stats = m.stats;

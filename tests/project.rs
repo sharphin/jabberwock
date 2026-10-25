@@ -178,6 +178,7 @@ fn new_run_and_test_commands() {
     write(&app.join("tests/boom.jw"), "fn main() { let v = [1]; let i = 3; print(v[i]); }\n");
     let (c, out, _) = jw(&app, &["test"]);
     assert_eq!(c, 1);
+    let out = out.replace('\\', "/");
     assert!(out.contains("test tests/good.jw ... ok"), "{}", out);
     assert!(out.contains("test tests/wrong.jw ... 失敗") && out.contains("出力が違います"), "{}", out);
     assert!(out.contains("test tests/boom.jw ... 失敗") && out.contains("tests/boom.jw:1:"), "{}", out);
@@ -193,6 +194,7 @@ fn new_run_and_test_commands() {
     );
     let (c, out, _) = jw(&app, &["test"]);
     assert_eq!(c, 1);
+    let out = out.replace('\\', "/");
     assert!(out.contains("test tests/fns.jw::test_ok ... ok"), "{}", out);
     assert!(out.contains("test tests/fns.jw::test_ng ... 失敗") && out.contains("assert に失敗しました") && out.contains("tests/fns.jw:10:"), "{}", out);
     assert!(out.contains("test tests/fns.jw::test_exit ... 失敗") && out.contains("exit(3)"), "{}", out);

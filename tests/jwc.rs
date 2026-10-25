@@ -397,3 +397,26 @@ fn jwc_build_makes_an_executable() {
         assert_eq!(String::from_utf8_lossy(&got.stdout), want, "{}", name);
     }
 }
+
+/// LTO が使えない環境でも、引数リストをムーブ済みにせず通常リンクへ戻れる。
+#[cfg(unix)]
+#[test]
+fn jwc_build_retries_without_lto() {
+    if !have_clang() { return; }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("jw-jwc-fallback-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wrapper = dir.join("clang-no-lto");
+    std::fs::write(&wrapper, "#!/bin/sh\nfor arg do\n  if [ \"$arg\" = -flto ]; then exit 1; fi\ndone\nexec \"$JW_TEST_CLANG\" \"$@\"\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let src = dir.join("main.jw");
+    let exe = dir.join("main");
+    std::fs::write(&src, "fn main() { print(7); }").unwrap();
+    let output = Command::new(jwc()).arg("build").arg("--clang").arg(&wrapper).arg("-o").arg(&exe).arg(&src)
+        .env("JW_TEST_CLANG", native::clang()).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let output = Command::new(exe).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
+    let _ = std::fs::remove_dir_all(dir);
+}

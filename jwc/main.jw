@@ -251,7 +251,7 @@ fn build(ref str[] a) {
         flags.push("-lm");
         flags.push("-pthread");
     }
-    let mut lto = flags;
+    let mut lto = flags.map((flag) -> flag);
     lto.push("-flto");
     lto.push("-fuse-ld=lld");
     // lld がない環境では LTO なしで作り直す。
