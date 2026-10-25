@@ -20,6 +20,7 @@
 | `src/types.rs` | 型検査。実行前に型と `mut` / `ref mut` の違反を見つける（`lib.rs` で解析・実行の前に呼ぶ） |
 | `src/analyze.rs` | 静的解析。証明できた `*p` / `p.f` の ref 世代チェックを消す |
 | `src/interp.rs` | 木をたどるインタプリタ。ヒープはスロット＋世代、変数は Live / Moved |
+| `src/sort.rs` | 並べ替えの手順（interp と IR の exec が使う。jw_rt.c と同じ順に比べる） |
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
@@ -55,7 +56,7 @@
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
-| `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` |
+| `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
 | `jwc/` | jabberwock で書いた jabberwock のコンパイラ（設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw` / `--ir`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く）・`analyze.jw`（ir/analyze.rs の移植。事実は変数ごとの数 1 つを、分かっている変数だけ番号の順に並べる）・`llvm.jw`（ir/llvm.rs の Module: 型の形・手伝いの関数）・`llvmfn.jw`（FnGen と `emit`。Rust 版と同じ順に同じ番号をつける）。`--ll` も。`jwc build` で実行ファイルまで作れ、jwc 自身もコンパイルできる。`runtime.jw` は runtime/jw_rt.c を文字列にしたもの（手で直さず `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す） |
@@ -73,7 +74,7 @@
   道筋は辞書の中を通らない（`through_map` / types.rs の `inside_map` / lower の `through_map` で弾く）。enum の中も通らない（`place` が通さない）。
 - リストは `Value::List(スロット)`。中身 `Array(_, true)` は own の先と同じく自分のスロットに置く（`new_list`。`Array(_, true)` をじかに値として持たない。
   文字列のメソッドなどヒープなしで作ったものは `adopt` で置き直す）。要素の場所は中身のスロットから数える（`index_place` / exec の `resolve_in` が `list_place` で移る）。
-  要素が動く操作（push・pop（中身があるとき）・insert・remove・drain・reverse・sort・sort_by）は `list_moved` で中身のスロットの世代を進める
+  要素が動く操作（push・pop（中身があるとき）・insert・remove・drain・reverse・sort・sort_by・sort_unstable・sort_unstable_by）は `list_moved` で中身のスロットの世代を進める
   （理由の文は `list_moved_why`。IR の `seq_op`・llvm.rs の `seq_op` も同じ操作で同じ文）。リストの写し（`view_of`）は中身も新しいスロットに写すので、
   写しを捨てるときは `release` する。一時的な値の中から読んだリストは `copy_lists` で写す（一時的な値と一緒に解放されるため）。
   IR の `Operand::Copy` も中のリストを写す（実行ファイルの複製と同じ）。`Show(Copy(場所), false)` は写さずに場所を見る。
@@ -199,7 +200,10 @@
   `map` / `filter` は interp の `map_list`、lower は for と同じ `each_in`（`Each::Map`）で書き出す（exec / llvm は何もしない）。
   `ok_or` は `lib.rs` の `PRELUDE` に jabberwock で書いた関数。
   `str[]` の `join(sep)` は interp の `join_strs`・llvm の `jw_list_join`（元のリストは変えないので mut でなくてよい）。
-  `sort` / `sort_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
+  `sort` / `sort_by` / `sort_unstable` / `sort_unstable_by` は interp の `sort_list`（要素の写しで比べて順番を決め、最後に元の要素を並べ替える）。
+  順番は `src/sort.rs`（安定: run ＋二分挿入ソート＋powersort、安定でない: pdqsort）。jw_rt.c の `jw_sort` / `jw_sort_unstable` と
+  **同じ手順・同じ順に比べる**（比べる関数の呼ばれ方が見えるため）。片方を変えたらもう片方も同じに直す。
+  例外: 実行ファイルの整数の `sort()` / `sort_unstable()` は比べない基数ソート（`jw_sort_int`。llvm.rs / llvmfn.jw の `sort_int`。呼ばれ方が見えず、結果も同じ）。
 
 - IR: `ir::lower::lower(prog, info)` が main から呼ばれる関数だけを書き出す（`Proj::Deref` はいつも `Check::Required` で書き出す）。
   **デバッグビルドでは `run_inner` が、書き出せたプログラムを IR でも実行し、出力・エラーの題と位置・残ったヒープの数を interp と突き合わせる**
@@ -221,7 +225,8 @@
   測定用の切り替えは `llvm::Opts`（`emit_with`・lib.rs の `llvm_build_with`。世代の検査・添字の検査を消す、通った回数を `@jw.count.*` に数えて `llvm.global_dtors` で出す）。ふだんは `Opts::default()` で、jwc は持たない。
   `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
 - IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。
-  事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `Pinned`。
+  事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `RefElem(x)`（x から届くリストの要素を指す。
+  要素が動きうる操作（リストの操作・呼び出し・組み込み・リストを持ちうる値の代入や drop）で `kill_elems` がまとめて消す。呼び出しの引数の根拠にはしない）/ `Pinned`。
   前向きのデータフローで、合流は共通部分。引数が Pinned かは関数をまたいで固定点まで回す（呼ばれない関数・関数の値の引数は何も仮定しない）。
   **根拠: own 型の局所変数にはいつも own が入っている**（自動で借りた一時的な値・`for` の要素の写しは `ref` 型にする。exec が debug_assert で確かめる）。
   念のため copy_out の結果には Own を付けない（写しの own は取り出しでエラーになる）。

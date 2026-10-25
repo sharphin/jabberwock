@@ -78,9 +78,9 @@ fn action(r: &mut Rng, s: &str, muts: bool, refs: &[usize], k: usize) -> String 
     // 取り出す文・必ずダングリングになる文（たいていエラーで止まる）は 8 回に 1 回。ほかは借りる・読む・書き換える
     const RISKY: [usize; 8] = [4, 5, 6, 7, 9, 12, 23, 24];
     const SAFE: [usize; 17] = [0, 1, 2, 3, 8, 10, 11, 13, 14, 15, 19, 20, 21, 22, 25, 26, 27];
-    // 仕様（spec の 7.1・7.2）で ref を無効にする操作をすべて入れる: 要素が動く（push・pop・insert・remove・drain・sort・sort_by・reverse）、
+    // 仕様（spec の 7.1・7.2）で ref を無効にする操作をすべて入れる: 要素が動く（push・pop・insert・remove・drain・sort・sort_by・sort_unstable・sort_unstable_by・reverse）、
     // リストが解放される（再代入・drop・スレッドへ送る）、own が解放される（再代入・drop）。無効にしない操作（ムーブ・要素への代入）も入れる
-    const MUTS: [usize; 19] = [16, 17, 18, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43];
+    const MUTS: [usize; 21] = [16, 17, 18, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45];
     let which = if r.below(8) == 0 {
         RISKY[r.below(RISKY.len())]
     } else if muts && r.below(3) == 0 {
@@ -137,6 +137,8 @@ fn action(r: &mut Rng, s: &str, muts: bool, refs: &[usize], k: usize) -> String 
         40 => format!("let tk{k} = spawn(() -> ss.len()); print(tk{k}.join());"),
         41 => "ns.sort();".to_string(),
         42 => format!("s0 = mk({});", 400 + k),
+        43 => "ss.sort_unstable_by((a, c) -> a.n < c.n);".to_string(),
+        44 => "ns.sort_unstable();".to_string(),
         _ => "drop(s0);".to_string(),
     }
 }

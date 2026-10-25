@@ -217,6 +217,8 @@ declare void @jw_list_reverse(ptr, i64, ptr)
 declare void @jw_list_moved(ptr, ptr)
 declare void @jw_list_free(ptr, i64, ptr)
 declare void @jw_sort(ptr, i64, i64, ptr, ptr)
+declare void @jw_sort_unstable(ptr, i64, i64, ptr, ptr)
+declare void @jw_sort_int(ptr, i64, i32, i32)
 declare void @jw_permute(ptr, i64, i64, ptr)
 declare ptr @jw_env_new(i64, ptr)
 declare void @jw_env_retain(ptr)
@@ -3237,8 +3239,19 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.call(&code, ret, &args, span)
     }
 
+    /// 整数の `sort()` / `sort_unstable()` は比べる関数なしの `jw_sort_int`（比べ方が見えないので速い手順でよい）。書き出したら true
+    fn sort_int(&mut self, data: &str, n: &str, x: &Ty) -> bool {
+        match x {
+            Ty::Int(i) => {
+                self.b.op(format!("call void @jw_sort_int(ptr {}, i64 {}, i32 {}, i32 {})", data, n, i.bits() / 8, i.signed() as i32));
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// `sort_by(f)`（interp の `sort_list`）。要素の読むだけの写しを作って比べる関数に渡し、並べ終わった順に要素を動かす
-    fn sort_by(&mut self, data: &str, n: &str, x: &Ty, f: (String, Ty), span: Span) -> G<()> {
+    fn sort_by(&mut self, data: &str, n: &str, x: &Ty, f: (String, Ty), stable: bool, span: Span) -> G<()> {
         let (fv, ft) = f;
         let Ty::Fn(ps, _) = &ft else { return Err("sort_by の関数の型".to_string()) };
         let pa = ps.first().cloned().ok_or("sort_by の関数の引数")?;
@@ -3286,7 +3299,8 @@ impl<'m, 'p> FnGen<'m, 'p> {
         self.b.op(format!("store {{ %fnv, ptr }} {}, ptr {}", c2, ctx));
         // 比べる関数は実行時ライブラリから呼ばれるので、深さはグローバル変数で渡す
         self.b.op(format!("store i64 {}, ptr @jw_depth", self.depth));
-        self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 8, ptr {}, ptr {})", order, n, cmp, ctx));
+        let f = if stable { "jw_sort" } else { "jw_sort_unstable" };
+        self.b.op(format!("call void @{}(ptr {}, i64 {}, i64 8, ptr {}, ptr {})", f, order, n, cmp, ctx));
         // 写しを片づける
         let fin = self.m.site(span, "sort_by の比べ終わった写し");
         let (i, e) = self.b.loop_begin(n);
@@ -4008,15 +4022,19 @@ impl<'m, 'p> FnGen<'m, 'p> {
             }
             Ty::Array(x, n) => match name {
                 "len" => Ok((n.to_string(), i64t)),
-                "sort" => {
-                    let less = self.m.helper(H::Less, &x);
-                    let size = self.m.sizeof(&x)?;
-                    self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", pr.ptr, n, size, less));
+                "sort" | "sort_unstable" => {
+                    let ptr = pr.ptr.clone();
+                    if !self.sort_int(&ptr, &n.to_string(), &x) {
+                        let less = self.m.helper(H::Less, &x);
+                        let size = self.m.sizeof(&x)?;
+                        let f = if name == "sort" { "jw_sort" } else { "jw_sort_unstable" };
+                        self.b.op(format!("call void @{}(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", f, ptr, n, size, less));
+                    }
                     Ok(("0".to_string(), Ty::Unit))
                 }
-                "sort_by" => {
+                "sort_by" | "sort_unstable_by" => {
                     let ptr = pr.ptr.clone();
-                    self.sort_by(&ptr, &n.to_string(), &x, vals[0].clone(), span)?;
+                    self.sort_by(&ptr, &n.to_string(), &x, vals[0].clone(), name == "sort_by", span)?;
                     Ok(("0".to_string(), Ty::Unit))
                 }
                 _ => Err(format!("配列のメソッド {}", name)),
@@ -4104,16 +4122,19 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         self.b.op(format!("store %list zeroinitializer, ptr {}", pr.ptr));
                         Ok((v, Ty::List(x.clone())))
                     }
-                    "sort_by" => {
+                    "sort_by" | "sort_unstable_by" => {
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
-                        self.sort_by(&data, &len, &x, vals[0].clone(), span)?;
+                        self.sort_by(&data, &len, &x, vals[0].clone(), name == "sort_by", span)?;
                         self.b.op(format!("call void @jw_list_moved(ptr {}, ptr {})", pr.ptr, moved));
                         Ok(("0".to_string(), Ty::Unit))
                     }
-                    "sort" => {
-                        let less = self.m.helper(H::Less, &x);
+                    "sort" | "sort_unstable" => {
                         let data = self.b.val(format!("load ptr, ptr {}", pr.ptr));
-                        self.b.op(format!("call void @jw_sort(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", data, len, size, less));
+                        if !self.sort_int(&data, &len, &x) {
+                            let less = self.m.helper(H::Less, &x);
+                            let f = if name == "sort" { "jw_sort" } else { "jw_sort_unstable" };
+                            self.b.op(format!("call void @{}(ptr {}, i64 {}, i64 {}, ptr {}, ptr null)", f, data, len, size, less));
+                        }
                         self.b.op(format!("call void @jw_list_moved(ptr {}, ptr {})", pr.ptr, moved));
                         Ok(("0".to_string(), Ty::Unit))
                     }

@@ -1345,8 +1345,20 @@ struct FnGen {
         call(m, cd, ret, al, span)
     }
 
+    /// 整数の `sort()` / `sort_unstable()` は比べる関数なしの `jw_sort_int`（比べ方が見えないので速い手順でよい）。書き出したら true
+    fn mut bool sort_int(str data, str cnt, ref ty.Ty x) {
+        match ref x {
+            case Int(t) -> {
+                let sg = if ty.signed(t) { 1 } else { 0 };
+                b.op("call void @jw_sort_int(ptr " + data + ", i64 " + cnt + ", i32 {ty.bits(t) / 8}, i32 {sg})");
+                true
+            }
+            default -> false;
+        }
+    }
+
     /// `sort_by(f)`（interp の `sort_list`）。要素の読むだけの写しを作って比べる関数に渡し、並べ終わった順に要素を動かす
-    fn mut Result<(), str> sort_by(ref mut llvm.Module m, str data, str cnt, ref ty.Ty x, ref llvm.V f, i64 span) {
+    fn mut Result<(), str> sort_by(ref mut llvm.Module m, str data, str cnt, ref ty.Ty x, ref llvm.V f, bool stable, i64 span) {
         let fv = f.v;
         let ft = ref f.t;
         if !ty.is(ft, "Fn") { return Err("sort_by の関数の型"); }
@@ -1397,7 +1409,8 @@ struct FnGen {
         b.op("store {{ %fnv, ptr }} " + c2 + ", ptr " + ctx);
         // 比べる関数は実行時ライブラリから呼ばれるので、深さはグローバル変数で渡す
         b.op("store i64 " + depth + ", ptr @jw_depth");
-        b.op("call void @jw_sort(ptr " + order + ", i64 " + cnt + ", i64 8, ptr " + cmp + ", ptr " + ctx + ")");
+        let sf = if stable { "jw_sort" } else { "jw_sort_unstable" };
+        b.op("call void @" + sf + "(ptr " + order + ", i64 " + cnt + ", i64 8, ptr " + cmp + ", ptr " + ctx + ")");
         // 写しを片づける
         let fin = m.site(span, "sort_by の比べ終わった写し");
         let e3 = b.loop_begin(cnt);
@@ -2125,14 +2138,17 @@ struct FnGen {
             let x = ty.inner(pr.t);
             let cnt = "{ty.arr_len(pr.t)}";
             if name == "len" { return Ok(llvm.vt(cnt, ty.i64t())); }
-            if name == "sort" {
-                let less = m.helper("Less", x);
-                let size = m.sizeof(x)?;
-                b.op("call void @jw_sort(ptr " + pr.ptr + ", i64 " + cnt + ", i64 " + size + ", ptr " + less + ", ptr null)");
+            if name == "sort" || name == "sort_unstable" {
+                if !sort_int(pr.ptr, cnt, x) {
+                    let less = m.helper("Less", x);
+                    let size = m.sizeof(x)?;
+                    let sf = if name == "sort" { "jw_sort" } else { "jw_sort_unstable" };
+                    b.op("call void @" + sf + "(ptr " + pr.ptr + ", i64 " + cnt + ", i64 " + size + ", ptr " + less + ", ptr null)");
+                }
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }
-            if name == "sort_by" {
-                sort_by(m, pr.ptr, cnt, x, vals[0], span)?;
+            if name == "sort_by" || name == "sort_unstable_by" {
+                sort_by(m, pr.ptr, cnt, x, vals[0], name == "sort_by", span)?;
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }
             return Err("配列のメソッド " + name);
@@ -2216,16 +2232,19 @@ struct FnGen {
                 b.op("store %list zeroinitializer, ptr " + pr.ptr);
                 return Ok(llvm.vt(v, ty.Ty.List(own x)));
             }
-            if name == "sort_by" {
+            if name == "sort_by" || name == "sort_unstable_by" {
                 let data = b.val("load ptr, ptr " + pr.ptr);
-                sort_by(m, data, len, x, vals[0], span)?;
+                sort_by(m, data, len, x, vals[0], name == "sort_by", span)?;
                 b.op("call void @jw_list_moved(ptr " + pr.ptr + ", ptr " + moved + ")");
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }
-            if name == "sort" {
-                let less = m.helper("Less", x);
+            if name == "sort" || name == "sort_unstable" {
                 let data = b.val("load ptr, ptr " + pr.ptr);
-                b.op("call void @jw_sort(ptr " + data + ", i64 " + len + ", i64 " + size + ", ptr " + less + ", ptr null)");
+                if !sort_int(data, len, x) {
+                    let less = m.helper("Less", x);
+                    let sf = if name == "sort" { "jw_sort" } else { "jw_sort_unstable" };
+                    b.op("call void @" + sf + "(ptr " + data + ", i64 " + len + ", i64 " + size + ", ptr " + less + ", ptr null)");
+                }
                 b.op("call void @jw_list_moved(ptr " + pr.ptr + ", ptr " + moved + ")");
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }

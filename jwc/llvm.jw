@@ -88,6 +88,8 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare void @jw_list_moved(ptr, ptr)\n" +
     "declare void @jw_list_free(ptr, i64, ptr)\n" +
     "declare void @jw_sort(ptr, i64, i64, ptr, ptr)\n" +
+    "declare void @jw_sort_unstable(ptr, i64, i64, ptr, ptr)\n" +
+    "declare void @jw_sort_int(ptr, i64, i32, i32)\n" +
     "declare void @jw_permute(ptr, i64, i64, ptr)\n" +
     "declare ptr @jw_env_new(i64, ptr)\n" +
     "declare void @jw_env_retain(ptr)\n" +

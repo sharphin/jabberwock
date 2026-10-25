@@ -119,6 +119,39 @@ fn main() {
 }
 
 #[test]
+fn unstable_sorting_and_counting_comparisons() {
+    // 比べた回数は取り込んだ `ref mut` で数えられる
+    let src = "
+fn main() {
+    let mut calls = 0;
+    let c = ref mut calls;
+    let mut v = [5, 3, 8, 1, 9, 2];
+    v.sort_unstable();
+    let mut w = [\"b\", \"a\"];
+    w.sort_unstable_by((x, y) -> { *c = *c + 1; x > y });
+    let i64[3] mut a = [3, 1, 2];
+    a.sort_unstable_by((x, y) -> { *c = *c + 1; x < y });
+    print(v, w, a, calls > 0);
+}";
+    assert_eq!(ok(src), "[1, 2, 3, 5, 8, 9] [b, a] [1, 2, 3] true\n");
+    assert!(err("fn main() {\nlet mut w = [true];\nw.sort_unstable();\n}").title.contains("sort"));
+    assert!(err("fn main() {\nlet o = own 1;\nlet f = () -> { *o = 2; };\n}").title.contains("書き換えられません"));
+}
+
+#[test]
+fn sorting_patterns() {
+    // 並び方 8 種（ばらばら・昇順・降順・全部同じ・のこぎり・少ない種類・山・ほぼ昇順）と長さ 13 種・整数の幅ごとで、
+    // 並んだか・安定か（sort_by）・要素がそろっているかを確かめる。矛盾した比べ方でも止まる
+    let o = run_source(include_str!("sort_patterns.jw"), false);
+    assert!(o.error.is_none(), "{:?}", o.error.map(|d| d.title));
+    assert_eq!(o.live_objects, 0);
+    assert_eq!(o.output.lines().last(), Some("96 0 115685 841144760927"));
+    assert_eq!(o.output.matches("true true").count(), 3);
+    assert!(o.output.starts_with("true -128 127 0 65269 "), "{}", o.output);
+    assert!(o.output.contains("[-2, -1, 0, 1, 2, 3, 4, 5] [1, 2, 2, 3]\n"));
+}
+
+#[test]
 fn closure_errors() {
     let e = |body: &str| err(&format!("fn main() {{\n{}\n}}", body));
     assert!(e("let mut n = 1;\nlet f = () -> { n = 2; };").title.contains("書き換えられません"));

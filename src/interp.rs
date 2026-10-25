@@ -2538,13 +2538,13 @@ impl Interp {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
             }
-            if name == "sort" || name == "sort_by" {
+            if matches!(name, "sort" | "sort_by" | "sort_unstable" | "sort_unstable_by") {
                 let loc = match (slot, &place) {
                     (Some(sp), _) => Some(sp),
                     (None, Some(pl)) => Some((pl.slot, pl.path.clone())),
                     (None, None) => None,
                 };
-                let r = self.sort_list(loc.as_ref(), &mut rv, vals.into_iter().next(), recv, span);
+                let r = self.sort_list(loc.as_ref(), &mut rv, vals.into_iter().next(), !name.starts_with("sort_unstable"), recv, span);
                 if let (Ok(()), Some((s, p))) = (&r, &loc) {
                     if p.is_empty() && matches!(self.heap.slots[*s].value, Some(Value::Array(_, true))) {
                         self.list_moved(*s, span, name);
@@ -2884,7 +2884,7 @@ impl Interp {
         Ok(self.new_list(out))
     }
 
-    fn sort_list(&mut self, loc: Option<&(usize, Vec<usize>)>, tmp: &mut Value, f: Option<Value>, recv: &Expr, span: Span) -> R<()> {
+    fn sort_list(&mut self, loc: Option<&(usize, Vec<usize>)>, tmp: &mut Value, f: Option<Value>, stable: bool, recv: &Expr, span: Span) -> R<()> {
         let items = match loc {
             Some((s, p)) => self.at(*s, p),
             None => &*tmp,
@@ -2934,7 +2934,7 @@ impl Interp {
                 },
             }
         };
-        let order = merge_sort(self, (0..n).collect(), &mut less);
+        let order = crate::sort::sort(self, n, stable, &mut less);
         for slot in temps {
             let w = self.vacate(slot, span, "sort_by の比べ終わった写し");
             self.release(w, span, "sort_by の比べ終わった写し");
@@ -3048,32 +3048,6 @@ impl Interp {
 }
 
 // ---------------------------------------------------------------- ヘルパ
-
-/// 安定なマージソート。`less` は途中で失敗しうる（比べる関数の実行時エラー）
-pub(crate) fn merge_sort<T>(cx: &mut T, v: Vec<usize>, less: &mut impl FnMut(&mut T, usize, usize) -> R<bool>) -> R<Vec<usize>> {
-    if v.len() <= 1 {
-        return Ok(v);
-    }
-    let mut right = v;
-    let left = right.drain(..right.len() / 2).collect();
-    let left = merge_sort(cx, left, less)?;
-    let right = merge_sort(cx, right, less)?;
-    let mut out = Vec::with_capacity(left.len() + right.len());
-    let (mut i, mut j) = (0, 0);
-    while i < left.len() && j < right.len() {
-        // 右が左より真に前のときだけ右を取る（同じなら元の順を保つ）
-        if less(cx, right[j], left[i])? {
-            out.push(right[j]);
-            j += 1;
-        } else {
-            out.push(left[i]);
-            i += 1;
-        }
-    }
-    out.extend_from_slice(&left[i..]);
-    out.extend_from_slice(&right[j..]);
-    Ok(out)
-}
 
 /// 整数を、型検査が決めた型（`Expr.int`）に変換する
 fn convert(e: &Expr, v: Value) -> Value {

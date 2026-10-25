@@ -6326,3 +6326,41 @@ fn main() {
     let i64 b = 2;
     print(a.max(b));
 }
+#####
+struct E { i64 k; i64 i; }
+
+fn main() {
+    let mut calls = 0;
+    let cr = ref mut calls;
+    let mut v = [E { k: 3, i: 0 }, E { k: 1, i: 1 }, E { k: 3, i: 2 }, E { k: 2, i: 3 }];
+    v.sort_by((x, y) -> { *cr = *cr + 1; x.k < y.k });
+    v.sort_unstable_by((x, y) -> { *cr = *cr + 1; x.i > y.i });
+    let mut ns = [5, 2, 9, 1];
+    ns.sort_unstable();
+    let mut a = [4.5, -1.0, 2.0];
+    a.sort_unstable();
+    a.sort_unstable_by((x, y) -> x > y);
+    for e in v { print(e.k, e.i); }
+    print(ns, a, calls);
+}
+#####
+fn main() {
+    let mut w = [true];
+    w.sort_unstable();
+}
+#####
+fn main() {
+    let v = [1, 2];
+    v.foo();
+}
+#####
+fn main() {
+    let i64[2] v = [1, 2];
+    v.foo();
+}
+#####
+fn main() {
+    let o = own 1;
+    let f = () -> { *o = 2; };
+    f();
+}

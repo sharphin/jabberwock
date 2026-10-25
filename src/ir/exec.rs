@@ -12,7 +12,7 @@ use crate::ast::UnOp;
 use crate::diag::Diagnostic;
 use crate::interp::{text_rc, 
     Callee,
-    as_bool, binary, bounds, float_to_int, locate, map_borrow_error, merge_sort, moved_error, none, some,
+    as_bool, binary, bounds, float_to_int, locate, map_borrow_error, moved_error, none, some,
     str_method, Interp, MapVal, RefVal,
     Value, MAX_DEPTH,
 };
@@ -531,7 +531,7 @@ impl<'a> Machine<'a> {
         };
         let r = self.seq_op_in(name, slot, &path, vals, span, arg_span)?;
         let moved = match name {
-            "push" | "insert" | "remove" | "reverse" | "drain" | "sort" | "sort_by" => true,
+            "push" | "insert" | "remove" | "reverse" | "drain" | "sort" | "sort_by" | "sort_unstable" | "sort_unstable_by" => true,
             "pop" => len > 0,
             _ => false,
         };
@@ -542,10 +542,10 @@ impl<'a> Machine<'a> {
     }
 
     fn seq_op_in(&mut self, name: &str, slot: usize, path: &[usize], mut vals: Vec<Value>, span: Span, arg_span: Span) -> R<Value> {
-        if name == "sort_by" {
-            return self.sort_by(slot, path, vals.remove(0), span);
+        if name == "sort_by" || name == "sort_unstable_by" {
+            return self.sort_by(slot, path, vals.remove(0), name == "sort_by", span);
         }
-        if name == "sort" {
+        if name == "sort" || name == "sort_unstable" {
             let Value::Array(items, _) = at(self.it, slot, path) else { unreachable!("sort on an array") };
             let items = items.clone();
             let mut less = |_: &mut (), a: usize, b: usize| -> R<bool> {
@@ -556,7 +556,7 @@ impl<'a> Machine<'a> {
                     _ => unreachable!("type checked: ordered elements"),
                 })
             };
-            let order = merge_sort(&mut (), (0..items.len()).collect(), &mut less)?;
+            let order = crate::sort::sort(&mut (), items.len(), name == "sort", &mut less)?;
             let Value::Array(items, _) = at_mut(self.it, slot, path) else { unreachable!() };
             let mut old: Vec<Option<Value>> = std::mem::take(items).into_iter().map(Some).collect();
             *items = order.into_iter().map(|i| old[i].take().expect("each index once")).collect();
@@ -625,7 +625,7 @@ impl<'a> Machine<'a> {
     }
 
     /// `sort_by(f)`（interp の `sort_list`）。比べる関数には要素の読むだけの写しを渡し、並べ終わった順に元の要素を動かす
-    fn sort_by(&mut self, slot: usize, path: &[usize], f: Value, span: Span) -> R<Value> {
+    fn sort_by(&mut self, slot: usize, path: &[usize], f: Value, stable: bool, span: Span) -> R<Value> {
         let Value::Array(items, _) = at(self.it, slot, path) else { unreachable!("sort_by on an array") };
         let items = items.clone();
         let n = items.len();
@@ -658,7 +658,7 @@ impl<'a> Machine<'a> {
                     .primary(span, format!("{} が返りました", other.type_name()))),
             }
         };
-        let order = merge_sort(self, (0..n).collect(), &mut less);
+        let order = crate::sort::sort(self, n, stable, &mut less);
         for s in temps {
             let w = self.it.vacate(s, span, "sort_by の比べ終わった写し");
             self.it.release(w, span, "sort_by の比べ終わった写し");

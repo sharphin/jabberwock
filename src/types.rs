@@ -2005,11 +2005,11 @@ impl<'a> Checker<'a> {
             // 読むだけ。戻り値の型は関数を調べてから決める
             "map" | "filter" => (1, Ty::Unit, false),
             "drain" => (0, Ty::List(Box::new(elem.clone())), true),
-            "sort" | "sort_by" => (if name == "sort" { 0 } else { 1 }, Ty::Unit, true),
+            "sort" | "sort_by" | "sort_unstable" | "sort_unstable_by" => (if name.ends_with("_by") { 1 } else { 0 }, Ty::Unit, true),
             _ => {
                 return Err(Diagnostic::new(format!("リストにメソッド `{}` はありません", name)).primary(
                     span,
-                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)`・`join(sep)` です",
+                    "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)`・`sort_unstable()`・`sort_unstable_by(f)`・`join(sep)` です",
                 ))
             }
         };
@@ -2027,14 +2027,14 @@ impl<'a> Checker<'a> {
             "insert" => (args.first(), args.get(1)),
             _ => (None, args.first()),
         };
-        if name == "sort" {
+        if name == "sort" || name == "sort_unstable" {
             if let Err(why) = self.satisfies(elem, ORDERED) {
                 return Err(Diagnostic::new("この要素は sort で並べられません")
                     .primary(span, why)
                     .note("並べ方を決める関数を渡す `sort_by((a, b) -> a.x < b.x)` を使ってください"));
             }
         }
-        if name == "sort_by" {
+        if name == "sort_by" || name == "sort_unstable_by" {
             // 比べる関数: 「a を b より前に置くか」。要素は読むだけで受け取る
             let v = self.view_ty(elem.clone());
             let f = Ty::Fn(vec![v.clone(), v], Box::new(Ty::Bool));
@@ -2522,13 +2522,13 @@ impl<'a> Checker<'a> {
         };
         match &inner {
             // 並べ替えは長さを変えないので、配列にも使える。map / filter は新しいリストを作る
-            Ty::Array(elem, _) if matches!(name, "sort" | "sort_by" | "map" | "filter") => {
+            Ty::Array(elem, _) if matches!(name, "sort" | "sort_by" | "sort_unstable" | "sort_unstable_by" | "map" | "filter") => {
                 return self.list_method(recv, &rt, elem, name, args, span)
             }
             Ty::Array(..) => {
                 if name != "len" || !args.is_empty() {
                     return Err(Diagnostic::new(format!("配列にメソッド `{}` はありません", name))
-                        .primary(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)`・`map(f)`・`filter(f)` だけです")
+                        .primary(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)`・`sort_unstable()`・`sort_unstable_by(f)`・`map(f)`・`filter(f)` だけです")
                         .note("伸び縮みさせたいなら、リスト `i64[]` を使ってください"));
                 }
                 return Ok(I64);
@@ -2751,8 +2751,10 @@ impl<'a> Checker<'a> {
                 }
             }
             ExprKind::Deref(inner, _) => {
-                let outer = if is_place(inner) { self.access(inner)? } else { Access::Write };
                 let t = self.expr(inner)?;
+                // 取り込んだ `ref mut` の先は書き換えられる（写しても同じ先を指す）
+                let captured_ref = matches!(&inner.kind, ExprKind::Var(n) if self.is_captured(n)) && matches!(t, Ty::Ref(..));
+                let outer = if is_place(inner) && !captured_ref { self.access(inner)? } else { Access::Write };
                 outer.through(&t, self.origin(inner), describe(inner))
             }
             ExprKind::Field(base, ..) | ExprKind::Index(base, ..) => {

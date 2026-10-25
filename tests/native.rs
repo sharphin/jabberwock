@@ -441,6 +441,12 @@ fn measurement_builds_keep_the_output_and_count_checks() {
 }
 
 #[test]
+fn sorting_matches_interp() {
+    // 比べた順まで同じ（比べる関数の中で数えた値を出す）
+    same_as_interp("sort_patterns", include_str!("sort_patterns.jw"));
+}
+
+#[test]
 fn number_methods_match_interp() {
     same_as_interp(
         "nummeth",

@@ -10,6 +10,7 @@ pub mod lexer;
 pub mod modules;
 pub mod native;
 pub mod parser;
+mod sort;
 pub mod threads;
 pub mod types;
 

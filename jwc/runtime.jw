@@ -1001,29 +1001,353 @@ void jw_list_free(WList *l, int64_t esize, const WSite *why) {{
     else free(l->data - LIST_PAD);
 }}
 
-// 並べ替え（安定）。less(a, b, env) で比べる
+// 並べ替え。less(a, b, env) で「a を b より前に置くか」を比べる。手順は src/sort.rs と同じで、同じ順に比べる
+// （sort_by の関数が何回・どの順で呼ばれるかが見えるため。説明も src/sort.rs）。
+// 安定（jw_sort）: run を見つけ（短ければ二分挿入ソートで min_run まで伸ばす）、run どうしは powersort の決まりで合わせる。
+// 安定でない（jw_sort_unstable）: 全体が並んでいればそのまま。ほかは pdqsort に近いクイックソート（深すぎたらヒープソート）。
 typedef int32_t (*WLess)(void *a, void *b, void *env);
 
-static void msort(char *a, char *tmp, int64_t n, int64_t es, WLess less, void *env) {{
-    if (n < 2) return;
-    int64_t h = n / 2;
-    msort(a, tmp, h, es, less, env);
-    msort(a + h * es, tmp, n - h, es, less, env);
-    int64_t i = 0, j = h, k = 0;
-    while (i < h && j < n) {{
-        if (less(a + j * es, a + i * es, env)) memcpy(tmp + (k++) * es, a + (j++) * es, (size_t)es);
-        else memcpy(tmp + (k++) * es, a + (i++) * es, (size_t)es);
+#define SORT_SMALL 20
+
+typedef struct {{
+    char *a, *s, *xb, *sw;
+    int64_t es, n;
+    WLess less;
+    void *env;
+}} WSort;
+
+static inline void s_cp(char *d, const char *src, int64_t es) {{
+    if (es == 8) memcpy(d, src, 8);
+    else memcpy(d, src, (size_t)es);
+}}
+#define S_AT(S, i) ((S)->a + (i) * (S)->es)
+#define S_LT(S, x, y) ((S)->less((x), (y), (S)->env))
+
+static void s_swap(WSort *S, int64_t i, int64_t j) {{
+    s_cp(S->sw, S_AT(S, i), S->es);
+    s_cp(S_AT(S, i), S_AT(S, j), S->es);
+    s_cp(S_AT(S, j), S->sw, S->es);
+}}
+
+static void s_reverse(WSort *S, int64_t lo, int64_t n) {{
+    for (int64_t l = lo, r = lo + n - 1; l < r; l++, r--) s_swap(S, l, r);
+}}
+
+// 自然な run がこれより短いときは、二分挿入ソートでこの長さまで伸ばす（32〜64）
+static int64_t s_minrun(int64_t n) {{
+    int64_t r = 0;
+    while (n >= 64) {{ r |= n & 1; n >>= 1; }}
+    return n + r;
+}}
+
+static uint32_t s_depth_limit(int64_t n) {{
+    uint32_t b = 63;
+    while (!((uint64_t)n >> b)) b--;
+    return 2 * b;
+}}
+
+static void s_samples(int64_t n, int64_t *out) {{
+    uint64_t r = (uint64_t)n * 0x9E3779B97F4A7C15ull;
+    for (int k = 0; k < 9; k++) {{
+        r ^= r >> 29;
+        r *= 0xBF58476D1CE4E5B9ull;
+        r ^= r >> 32;
+        out[k] = (int64_t)(r % (uint64_t)n);
     }}
-    while (i < h) memcpy(tmp + (k++) * es, a + (i++) * es, (size_t)es);
-    while (j < n) memcpy(tmp + (k++) * es, a + (j++) * es, (size_t)es);
-    memcpy(a, tmp, (size_t)(n * es));
+}}
+
+static uint32_t s_power(int64_t s1, int64_t n1, int64_t n2, int64_t n) {{
+    uint64_t un = (uint64_t)n, a = 2 * (uint64_t)s1 + (uint64_t)n1, b = a + (uint64_t)n1 + (uint64_t)n2;
+    uint32_t p = 0;
+    for (;;) {{
+        p++;
+        int x = a >= un, y = b >= un;
+        if (x != y) return p;
+        if (x) {{ a -= un; b -= un; }}
+        a <<= 1;
+        b <<= 1;
+    }}
+}}
+
+static void s_insertion(WSort *S, int64_t lo, int64_t n) {{
+    for (int64_t i = 1; i < n; i++) {{
+        s_cp(S->xb, S_AT(S, lo + i), S->es);
+        int64_t j = i;
+        while (j > 0 && S_LT(S, S->xb, S_AT(S, lo + j - 1))) {{
+            s_cp(S_AT(S, lo + j), S_AT(S, lo + j - 1), S->es);
+            j--;
+        }}
+        s_cp(S_AT(S, lo + j), S->xb, S->es);
+    }}
+}}
+
+// i から始まる run の長さ。真に減っていれば *desc
+static int64_t s_run_at(WSort *S, int64_t i, int *desc) {{
+    int64_t n = S->n;
+    *desc = 0;
+    if (i + 1 >= n) return n - i;
+    int64_t k = i + 2;
+    if (S_LT(S, S_AT(S, i + 1), S_AT(S, i))) {{
+        while (k < n && S_LT(S, S_AT(S, k), S_AT(S, k - 1))) k++;
+        *desc = 1;
+    }} else {{
+        while (k < n && !S_LT(S, S_AT(S, k), S_AT(S, k - 1))) k++;
+    }}
+    return k - i;
+}}
+
+static void s_merge(WSort *S, int64_t lo, int64_t mid, int64_t hi) {{
+    if (mid == lo || mid == hi || !S_LT(S, S_AT(S, mid), S_AT(S, mid - 1))) return;
+    int64_t n1 = mid - lo, es = S->es;
+    memcpy(S->s, S_AT(S, lo), (size_t)(n1 * es));
+    int64_t i = 0, j = mid, k = lo;
+    while (i < n1 && j < hi) {{
+        if (S_LT(S, S_AT(S, j), S->s + i * es)) s_cp(S_AT(S, k), S_AT(S, j++), es);
+        else s_cp(S_AT(S, k), S->s + (i++) * es, es);
+        k++;
+    }}
+    if (i < n1) memcpy(S_AT(S, k), S->s + i * es, (size_t)((n1 - i) * es));
+}}
+
+// lo から n 個のうち、前の done 個が並んでいるとき、残りを二分探索で挿し入れる（同じものの後ろへ入れるので安定）
+static void s_binsert(WSort *S, int64_t lo, int64_t done, int64_t n) {{
+    for (int64_t i = done < 1 ? 1 : done; i < n; i++) {{
+        s_cp(S->xb, S_AT(S, lo + i), S->es);
+        int64_t l = 0, r = i;
+        while (l < r) {{
+            int64_t m = l + (r - l) / 2;
+            if (S_LT(S, S->xb, S_AT(S, lo + m))) r = m;
+            else l = m + 1;
+        }}
+        memmove(S_AT(S, lo + l + 1), S_AT(S, lo + l), (size_t)((i - l) * S->es));
+        s_cp(S_AT(S, lo + l), S->xb, S->es);
+    }}
+}}
+
+static void s_stable(WSort *S) {{
+    int64_t n = S->n, es = S->es;
+    if (n < 64) {{ s_binsert(S, 0, 1, n); return; }}
+    S->s = malloc((size_t)(n * es));
+    int64_t minrun = s_minrun(n);
+    // (始め, 長さ, 次の run との境目の深さ)
+    int64_t rs[130], rl[130];
+    uint32_t rp[130];
+    int top = 0;
+    int64_t i = 0;
+    while (i < n) {{
+        int desc;
+        int64_t len = s_run_at(S, i, &desc);
+        if (desc) s_reverse(S, i, len);
+        if (len < minrun) {{
+            int64_t f = minrun < n - i ? minrun : n - i;
+            s_binsert(S, i, len, f);
+            len = f;
+        }}
+        int64_t e = i + len;
+        if (top > 0) {{
+            uint32_t p = s_power(rs[top - 1], rl[top - 1], e - i, n);
+            while (top > 1 && rp[top - 2] > p) {{
+                s_merge(S, rs[top - 2], rs[top - 1], rs[top - 1] + rl[top - 1]);
+                rl[top - 2] += rl[top - 1];
+                top--;
+            }}
+            rp[top - 1] = p;
+        }}
+        rs[top] = i; rl[top] = e - i; rp[top] = 0; top++;
+        i = e;
+    }}
+    while (top > 1) {{
+        s_merge(S, rs[top - 2], rs[top - 1], rs[top - 1] + rl[top - 1]);
+        rl[top - 2] += rl[top - 1];
+        top--;
+    }}
+    free(S->s);
+}}
+
+// 3 つの場所のうち、値が中央のものの場所
+static int64_t s_m3_at(WSort *S, int64_t i, int64_t j, int64_t k) {{
+    if (S_LT(S, S_AT(S, j), S_AT(S, i))) {{ int64_t t = i; i = j; j = t; }}
+    if (S_LT(S, S_AT(S, k), S_AT(S, j))) {{
+        j = k;
+        if (S_LT(S, S_AT(S, j), S_AT(S, i))) j = i;
+    }}
+    return j;
+}}
+
+static void s_sift(WSort *S, int64_t lo, int64_t root, int64_t end) {{
+    for (;;) {{
+        int64_t child = 2 * root + 1;
+        if (child >= end) return;
+        if (child + 1 < end && S_LT(S, S_AT(S, lo + child), S_AT(S, lo + child + 1))) child++;
+        if (!S_LT(S, S_AT(S, lo + root), S_AT(S, lo + child))) return;
+        s_swap(S, lo + root, lo + child);
+        root = child;
+    }}
+}}
+
+static void s_heapsort(WSort *S, int64_t lo, int64_t n) {{
+    for (int64_t st = n / 2 - 1; st >= 0; st--) s_sift(S, lo, st, n);
+    for (int64_t end = n - 1; end >= 1; end--) {{
+        s_swap(S, lo, lo + end);
+        s_sift(S, lo, 0, end);
+    }}
+}}
+
+// pdqsort に近いクイックソート。pivot は範囲の先頭に置いて分け、終わったら間に置く。anc は外側の pivot（動かない場所）
+static void s_pdq(WSort *S, int64_t lo, int64_t n, char *anc, uint32_t limit) {{
+    while (n > SORT_SMALL) {{
+        if (limit == 0) {{ s_heapsort(S, lo, n); return; }}
+        limit--;
+        int64_t pos[9], m[3];
+        s_samples(n, pos);
+        for (int g = 0; g < 3; g++) m[g] = s_m3_at(S, lo + pos[3 * g], lo + pos[3 * g + 1], lo + pos[3 * g + 2]);
+        int64_t mp = s_m3_at(S, m[0], m[1], m[2]);
+        s_swap(S, lo, mp);
+        char *p = S_AT(S, lo);
+        if (anc && !S_LT(S, anc, p)) {{
+            // p より後ろでないものを左へ集めて片づける
+            int64_t i = lo + 1, j = lo + n - 1;
+            for (;;) {{
+                while (i <= j && !S_LT(S, p, S_AT(S, i))) i++;
+                while (i <= j && S_LT(S, p, S_AT(S, j))) j--;
+                if (i > j) break;
+                s_swap(S, i, j);
+                i++;
+                j--;
+            }}
+            int64_t k = i - lo;
+            lo += k;
+            n -= k;
+            anc = NULL;
+            continue;
+        }}
+        int64_t i = lo + 1, j = lo + n - 1;
+        for (;;) {{
+            while (i <= j && S_LT(S, S_AT(S, i), p)) i++;
+            while (i <= j && !S_LT(S, S_AT(S, j), p)) j--;
+            if (i > j) break;
+            s_swap(S, i, j);
+            i++;
+            j--;
+        }}
+        int64_t mid = i - 1;
+        s_swap(S, lo, mid);
+        s_pdq(S, lo, mid - lo, anc, limit);
+        anc = S_AT(S, mid);
+        n = lo + n - mid - 1;
+        lo = mid + 1;
+    }}
+    s_insertion(S, lo, n);
+}}
+
+static void s_init(WSort *S, char *data, int64_t n, int64_t es, WLess less, void *env) {{
+    S->a = data;
+    S->n = n;
+    S->es = es;
+    S->less = less;
+    S->env = env;
+    S->xb = malloc((size_t)(2 * es));
+    S->sw = S->xb + es;
 }}
 
 void jw_sort(char *data, int64_t n, int64_t es, WLess less, void *env) {{
     if (n < 2) return;
-    char *tmp = malloc((size_t)(n * es));
-    msort(data, tmp, n, es, less, env);
-    free(tmp);
+    WSort S;
+    s_init(&S, data, n, es, less, env);
+    s_stable(&S);
+    free(S.xb);
+}}
+
+void jw_sort_unstable(char *data, int64_t n, int64_t es, WLess less, void *env) {{
+    if (n < 2) return;
+    WSort S;
+    s_init(&S, data, n, es, less, env);
+    int desc;
+    if (s_run_at(&S, 0, &desc) == n) {{
+        if (desc) s_reverse(&S, 0, n);
+    }} else {{
+        s_pdq(&S, 0, n, NULL, s_depth_limit(n));
+    }}
+    free(S.xb);
+}}
+
+// 整数の sort() / sort_unstable()（比べる関数は組み込みで、呼ばれ方は見えない）。同じ値どうしは見分けがつかないので、
+// 結果は上の手順と同じ。並んでいればそのまま、短ければ挿入ソート、ほかは基数ソート（最小の値を引いて、要る桁だけ 11 ビットずつ）
+static uint64_t r_key(const char *p, int32_t bytes, int32_t sgn) {{
+    uint64_t k;
+    switch (bytes) {{
+    case 1: k = *(const uint8_t *)p; break;
+    case 2: {{ uint16_t v; memcpy(&v, p, 2); k = v; break; }}
+    case 4: {{ uint32_t v; memcpy(&v, p, 4); k = v; break; }}
+    default: memcpy(&k, p, 8); break;
+    }}
+    if (sgn) k ^= 1ull << (bytes * 8 - 1);
+    return k;
+}}
+
+void jw_sort_int(char *data, int64_t n, int32_t bytes, int32_t sgn) {{
+    if (n < 2) return;
+    int64_t es = bytes, i = 1;
+    uint64_t prev = r_key(data, bytes, sgn);
+    int up = 1, down = 1;
+    for (; i < n && (up || down); i++) {{
+        uint64_t k = r_key(data + i * es, bytes, sgn);
+        if (k < prev) up = 0;
+        if (k >= prev) down = 0;
+        prev = k;
+    }}
+    if (up) return;
+    if (down) {{
+        for (int64_t l = 0, r = n - 1; l < r; l++, r--) {{
+            char t[8];
+            memcpy(t, data + l * es, (size_t)es);
+            memcpy(data + l * es, data + r * es, (size_t)es);
+            memcpy(data + r * es, t, (size_t)es);
+        }}
+        return;
+    }}
+    if (n <= 64) {{
+        for (int64_t j = 1; j < n; j++) {{
+            char x[8];
+            memcpy(x, data + j * es, (size_t)es);
+            uint64_t kx = r_key(x, bytes, sgn);
+            int64_t m = j;
+            while (m > 0 && kx < r_key(data + (m - 1) * es, bytes, sgn)) {{
+                memcpy(data + m * es, data + (m - 1) * es, (size_t)es);
+                m--;
+            }}
+            memcpy(data + m * es, x, (size_t)es);
+        }}
+        return;
+    }}
+    // 8 バイトの整数は data をそのまま鍵の場所に使う（作業用の場所は n 個ぶんだけ）
+    uint64_t *buf = malloc((size_t)n * (bytes == 8 ? 8 : 16));
+    if (!buf) jw_bug("メモリが足りません");
+    uint64_t *k = bytes == 8 ? (uint64_t *)data : buf + n, *t = buf;
+    uint64_t mn = ~0ull, mx = 0;
+    for (int64_t j = 0; j < n; j++) {{
+        uint64_t v = r_key(data + j * es, bytes, sgn);
+        k[j] = v;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+    }}
+    int bits = 0;
+    while (bits < 64 && ((mx - mn) >> bits)) bits++;
+    int64_t cnt[2048];
+    for (int sh = 0; sh < bits; sh += 11) {{
+        memset(cnt, 0, sizeof cnt);
+        for (int64_t j = 0; j < n; j++) cnt[((k[j] - mn) >> sh) & 2047]++;
+        int64_t sum = 0;
+        for (int b = 0; b < 2048; b++) {{ int64_t c = cnt[b]; cnt[b] = sum; sum += c; }}
+        for (int64_t j = 0; j < n; j++) t[cnt[((k[j] - mn) >> sh) & 2047]++] = k[j];
+        uint64_t *u = k; k = t; t = u;
+    }}
+    for (int64_t j = 0; j < n; j++) {{
+        uint64_t v = k[j];
+        if (sgn) v ^= 1ull << (bytes * 8 - 1);
+        memcpy(data + j * es, &v, (size_t)es);
+    }}
+    free(buf);
 }}
 
 // ---------------------------------------------------------------- 辞書（入れた順を保つ。キーは 8 バイト: 整数・真偽値・文字列のポインタ）

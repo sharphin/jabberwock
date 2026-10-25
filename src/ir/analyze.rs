@@ -5,6 +5,8 @@
 //!   * 変数そのもの（own でない値）の場所を解放できるのも、その変数の drop とムーブだけ。再代入は同じ場所に入れ直すので、
 //!     変数を借りた ref は生きたまま（構文木の解析にはない、IR で増えた分）。
 //!   * 引数の ref は、すべての呼び出し元が生きている ref を渡すなら、関数の中ずっと安全（Pinned。関数をまたいで繰り返し決める）。
+//!   * リストの要素を借りた ref（`ref mut ps[i]`）は、要素を動かしうる操作（リストの操作・呼び出し・リストを持ちうる値の上書きや解放）が
+//!     どこにもないあいだ安全（RefElem）。ほかの名前から同じリストに届きうるので、名前ではなく操作の種類で消す。
 //!
 //! 基本ブロックの上の前向きのデータフロー解析で、合流では両方で成り立つ事実だけを残す。
 //! 証明できない `*p` は `Check::Required` のまま（実行時に検査する）。デバッグビルドでは、消した検査も実行時に確かめる。
@@ -25,6 +27,9 @@ enum Fact {
     RefSlot(Local),
     /// 関数の実行中ずっと借りた先が生きている ref（安全な引数から来たもの）
     Pinned,
+    /// 変数（Pinned の引数・own・リストの変数）から届くリストの要素を借りた ref。要素を動かしうる操作で消える（`kill_elems`）。
+    /// 呼ばれた関数の中では守れないので、引数としては安全と見なさない（`is_live` は偽）
+    RefElem(Local),
 }
 
 type Facts = HashMap<Local, Fact>;
@@ -37,13 +42,23 @@ fn meet(a: &Facts, b: &Facts) -> Facts {
 /// 変数 `x` がなくなった（drop・ムーブ）。それを借りた ref の事実も消す
 fn kill_all(facts: &mut Facts, x: Local) {
     facts.remove(&x);
-    facts.retain(|_, f| *f != Fact::RefTo(x) && *f != Fact::RefSlot(x));
+    facts.retain(|_, f| *f != Fact::RefTo(x) && *f != Fact::RefSlot(x) && *f != Fact::RefElem(x));
+}
+
+/// リストの要素が動いたかもしれない。要素を借りた ref の事実をすべて消す
+fn kill_elems(facts: &mut Facts) {
+    facts.retain(|_, f| !matches!(f, Fact::RefElem(_)));
+}
+
+/// この型の値を上書き・解放すると、リストの中身が解放されうるか（数・文字列・ref は持たない）
+fn may_hold_list(t: &Ty) -> bool {
+    !matches!(t, Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Never | Ty::Ref(..))
 }
 
 /// 変数 `x` に入れ直した。古い own は解放されるが、変数の場所はそのまま
 fn kill_value(facts: &mut Facts, x: Local) {
     facts.remove(&x);
-    facts.retain(|_, f| *f != Fact::RefTo(x));
+    facts.retain(|_, f| *f != Fact::RefTo(x) && *f != Fact::RefElem(x));
 }
 
 /// この事実を持つ値は、今、借りた先が生きている ref（か own）か
@@ -169,6 +184,11 @@ impl<'a> Cx<'a> {
                 // 値を先に計算し、そのあとで場所を求める（exec と同じ順）
                 let f = self.rvalue(value, facts);
                 self.place(place, facts);
+                // リストを持ちうる値を上書きすると、古い値の中のリストが解放される
+                let holds = if place.proj.is_empty() { may_hold_list(&self.locals[place.local].ty) } else { self.value_may_hold(value) };
+                if holds {
+                    kill_elems(facts);
+                }
                 if place.proj.is_empty() {
                     let x = place.local;
                     kill_value(facts, x);
@@ -185,9 +205,23 @@ impl<'a> Cx<'a> {
                     }
                 }
             }
-            Inst::Drop { local, .. } => kill_all(facts, *local),
+            Inst::Drop { local, .. } => {
+                if may_hold_list(&self.locals[*local].ty) {
+                    kill_elems(facts);
+                }
+                kill_all(facts, *local)
+            }
             Inst::Discard { value, .. } => {
+                let holds = match value {
+                    Operand::Move(l, _) | Operand::Read(l, _) => may_hold_list(&self.locals[*l].ty),
+                    Operand::Copy(p) if p.proj.is_empty() => may_hold_list(&self.locals[p.local].ty),
+                    Operand::Const(_) => false,
+                    Operand::Copy(_) => true,
+                };
                 self.operand(value, facts);
+                if holds {
+                    kill_elems(facts);
+                }
             }
         }
     }
@@ -202,11 +236,22 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// 上書きに使う値がリストを持ちうるか（数の計算なら持たない）
+    fn value_may_hold(&self, v: &Rvalue) -> bool {
+        match v {
+            Rvalue::Bin(..) | Rvalue::Un(..) | Rvalue::Cast(..) | Rvalue::Show(..) | Rvalue::Ref { .. } => false,
+            Rvalue::Use(Operand::Const(_)) => false,
+            Rvalue::Use(Operand::Move(l, _) | Operand::Read(l, _)) => may_hold_list(&self.locals[*l].ty),
+            Rvalue::Use(Operand::Copy(p)) if p.proj.is_empty() => may_hold_list(&self.locals[p.local].ty),
+            _ => true,
+        }
+    }
+
     /// 場所をたどる。先頭の `*` の検査を決める（ほかの `*` は実行時に検査する）
     fn place(&mut self, p: &mut Place, facts: &mut Facts) {
         let safe = {
             let f = facts.get(&p.local).copied();
-            f == Some(Fact::Own) || is_live(facts, f)
+            f == Some(Fact::Own) || matches!(f, Some(Fact::RefElem(_))) || is_live(facts, f)
         };
         if self.set {
             for (i, pr) in p.proj.iter_mut().enumerate() {
@@ -295,6 +340,19 @@ impl<'a> Cx<'a> {
                     Some(Fact::RefSlot(place.local))
                 }
             }
+            // リストの要素（とその中）: `(*ps)[i]`（ps は Pinned の引数か own）・`ps[i]`（ps はリストの変数）
+            _ if !follows => {
+                let elems = |from: usize| place.proj[from..].iter().all(|p| matches!(p, Proj::Field(..) | Proj::Index(..)));
+                match place.proj.first() {
+                    Some(Proj::Deref(..)) if elems(1) && matches!(root, Some(Fact::Pinned | Fact::Own)) => {
+                        Some(Fact::RefElem(place.local))
+                    }
+                    Some(Proj::Index(..)) if elems(0) && matches!(self.locals[place.local].ty, Ty::List(_)) => {
+                        Some(Fact::RefElem(place.local))
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -320,8 +378,17 @@ impl<'a> Cx<'a> {
                 self.place(place, facts);
                 f
             }
-            Rvalue::Struct(_, ops) | Rvalue::Enum(_, ops, _) | Rvalue::Array(ops, _) | Rvalue::Builtin(_, ops, _) => {
+            Rvalue::Struct(_, ops) | Rvalue::Enum(_, ops, _) | Rvalue::Array(ops, _) => {
                 self.operands(ops, facts);
+                None
+            }
+            Rvalue::Builtin(name, ops, _) => {
+                self.operands(ops, facts);
+                // 数と文字列の計算・表示のほかは、何が起きるか個別に見ない（スレッド・入出力など）
+                let pure = matches!(name.as_str(), "print" | "eprint" | "concat" | "append" | "assert");
+                if !(pure || name.starts_with("f64.") || name.starts_with("int.") || name.starts_with("str.")) {
+                    kill_elems(facts);
+                }
                 None
             }
             Rvalue::Map(pairs, _) => {
@@ -334,6 +401,7 @@ impl<'a> Cx<'a> {
             Rvalue::Call(fi, ops, _) => {
                 let safe = self.operands(ops, facts);
                 self.record(*fi, safe);
+                kill_elems(facts);
                 None
             }
             Rvalue::Closure(fi, ops) => {
@@ -348,6 +416,7 @@ impl<'a> Cx<'a> {
             Rvalue::CallValue(fv, ops, _) => {
                 self.operands(ops, facts);
                 self.operand(fv, facts);
+                kill_elems(facts);
                 None
             }
             Rvalue::CallDyn { table, this, args, .. } => {
@@ -358,11 +427,16 @@ impl<'a> Cx<'a> {
                 for (_, fi) in table.iter() {
                     self.record(*fi, safe.clone());
                 }
+                kill_elems(facts);
                 None
             }
-            Rvalue::SeqOp { place, args, .. } => {
+            Rvalue::SeqOp { name, place, args, .. } => {
                 self.operands(args, facts);
                 self.place(place, facts);
+                // 読むだけの操作のほかは、要素が動きうる（push・pop・sort など。辞書の値の解放も）
+                if !matches!(name.as_str(), "len" | "contains" | "get" | "keys") {
+                    kill_elems(facts);
+                }
                 None
             }
             Rvalue::CopyOut(p, ..) | Rvalue::Take(p) | Rvalue::Items { place: p, .. } | Rvalue::Keys(p) => {

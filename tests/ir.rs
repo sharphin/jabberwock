@@ -74,3 +74,29 @@ fn unsupported_programs_say_why() {
     // 書き出せなくてもインタプリタでは動く
     assert_eq!(run_source(src, false).output, "a 1\n");
 }
+
+#[test]
+fn refs_to_list_elements_skip_the_check_until_the_list_may_change() {
+    // 要素を借りた ref（`ref mut ps[i]`）は、リストの要素が動きうる操作までは世代の検査がいらない
+    let head = "struct P { i64 x; }\nfn bump(ref mut P[] ps) { ps.push(P { x: 0 }); }\n";
+    let checked = |body: &str| {
+        let src = format!("{}fn main() {{\n    let P[] mut ps = [P {{ x: 1 }}, P {{ x: 2 }}];\n    let p = ref mut ps[1];\n    p.x = 5;\n{}\n    p.x = 6;\n}}", head, body);
+        let t = ir(&src);
+        (t.matches("(*!").count(), t.matches("(*_").count())
+    };
+    assert_eq!(checked("    let n = ps.len();\n    print(n, p.x);"), (0, 3));
+    // 要素が動く・リストを丸ごと替える・関数に渡す・別の ref から替える、のあとは検査を残す
+    for body in [
+        "    ps.push(P { x: 3 });",
+        "    ps.sort_unstable_by((a, b) -> a.x < b.x);",
+        "    ps = [P { x: 9 }];",
+        "    bump(ref mut ps);",
+        "    let q = ref mut ps;\n    *q = [];",
+    ] {
+        let (c, _) = checked(body);
+        assert!(c >= 1, "{}", body);
+    }
+    // 引数の ref の先のリストでも同じ
+    let t = ir(&format!("{}fn set(ref mut P[] ps) {{\n    let p = ref mut ps[0];\n    p.x = 1;\n    p.x = p.x + 1;\n}}\nfn main() {{\n    let P[] mut ps = [P {{ x: 1 }}];\n    set(ref mut ps);\n}}", head));
+    assert_eq!(t.matches("(*!").count(), 0, "{}", t);
+}

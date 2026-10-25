@@ -2233,12 +2233,12 @@ pub struct Checker {
             mutable = false;
         } else if name == "drain" {
             ret = ty.Ty.List(own ty.cl(elem));
-        } else if name == "sort" {
-        } else if name == "sort_by" {
+        } else if name == "sort" || name == "sort_unstable" {
+        } else if name == "sort_by" || name == "sort_unstable_by" {
             want = 1;
         } else {
             return Err(diag.make("リストにメソッド `{name}` はありません").at(span,
-                "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)`・`join(sep)` です"));
+                "リストのメソッドは `len()`・`push(x)`・`pop()`・`insert(i, x)`・`remove(i)`・`reverse()`・`drain()`・`map(f)`・`filter(f)`・`sort()`・`sort_by(f)`・`sort_unstable()`・`sort_unstable_by(f)`・`join(sep)` です"));
         }
         if argv.len() != want {
             return Err(arity_error(name, want, argv.len(), span));
@@ -2246,7 +2246,7 @@ pub struct Checker {
         if mutable {
             require_mut(recv, rt, span, "リストを `{name}` で書き換えようとした")?;
         }
-        if name == "sort" {
+        if name == "sort" || name == "sort_unstable" {
             match satisfies(elem, ORDERED) {
                 case Ok(u) -> {}
                 case Err(why) -> return Err(diag.make("この要素は sort で並べられません")
@@ -2254,7 +2254,7 @@ pub struct Checker {
                     .with_note("並べ方を決める関数を渡す `sort_by((a, b) -> a.x < b.x)` を使ってください"));
             }
         }
-        if name == "sort_by" {
+        if name == "sort_by" || name == "sort_unstable_by" {
             // 比べる関数: 「a を b より前に置くか」。要素は読むだけで受け取る
             let v = view_ty(ty.cl(elem));
             let f = ty.Ty.Fn(own [ty.cl(v), v], own ty.Ty.Bool);
@@ -2768,7 +2768,7 @@ pub struct Checker {
         let rt = expr(recv)?;
         let inner = if ty.has_pointee(rt) { ty.inner(rt) } else { ty.cl(rt) };
         let k = ty.tag(inner);
-        if k == "Array" && (name == "sort" || name == "sort_by" || name == "map" || name == "filter") {
+        if k == "Array" && (name == "sort" || name == "sort_by" || name == "sort_unstable" || name == "sort_unstable_by" || name == "map" || name == "filter") {
             // 並べ替えは長さを変えないので、配列にも使える。map / filter は新しいリストを作る
             let el = ty.inner(inner);
             return list_method(recv, rt, el, name, argv, span);
@@ -2776,7 +2776,7 @@ pub struct Checker {
         if k == "Array" {
             if name != "len" || argv.len() > 0 {
                 return Err(diag.make("配列にメソッド `{name}` はありません")
-                    .at(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)`・`map(f)`・`filter(f)` だけです")
+                    .at(span, "配列のメソッドは `len()`（長さ）と `sort()`・`sort_by(f)`・`sort_unstable()`・`sort_unstable_by(f)`・`map(f)`・`filter(f)` だけです")
                     .with_note("伸び縮みさせたいなら、リスト `i64[]` を使ってください"));
             }
             return Ok(ty.i64t());
@@ -3026,8 +3026,19 @@ pub struct Checker {
                 }
             }
             case Deref(x) -> {
-                let outer = if is_place(x) { access(x)? } else { Access.Write };
                 let t = expr(x)?;
+                // 取り込んだ `ref mut` の先は書き換えられる（写しても同じ先を指す）
+                let mut captured_ref = false;
+                match ref x.kind {
+                    case Var(n) -> {
+                        match ref t {
+                            case Ref(r, m) -> { captured_ref = is_captured(n); }
+                            default -> {}
+                        }
+                    }
+                    default -> {}
+                }
+                let outer = if is_place(x) && !captured_ref { access(x)? } else { Access.Write };
                 Ok(through(outer, t, origin(x), describe(x)))
             }
             case Field(base, n) -> {
