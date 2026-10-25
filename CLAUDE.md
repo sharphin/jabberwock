@@ -233,7 +233,9 @@
   `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
 - IR の解析（`ir::analyze::analyze`）: 書き出しのあとに呼び、`Proj::Deref` の `Check` を書く（場所の最初の Deref だけ消せる）。
   事実は局所変数ごとに `Own`（own の持ち主）/ `RefTo(x)`（own 変数 x の先を指す）/ `RefSlot(x)`（変数 x のスロットを指す。再代入では消えない）/ `RefElem(x)`（x から届くリストの要素を指す。
-  要素が動きうる操作（リストの操作・呼び出し・組み込み・リストを持ちうる値の代入や drop）で `kill_elems` がまとめて消す。呼び出しの引数の根拠にはしない）/ `Pinned`。
+  要素が動きうる操作（リストの操作・呼び出し・組み込み・リストを持ちうる値の代入や drop）で `kill_elems` がまとめて消す。呼び出しの引数の根拠にはしない。
+  例外: 取り込みがなく、引数と戻り値がすべて数・小数・真偽・文字列・値なしの直接呼び出し（`scalar_call`。jwc/analyze.jw も同じ）は消さない。
+  根拠は「可変のグローバル変数がない」こと。グローバル・FFI・ポインタを作るキャストを足したら見直す。ref は may_hold_list が false でも対象外。docs/scalar-call-handoff.md）/ `Pinned`。
   前向きのデータフローで、合流は共通部分。引数が Pinned かは関数をまたいで固定点まで回す（呼ばれない関数・関数の値の引数は何も仮定しない）。
   **根拠: own 型の局所変数にはいつも own が入っている**（自動で借りた一時的な値・`for` の要素の写しは `ref` 型にする。exec が debug_assert で確かめる）。
   念のため copy_out の結果には Own を付けない（写しの own は取り出しでエラーになる）。
