@@ -33,6 +33,8 @@ Rust版は組み込みAPIで同じ構造を返す。単体jabberwockにも同じ
 | compiler | rustまたはjwc |
 | compiler-version | 製品の版の文字列。これだけで互換と判断しない |
 | protocols | 対応する連携プロトコル番号の配列。初期は実装済みなら[1] |
+| operations | 実装済みの登録操作IDのu32配列。重複・未知IDを拒否する |
+| capability-targets | fs等の能力名から実装・検証済みtarget配列への対応 |
 | modes | 実装済みのast、ir、llvmの配列。jwcの初期対応はllvmだけ |
 | host | compiler実体が動作するtargetの登録名 |
 | targets | このcompilerが生成を実装・検証したtargetの登録名の配列 |
@@ -118,7 +120,8 @@ entry-functionの既定はmain。関数別testでは入口module内のtest_関�
 元ソースをsnapshot上で書き換えず、compilerが選択した関数を呼ぶ内部の入口を生成する。
 この入口の生成で別moduleのprivate関数や資源の内部操作を呼ぶ権限は追加しない。
 操作とClockの効果はcompiler側の登録表から検証し、「副作用なし」という自己申告のキーを提供しない。
-requirementsのresource-abiは使用する資源がなければnullを許すが、必要な資源操作のABI検査を無効にできない。
+requirementsのresource-abiは新ABIの操作がなければnullを許すが、必要な資源/値codecのABI検査を無効にできない。
+ClockなどOS資源を所有しない新操作もABI 1を要求し、読み込むmoduleの操作が未実装なら実行前に拒否する。
 能力・ABI・登録表の不足を、最適化で使わないはずだという推測で無視しない。
 
 module記録はID、分類、所属package、公開ID、sourceの相対ファイル名・長さ・hash、診断用元パスを持つ。

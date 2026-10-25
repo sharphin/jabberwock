@@ -4,6 +4,7 @@
 Windows先行、ゲームにも使える描画基盤という合意に基づく。
 [全体方針](standard-libraries.md)、[共通資源管理](resource-management.md)、[alice拡張](alice-native.md) と整合させる。
 widget tree、配置、入力の消費、TSFとUI Automationの具体的な契約は [GUI内部仕様](gui-internals.md) に定める。
+公開名・型・引数順は [公開API](public-apis.md) と [v1公開契約](stdlib-v1-contracts.md) を正本とする。
 
 ## 構成と初期範囲
 
@@ -24,13 +25,13 @@ Linuxの公開APIはここで確定せず、Windows固有の型を公開しな�
 
 | API | 契約 |
 |---|---|
-| `create_window(options)` | `Result<Window, GuiError>`。title、論理サイズ、サイズ変更可否など |
+| `create_window(options)` | `Result<Window, WindowError>`。title、論理サイズ、サイズ変更可否など |
 | `Window.poll_events()` | 待たずに所有するEventBatchを返す。GUI資源の作成スレッドで呼ぶ |
 | `Window.wait_events(deadline)` | イベントまたは期限まで待つ。無限のbusy loopにしない |
 | `Window.info()` | 論理サイズ、物理描画サイズ、DPI倍率、フォーカス、最小化状態の値 |
 | `Window.request_redraw()` | 再描画の要求。即座にユーザーコードを呼び返さない |
 | `Window.close()` | 所有値を消費する。依存する描画を停止・無効化してから閉じる |
-| `create_renderer(window, options)` | `Result<Renderer, GuiError>`。Windowとの内部依存を記録 |
+| `create_renderer(window, options)` | `Result<Renderer, DrawError>`。Windowとの内部依存を記録 |
 | `Renderer.close()` / `Texture.close()` | 所有値を消費し、依存と世代の規則に従って解放 |
 | `create_text_layout(font, text, options)` | font設定と所有する文字からlayoutを作る。幅・サイズ・上限を検査 |
 | `Renderer.info()` | 選んだadapterの種類、feature level、描画上限などの値 |
@@ -46,7 +47,7 @@ Linuxの公開APIはここで確定せず、Windows固有の型を公開しな�
 | `GuiContext.close()` | GUIの所有値を消費。Window自体を閉じず、IME・focus・native連携を解除 |
 | `GuiContext.draw(frame)` | 同じWindowに属するFrameへGUIを描く |
 
-実際の公開名・構文は、資源型の導入時に仕様書へ反映する。
+Window/Draw/Guiのエラー型を分ける。その他の草案表記も公開API表のResultと返却型に従う。
 D3Dのdevice/context、COMポインタ、HWND、OSメッセージ番号は公開APIに含めない。
 
 ## スレッドとイベントの寿命

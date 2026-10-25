@@ -6,6 +6,7 @@
 設定ファイル全体の正式仕様は [aliceの設定仕様](alice-configuration.md) に定める。
 資源ABIとcompilerの受け渡しは [資源ABI詳細](resource-abi.md)、[compiler連携](compiler-integration.md) に定める。
 GUIのwidget・配置・入力・native連携は [GUI内部仕様](gui-internals.md) に定める。
+公開module/APIの正式な型は [公開API](public-apis.md)、catalog.jsonのschemaと登録表は [配布・登録仕様](catalog-registry.md) に従う。
 
 ## 現在の動作と維持するもの
 

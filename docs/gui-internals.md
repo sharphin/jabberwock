@@ -3,7 +3,7 @@
 状態: 実装前の設計。本書で選択する方式・API・上限は現行機能ではない。
 [描画・Windowの設計](gui-rendering.md)、[資源ABI](resource-abi.md)、[compiler連携](compiler-integration.md) に接続する。
 Windows 10 1809以降/Windows 11 x64を先行し、ゲームと共存できる保持型のGUIを定める。
-各操作のC symbol・操作ID・全ライブラリの宣言ファイルは、個別C ABI/公開APIの確定作業でそろえる。
+各操作のC symbol・操作ID・全ライブラリの型は [個別C ABI](native-operations.md)、[公開API](public-apis.md) と登録表に定める。
 
 ## 初期版で選ぶもの
 
@@ -57,7 +57,7 @@ treeや文字・propertyへのユーザーのref、OSのpointer、widgetを直�
 | 操作 | 戻り値と規則 |
 |---|---|
 | create_gui(ref mut Window, GuiOptions) | Result<GuiContext, GuiError>。二つ目のcontextはAlreadyAttached |
-| root() | NodeId。固定rootを返す |
+| root() | Result<NodeId, GuiError>。固定rootを返し、context失効も報告する |
 | create(parent, WidgetSpec, Layout, Semantics) | Result<NodeId, GuiError>。末尾へ追加 |
 | reparent(node, parent, index) / remove(node) | Result<(), GuiError>。原子的にtreeを変更 |
 | set_layout(node, Layout) / set_style(node, Style) | Result<(), GuiError>。対象kindも検査 |
@@ -81,8 +81,9 @@ Closed、Busy、Unsupported、NativeErrorを区別する。資源tokenの破損�
 NodeIdは普通の値なので、古いIDや異なるcontextのIDを渡す失敗はOSハンドル偽装と混同しない。
 
 GuiOptionsはThemeとGuiLimitsを持つ。既定のThemeはSystemとする。
-WidgetSpecはkindごとの初期値を持ち、Panelはblock_background、Row/Columnはgapとblock_background、Label/ButtonはtextとTextStyle、
-TextInputはinitial_text、placeholder、TextStyle、read_only、max_bytesを持つ。
+WidgetSpecはkindごとの初期値を持ち、Panelはblock_background、Row/Columnはgapとblock_background、Label/Buttonはtextと任意TextStyle、
+TextInputはinitial_text、任意TextStyle、placeholder/read_only/max_bytesをまとめたTextInputOptionsを持つ。
+style=Noneはkindの既定を使い、Someは明示した書式を尊重する。具体的なfield名は公開APIの登録表に従う。
 初期のTextInputは単一行で、max_bytesの既定は1048576、read_onlyはfalse、placeholderは空。
 set_textや初期値も同じ検査を通し、NUL・TAB・CR・LF・NEL・U+2028・U+2029を含むTextInputの確定textは拒否する。
 max_bytesを現在の確定textより小さくする変更は拒否する。read_onlyへの切替はcompositionを取消す。
@@ -103,7 +104,7 @@ TextInputのprogrammatic更新はcompositionを取消し、undo/redoを消去す
 | Align | Start、Center、End、Stretch |
 | Justify | Start、Center、End、SpaceBetween |
 | Visibility | Visible、Hidden、Collapsed |
-| TextStyle | SystemUiまたは指定family、任意size、Normal/Bold、NoWrap/WordWrap |
+| TextStyle | draw2d.TextStyle。SystemUiまたは指定family、任意size、Normal/Bold、NoWrap/WordWrap |
 | Style | System色または明示RGBAの背景・前景・borderと非負border幅 |
 | Semantics | 任意name/help/automation_id、任意labelled_by。roleはwidget kindから決まり、任意上書きしない |
 | Selection | anchor_utf8:u64、active_utf8:u64。方向を保持する |

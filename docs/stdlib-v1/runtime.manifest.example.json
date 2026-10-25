@@ -1,0 +1,52 @@
+[
+  {
+    "path": "runtime/jw_base.c",
+    "bytes": 42,
+    "sha256": "d626d21da4b2420109ce179bb315e543e34f7c5adb53b1a911d7f3fbe4ef4ee8"
+  },
+  {
+    "path": "runtime/jw_draw2d.c",
+    "bytes": 44,
+    "sha256": "9a79acab8899588dc458c1cfdc204a015bf4e9afd3b247edb89c4b78c3cbd3a1"
+  },
+  {
+    "path": "runtime/jw_fs.c",
+    "bytes": 40,
+    "sha256": "a921b6df12eab3f243fdbbbf71262f6ce70e03fe0d1a09d2f9fbb28b4932e500"
+  },
+  {
+    "path": "runtime/jw_gui.c",
+    "bytes": 41,
+    "sha256": "3ee6b292e2ba5f37b9fe3e4a4f8b1e3a1e95e3da0ae93b7e6740618b34d11bef"
+  },
+  {
+    "path": "runtime/jw_image.c",
+    "bytes": 43,
+    "sha256": "29aaa52bfe0f9058dcebb913f5b712628d40f7852cc9d7e73b4bc61d7bed1f2f"
+  },
+  {
+    "path": "runtime/jw_net.c",
+    "bytes": 41,
+    "sha256": "aa8c737aaf86b882ad7049c3dda558c533bc6433b1de2015255145cd73f825a4"
+  },
+  {
+    "path": "runtime/jw_pg.c",
+    "bytes": 40,
+    "sha256": "efe7c1ac940f66334e998aba17d940ffb6be74039deb6e918446a6447b63630d"
+  },
+  {
+    "path": "runtime/jw_tls.c",
+    "bytes": 41,
+    "sha256": "8fb7b215aada90185320d10ac8dbfa2dd14cc73236d684fb089d829815f6adb3"
+  },
+  {
+    "path": "runtime/jw_window.c",
+    "bytes": 44,
+    "sha256": "fa52dad383181d2592b7375f579ec9aef5a50528a0838ee6adee6f5b866c9990"
+  },
+  {
+    "path": "runtime/stdlib-abi-v1.h",
+    "bytes": 48,
+    "sha256": "0ef9808f97d948046fc5700a4d77b9803560fe506da9640a42b92f575a3667b1"
+  }
+]

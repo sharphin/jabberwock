@@ -4,6 +4,7 @@
 [標準ライブラリ全体の方針](standard-libraries.md) のPostgreSQL部分を具体化する。
 この文書の追加では、コンパイラ・alice・既存プログラムの動作を変更しない。
 関連する境界は [共通資源管理](resource-management.md) と [aliceのネイティブ依存](alice-native.md) に定める。
+型・引数・返却型は [公開API](public-apis.md)、初期adapter・認証・既定値・C境界は [v1公開契約](stdlib-v1-contracts.md) に具体化する。
 
 ## 目的と初期範囲
 
@@ -23,7 +24,7 @@ GUIではworker内で接続を作り、取得した値をchannelでGUIスレッ�
 接続プール、公開された非同期API、COPY、LISTEN/NOTIFY、大きなオブジェクト、名前付きprepared statement、
 ORM、自動マイグレーション、ネストしたトランザクションは初期範囲に含めない。
 libpq自体の対応範囲と、このライブラリが実際に検証した対応範囲は分けて記録する。
-初期CIはlibpq・PostgreSQL 16/17/18を候補とし、成功した構成だけを対応済みとする。
+初期clientはlibpq 18.xの対応版に絞り、server 16/17/18を結合試験の候補とする。成功した構成だけを対応済みとする。
 Windowsを利用者向けの先行環境とし、Linuxでも共通の接続処理・資源管理をCIで検証する。
 これはGUIのLinux対応を決めるものではない。
 
@@ -52,7 +53,7 @@ Rust版の配布バイナリはビルド時にこの接続処理を含められ�
 | `Connection.run(sql, params, options)` | `Result<QueryResult, PgError>`。接続は借用し、同時に実行できる操作は1つ |
 | `Connection.begin(options)` | 接続をムーブし、`Result<Transaction, BeginFailure>` |
 | `Transaction.run(sql, params, options)` | `Result<QueryResult, PgError>` |
-| `Transaction.commit()` / `rollback()` | Transactionをムーブし、`TxEnd` |
+| `Transaction.commit(deadline)` / `rollback(deadline)` | Transactionをムーブし、`TxEnd` |
 | `Connection.close()` | Connectionを消費する。以後その所有値・別名では利用できない |
 
 `run`はSELECTと更新を共通に扱う。SQLを既に実行した後で「行を返すSQLだったから失敗」とするAPIを避ける。
@@ -91,7 +92,8 @@ IPアドレスを使う場合も、そのIPに対する証明書検証を満た�
 平文を許す例外は、CI・開発用に明示した数値ループバックアドレスに限定する案とする。
 DNS名の `localhost` を文字列だけでループバックとして扱わない。
 
-libpqが参照するPG*環境変数・パスワードファイルなどの既定値を仕様に列挙する。
+v1はPG*環境変数が存在する場合に拒否し、非空passwordのSCRAM認証と明示TLSを使う。
+passfile・service・client certificate/GSSを初期の公開認証選択へ含めない。root.crl等のlibpq既定値の範囲もv1契約に記す。
 TLSなど安全性に関わる設定は明示値で固定し、環境変数で黙って弱められないよう試験する。
 プロセス全体の環境変数を書き換えて制御しない。
 passwordなどlibpqへC文字列で渡す値には埋め込みNULを認めず、長さとUTF-8の妥当性を境界で確認する。
@@ -102,7 +104,7 @@ passwordなどlibpqへC文字列で渡す値には埋め込みNULを認めず、
 `PQsendQueryParams`を使い、SQLと値を別々に渡す。SQLはUTF-8で、埋め込みNULを拒否する。
 1回の呼び出しは1つのSQLコマンドに限定する。セミコロンで複数の更新をまとめるAPIは提供しない。
 
-パラメータの初期型は以下を候補とする。
+v1のパラメータ型は以下とする。
 
 | パラメータ | PostgreSQL側での扱い |
 |---|---|
@@ -137,7 +139,7 @@ byteaは型OIDを確認して復号する。numeric、日時、JSONなどの元�
 - 受信したUTF-8が不正なら文字列として公開しない。部分的に作った結果も解放する。
 - コマンドタグと影響行数を保持する。行数がない場合と0行の場合を区別し、数値の上限を超えたら明示的に失敗する。
 
-行数・列数・合計バイト数には設定可能な上限を設ける。初期値の候補は10万行・1024列・合計64 MiBとし、
+行数・列数・合計バイト数には設定可能な上限を設ける。v1の初期値は10万行・1024列・合計64 MiBとし、
 加算・乗算があふれる前に判定する。上限到達時は接続を閉じ、操作結果が不明になりうることも返す。
 
 内部では送信直後にsingle-row modeを選び、行を順次回収して上限を検査する案とする。

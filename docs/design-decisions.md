@@ -716,3 +716,11 @@ let x = pick(true, 1, 2);
 - 日本語IMEはTSF、アクセシビリティはUI Automationを使い、native lock・別thread照会・遅い通知・終了時の寿命を扱う。
 - 通常入力とcomposition、UTF-8/UTF-16/graphemeを区別する。実機IME/Narratorの確認とmock/WARPの成功を分ける。
 - 初期GUIはWindows 10 1809以降/Windows 11 x64、TextInputは単一行。公開API全体と個別C操作の確定・実装完了は別に扱う。
+
+## 標準ライブラリ初期版の残り設計を具体化（未実装。2026-10-25）
+
+- [公開API](public-apis.md) の149操作・142型、[個別C ABI](native-operations.md)、[カタログ/登録表](catalog-registry.md) をまとめた。
+- registry.jsonを正本にCヘッダー・一覧・schema/例を生成し、参照・所有・ID・配置と契約lockの一致を検査する。
+- [公開契約](stdlib-v1-contracts.md) に部分進捗・COMMIT結果・所有受渡しとcodec、初期の既定値/上限を確定した。
+- Window/Draw/Guiのエラーを分け、TLSの期限付きclose、libpq 18/SCRAMの初期adapter、Unsupportedの範囲を明示した。
+- [設計範囲と実装への引渡し](stdlib-design-status.md) に実装・OS結合・実機確認の残りを区別した。設計検査の成功は機能実装の成功ではない。

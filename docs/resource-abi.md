@@ -3,6 +3,7 @@
 状態: 実装前の設計。[共通資源管理](resource-management.md) の型・値・検査を具体化する。
 ここで予約するABI番号1と型の表現は、現行compilerが対応したという意味ではない。
 [alice設定](alice-configuration.md) と [compiler連携](compiler-integration.md) に同じABIを渡す。
+個別の操作ID・Args/Outの完全な宣言は [個別C ABI](native-operations.md)、codecと結果の保持は [v1公開契約](stdlib-v1-contracts.md) に定める。
 
 ## 対象と既存の型
 
@@ -174,6 +175,8 @@ generationが一致しないtokenから過去のpayloadを復元したり、現�
 ABI/kind/thread/所有の不変条件違反は通常のOS失敗と混同せず、言語の実行時診断へ変換する。
 OS失敗・進捗・DBのoutcomeなどは、各操作の型付きの出力に保持する。status番号だけで再試行や未実行を判断しない。
 個別操作の引数と出力は同じ規則の版付き宣言を登録表で持ち、未定義な汎用voidポインタ引数列にはしない。
+通常の個別操作は専用Args/Outへのpointerを使い、複合値のsliceも宣言型ごとのcodecを必須とする。
+Outのvalid/progress/outcomeと所有slotを使い、statusが非0でも完全なTxEnd等の結果を失わない。
 
 呼び出し中だけ借りるbyte列はconst pointerとu64長を使い、長さ・null・確保範囲・OSの幅への変換を確認する。
 calleeは借りたpointerを保持しない。出力のbyte列はcaller所有の領域か、runtime所有のbufferと専用解放関数で返す。

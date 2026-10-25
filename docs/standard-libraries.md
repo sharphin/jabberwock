@@ -19,6 +19,11 @@
 
 | 対象 | 設計書 |
 |---|---|
+| 初期版の設計範囲・引渡し | [stdlib-design-status.md](stdlib-design-status.md) |
+| 公開API・型の正式定義 | [public-apis.md](public-apis.md) |
+| 個別操作のC ABI | [native-operations.md](native-operations.md) |
+| 既定値・codec・部分結果 | [stdlib-v1-contracts.md](stdlib-v1-contracts.md) |
+| カタログ・登録表と生成 | [catalog-registry.md](catalog-registry.md) |
 | 標準ライブラリの配置・読み込み | [standard-library-loading.md](standard-library-loading.md) |
 | aliceの正式な設定仕様 | [alice-configuration.md](alice-configuration.md) |
 | ファイル入出力 | [file-io.md](file-io.md) |

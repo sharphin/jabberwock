@@ -1,0 +1,224 @@
+{
+  "catalog_version": 1,
+  "catalog_kind": "design-example",
+  "distribution_id": "jabberwock-stdlib-v1-design",
+  "registry_sha256": "39082330c30f4be7c00d554aeddbabdcace84553147dac1d256833e9e8faa0be",
+  "runtime_sha256": "d30e5feb80e5616b4c89711d3f215a434636b41b1895603eefcc3f1f4d52b808",
+  "runtime_manifest": {
+    "path": "runtime/manifest.json",
+    "bytes": 1407,
+    "sha256": "28e0e83839de44d72ca555b6b88a3f466abc8f8ad92fb16b8a9a3ef21d4dc2c3"
+  },
+  "resource_abi": 1,
+  "targets": [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc"
+  ],
+  "modules": [
+    {
+      "id": "std.fs",
+      "visibility": "public",
+      "source": {
+        "path": "std/fs.jw",
+        "bytes": 34,
+        "sha256": "c54a628384735a2a28122077a3c30790a2349eee27ec361f949e1ad40f008ce6"
+      },
+      "imports": [
+        "std._value"
+      ],
+      "allowed_importers": [],
+      "capabilities": [
+        "fs"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "id": "std.time",
+      "visibility": "public",
+      "source": {
+        "path": "std/time.jw",
+        "bytes": 36,
+        "sha256": "e21f885f60055626d2b9237c26fdb95cc55fd3931cf73c71cb76a738e3e34667"
+      },
+      "imports": [
+        "std._value"
+      ],
+      "allowed_importers": [],
+      "capabilities": [],
+      "resource_abi": 1
+    },
+    {
+      "id": "std.net",
+      "visibility": "public",
+      "source": {
+        "path": "std/net.jw",
+        "bytes": 35,
+        "sha256": "8fbc3361d628b03d8a3b97bf6a55607442d8e7c8215478b380d4325a6b47bfa9"
+      },
+      "imports": [
+        "std.time",
+        "std._value"
+      ],
+      "allowed_importers": [],
+      "capabilities": [
+        "net"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "id": "std.tls",
+      "visibility": "public",
+      "source": {
+        "path": "std/tls.jw",
+        "bytes": 35,
+        "sha256": "f480d2cf042ba98ac9fa611f02d9b4fbcb13b292ae2fddca307d34ec09fe9dba"
+      },
+      "imports": [
+        "std.net",
+        "std.time",
+        "std._value"
+      ],
+      "allowed_importers": [],
+      "capabilities": [
+        "net",
+        "tls_client"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "id": "std._value",
+      "visibility": "private",
+      "source": {
+        "path": "std/_value.jw",
+        "bytes": 38,
+        "sha256": "3ca0f2a1552e03e2260244a9b976893ff1769563d7cac679541cc6fa10e1c7d2"
+      },
+      "imports": [],
+      "allowed_importers": [
+        "std.fs",
+        "std.time",
+        "std.net",
+        "std.tls"
+      ],
+      "capabilities": [],
+      "resource_abi": 1
+    }
+  ],
+  "packages": [
+    {
+      "name": "postgres",
+      "root": "packages/postgres",
+      "manifest": {
+        "path": "packages/postgres/alice.toml",
+        "bytes": 53,
+        "sha256": "03ae4d8191dbb4e5178fa4cabb376e923349a60cc76bf86e66cbafcf3380f422"
+      },
+      "entry": {
+        "path": "packages/postgres/src/lib.jw",
+        "bytes": 53,
+        "sha256": "759a9490378b229e769d7b22e12599ae6fb63f62a3a880aecfb403fb841b8deb"
+      },
+      "dependencies": [],
+      "standard_modules": [
+        "std.fs",
+        "std.time"
+      ],
+      "capabilities": [
+        "postgres"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "name": "window",
+      "root": "packages/window",
+      "manifest": {
+        "path": "packages/window/alice.toml",
+        "bytes": 51,
+        "sha256": "0f95ca775cf9af861768a5ae42c3a18ec1df4d55cb388308e699da69bdfcb2ef"
+      },
+      "entry": {
+        "path": "packages/window/src/lib.jw",
+        "bytes": 51,
+        "sha256": "64bcc1f1afbfb3be160b1192dd9d44e288ff0185a2c653b99c79bcf1dc5a0198"
+      },
+      "dependencies": [],
+      "standard_modules": [
+        "std.time"
+      ],
+      "capabilities": [
+        "window"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "name": "draw2d",
+      "root": "packages/draw2d",
+      "manifest": {
+        "path": "packages/draw2d/alice.toml",
+        "bytes": 51,
+        "sha256": "41ec4936aed45845fc3624f49be545970db45eb2c16252294c345a5d2ec6be7d"
+      },
+      "entry": {
+        "path": "packages/draw2d/src/lib.jw",
+        "bytes": 51,
+        "sha256": "79b8f8bbc4d793a7fd05d4eaae4e14bab0a54729a13b2cb2f1a9fdd3478eef2b"
+      },
+      "dependencies": [
+        "window"
+      ],
+      "standard_modules": [],
+      "capabilities": [
+        "draw2d"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "name": "image",
+      "root": "packages/image",
+      "manifest": {
+        "path": "packages/image/alice.toml",
+        "bytes": 50,
+        "sha256": "26a7d1e608b5a55aa9b8f8d32b9a636588d926c3babd8f7b646bc391ef0c6d41"
+      },
+      "entry": {
+        "path": "packages/image/src/lib.jw",
+        "bytes": 50,
+        "sha256": "75478cd26a5c679663ab922534166b52b17322269a507d9e8f5f3d19cec5ca34"
+      },
+      "dependencies": [],
+      "standard_modules": [
+        "std.fs"
+      ],
+      "capabilities": [
+        "image"
+      ],
+      "resource_abi": 1
+    },
+    {
+      "name": "gui",
+      "root": "packages/gui",
+      "manifest": {
+        "path": "packages/gui/alice.toml",
+        "bytes": 48,
+        "sha256": "4fc7851e652d033541be5295035f61e50a9f163e1415c35541e3503c3e3a04fc"
+      },
+      "entry": {
+        "path": "packages/gui/src/lib.jw",
+        "bytes": 48,
+        "sha256": "58b0209768de04930b78c5e16a477f2c46009522b766601de0544ab3e1a076eb"
+      },
+      "dependencies": [
+        "window",
+        "draw2d"
+      ],
+      "standard_modules": [
+        "std.time"
+      ],
+      "capabilities": [
+        "gui"
+      ],
+      "resource_abi": 1
+    }
+  ],
+  "stdlib_build_id": "c1251c2e8cc153bed43ad7eef12807f3fc6ba870ea484221f610aa770069f811"
+}

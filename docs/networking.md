@@ -3,6 +3,7 @@
 状態: 実装前の設計。型・API・設定は提案であり、既存機能ではない。
 [全体方針](standard-libraries.md)、[共通資源管理](resource-management.md) に従う。
 Windowsを先行し、Linuxで共通処理の検証も行う。任意の外部Rustクレートや独自TLSを追加しない。
+v1の正式名・型・引数順は [公開API](public-apis.md)、既定値・上限と所有の失敗契約は [公開契約](stdlib-v1-contracts.md) に定める。
 
 ## 初期範囲
 
@@ -37,7 +38,7 @@ libpqのTLSと本ライブラリのTLSでは、信頼する証明書の取得方
 | `TlsStream.read` / `write` / `write_all` / `close` | 認証された平文の入出力。生のソケットは公開しない |
 
 max_bytesは正の上限内に制限する。read_exact(0)は空で成功し、空のwriteは0で成功する。
-readの初期上限の候補は64 KiB。read_exactの一括確保には別の明示的な上限を設ける。
+v1のread上限は64 KiB、read_exactは64 MiBとする。
 ホスト名とportは別項目にする。portの縮小変換前に範囲検査し、IPv6を単純なコロン分割で壊さない。
 
 ## 接続とDNS
@@ -110,7 +111,8 @@ WindowsはSchannelとOSの証明書検証を第一案とする。
 TLS 1.2以上を必須とし、TLS 1.3はOSが対応し実際に検証できた構成で利用する。
 プロトコル、暗号、証明書のchain・期限・接続先名の検証を自作しない。
 既定でWindowsの信頼ストアを使い、証明書検証を無効にする一般向けのスイッチを初期APIへ設けない。
-Linux向けTLSの基盤は別途選定し、未実装なら明確にUnsupportedを返す。
+Linux向けTLSは初期版ではUnsupportedとする。backendの追加は後の範囲として別に設計・検証する。
+公開入口はstd.tls.connect/start_tls、明示closeにはDeadlineを渡す。dropでclose_notify成功は保証しない。
 
 - handshakeから通常の送受信まで、SSPIが示す入出力状態と、残りの暗号化バイト列を保持する。
 - 不完全なTLSレコードをエラーや平文EOFと決めつけない。複数レコードを1回のreadで受けることも扱う。
