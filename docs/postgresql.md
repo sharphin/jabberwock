@@ -3,6 +3,7 @@
 状態: 実装前の設計。API名・型名・配置先は提案であり、利用可能な機能ではない。
 [標準ライブラリ全体の方針](standard-libraries.md) のPostgreSQL部分を具体化する。
 この文書の追加では、コンパイラ・alice・既存プログラムの動作を変更しない。
+関連する境界は [共通資源管理](resource-management.md) と [aliceのネイティブ依存](alice-native.md) に定める。
 
 ## 目的と初期範囲
 

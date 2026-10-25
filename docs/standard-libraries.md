@@ -13,6 +13,21 @@
 ここから先の細部は実装方針の提案。公開APIと配布方法は実装時に仕様書へ反映する。
 最初の対応環境はWindows 10/11の64ビットを想定する。
 
+## 個別設計書
+
+以下はすべて実装前の設計。API名・設定・試験条件を定義するもので、機能を提供済みという意味ではない。
+
+| 対象 | 設計書 |
+|---|---|
+| ファイル入出力 | [file-io.md](file-io.md) |
+| 通信 | [networking.md](networking.md) |
+| 共通資源管理 | [resource-management.md](resource-management.md) |
+| aliceの拡張 | [alice-native.md](alice-native.md) |
+| GUI・描画詳細 | [gui-rendering.md](gui-rendering.md) |
+| PostgreSQL | [postgresql.md](postgresql.md) |
+
+設計書はこの一覧から参照できる。実装は資源管理・ビルド基盤を先に整え、各個別設計の完了条件に従う。
+
 ## 現在の実装との差
 
 | 対象 | 現在あるもの | 新しく必要なもの |

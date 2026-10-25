@@ -679,3 +679,11 @@ let x = pick(true, 1, 2);
 - libpqを使う案で、接続・パラメータ・NULL/bytea・トランザクション・配布・検証条件を具体化した。
 - TransactionがConnectionを所有し、COMMITの結果が分からない場合はUnknownとして返す。SQLは自動再実行しない。
 - 詳細は [postgresql.md](postgresql.md)。記載したAPI・設定・機能を実装済みとは扱わない。
+
+## 外部ライブラリの個別設計書（未実装。2026-10-25）
+
+- [ファイル入出力](file-io.md)、[通信](networking.md)、[共通資源管理](resource-management.md)、
+  [alice拡張](alice-native.md)、[GUI・描画詳細](gui-rendering.md) を順に設計した。
+- 公開API、所有と解放、失敗時の状態、OS依存、実行器への影響、完了条件を記録する。
+- [全体方針](standard-libraries.md) を入口とし、[PostgreSQL](postgresql.md) とも所有・期限・配布の契約を合わせる。
+- 設計書の完成と機能の実装・検証の完了を区別する。ここで新しい文法・ABI・実行時機能を追加したわけではない。
