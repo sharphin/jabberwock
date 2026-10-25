@@ -2,6 +2,7 @@
 name = "jabberwock"
 version = "0.1.0"
 edition = "2021"
+default-run = "jabberwock"
 description = "own と世代付き ref だけで安全を目指す小さな言語の核"
 
 [lib]
