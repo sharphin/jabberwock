@@ -50,6 +50,6 @@ int main(int argc, char **argv) {
     }
     qsort(t, (size_t)n, sizeof(double), cmp);
     double med = n % 2 ? t[n / 2] : (t[n / 2 - 1] + t[n / 2]) / 2;
-    printf("%.3f %.3f %.3f %.1f\n", t[0], med, t[n - 1], (double)rss / 1024.0);
+    printf("%.6f %.6f %.6f %.1f\n", t[0], med, t[n - 1], (double)rss / 1024.0);
     return 0;
 }
