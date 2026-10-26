@@ -12,6 +12,17 @@ class BenchmarkReportTests(unittest.TestCase):
     def test_targets_exactly_four(self):
         self.assertEqual(bench.TARGETS, ("jwc", "rust", "cpp", "go"))
 
+    def test_rounds_cover_all_four_subjects_without_fixed_first(self):
+        self.assertEqual(len(bench.TARGETS), 4)
+        orders = [bench.rotated_targets(i) for i in range(8)]
+        self.assertTrue(all(set(order) == set(bench.TARGETS) for order in orders))
+        self.assertEqual({order[0] for order in orders[:4]}, set(bench.TARGETS))
+
+    def test_any_repetition_output_drift_is_rejected(self):
+        self.assertTrue(bench.stable_output(["a", "a", "a"]))
+        self.assertFalse(bench.stable_output(["a", "b", "a"]))
+        self.assertFalse(bench.stable_output([]))
+
     def test_measure_parser(self):
         result = bench.parse_measure("0.12 0.15 0.20 4.5")
         self.assertEqual(result["median_s"], 0.15)
