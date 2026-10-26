@@ -521,7 +521,8 @@ impl<'p> Module<'p> {
             Ty::Fn(..) => (16, 8),
             Ty::Array(x, n) => {
                 let (s, a) = self.size_align(x)?;
-                (ceil_div(s, a) * a * n, a)
+                (ceil_div(s, a).checked_mul(a).and_then(|v| v.checked_mul(*n))
+                    .ok_or_else(|| format!("配列型 `{}` のサイズがオーバーフローしました", t.show()))?, a)
             }
             Ty::Struct(name, fs) if name.is_empty() => self.layout(fs)?,
             Ty::Struct(..) => {
@@ -535,7 +536,8 @@ impl<'p> Module<'p> {
                     let (s, _) = self.layout(&fs)?;
                     k = k.max(ceil_div(s, 8));
                 }
-                (8 + 8 * k, 8)
+                (k.checked_mul(8).and_then(|v| v.checked_add(8))
+                    .ok_or_else(|| format!("enum `{}` のサイズがオーバーフローしました", t.show()))?, 8)
             }
             _ => return Err(format!("型 {} の大きさ", t.show())),
         })
@@ -545,10 +547,13 @@ impl<'p> Module<'p> {
         let (mut off, mut al) = (0u64, 1u64);
         for f in fs {
             let (s, a) = self.size_align(f)?;
-            off = ceil_div(off, a) * a + s;
+            off = ceil_div(off, a).checked_mul(a)
+                .and_then(|v| v.checked_add(s))
+                .ok_or_else(|| "構造体のサイズがオーバーフローしました".to_string())?;
             al = al.max(a);
         }
-        Ok((ceil_div(off, al) * al, al))
+        Ok((ceil_div(off, al).checked_mul(al)
+            .ok_or_else(|| "構造体のアラインメント計算がオーバーフローしました".to_string())?, al))
     }
 
     /// 型の大きさ（LLVM の定数式）
@@ -4148,7 +4153,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
 // u64::div_ceil は Rust 1.73 から（1.65 で動かすため自前）
 #[allow(clippy::manual_div_ceil)]
 fn ceil_div(a: u64, b: u64) -> u64 {
-    (a + b - 1) / b
+    a / b + u64::from(a % b != 0)
 }
 
 fn ext(t: IntTy) -> &'static str {
