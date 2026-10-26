@@ -58,6 +58,18 @@ class LocalVerifierTests(unittest.TestCase):
         p["run_status"] = "RUNNING"
         self.assertEqual(verify.judge(p, f)["status"], "NOT_PROVEN")
 
+    def test_stage_failures_are_not_collapsed_into_generic_unproved(self):
+        p, f = fixture()
+        p["items"][0]["status"] = "FAIL"
+        self.assertEqual(verify.judge(p, f)["status"], "PROBE_FAILURE")
+        p["items"][0]["status"] = "NOT_RUN"
+        self.assertEqual(verify.judge(p, f)["status"], "NOT_RUN")
+        p["items"][0]["status"] = "PROBES_PASS_ONLY"
+        f["goals"][0]["proof_check"]["status"] = "STALE"
+        self.assertEqual(verify.judge(p, f)["status"], "PROOF_STALE")
+        f["goals"][0]["proof_check"]["status"] = "FAIL"
+        self.assertEqual(verify.judge(p, f)["status"], "PROOF_CHECK_FAILURE")
+
     def test_kernel_only_is_never_formal_acceptance(self):
         p, f = fixture()
         for x in p["items"]:
