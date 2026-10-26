@@ -19,3 +19,28 @@ jobs:
         run: cargo build --release
       - name: 検査の数を比べる
         run: bench/checks.sh
+
+  jwc-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q clang lld
+          rustc --version
+          cargo --version
+          clang++ --version
+      - name: Compile and measure jwc / Rust / C++ independently
+        run: python scripts/benchmark_report.py --cases fib --runs 2
+      - name: Retain benchmark diagnostic JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jwc-benchmark-smoke
+          path: target/benchmark-report.json
+          if-no-files-found: warn
