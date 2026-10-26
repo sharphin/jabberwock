@@ -33,8 +33,8 @@ def fixture(path, *, imports=None, exported=None, forwarder=None):
     if imports:
         dll,symbol=imports
         u32(0x98+120,0x1200); u32(0x98+124,40)
-        u32(0x400,0x1250); u32(0x40c,0x1240); u32(0x410,0x1250)
-        string(0x440,dll)
+        u32(0x400,0x1250); u32(0x40c,0x1300); u32(0x410,0x1250)
+        string(0x500,dll)
         struct.pack_into('<Q',data,0x450,(1<<63)|int(symbol[1:]) if symbol.startswith('#') else 0x1280)
         if not symbol.startswith('#'): string(0x482,symbol)
     path.write_bytes(data)

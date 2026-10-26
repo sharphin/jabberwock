@@ -18,7 +18,7 @@ def catalog(target, scale, work, compilers=COMPILERS):
     if target == "windows":
         diagnostic = work / "windows-asan-diagnostic.json"
         preflight = safety.probe("windows-asan-preflight", [],
-                            [sys.executable, "scripts/check_windows_asan.py", "--output", str(diagnostic)], clang=True, timeout=360)
+                            [sys.executable, "scripts/check_windows_asan.py", "--output", str(diagnostic)], clang=True, timeout=420)
         preflight["case_report"] = str(diagnostic)
         preparations.append(preflight)
     result = []
@@ -104,4 +104,5 @@ def catalog(target, scale, work, compilers=COMPILERS):
         p.setdefault("dependencies", [])
         if target == "windows" and p.get("compiler") and ("address" in p["name"] or "-fuzz-" in p["name"]):
             p["dependencies"].append("windows-asan-preflight")
+            p["runtime_environment_from"] = "windows-asan-preflight"
     return preparations, result
