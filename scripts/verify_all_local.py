@@ -56,6 +56,26 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
             "required_formal": len(expected_goals),
             "reason": "No independent whole-implementation acceptance verifier exists; report strings are not proof"}
 
+def practical_command_for(os_name: str, path: Path) -> list[str]:
+    if os_name == "windows":
+        return ["cmd", "/d", "/c", str(ROOT / "scripts/safety_windows.cmd"),
+                "--compiler", "all", "--output", str(path)]
+    if os_name == "linux":
+        return [sys.executable, str(ROOT / "scripts/safety_linux.py"),
+                "--compiler", "all", "--output", str(path)]
+    raise ValueError("unsupported OS")
+
+
+def formal_environment_for(os_name: str) -> dict[str, str]:
+    env = dict(os.environ)
+    if os_name == "windows":
+        # The safety batch file initializes a child shell only; its PATH does
+        # not propagate back to this process before the independent Lean run.
+        home = Path.home()
+        prefixes = [home / ".elan" / "bin", home / ".cargo" / "bin"]
+        env["PATH"] = os.pathsep.join(str(p) for p in prefixes) + os.pathsep + env.get("PATH", "")
+    return env
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -69,11 +89,7 @@ def main() -> int:
     practical_path = args.practical or ROOT / "target" / ("safety-" + os_name + "-report.json")
     formal_path = args.formal or ROOT / "target/formal-report.json"
     executed = []
-    practical_command = (["cmd", "/d", "/c", str(ROOT / "scripts/safety_windows.cmd"),
-                          "--compiler", "all", "--output", str(practical_path)]
-                         if os_name == "windows" else
-                         [sys.executable, str(ROOT / "scripts/safety_linux.py"),
-                          "--compiler", "all", "--output", str(practical_path)])
+    practical_command = practical_command_for(os_name, practical_path)
     for supplied, label, command in (
         (args.practical, "practical", practical_command),
         (args.formal, "formal", [sys.executable, str(ROOT / "scripts/formal_report.py"),
@@ -86,7 +102,8 @@ def main() -> int:
                 executed.append({"stage": label, "error": "cannot remove stale report: " + str(exc)})
                 continue
             try:
-                result = subprocess.run(command, cwd=ROOT, timeout=86400)
+                result = subprocess.run(command, cwd=ROOT, timeout=86400,
+                                        env=formal_environment_for(os_name))
                 executed.append({"stage": label, "exit_code": result.returncode})
             except (OSError, subprocess.TimeoutExpired) as exc:
                 executed.append({"stage": label, "error": str(exc)})
