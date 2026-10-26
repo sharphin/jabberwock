@@ -1,0 +1,46 @@
+name: formal-spec
+
+on:
+  push:
+    branches: [main, safety-ci-resume]
+    paths:
+      - 'formal/**'
+      - 'scripts/check_formal.py'
+      - 'docs/formal-semantics.md'
+      - 'docs/spec.md'
+      - '.github/workflows/formal-spec.yml'
+  pull_request:
+    paths:
+      - 'formal/**'
+      - 'scripts/check_formal.py'
+      - 'docs/formal-semantics.md'
+      - 'docs/spec.md'
+      - '.github/workflows/formal-spec.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-generation-and-moves:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Lean 4 release
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/lean-4.24.0-linux.tar.zst"
+          lean_root="$RUNNER_TEMP/jabberwock-lean4"
+          curl --fail --location --silent --show-error --retry 3 --max-time 300 \
+            -o "$archive" https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.tar.zst
+          printf '%s  %s\n' b14f5e5159219dd1a1956c3b806813319f5e94ccd5bdfd56f54520609a5bb5ec "$archive" | sha256sum -c -
+          mkdir -p "$lean_root"
+          tar --zstd -xf "$archive" -C "$lean_root" --strip-components=1
+          printf '%s\n' "$lean_root/bin" >> "$GITHUB_PATH"
+      - name: Check proofs and audit theorem axioms
+        run: python scripts/check_formal.py
