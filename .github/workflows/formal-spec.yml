@@ -6,6 +6,8 @@ on:
     paths:
       - 'formal/**'
       - 'scripts/check_formal.py'
+      - 'scripts/formal_report.py'
+      - 'scripts/test_formal_report.py'
       - 'docs/formal-semantics.md'
       - 'docs/spec.md'
       - '.github/workflows/formal-spec.yml'
@@ -42,5 +44,16 @@ jobs:
           mkdir -p "$lean_root"
           tar --zstd -xf "$archive" -C "$lean_root" --strip-components=1
           printf '%s\n' "$lean_root/bin" >> "$GITHUB_PATH"
+      - name: Validate report unit tests
+        run: python -m unittest discover -s scripts -p test_formal_report.py
       - name: Check proofs and audit theorem axioms
         run: python scripts/check_formal.py
+      - name: Audit jwc and Rust proof obligations independently
+        run: python scripts/formal_report.py --compiler all --output target/formal-report.json
+      - name: Upload formal proof audit even if incomplete
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-proof-audit
+          path: target/formal-report.json
+          if-no-files-found: warn
