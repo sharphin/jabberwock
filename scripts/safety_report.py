@@ -341,6 +341,7 @@ def main(argv=None, *, target_os=None) -> int:
                             ("FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED")]
                 unavailable = [x["name"] for x in results if x["status"] in ("NOT_RUN", "PLANNED")]
                 status = ("FAIL" if problems else "NOT_RUN" if pending or unavailable or not results
+                          or any(x["status"] != "PROBE_PASS" for x in results)
                           else "PROBES_PASS_ONLY")
                 report["items"].append({"item": n, "name": safety.NAMES[n],
                                         "status": "PLANNED" if args.dry_run else status,
