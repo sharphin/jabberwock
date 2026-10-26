@@ -329,3 +329,10 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 ## 安全性検査の作業メモ
 
 jwcを最優先に12項目×コンパイラ＋5目標の実用検査を分離。形式証明は `scripts/formal_report.py`。仕様と未検証範囲は `docs/compiler-safety-matrix.md`。テスト実行は利用者が担当し、結果から修正・PRを行う。今回の改修は未実行。
+
+### 項目3・4・6の検出器（暫定）
+
+既存ツールによる対応は仮。後でJabberwock専用の競合・未定義動作・未初期化検出器を実装する。
+WindowsはInspector/UBSan+LLVM verifier/Dr. Memoryの接続口、LinuxはTSan/UBSan+LLVM verifier/MSan。
+未導入・非対応・負例検出失敗を合格にしない。詳細と実行コマンドは `docs/provisional-detectors.md`。
+専用版は暫定版との検出能力比較後に置き換え、コンパイラ別12項目と5目標の区別を保つ。

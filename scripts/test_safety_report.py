@@ -191,13 +191,14 @@ class SafetyReportTests(unittest.TestCase):
             root = Path(d)
             for target in ("windows", "linux"):
                 with mock.patch.object(report, "ROOT", root), \
+                     mock.patch.object(report.safety_compilers.detectors, "executable", return_value=None), \
                      mock.patch.object(report.suites, "host_os", return_value=target), \
                      mock.patch.object(report, "version", return_value="recorded-version"), \
                      mock.patch.object(report, "run_probe", side_effect=fake_probe), \
                      contextlib.redirect_stdout(io.StringIO()):
                     code = report.main([], target_os=target)
                 data = json.loads((root / "target" / ("safety-" + target + "-report.json")).read_text(encoding="utf-8"))
-                self.assertEqual(code, 1 if target == "windows" else 0)
+                self.assertEqual(code, 1)  # missing detectors stay NOT_RUN on both OSes
                 self.assertEqual(data["suite"]["id"], target + "-compiler-matrix")
                 self.assertEqual([i["item"] for i in data["items"]], list(range(1, 13)) * 2)
                 self.assertEqual(len({i["id"] for i in data["items"]}), 24)

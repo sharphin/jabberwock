@@ -35,10 +35,10 @@ jwc検査が終わってからRust版を検査する。各プローブの開始�
 |---|---|---|
 |1 検査省略|当該コンパイラのchecked/elided LLVM、仕様期待値、fuzz|全IR命令と制御フロー|
 |2 型の通る攻撃|無効参照・境界・型拒否・ASan・退役負例|全公開機能の攻撃パターン|
-|3 データ競合|スレッド/所有権移動/channel、Linux TSanと検出器負例|全共有経路、Windows検出器|
-|4 LLVM未定義動作|数値・境界期待値、Linux UBSan|LLVM poison/undef・属性・alias（UBSanでは網羅しない）|
+|3 データ競合|スレッド/所有権移動/channel、Linux TSan・Windows暫定Inspectorと負例|全共有経路、専用検出器|
+|4 LLVM未定義動作|数値・境界期待値、暫定UBSan＋LLVM verifier|LLVM poison/undef・属性・alias（UBSanでは網羅しない）|
 |5 最適化|O1/O2+LTO、検査省略あり/なし、ASan fuzz|サポートする全構成|
-|6 未初期化|Linux MSanと当該コンパイラLLVMの負例|Windows検出器、全生成経路|
+|6 未初期化|Linux MSan・Windows暫定Dr. Memoryと当該コンパイラLLVMの負例|専用検出器、全生成経路|
 |7 自己ホスト|jwc stage1→2→3、LLVM一致、生成物実行。Rust側はbootstrap元の回帰|stage2/3への全検査適用|
 |8 資源枯渇|runtime malloc/calloc/reallocのN回目失敗注入、Linux資源制限|コンパイラ内部・スレッド・スタック・OS資源|
 |9 巨大配列型|各コンパイラの型境界・上限内/外|全入れ子型・レイアウト演算|
@@ -100,3 +100,5 @@ Rust CLIの `--no-elide --ll` が以前はフラグを無視していたため�
 `formal/compilers/<compiler>/obligations.json` に実装ソースhash、局所的な証明範囲と除外範囲、定理入口を記録する。
 名前空間は `JabberwockFormal.Jwc.*` と `JabberwockFormal.Rust.*`。
 別コンパイラの定理や古い実装hashの証明を流用しない。hashの一致だけでは実装との同値性を証明しない。
+
+項目3・4・6には [既存ツールによる暫定検出器](provisional-detectors.md) を接続。後で専用検出器を実装して置き換える方針。未導入や検出能力未確認を合格にはしない。

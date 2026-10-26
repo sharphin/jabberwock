@@ -314,3 +314,5 @@ cargo run --release -- build -o jwc1 jwc/main.jw   # Rust 版で 1 代目の jwc
 3. パッケージ（`alice`）: 手元の依存先だけはできた（docs/packages.md）。ネットからの取得・版の指定と、標準ライブラリ
 
 Windows ASanの起動エラーは [DLL診断](docs/windows-asan-diagnostics.md) を参照。診断情報は通常の安全性JSONにも含まれる。
+
+項目3・4・6には [既存ツールによる暫定検出器](docs/provisional-detectors.md) を接続。後で専用検出器を実装して置き換える方針。未導入や検出能力未確認を合格にはしない。

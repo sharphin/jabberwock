@@ -3,6 +3,7 @@ import sys
 import local_safety as safety
 from safety_platforms import executable, missing
 from compiler_contracts import CASES, GOAL_CASES
+import provisional_detectors as detectors
 
 COMPILERS = ("jwc", "rust")
 
@@ -48,9 +49,17 @@ def catalog(target, scale, work, compilers=COMPILERS):
         for mode, items in [("contracts", [1,2,3,4,5,9,10,11,12]), ("address", [2,5,11]),
                             ("allocation", [8,11]), ("thread", [3]), ("memory", [6]), ("undefined", [4])]:
             if target == "windows" and mode in ("thread", "memory", "undefined"):
-                p = missing(subject + "-" + mode, items, "Windows " + mode + " detector is not implemented")
-                p.update(compiler=subject, dependencies=[])
-                result.append(p)
+                detector = {"thread": "inspector", "memory": "drmemory", "undefined": "ubsan"}[mode]
+                if detectors.executable(detector):
+                    p = add(mode, items, [sys.executable, "scripts/check_external_detector.py", "--subject", subject,
+                            "--compiler", str(compiler), "--detector", detector], nested=True, timeout=14400)
+                    p["required_case_ids"] = detectors.expected_ids(detector)
+                else:
+                    variable, command = detectors.TOOLS[detector]
+                    p = missing(subject + "-" + mode, items, "Provisional " + detector + " unavailable; install/configure " + variable + " (" + command + ")")
+                    p.update(compiler=subject, dependencies=[])
+                    result.append(p)
+                p["provisional_detector"] = {"tool": detector, "replacement": "dedicated Jabberwock detector planned"}
                 continue
             p = add(mode, items, [sys.executable, "scripts/check_compiler_contracts.py", "--subject", subject,
                                   "--compiler", str(compiler), "--profile", "release", "--mode", mode], nested=True)
@@ -64,6 +73,15 @@ def catalog(target, scale, work, compilers=COMPILERS):
                     ["cargo", "test", "--test", "sanitizers", "generated_llvm_is_instrumented", "--", "--exact", "--nocapture"],
                     extra={"JW_CFLAGS": "-fsanitize=" + mode})
                 negative["required_test_names"] = ["generated_llvm_is_instrumented"]
+        if detectors.executable("llvm"):
+            p = add("llvm-verifier", [4], [sys.executable, "scripts/check_external_detector.py", "--subject", subject,
+                    "--compiler", str(compiler), "--detector", "llvm"], nested=True)
+            p["required_case_ids"] = detectors.expected_ids("llvm")
+        else:
+            p = missing(subject + "-llvm-verifier", [4], "LLVM opt unavailable; configure JW_OPT")
+            p.update(compiler=subject, dependencies=[])
+            result.append(p)
+        p["provisional_detector"] = {"tool": "LLVM verifier", "replacement": "dedicated Jabberwock detector planned"}
         if target == "linux":
             p = add("undefined-negative", [4], ["cargo", "test", "--test", "sanitizers",
                     "c_runtime_instrumentation_detects_races_and_undefined_behavior", "--", "--exact", "--nocapture"],
@@ -102,6 +120,8 @@ def catalog(target, scale, work, compilers=COMPILERS):
     for p in preparations + result:
         p["target_os"] = target
         p.setdefault("dependencies", [])
+        if target == "linux" and any(p["name"].endswith("-" + suffix) for suffix in ("thread", "memory", "undefined", "thread-negative", "memory-negative", "undefined-negative")):
+            p["provisional_detector"] = {"tool": "LLVM sanitizer", "replacement": "dedicated Jabberwock detector planned"}
         if target == "windows" and p.get("compiler") and ("address" in p["name"] or "-fuzz-" in p["name"]):
             p["dependencies"].append("windows-asan-preflight")
             p["runtime_environment_from"] = "windows-asan-preflight"

@@ -151,6 +151,8 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
     entry = {"name": name, "items": probe["items"], "command": command,
              "environment_overrides": probe["env"], "status": "NOT_RUN",
              "expected": {"exit_code": 0}, "reason": None, "compiler": probe.get("compiler")}
+    if probe.get("provisional_detector"):
+        entry["provisional_detector"] = probe["provisional_detector"]
     if probe.get("evidence_scope"):
         entry["evidence_scope"] = probe["evidence_scope"]
     if probe.get("target_os"):
