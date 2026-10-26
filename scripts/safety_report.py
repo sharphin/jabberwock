@@ -249,7 +249,7 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
             cases = details["results"]
             if probe.get("expected_subject") and details.get("subject") != probe["expected_subject"]:
                 raise ValueError("case report belongs to a different compiler")
-            if any(r.get("compiler", probe.get("compiler")) != probe.get("compiler") for r in cases if isinstance(r, dict)):
+            if probe.get("compiler") and any(r.get("compiler") != probe["compiler"] for r in cases if isinstance(r, dict)):
                 raise ValueError("mixed compiler cases")
             # Dynamic case inventories may grow, but the runner must execute
             # exactly the complete inventory emitted by the case generator.
