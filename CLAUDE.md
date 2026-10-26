@@ -20,7 +20,11 @@ Cの退役区画はatomicな保持表へ残し、参照検査は世代一致で�
 
 `runtime/jw_rt.c` を変更したら `python3 scripts/sync_runtime.py` で `jwc/runtime.jw` を再生成する。
 このコマンドは生成ファイルだけを更新し、ビルドやテストを実行しない。同期の検証は既存の `runtime_is_up_to_date` テストが担当する。
-安全性の単一JSONは `scripts/safety_report.py`、共通の検査一覧は `scripts/local_safety.py`。
+安全性はWindows用12項目・Linux用12項目を独立に扱う。
+入口は `scripts/safety_windows.py` / `scripts/safety_linux.py`、OS別一覧は `scripts/safety_platforms.py`。
+共通の単一JSON実行器は `scripts/safety_report.py`、旧来の簡易実行器は `scripts/local_safety.py`。
+schema 2の `suite` / 項目ID / 出力ファイル名でOSを区別し、Linux（WSL2を含む）の結果をWindowsの合格に流用しない。
+資源枯渇8と巨大配列9は別プローブ。Windowsの未対応検出器はNOT_RUNとして項目を残す。
 native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`とし、スキップを成功扱いしない。
 
 | ファイル | 役割 |

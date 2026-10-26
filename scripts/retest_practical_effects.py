@@ -14,17 +14,18 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+EXE = ".exe" if sys.platform == "win32" else ""
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--debug-compiler", type=Path, default=ROOT / "target/debug/jabberwock")
-    parser.add_argument("--release-compiler", type=Path, default=ROOT / "target/release/jabberwock")
+    parser.add_argument("--debug-compiler", type=Path, default=ROOT / "target/debug" / ("jabberwock" + EXE))
+    parser.add_argument("--release-compiler", type=Path, default=ROOT / "target/release" / ("jabberwock" + EXE))
     parser.add_argument("--jwc", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if not sys.platform.startswith("linux"):
-        parser.error("This runner currently covers Linux; Windows is not a pass")
+    if sys.platform != "win32" and not sys.platform.startswith("linux"):
+        parser.error("This runner requires Windows or Linux")
     if os.environ.get("JW_CFLAGS", "").strip():
         parser.error("This runner is uninstrumented; run without JW_CFLAGS")
     engines = {"debug": args.debug_compiler.resolve(), "release": args.release_compiler.resolve(),
@@ -45,7 +46,7 @@ def main():
         if native:
             current_env["JW_LEAKS"] = "1"
         proc = subprocess.run([str(x) for x in command], cwd=ROOT, env=current_env,
-                              text=True, capture_output=True, timeout=120)
+                              text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=120)
         return {"exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 
     fixtures = [("effect-once.jw", 0), ("effect-before-error.jw", 1)]
@@ -67,10 +68,11 @@ def main():
                 ll = folder / (name + "-" + filename + ".ll")
                 ll.write_text(generated["stdout"], encoding="utf-8")
                 for level in ["O1", "O2"]:
-                    executable = folder / (name + "-" + filename + "-" + level)
+                    executable = folder / (name + "-" + filename + "-" + level + EXE)
                     command = [os.environ.get("JW_CLANG", "clang"), "-" + level,
-                               ll, ROOT / "runtime/jw_rt.c", "-lm", "-pthread",
+                               ll, ROOT / "runtime/jw_rt.c",
                                "-Wno-override-module", "-o", executable]
+                    command.extend(["-lshell32"] if sys.platform == "win32" else ["-lm", "-pthread"])
                     if level == "O2":
                         command.extend(["-flto", "-fuse-ld=lld"])
                     built = run(command)

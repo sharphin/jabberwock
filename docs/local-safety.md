@@ -1,6 +1,8 @@
 # ローカル安全性テスト（GitHub Actions不要）
 
-この仕組みは [verification-plan.md](verification-plan.md) の **実用安全性12項目** に対応する既存テストの実行入口です。
+この仕組みは [verification-plan.md](verification-plan.md) の **実用安全性12項目** を、
+**Windows用12項目**と**Linux用12項目**の独立したセットとして実行します。
+各OSの番号・判定・証拠は別に管理し、片方の成功で他方の不足を埋めません。
 **12項目の合格を自動認定するものではありません。** 合格条件には、網羅性、OS、検出器の負例、実行時の副作用など、別途判定すべき内容が残ります。
 
 ## 前提
@@ -8,7 +10,7 @@
 - Python 3.10以上、Rust/Cargo、Cコンパイラの clang
 - 包括検証には Linux x86_64 推奨。clangの sanitizer runtime（ASan/UBSan、TSan、MSan）、lld
 - 形式モデルの検査には `lake` と Lean 4.24.0（`formal/lean-toolchain`）
-- Windowsは通常のRust/nativeテストの対象ですが、Linux固有のsanitizerやRLIMIT検査は **NOT_RUN**。両OSでの実行記録を別々に残してください
+- WindowsはWindows向けASan runtimeとCリンカ・SDKも必要。Linuxと同じ検出器構成を利用できるとは限りません
 - `clang --version`、`cargo --version`、`lake env lean --version` で準備状況を確認してください
 - sanitizerがランタイム起動に失敗する環境ではその試験は失敗です。スクリプトはOSの `sysctl` を勝手に書き換えません
 
@@ -19,29 +21,48 @@ LLVMのclangと、対象に合うCリンカ・Windows SDKを準備し、同じ�
 別の場所のclangを使う場合は `JW_CLANG` に実行ファイルのパスを設定できます。
 Leanは `formal/lean-toolchain` に合わせて用意し、同じシェルから `lake` が見える必要があります。
 
-Windows上でclangを用意しても、Linux専用のASan/TSan/MSan・RLIMIT検査は `NOT_RUN` のままです。
-これらの記録にはLinux環境での別実行が必要です。Windowsの失敗を無視してLinuxの結果だけで代用しないでください。
+Windows版はWindows用ASan・native・巨大配列・副作用検査を実行します。
+Windows用の競合検出・未定義動作検出・未初期化メモリ検出・資源枯渇検査には未対応があり、該当する検査は `NOT_RUN` のままです。
+LinuxでのTSan/MSan/RLIMIT結果を、Windows側の未対応検査の成功として扱いません。
 Rustの通常テストとreleaseテストはclangなしでも実行しますが、native/jwcを使う一部のテストは内部でスキップされます。
 単一JSONの `coverage_notes` にその制限を記録し、native専用の退役検査は `NOT_RUN` にします。
 
-## 12項目を番号順に実行し、1ファイルにまとめる
+## Windowsの12項目とLinuxの12項目を別々に実行する
 
-**推奨コマンド（リポジトリルート）:**
+リポジトリルートで、そのOSの入口を使います。
 
-```sh
-python3 scripts/safety_report.py --output target/safety-report.json
+Windows（PowerShell）:
+
+```powershell
+python scripts/safety_windows.py
 ```
 
-Windowsでは `python3` を `python` に置き換えます。まずRust Debug/Releaseコンパイラとセルフホスト版を準備し、続いて1番から12番まで順番に対応する検査を起動します。複数項目に共通する検査は**一度だけ**実行し、その結果を各項目から参照します。
+Linux（WSL2を含む）:
 
-- **報告するファイルは `target/safety-report.json` 1つ**です。項目順の判定、コマンド、環境変数、Git SHA、OS、各ツールのバージョン、終了コード、stdout/stderr、実行時間、8・9・10・11・12番の個別ケースJSONを含みます。
+```sh
+python3 scripts/safety_linux.py
+```
+
+| 検証セット | 項目一覧 | アップロードするファイル |
+|---|---|---|
+| Windows用12項目 | [Windowsの1〜12](safety-windows.md) | `target/safety-windows-report.json` |
+| Linux用12項目 | [Linuxの1〜12](safety-linux.md) | `target/safety-linux-report.json` |
+
+各OSでRust Debug/Releaseコンパイラと自己ホスト版を準備し、1番から12番まで順に検査を起動します。
+そのOS内で共通するプローブは一度だけ実行します。Windows用の12件とLinux用の12件を混ぜて合格を数えません。
+
+- **1回の報告は、そのOSのJSON 1ファイル**です。12項目の判定、コマンド、環境変数、Git SHA、OS、ツールの版、終了コード、stdout/stderr、実行時間、個別ケースJSONを含みます。
+- schema 2の `suite.id` は `windows-12` / `linux-12`。項目にも `windows-01` / `linux-01` のようなIDと `target_os` を付けます。
+- WSL2はLinuxです。Windows用入口をLinuxで実行する等、OSの取り違えは検査開始前にエラーにします。
+- Windowsの3・4・6・8には未対応の検査があり、現段階では全項目成功で終了しません。未対応の理由もJSONに残します。
 - 失敗後も他の検査を継続します。ログは各stdout/stderrの先頭・末尾を合計最大24 KiB保持し、切り詰められた場合はサイズとSHA-256を記録します。完全な出力が必要な場合は再実行してください。
 - `NOT_RUN`、`FAIL`、`CRASH`、`TIMEOUT`、`INFRA_ERROR`を区別します。全プローブ成功でも`PROBES_PASS_ONLY`であり、12項目の形式的な認定ではありません。
-- 同じ検査を複数項目が共有するため、1件の失敗が複数項目の `FAIL` に現れます。欠陥の件数は `results` のログで確認してください。
+- 同じ検査を複数項目が共有する場合、1件の失敗が複数項目の `FAIL` に現れます。欠陥の件数は `results` のログで確認してください。項目8と9は別コマンド・別ケースJSONで判定します。
 - nativeを必須とするCargo検査には `JW_REQUIRE_RETIREMENT_TESTS=1` を設定します。通常のCargo検査の成功件数だけでnative実行を確認したことにはなりません。
-- サニタイザ等の実行に必要なLinux・clang・Leanがない場合も判定に記録します。Windowsのみの実行では全項目の合格判定になりません。
-- 中間ケースJSONやファズ入力は`target/safety-report-work/`にも保存されますが、通常の解析用には**単一の`safety-report.json`だけアップロード**すれば十分です。ファジングで生成した巨大な入力ファイルそのものは、レポートに埋め込まず別保存です。
-- 実行環境を変えずに概要を確認するには`python3 scripts/safety_report.py --dry-run`を使います（レポートは生成しません）。
+- 必要なclang・Lean・sanitizer等がない場合も判定に記録します。各OSで全プローブが成功しても、12項目全体の受け入れ判定は別です。
+- 中間ケースJSONやファズ入力は `target/safety-windows-report-work/` / `target/safety-linux-report-work/` に分けて保存します。ファジングで生成した巨大な入力ファイルそのものは別保存です。
+- ケースJSONは毎回新しく作られたものだけを取り込みます。欠落・ケース数不足を成功扱いにしません。
+- 概要だけ見る場合は各入口に `--dry-run` を付けます。検査・バージョン取得コマンドを実行せず、レポートも生成しません。
 - ランナーの基本動作確認: `python3 scripts/test_safety_report.py`。
 
 `jwc/runtime.jw` の同期不一致が出た場合、修正側は `python3 scripts/sync_runtime.py` で生成ファイルを更新してコミットします。
@@ -50,7 +71,13 @@ Windowsでは `python3` を `python` に置き換えます。まずRust Debug/Re
 
 重い包括テストです。メモリ・CPUの余裕がある環境で実行してください。詳細をすべて含む独立したJSONは大きくなるため、必要に応じて圧縮して送れます。
 
-## 使い方
+`scripts/safety_report.py` から直接呼ぶ場合も、現在のOSのセットを自動選択します。
+`--platform windows` / `--platform linux` で明示できますが、実行OSとの不一致は許可しません。
+既存の `--output PATH`、`--scale N` は両方の入口で利用できます。
+
+## 従来の共通ランナー（補助用）
+
+以下の `local_safety.py` は互換用に残しています。OS別12項目の提出には上記の専用入口を使ってください。
 
 リポジトリルートで実行します。
 
@@ -103,7 +130,7 @@ Windowsでは `python` に読み替えられます。サニタイザ非対応の
 
 `--strict` は試験失敗だけでなく `NOT_RUN` も非0終了にします。未解決の8・9や10の副作用問題が再現する場合は `FAIL` のまま記録し、無理に緑にしません。
 
-`quick` は短い開発用プロファイルで、全項目を実行しません。包括的な証拠には `full --strict` とLinux/Windowsそれぞれの実行記録が必要です。
+`quick` は短い開発用プロファイルで、全項目を実行しません。OS別12項目の証拠は `safety_windows.py` / `safety_linux.py` でそれぞれ収集してください。
 
 ### 注意と限界
 
