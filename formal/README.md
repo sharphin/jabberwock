@@ -1,3 +1,18 @@
+# コンパイラ別の形式検証
+
+[実行コマンド・必要環境・結果の読み方](../docs/formal-commands.md) を参照。
+
+```powershell
+py -3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-report.json
+py -3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
+```
+
+`JabberwockFormal/Jwc/ReferenceAccess.lean` と `Rust/ReferenceAccess.lean` に
+各8定理の局所証明を実装。実装との対応は手動モデルであり未証明。
+両コンパイラの5目標全体は未証明。Leanの実行結果は利用者が確認する。
+
+## 共有抽象モデル
+
 # 形式仕様の検査
 
 [形式仕様の範囲と退役規則](../docs/formal-semantics.md) の機械検査部分。

@@ -13,8 +13,9 @@ class FormalTests(unittest.TestCase):
     def test_each_compiler_has_five_independent_unproved_obligations(self):
         with tempfile.TemporaryDirectory() as d:
             dest = Path(d) / "formal.json"
-            with mock.patch.object(sys, "argv", ["formal_report", "--output", str(dest)]), \
-                 mock.patch.object(formal.subprocess, "run") as run, contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(sys, "argv", ["formal_report", "--require-full", "--output", str(dest)]), \
+                 mock.patch.object(formal.subprocess, "run") as run, \
+                 mock.patch.object(formal, "audit_module", return_value={"status": "KERNEL_CHECKED"}), contextlib.redirect_stdout(io.StringIO()):
                 code = formal.main()
             data = json.loads(dest.read_text(encoding="utf-8"))
             self.assertEqual(code, 1)
@@ -29,7 +30,7 @@ class FormalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             dest = Path(d) / "formal.json"
             with mock.patch.object(sys, "argv", ["formal_report", "--compiler", "jwc", "--output", str(dest)]), \
-                 contextlib.redirect_stdout(io.StringIO()):
+                 mock.patch.object(formal, "audit_module", return_value={"status": "KERNEL_CHECKED"}), contextlib.redirect_stdout(io.StringIO()):
                 formal.main()
             data = json.loads(dest.read_text(encoding="utf-8"))
             self.assertEqual(len(data["goals"]), 5)

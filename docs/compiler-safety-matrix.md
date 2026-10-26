@@ -71,15 +71,15 @@ NULL注入はruntimeの5つの単一スレッドfixtureだけを対象とし、
 
 ## 形式証明：別ツール
 
-```sh
-python scripts/formal_report.py --output target/formal-report.json
+```powershell
+py -3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-report.json
+py -3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
 ```
 
-`--abstract-model` 指定時のみ既存の `check_formal.py` で共有抽象モデルのLean証明・公理監査を実行する。
-5目標×コンパイラの形式証明状況は別JSONに記録する。
-現状は実装全体に対応する証明がないため `NOT_PROVEN`。
-抽象モデルの成功 `MODEL_PASS` で5目標を証明済みに変更しない。
-全目標の証明が未完了なのでこのツールの終了コードは1（環境エラーは2）。
+両コンパイラの参照アクセスについて各8定理を実装した。
+証明対象・必要環境・Linuxコマンド・終了コードは [形式検証コマンド](formal-commands.md) を参照。
+共有抽象モデルは `--abstract-model` で追加実行する。コンパイラ全体の5目標には `--require-full` を指定する。
+局所定理の成功は `KERNEL_CHECKED`、実装全体の状態は `NOT_PROVEN` と区別する。
 
 ## レポート
 
@@ -97,11 +97,6 @@ Rust CLIの `--no-elide --ll` が以前はフラグを無視していたため�
 
 ### コンパイラ別形式証明の入口
 
-`python scripts/formal_report.py --compiler jwc` または `--compiler rust`。
-既定は両方で、`formal/compilers/<compiler>/obligations.json` の5義務を独立に処理する。
-対象実装のソース一覧/hash、義務manifestのhash、証明入口、定理の公理監査を記録する。
-証明モジュールの名前空間は `JabberwockFormal.Jwc.*` と `JabberwockFormal.Rust.*`。
-別コンパイラのモジュールや、古い実装hashに結び付いた証明は使用しない。
-現時点で各実装の証明モジュールは未制作であり `NOT_IMPLEMENTED / NOT_PROVEN`。
-モジュール追加後もLean成功だけでは実装対応の正しさを認定せず、`KERNEL_CHECKED` と区別する。
-共有抽象モデルは明示的な `--abstract-model` でのみ追加実行する。
+`formal/compilers/<compiler>/obligations.json` に実装ソースhash、局所的な証明範囲と除外範囲、定理入口を記録する。
+名前空間は `JabberwockFormal.Jwc.*` と `JabberwockFormal.Rust.*`。
+別コンパイラの定理や古い実装hashの証明を流用しない。hashの一致だけでは実装との同値性を証明しない。

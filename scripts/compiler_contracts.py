@@ -27,7 +27,7 @@ CASES = [
     case("return-cleanup", [1, 11], "fn own i64 f() { let scratch = own 1; let result = own 9; return result; } fn main() { let a = f(); print(*a); }", "9\n"),
     case("question-mark-cleanup", [10, 11], 'fn Result<i64, str> fail() { Err("stop") } fn Result<i64, str> f() { let a = own 9; let b = fail()?; Ok(*a + b) } fn main() { print(f()); }', "Err(stop)\n"),
     case("closure-own", [10, 11], "fn main() { let a = own 5; let f = () -> *a; print(f()); }", "5\n"),
-    case("generic-own", [9, 10, 11], "struct Box<T> { T value; } fn T take<T>(Box<T> b) { b.value } fn main() { let p = take(Box { value: own 7 }); print(*p); }", "7\n"),
+    case("generic-own", [9, 10, 11], "struct Box<T> { T value; } fn T take<T>(Box<T> b) { b.value } fn main() { let p = take(Box { value: own 7 }); print(*p); }", error="フィールドにある own は取り出せません"),
     case("enum-own", [10, 11], "fn main() { let a = Some(own 7); match a { case Some(p) -> print(*p); case None -> print(0); } }", "7\n"),
     case("map-values", [10, 11], 'fn main() { let i64[str] m = ["a": 7]; print(m.len()); }', "1\n"),
     case("thread-join", [3, 11, 12], "fn i64 f() { 7 } fn main() { print(spawn(f).join()); }", "7\n"),

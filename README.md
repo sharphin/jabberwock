@@ -26,6 +26,28 @@ alice build --release         # target/release/app を作る（変わってい�
 alice test                    # tests/*.jw を動かし、tests/名前.out があれば出力と比べる
 ```
 
+## 安全性テスト・形式検証
+
+リポジトリ直下から実行する。Windows:
+
+```powershell
+.\scripts\safety_windows.cmd
+py -3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-report.json
+py -3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
+```
+
+Linux:
+
+```sh
+python3 scripts/safety_linux.py
+python3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-report.json
+python3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
+```
+
+形式検証は実装済みの局所定理を検査する。全コンパイラの安全性を証明済みとはしない。
+必要環境・一括実行・終了コードは [形式検証コマンド](docs/formal-commands.md)、
+実用12項目×コンパイラ＋5目標は [検査構成](docs/compiler-safety-matrix.md) を参照。
+
 ## 言語の見た目
 
 ```

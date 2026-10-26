@@ -32,6 +32,10 @@ def audit_module(module, theorems):
     source = PROJECT / (module.replace(".", "/") + ".lean")
     if not source.is_file():
         raise ValueError("proof module missing: " + module)
+    version = subprocess.run(["lake", "env", "lean", "--version"], cwd=PROJECT, capture_output=True,
+                             text=True, encoding="utf-8", errors="replace", timeout=60)
+    if version.returncode or "version 4.24.0," not in version.stdout:
+        raise ValueError("Lean 4.24.0 required: " + version.stdout + version.stderr)
     # Kernel audit is the final check: source scanning alone cannot prove absence of sorryAx.
     built = subprocess.run(["lake", "build", module], cwd=PROJECT, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=1800)
@@ -55,6 +59,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler", choices=("all", "jwc", "rust"), default="all")
     parser.add_argument("--output", type=Path, default=ROOT / "target/formal-report.json")
+    parser.add_argument("--require-full", action="store_true", help="nonzero unless whole-compiler goals are proved")
     parser.add_argument("--abstract-model", action="store_true", help="also audit the shared abstract model; never substitutes compiler proofs")
     args = parser.parse_args()
     selected = ("jwc", "rust") if args.compiler == "all" else (args.compiler,)
@@ -63,6 +68,7 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     def save():
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    audit_cache = {}
     try:
         for compiler in selected:
             identity = source_identity(compiler)
@@ -74,7 +80,7 @@ def main():
             for goal in GOALS:
                 obligation = manifest["goals"][goal]
                 record = {"id": compiler + "-" + goal, "compiler": compiler, "goal": goal,
-                          "statement": obligation["statement"], "module": obligation.get("module"), "theorems": obligation.get("theorems", []), "source_sha256": identity["sha256"],
+                          "statement": obligation["statement"], "proof_scope": obligation.get("proof_scope"), "excluded": obligation.get("excluded", []), "implementation_correspondence": obligation.get("implementation_correspondence"), "module": obligation.get("module"), "theorems": obligation.get("theorems", []), "source_sha256": identity["sha256"],
                           "status": "NOT_PROVEN", "acceptance": "NOT_PROVEN", "proof_check": {"status": "NOT_IMPLEMENTED"}}
                 report["goals"].append(record)
                 save()
@@ -86,7 +92,15 @@ def main():
                     if obligation.get("implementation_sha256") != identity["sha256"]:
                         record["proof_check"] = {"status": "STALE", "reason": "proof binding differs from current compiler sources"}
                     else:
-                        record["proof_check"] = audit_module(obligation["module"], obligation.get("theorems", []))
+                        module = obligation["module"]
+                        all_theorems = sorted({t for o in manifest["goals"].values() if o.get("module") == module for t in o.get("theorems", [])})
+                        if any(not t.startswith(prefix) for t in all_theorems):
+                            raise ValueError("theorem belongs to another compiler")
+                        key = (compiler, module, tuple(all_theorems))
+                        if key not in audit_cache:
+                            print("VERIFY " + compiler + " " + module, flush=True)
+                            audit_cache[key] = audit_module(module, all_theorems)
+                        record["proof_check"] = audit_cache[key]
                         # Kernel success does not establish that a formalization describes the actual implementation.
                         record["reason"] = "implementation correspondence and scope require review; kernel success alone is not whole-compiler proof"
                 print(record["id"] + ": " + record["proof_check"]["status"] + " / NOT_PROVEN", flush=True)
@@ -101,7 +115,14 @@ def main():
         report["interrupted"] = True
     save()
     print("Formal report: " + str(args.output))
-    return 130 if report.get("interrupted") else 2 if report.get("infrastructure_error") else 1
+    if report.get("interrupted"):
+        return 130
+    if report.get("infrastructure_error"):
+        return 2
+    if args.require_full:
+        return 1  # Whole-compiler correspondence remains unproved.
+    return int(not report["goals"] or any(g["proof_check"]["status"] != "KERNEL_CHECKED" for g in report["goals"])
+               or (args.abstract_model and report["abstract_model"]["status"] != "MODEL_PASS"))
 
 if __name__ == "__main__":
     sys.exit(main())
