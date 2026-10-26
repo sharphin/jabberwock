@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Tests for the self-hosted jwc / Rust / C++ / Go report. No benchmark executed."""
 from pathlib import Path
+import os
+import tempfile
 import sys
 import unittest
 
@@ -11,6 +13,18 @@ import benchmark_report as bench
 class BenchmarkReportTests(unittest.TestCase):
     def test_targets_exactly_four(self):
         self.assertEqual(bench.TARGETS, ("jwc", "rust", "cpp", "go"))
+
+    @unittest.skipUnless(os.name == "nt", "Windows native measurement test")
+    def test_windows_measurement_records_time_output_and_memory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "run.stdout"
+            result = bench.run_windows_measure(Path(sys.executable), output, timeout=30)
+            # The interpreter without flags may print nothing, but process data
+            # must remain measurable and the OS peak working set must be positive.
+            self.assertEqual(result["exit"], 0)
+            metrics = bench.parse_measure(result["stdout"])
+            self.assertGreater(metrics["peak_rss_mb"], 0)
+            self.assertTrue(output.is_file())
 
     def test_rounds_cover_all_four_subjects_without_fixed_first(self):
         self.assertEqual(len(bench.TARGETS), 4)
