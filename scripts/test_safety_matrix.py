@@ -57,14 +57,17 @@ class MatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             output = Path(d) / "matrix.json"
             def fake_probe(p, *_):
-                return {"name": p["name"], "status": "UNRECOGNIZED"}
+                return {"name": p["name"],
+                        "status": "UNRECOGNIZED" if p["name"] == "jwc-contracts" else "PROBE_PASS"}
             with mock.patch.object(report.suites, "host_os", return_value="linux"), \
                  mock.patch.object(report, "version", return_value="mock"), \
                  mock.patch.object(report, "run_probe", side_effect=fake_probe), \
                  contextlib.redirect_stdout(io.StringIO()):
                 code = report.main(["--output", str(output)])
             self.assertEqual(code, 1)
-            self.assertEqual(len(json.loads(output.read_text())["items"]), 24)
+            data = json.loads(output.read_text())
+            self.assertEqual(len(data["items"]), 24)
+            self.assertTrue(any(x["status"] == "NOT_RUN" for x in data["items"] if x["compiler"] == "jwc"))
 
     def test_zero_tests_cannot_pass_detector(self):
         p = report.safety.probe("negative", [2], [sys.executable])
