@@ -29,25 +29,38 @@ jwc検査が終わってからRust版を検査する。各プローブの開始�
 
 ## ローカル一括監査（GitHub Actionsは使用しない）
 
+Windows（PowerShell / リポジトリ直下）:
+
+```powershell
+py scripts/verify_all_local.py
+py -m unittest discover -s scripts -p "test_*.py"
+# Rust製コンパイラの最適化チェック数をWindows上で監査する場合（セルフホストjwcとは別）
+py scripts/check_bench_checks.py
+```
+
+Linux / WSL2:
+
 ```sh
 python3 scripts/verify_all_local.py
-# 既に別々に作成したレポートを集約する場合
-python3 scripts/verify_all_local.py --practical target/safety-linux-report.json --formal target/formal-report.json
-# ローカル検証器の負例テスト
 python3 -m unittest discover -s scripts -p "test_*.py"
 ```
 
-Windowsでのローカル安全性検査はVisual Studio/Clang環境の初期化が必要なので、
-先に `scripts/safety_windows.cmd` で実行するか、初期化済みのシェルを使用する。
-一括監査はOS別に生成された12項目×2コンパイラの結果と、G1〜G5×2コンパイラの
-Lean監査を**別々に**検査する。
+既存のJSONだけを集約する場合は `--practical` と `--formal` にそれぞれのファイルを指定する。
+Windowsの新規実証試験は `scripts/safety_windows.cmd` 経由で実行し、
+その中でVisual Studio/Clang x64の環境初期化とツールチェーン検査を行う。
+Lean監査は独立したPythonプロセスとして実行し、Windowsではユーザーの
+`.elan\\bin`、`.cargo\\bin` もコマンド検索経路に加える。
+**既存の結果ファイルを誤って新規実行結果と誤認しないよう、実行前に前回のJSONを消去する。**
 
-**現時点の一括監査は完了判定が必ず `NOT_PROVEN`（または証拠形式エラー）になる。**
-理由は、局所的なLean定理と実コンパイラ・LLVM・ランタイム全体の数学的対応が未完成であり、
-JSON中の `PASS`/ `PROVEN` という文字列を安全性認定の証拠として信頼しないため。
-将来の完全証明と正式な実証受入条件が実装・検査されるまで、合格判定を緩めない。
-テスト入力やケース数は拡張可能で、登録されたケースIDの欠落・重複を拒否する。
-`target/local-verification.json` に結果を保存する。
+`target/local-verification.json` にOS別の12項目×2コンパイラと
+G1〜G5×2コンパイラを別々に記録する。最終安全性認定は
+局所的なLean定理と実コンパイラ・LLVM・ランタイム全体の数学的対応が未完成のため
+**`NOT_PROVEN`** のままとする。欠落・重複・別コンパイラの混入は
+`INVALID_EVIDENCE`、実証試験の失敗は `PROBE_FAILURE`、
+必要なテスト未実行は `NOT_RUN`、Lean監査失敗は `PROOF_CHECK_FAILURE`、
+古い証明は `PROOF_STALE` と区別する。
+JSON中の `PASS`/`PROVEN` という文字列を安全性認定の証拠として信頼しない。
+将来の完全証明と正式な実証受入条件が機械的に検証されるまで合格判定を緩めない。
 
 ## 12項目の検査対象
 
