@@ -7,6 +7,8 @@ Linux-only measurement uses bench/measure.c (wait4). One JSON report.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.wintypes as wintypes
 import datetime as dt
 import hashlib
 import json
@@ -106,6 +108,59 @@ def stable_output(digests: list[str]) -> bool:
 
 
 
+def run_windows_measure(binary: Path, output: Path, *, timeout: int = 3600) -> dict:
+    """Measure one Windows process with perf_counter and peak working set.
+
+    Values are working-set MB on Windows, not Linux wait4 maxrss.
+    """
+    if sys.platform != "win32":
+        raise RuntimeError("Windows measurement requires Windows")
+    class MemoryCounters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    get_memory = psapi.GetProcessMemoryInfo
+    get_memory.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
+    get_memory.restype = wintypes.BOOL
+    start = time.perf_counter()
+    peak = 0
+    measured = False
+    with output.open("wb") as dest:
+        proc = subprocess.Popen([str(binary)], cwd=ROOT, stdout=dest,
+                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        try:
+            while True:
+                counters = MemoryCounters()
+                counters.cb = ctypes.sizeof(counters)
+                if get_memory(int(proc._handle), ctypes.byref(counters), counters.cb):
+                    peak = max(peak, counters.PeakWorkingSetSize)
+                    measured = True
+                if proc.poll() is not None:
+                    break
+                if time.perf_counter() - start > timeout:
+                    proc.kill()
+                    proc.wait(timeout=10)
+                    raise subprocess.TimeoutExpired([str(binary)], timeout)
+                time.sleep(0.002)
+            proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+    elapsed = time.perf_counter() - start
+    if proc.returncode != 0:
+        return {"cmd": [str(binary)], "exit": proc.returncode,
+                "stdout": "", "stderr": "benchmark process exited unsuccessfully"}
+    if not measured:
+        raise ValueError("Windows peak working set could not be measured")
+    return {"cmd": [str(binary)], "exit": 0,
+            "stdout": "{0:.6f} {0:.6f} {0:.6f} {1:.3f}".format(elapsed, peak / 1048576.0),
+            "stderr": "", "memory_semantics": "Windows PeakWorkingSetSize; Linux maxrss is different"}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--full", action="store_true")
@@ -133,11 +188,13 @@ def main():
     work = out.parent / (out.stem + "-work")
     work.mkdir(parents=True, exist_ok=True)
     exe_suffix = ".exe" if os.name == "nt" else ""
-    known_jwc = [ROOT / "target/release/jwc-local", ROOT / "target/release/jwc",
-                 ROOT / "jwc-bin", ROOT / "target/release/jwc-benchmark"]
+    known_jwc = [ROOT / "target/release" / ("jwc-local" + exe_suffix),
+                 ROOT / "target/release" / ("jwc" + exe_suffix),
+                 ROOT / ("jwc-bin" + exe_suffix),
+                 ROOT / "target/release" / ("jwc-benchmark" + exe_suffix)]
     existing_jwc = next((candidate for candidate in known_jwc
                          if candidate.is_file() and os.access(candidate, os.X_OK)), None)
-    jwc = a.jwc.resolve() if a.jwc else (existing_jwc or ROOT / "target/release/jwc-benchmark")
+    jwc = a.jwc.resolve() if a.jwc else (existing_jwc or ROOT / "target/release" / ("jwc-benchmark" + exe_suffix))
     bootstrap_needed = not a.jwc and existing_jwc is None
     rust_bootstrap = ROOT / "target/release" / ("jabberwock" + exe_suffix)
     measure = work / "measure"
@@ -169,12 +226,14 @@ def main():
             save()
             return False
 
-    missing = [v for v in ("cc", "clang", "clang++", "rustc", "ld.lld", "go") if not shutil.which(v)]
+    missing = [v for v in (("cc", "clang", "clang++", "rustc", "ld.lld", "go")
+                           if sys.platform.startswith("linux") else ("clang", "clang++", "rustc", "go"))
+               if not shutil.which(v)]
     if bootstrap_needed and not shutil.which("cargo"):
         missing.append("cargo")
     reason = None
-    if not sys.platform.startswith("linux"):
-        reason = "bench/measure.c needs Linux wait4; use Linux or WSL2"
+    if sys.platform not in ("linux", "win32"):
+        reason = "benchmarks supported only on Windows and Linux"
     elif missing:
         reason = "missing programs: " + ", ".join(missing)
     elif bootstrap_needed:
@@ -184,7 +243,7 @@ def main():
             reason = "failed to bootstrap jwc"
     if not reason and not jwc.is_file():
         reason = "jwc executable missing: " + str(jwc)
-    if not reason and not prepare(["cc", "-O2", "-o", measure, BENCH / "measure.c"], "measure-helper"):
+    if not reason and sys.platform.startswith("linux") and not prepare(["cc", "-O2", "-o", measure, BENCH / "measure.c"], "measure-helper"):
         reason = "failed to compile Linux timing helper"
     if reason:
         for name in selected:
@@ -207,7 +266,7 @@ def main():
         go = BENCH / "go" / (name + ".go")
         report["source_hashes"][name] = {lang: sha(path) for lang, path in (("jwc", source), ("cpp", cpp), ("rust", rust), ("go", go))}
         ll = dest / "jwc.ll"
-        binaries = {k: dest / k for k in TARGETS}
+        binaries = {k: dest / (k + exe_suffix) for k in TARGETS}
         item = {"status": "INFRA_ERROR", "commands": [], "metrics": {}, "outputs": {}}
         report["cases"][name] = item
         try:
@@ -221,9 +280,11 @@ def main():
                                      "cmd": [str(jwc), "--ll", str(source)],
                                      "llvm_bytes": len(ll_process.stdout),
                                      "stderr": ll_process.stderr.decode("utf-8", "replace")[-MAX_LOG:]})
+            link = (["-lshell32", "-Wl,/stack:268435456"] if os.name == "nt"
+                    else ["-lm", "-pthread"])
             compile_steps = [
                 ("jwc-native", [*flags["jwc_native"], ll, ROOT / "runtime/jw_rt.c",
-                                "-lm", "-pthread", "-Wno-override-module", "-o", binaries["jwc"]]),
+                                *link, "-Wno-override-module", "-o", binaries["jwc"]]),
                 ("rust", [*flags["rust"], "-o", binaries["rust"], rust]),
                 ("cpp", [*flags["cpp"], "-o", binaries["cpp"], cpp]),
                 ("go", [*flags["go"], "-o", binaries["go"], go])]
@@ -240,7 +301,9 @@ def main():
                 order = rotated_targets(round_id)
                 for target in order:
                     output = dest / (target + ".run" + str(round_id) + ".stdout")
-                    result = run([measure, 1, output, binaries[target]], timeout=3600)
+                    result = (run_windows_measure(binaries[target], output, timeout=3600)
+                              if os.name == "nt" else
+                              run([measure, 1, output, binaries[target]], timeout=3600))
                     item["commands"].append({"stage": "measure-" + target, "round": round_id, **result})
                     if result["exit"]:
                         raise ValueError(target + " execution failed in round " + str(round_id))
