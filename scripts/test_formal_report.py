@@ -36,5 +36,33 @@ class FormalTests(unittest.TestCase):
             self.assertEqual(len(data["goals"]), 5)
             self.assertEqual(set(data["compilers"]), {"jwc"})
 
+    def test_manifest_rejects_missing_and_foreign_theorems(self):
+        for compiler in ("jwc", "rust"):
+            manifest = json.loads((formal.PROJECT / "compilers" / compiler / "obligations.json").read_text(encoding="utf-8"))
+            formal.validate_manifest(manifest, compiler)
+            broken = json.loads(json.dumps(manifest))
+            broken["goals"]["memory"]["theorems"] = []
+            with self.assertRaises(ValueError):
+                formal.validate_manifest(broken, compiler)
+            broken = json.loads(json.dumps(manifest))
+            broken["goals"]["memory"]["theorems"] = ["JabberwockFormal.Other.ReferenceAccess.read_requires_valid"]
+            with self.assertRaises(ValueError):
+                formal.validate_manifest(broken, compiler)
+            broken = json.loads(json.dumps(manifest))
+            broken["goals"]["types"]["theorems"] *= 2
+            with self.assertRaises(ValueError):
+                formal.validate_manifest(broken, compiler)
+
+    def test_full_proof_is_not_claimed_by_kernel_success(self):
+        with tempfile.TemporaryDirectory() as d:
+            dest = Path(d) / "formal.json"
+            with mock.patch.object(sys, "argv", ["formal_report", "--require-full", "--output", str(dest)]), \
+                 mock.patch.object(formal, "audit_module", return_value={"status": "KERNEL_CHECKED"}), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(formal.main(), 1)
+            data = json.loads(dest.read_text(encoding="utf-8"))
+            self.assertEqual(data["summary"]["expected_goal_count"], 10)
+            self.assertEqual(data["summary"]["whole_compiler_proven_goal_count"], 0)
+            self.assertFalse(data["summary"]["all_compilers_proven"])
+
 if __name__ == "__main__":
     unittest.main()
