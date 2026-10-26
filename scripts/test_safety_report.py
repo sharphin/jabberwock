@@ -95,7 +95,7 @@ class SafetyReportTests(unittest.TestCase):
             location = Path(d)
             def produce(*args, **kwargs):
                 (location / "edges-8-9.json").write_text(json.dumps(
-                    {"results": [{"item": 8, "case_status": "fail",
+                    {"results": [{"item": 8, "case": "resource-allocation", "case_status": "fail",
                                   "observed": {"exit": 2, "stderr": "internal error"}}]}), encoding="utf-8")
                 return subprocess.CompletedProcess(args[0], 0, "", "")
             p = report.safety.probe("edges-8-9", [8, 9], [sys.executable, "-c", "pass"])
