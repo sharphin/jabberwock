@@ -47,7 +47,13 @@ class LocalVerifierTests(unittest.TestCase):
         for x in p["items"]:
             x["acceptance"] = "PASS"
         self.assertEqual(verify.judge(p, f)["status"], "NOT_PROVEN")
-        self.assertEqual(verify.judge(p, f)["formal_accepted"], 0)
+        self.assertEqual(verify.judge(p, f)["verified_formal"], 0)
+        for x in f["goals"]:
+            x["acceptance"] = "PROVEN"
+        result = verify.judge(p, f)
+        self.assertEqual(result["status"], "NOT_PROVEN")
+        self.assertEqual(result["claimed_formal"], 10)
+        self.assertEqual(result["verified_formal"], 0)
 
 
 if __name__ == "__main__":
