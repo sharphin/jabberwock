@@ -55,7 +55,11 @@ python3 scripts/safety_linux.py
 - schema 2の `suite.id` は `windows-12` / `linux-12`。項目にも `windows-01` / `linux-01` のようなIDと `target_os` を付けます。
 - WSL2はLinuxです。Windows用入口をLinuxで実行する等、OSの取り違えは検査開始前にエラーにします。
 - Windowsの3・4・6・8には未対応の検査があり、現段階では全項目成功で終了しません。未対応の理由もJSONに残します。
-- 失敗後も他の検査を継続します。ログは各stdout/stderrの先頭・末尾を合計最大24 KiB保持し、切り詰められた場合はサイズとSHA-256を記録します。完全な出力が必要な場合は再実行してください。
+- 失敗後も独立した検査を継続します。準備ビルドに失敗した実行ファイルを必要とする検査はNOT_RUNにし、古い生成物を流用しません。
+- 各検査の開始時にコマンド・制限時間・ログ保存先を表示し、15秒ごとに検査名・経過秒数・PIDを表示します。経過表示だけでは、検査内部が正常に進んでいることまでは保証しません。
+- stdout/stderrの全出力は作業フォルダ内の `<検査名>.stdout.log` / `<検査名>.stderr.log` に逐次保存します。JSONには先頭・末尾を合計最大24 KiB収録し、切り詰めた場合はサイズとSHA-256を記録します。
+- JSONは検査開始前と各検査の前後に更新します。途中でも12項目を収録し、未実行分は `pending_probe_names` に残します。`run_status` はRUNNING / COMPLETE / INTERRUPTED、`active_probe` は実行中の検査名です。COMPLETEは全検査の処理終了を表し、合格を意味しません。
+- Ctrl+Cでは実行中の検査をINTERRUPTEDとして記録し、途中結果を保存して終了コード130で終了します。タイムアウト・中断時はWindowsではtaskkill /T、Linuxでは専用プロセスグループへ終了を要求し、後片付けにも制限時間を設けます。強制終了・電源断では最後の保存時点のJSONとログが残ります。
 - `NOT_RUN`、`FAIL`、`CRASH`、`TIMEOUT`、`INFRA_ERROR`を区別します。全プローブ成功でも`PROBES_PASS_ONLY`であり、12項目の形式的な認定ではありません。
 - 同じ検査を複数項目が共有する場合、1件の失敗が複数項目の `FAIL` に現れます。欠陥の件数は `results` のログで確認してください。項目8と9は別コマンド・別ケースJSONで判定します。
 - nativeを必須とするCargo検査には `JW_REQUIRE_RETIREMENT_TESTS=1` を設定します。通常のCargo検査の成功件数だけでnative実行を確認したことにはなりません。
