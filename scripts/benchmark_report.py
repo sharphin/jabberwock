@@ -89,6 +89,20 @@ def compare(current, baseline, threshold):
             "threshold_percent": threshold, "cases": rows,
             "regressions": [r["case"] for r in rows if r["regression"]]}
 
+def rotated_targets(round_id: int) -> tuple[str, ...]:
+    """Rotate and periodically reverse orders to limit fixed-order bias."""
+    if round_id < 0:
+        raise ValueError("negative round")
+    offset = round_id % len(TARGETS)
+    order = TARGETS[offset:] + TARGETS[:offset]
+    return tuple(reversed(order)) if (round_id // len(TARGETS)) % 2 else order
+
+
+def stable_output(digests: list[str]) -> bool:
+    """Every repetition must produce exactly the same output."""
+    return bool(digests) and len(set(digests)) == 1
+
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -221,9 +235,7 @@ def main():
             checksums = {target: [] for target in TARGETS}
             for round_id in range(a.runs):
                 # Rotate the order so one language is not always first or last.
-                order = TARGETS[round_id % len(TARGETS):] + TARGETS[:round_id % len(TARGETS)]
-                if (round_id // len(TARGETS)) % 2:
-                    order = tuple(reversed(order))
+                order = rotated_targets(round_id)
                 for target in order:
                     output = dest / (target + ".run" + str(round_id) + ".stdout")
                     result = run([measure, 1, output, binaries[target]], timeout=3600)
@@ -236,7 +248,7 @@ def main():
                     data = output.read_bytes()
                     checksums[target].append(hashlib.sha256(data).hexdigest())
             for target in TARGETS:
-                if len(set(checksums[target])) != 1:
+                if not stable_output(checksums[target]):
                     raise ValueError(target + " output changes across repetitions")
                 values = sorted(timings[target])
                 item["metrics"][target] = {"min_s": values[0],
