@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
     char *end = NULL;
     long count = strtol(argv[1], &end, 10);
     if (!end || *end != 0 || count < 1 || count > 100000) {
-        fprintf(stderr, "measure: invalid repetition count\\n");
+        fprintf(stderr, "measure: invalid repetition count\n");
         return 2;
     }
     int n = (int)count;
