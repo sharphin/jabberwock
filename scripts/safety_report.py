@@ -103,10 +103,11 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
         try:
             details = json.loads(nested.read_text(encoding="utf-8"))
             entry["case_report"] = details
-            if details.get("infrastructure_errors"):
+            if details.get("infrastructure_errors") or not details.get("results"):
                 entry["status"] = "INFRA_ERROR"
+                entry["reason"] = "case report contains infrastructure errors or no executed cases"
             elif any(r.get("case_status", r.get("status")) == "fail"
-                     for r in details.get("results", [])):
+                     for r in details["results"]):
                 entry["status"] = "FAIL"
         except (OSError, ValueError) as error:
             entry["status"], entry["reason"] = "INFRA_ERROR", "invalid case report: " + str(error)
@@ -181,6 +182,7 @@ def main() -> int:
                                 "acceptance": "NOT_ASSESSED", "probe_names": references,
                                 "failures": [x["name"] for x in problems],
                                 "unavailable": [x["name"] for x in not_run]})
+        print(f"ITEM {n:02d}/12 {safety.NAMES[n]}: {status}", flush=True)
     report["results"] = [produced[p["name"]] for p in ordered if p["name"] in produced]
     report["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     if not args.dry_run:
