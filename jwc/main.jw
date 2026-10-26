@@ -269,8 +269,8 @@ fn main() {
         build(a);
         return;
     }
-    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw" && a[0] != "--ir" && a[0] != "--ll") {
-        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw> / jwc --ir <file.jw> / jwc --ll <file.jw>");
+    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw" && a[0] != "--ir" && a[0] != "--ll" && a[0] != "--ll-checked") {
+        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw> / jwc --ir <file.jw> / jwc --ll <file.jw> / jwc --ll-checked <file.jw>");
         exit(2);
     }
     let path = a[1];
@@ -299,11 +299,11 @@ fn main() {
                 let q = ast.number(p);
                 match typeck.check(q) {
                     case Ok(c) -> {
-                        if a[0] == "--ll" {
+                        if a[0] == "--ll" || a[0] == "--ll-checked" {
                             match lower.lower(q, c) {
                                 case Ok(ip) -> {
                                     let mut prog = ip;
-                                    analyze.analyze(ref mut prog);
+                                    if a[0] == "--ll" { analyze.analyze(ref mut prog); }
                                     match llvmfn.emit(prog, c, ns, l.srcs) {
                                         case Ok(text) -> print(chop(text));
                                         case Err(why) -> fail_ll("まだ LLVM に書き出せない書き方があります: " + why + "\n");
@@ -330,13 +330,13 @@ fn main() {
                         print(out + astdump.dump_typed(q, c));
                     }
                     case Err(d) -> {
-                        if a[0] == "--ll" { fail_ll(diag.render(d, ns, l.srcs)); }
+                        if a[0] == "--ll" || a[0] == "--ll-checked" { fail_ll(diag.render(d, ns, l.srcs)); }
                         print(err_text(a[0], diag.render(d, ns, l.srcs)));
                     }
                 }
             }
             case Err(d) -> {
-                if a[0] == "--ll" { fail_ll(diag.render(d, ns, l.srcs)); }
+                if a[0] == "--ll" || a[0] == "--ll-checked" { fail_ll(diag.render(d, ns, l.srcs)); }
                 print(err_text(a[0], diag.render(d, ns, l.srcs)));
             }
         }

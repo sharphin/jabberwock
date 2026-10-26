@@ -1,3 +1,6 @@
+> 現行の実用テストは [コンパイラ別検査](compiler-safety-matrix.md) を参照。
+> OSごとに12項目×2コンパイラ＋5目標×2。形式証明は別ツール。以下の旧混合集計は全コンパイラの合格を表さない。
+
 # ローカル安全性テスト（GitHub Actions不要）
 
 この仕組みは [verification-plan.md](verification-plan.md) の **実用安全性12項目** を、

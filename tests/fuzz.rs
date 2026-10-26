@@ -17,7 +17,18 @@ mod attacks;
 const CASES: u64 = 40;
 
 fn have_clang() -> bool {
-    Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    let available = Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+    assert!(available || std::env::var("JW_SAFETY_STRICT").is_err(), "required fuzz verification cannot skip clang");
+    available
+}
+
+fn selected_jwc() -> Option<String> {
+    let compiler = std::env::var("JW_FUZZ_JWC").ok();
+    if std::env::var("JW_SAFETY_COMPILER").map(|s| s == "jwc").unwrap_or(false) {
+        assert!(compiler.as_ref().map(|p| std::path::Path::new(p).is_file()).unwrap_or(false),
+                "jwc subject requires an actual JW_FUZZ_JWC executable");
+    }
+    compiler
 }
 
 /// xorshift の乱数（外部クレートなし）
@@ -266,7 +277,7 @@ fn interp_and_executables_agree_on_generated_programs() {
     }
     let n: u64 = std::env::var("JW_FUZZ").ok().and_then(|s| s.parse().ok()).unwrap_or(CASES);
     let first: u64 = std::env::var("JW_FUZZ_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
-    let jwc = std::env::var("JW_FUZZ_JWC").ok();
+    let jwc = selected_jwc();
     let (mut ran, mut failed) = (0, Vec::new());
     let mut kinds: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for seed in first..first + n {
@@ -302,7 +313,7 @@ fn interp_and_executables_agree_on_generated_programs() {
 #[test]
 fn typed_attacks_reach_their_checks() {
     if !have_clang() { return; }
-    let jwc = std::env::var("JW_FUZZ_JWC").ok();
+    let jwc = selected_jwc();
     let seed = std::env::var("JW_FUZZ_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
     let mut cases: Vec<(String, String, &str)> = attacks::ATTACKS.iter().map(|(n, s, w)| (n.to_string(), s.to_string(), *w)).collect();
     cases.extend(attacks::generated(seed));
@@ -328,7 +339,7 @@ fn typed_attacks_reach_their_checks() {
 #[test]
 fn arithmetic_edges_agree_with_checked_execution() {
     if !have_clang() { return; }
-    let jwc = std::env::var("JW_FUZZ_JWC").ok();
+    let jwc = selected_jwc();
     let mut cases = Vec::new();
     for (ty, min, max) in [("i8", "-128", "127"), ("i16", "-32768", "32767"), ("i32", "-2147483648", "2147483647"),
                            ("i64", "-9223372036854775808", "9223372036854775807"), ("u8", "0", "255"),
