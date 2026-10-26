@@ -1,4 +1,4 @@
-# ベンチマーク（セルフホストjwc・Rust・C++のみ）
+# ベンチマーク（セルフホストjwc・Rust・C++・Goのみ）
 
 ## 一括コマンド
 
@@ -8,7 +8,7 @@ Linux / WSL2で、リポジトリ直下から実行する。
 # 5種類の簡易計測
 python3 scripts/benchmark_report.py
 
-# 全21種類 × 5回（3者比較）
+# 全21種類 × 5回（4者比較）
 python3 scripts/benchmark_report.py --full
 
 # 既存のセルフホストjwcを指定する場合（ブートストラップ省略）
@@ -21,13 +21,13 @@ python3 scripts/benchmark_report.py --cases fib sort --runs 7
 python3 scripts/benchmark_report.py --full --baseline path/to/previous-benchmark-report.json
 ```
 
-計測対象は **jwcが生成した実行ファイル、rustcが生成した実行ファイル、clang++が生成した実行ファイルの3つだけ**。Rust製Jabberwockコンパイラはデフォルトではセルフホストjwcの初回ビルドのために使用するが、ベンチマーク結果に含めない。Go、`--no-elide`、`--unchecked` も含めない。
+計測対象は **jwcが生成した実行ファイル、rustcが生成した実行ファイル、clang++が生成した実行ファイル、go buildが生成した実行ファイルの4つだけ**。Rust製Jabberwockコンパイラはデフォルトではセルフホストjwcの初回ビルドのために使用するが、ベンチマーク結果に含めない。`--no-elide`、`--unchecked` は含めない。
 
-出力は `target/benchmark-report.json`。各ケースについて3者すべての標準出力SHA-256が一致した場合にのみPASSとし、実行時間の中央値、最大RSS、jwc対Rust・C++の比率を記録する。正の速度低下率は `(jwcの中央値 / 比較対象の中央値 - 1) × 100%`。機械環境、ビルドフラグ、ソース入力のSHA-256、生成に用いたjwcのSHA-256も保存する。
+出力は `target/benchmark-report.json`。各ケースについて4者すべての標準出力SHA-256が一致した場合にのみPASSとし、実行時間の中央値、最大RSS、jwc対Rust・C++・Goの比率を記録する。正の速度低下率は `(jwcの中央値 / 比較対象の中央値 - 1) × 100%`。機械環境、ビルドフラグ、ソース入力のSHA-256、生成に用いたjwcのSHA-256も保存する。
 
 **旧計測の注意:** 以下に残す2026-10-25のベンチマーク表と従来の`bench/run.sh`はRust製Jabberwockコンパイラ・Go等を含む**旧方式**であり、セルフホストjwcの実測結果ではない。現在のjwc性能の主比較へ流用しない。
 
-このランナーはLinuxの`wait4`を利用する。WindowsではWSL2などが必要。依存はPython 3、cargo/rustc（jwcを事前指定する場合cargo不要）、clang/clang++、lld、cc。コンパイラの最適化器やアルゴリズムの差は残るので、数値は個々のケースの比較であり言語全体の優劣を証明しない。
+このランナーはLinuxの`wait4`を利用する。WindowsではWSL2などが必要。依存はPython 3、cargo/rustc（jwcを事前指定する場合cargo不要）、clang/clang++、lld、cc、go。コンパイラの最適化器やアルゴリズムの差は残るので、数値は個々のケースの比較であり言語全体の優劣を証明しない。
 
 ## 旧スイート・履歴資料
 
