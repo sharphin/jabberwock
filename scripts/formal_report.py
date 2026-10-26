@@ -55,6 +55,41 @@ def audit_module(module, theorems):
     return {"status": "KERNEL_CHECKED", "module_sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "stdout": run.stdout, "stderr": run.stderr}
 
 
+
+def validate_manifest(manifest, compiler):
+    """Reject missing/foreign proof obligations before invoking Lean.
+
+    This verifies bookkeeping, not mathematical adequacy or source equivalence.
+    """
+    if not isinstance(manifest, dict) or manifest.get("compiler") != compiler:
+        raise ValueError("compiler mismatch in proof manifest")
+    goals = manifest.get("goals")
+    if not isinstance(goals, dict) or set(goals) != set(GOALS):
+        raise ValueError("missing or unexpected proof goals")
+    prefix = "JabberwockFormal." + ("Jwc" if compiler == "jwc" else "Rust") + "."
+    for goal in GOALS:
+        entry = goals[goal]
+        if not isinstance(entry, dict):
+            raise ValueError("invalid proof obligation: " + goal)
+        for field in ("statement", "proof_scope", "implementation_correspondence",
+                      "implementation_sha256"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                raise ValueError("missing proof metadata " + goal + "." + field)
+        excluded = entry.get("excluded")
+        if not isinstance(excluded, list) or any(not isinstance(x, str) or not x.strip() for x in excluded):
+            raise ValueError("invalid exclusions: " + goal)
+        module = entry.get("module")
+        theorems = entry.get("theorems")
+        if not isinstance(module, str) or not IDENTIFIER.fullmatch(module) or not module.startswith(prefix):
+            raise ValueError("invalid or foreign proof module: " + goal)
+        if not isinstance(theorems, list) or not theorems or len(theorems) != len(set(theorems)):
+            raise ValueError("missing or duplicate theorem: " + goal)
+        for theorem in theorems:
+            if not isinstance(theorem, str) or not IDENTIFIER.fullmatch(theorem) or not theorem.startswith(module + "."):
+                raise ValueError("foreign or malformed theorem: " + goal)
+    return goals
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler", choices=("all", "jwc", "rust"), default="all")
@@ -63,7 +98,7 @@ def main():
     parser.add_argument("--abstract-model", action="store_true", help="also audit the shared abstract model; never substitutes compiler proofs")
     args = parser.parse_args()
     selected = ("jwc", "rust") if args.compiler == "all" else (args.compiler,)
-    report = {"schema_version": 2, "kind": "formal-proof", "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    report = {"schema_version": 3, "kind": "formal-proof", "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "compilers": {}, "goals": [], "abstract_model": {"status": "NOT_RUN"}}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     def save():
@@ -74,8 +109,7 @@ def main():
             identity = source_identity(compiler)
             manifest_path = PROJECT / "compilers" / compiler / "obligations.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if manifest.get("compiler") != compiler or set(manifest["goals"]) != set(GOALS):
-                raise ValueError("compiler or goal mismatch: " + str(manifest_path))
+            validate_manifest(manifest, compiler)
             report["compilers"][compiler] = {"source": identity, "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest()}
             for goal in GOALS:
                 obligation = manifest["goals"][goal]
@@ -113,6 +147,14 @@ def main():
         report["infrastructure_error"] = str(error)
     except KeyboardInterrupt:
         report["interrupted"] = True
+    report["summary"] = {
+        "expected_goal_count": len(selected) * len(GOALS),
+        "recorded_goal_count": len(report["goals"]),
+        "kernel_checked_goal_count": sum(g["proof_check"]["status"] == "KERNEL_CHECKED" for g in report["goals"]),
+        "whole_compiler_proven_goal_count": sum(g["acceptance"] == "PROVEN" for g in report["goals"]),
+        "all_compilers_proven": False,
+        "interpretation": "Local model theorem checks only; implementation correspondence not proved"
+    }
     save()
     print("Formal report: " + str(args.output))
     if report.get("interrupted"):
@@ -121,7 +163,7 @@ def main():
         return 2
     if args.require_full:
         return 1  # Whole-compiler correspondence remains unproved.
-    return int(not report["goals"] or any(g["proof_check"]["status"] != "KERNEL_CHECKED" for g in report["goals"])
+    return int(len(report["goals"]) != len(selected) * len(GOALS) or any(g["proof_check"]["status"] != "KERNEL_CHECKED" for g in report["goals"])
                or (args.abstract_model and report["abstract_model"]["status"] != "MODEL_PASS"))
 
 if __name__ == "__main__":
