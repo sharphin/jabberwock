@@ -325,6 +325,13 @@ _Noreturn void jw_fail(const char *title, const WSite *at, const char *label, co
     finish_error(at, label, note);
 }
 
+// 確保失敗は内部エラーではなく、言語仕様上の実行時エラー。
+static _Noreturn void jw_oom(void) {
+    jw_flush();
+    fputs("error: メモリが足りません\n", stderr);
+    quit(1);
+}
+
 // IR では来ないはずの場所（書き出しの誤り）
 _Noreturn void jw_bug(const char *what) {
     jw_flush();
@@ -545,7 +552,7 @@ static void *slab_take(size_t n) {
     if ((size_t)(slab_end - slab_cur) < n) {
         size_t sz = 256 * 1024;
         slab_cur = malloc(sz);
-        if (!slab_cur) jw_bug("メモリが足りません");
+        if (!slab_cur) jw_oom();
         slab_end = slab_cur + sz;
     }
     void *r = slab_cur;
@@ -593,7 +600,7 @@ static void *block_alloc(int64_t size) {
         if (!p) {
             // 中身を 64 バイトの境目にそろえる（リストの要素をまとめて読み書きする命令が速くなる）。大きな区画は OS に返さない
             char *raw = malloc(sizeof(WHdr) + s + 64);
-            if (!raw) jw_bug("メモリが足りません");
+            if (!raw) jw_oom();
             p = (void *)(((uintptr_t)raw + sizeof(WHdr) + 63) & ~(uintptr_t)63);
             gen_set(p, 0);
         }
@@ -694,7 +701,7 @@ static void *bytes_alloc(size_t n) {
     size_t c = (n + 15) >> 4;
     if (c > SCLASS) {
         void *p = malloc(n);
-        if (!p) jw_bug("メモリが足りません");
+        if (!p) jw_oom();
         return p;
     }
     void *p = free_bytes[c];
@@ -766,7 +773,7 @@ WStr *jw_str_append(WStr **slot, WStr *b) {
     if (need != old) {
         if (((old + 15) >> 4) > SCLASS) {
             a = realloc(a, need);
-            if (!a) jw_bug("メモリが足りません");
+            if (!a) jw_oom();
         } else {
             WStr *s = bytes_alloc(need);
             memcpy(s, a, sizeof(WStr) + (size_t)a->len);
@@ -1010,7 +1017,7 @@ static int64_t list_bytes(int64_t esize, int64_t n) { return (int64_t)round8(n *
 
 static char *list_new_data(int64_t bytes) {
     char *raw = malloc((size_t)(LIST_PAD + bytes));
-    if (!raw) jw_bug("メモリが足りません");
+    if (!raw) jw_oom();
     char *d = raw + LIST_PAD;
     gen_set(d, 0);
     return d;
@@ -1040,7 +1047,7 @@ static int list_grow(WList *l, int64_t esize, int64_t n, const WSite *why) {
         l->data = nd;
     } else {
         char *raw = realloc(l->data - LIST_PAD, (size_t)(LIST_PAD + bytes));
-        if (!raw) jw_bug("メモリが足りません");
+        if (!raw) jw_oom();
         l->data = raw + LIST_PAD;
     }
     l->cap = cap;
@@ -1411,7 +1418,7 @@ void jw_sort_int(char *data, int64_t n, int32_t bytes, int32_t sgn) {
     }
     // 8 バイトの整数は data をそのまま鍵の場所に使う（作業用の場所は n 個ぶんだけ）
     uint64_t *buf = malloc((size_t)n * (bytes == 8 ? 8 : 16));
-    if (!buf) jw_bug("メモリが足りません");
+    if (!buf) jw_oom();
     uint64_t *k = bytes == 8 ? (uint64_t *)data : buf + n, *t = buf;
     uint64_t mn = ~0ull, mx = 0;
     for (int64_t j = 0; j < n; j++) {
