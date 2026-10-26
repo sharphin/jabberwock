@@ -64,5 +64,16 @@ class FormalTests(unittest.TestCase):
             self.assertEqual(data["summary"]["whole_compiler_proven_goal_count"], 0)
             self.assertFalse(data["summary"]["all_compilers_proven"])
 
+    def test_unapproved_axioms_and_missing_audit_fail_closed(self):
+        theorem = "JabberwockFormal.Jwc.ReferenceAccess.gate_semantics"
+        module = "JabberwockFormal.Jwc.ReferenceAccess"
+        version = mock.Mock(returncode=0, stdout="Lean (version 4.24.0, release)", stderr="")
+        built = mock.Mock(returncode=0, stdout="", stderr="")
+        for output in ("", "'" + theorem + "' depends on axioms: [sorryAx]"):
+            audited = mock.Mock(returncode=0, stdout=output, stderr="")
+            with mock.patch.object(formal.subprocess, "run", side_effect=[version, built, audited]):
+                record = formal.audit_module(module, [theorem])
+            self.assertEqual(record["status"], "FAIL")
+
 if __name__ == "__main__":
     unittest.main()
