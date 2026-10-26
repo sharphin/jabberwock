@@ -40,6 +40,7 @@ NR == FNR {
     if (!numeric_row("baseline")) next
     if (seen_base[$1]++) { print "ERROR: duplicate baseline " $1; bad = 1 }
     base[$1] = $0
+    base_count++
     next
 }
 {
@@ -54,6 +55,6 @@ NR == FNR {
 }
 END {
     for (name in base) if (!(name in seen_now)) { print "ERROR: missing case " name; bad = 1 }
-    if (length(base) == 0) { print "ERROR: empty baseline"; bad = 1 }
+    if (base_count == 0) { print "ERROR: empty baseline"; bad = 1 }
     exit bad
 }' checks.txt "$NOW"
