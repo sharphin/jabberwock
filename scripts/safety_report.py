@@ -251,6 +251,17 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
                 raise ValueError("case report belongs to a different compiler")
             if any(r.get("compiler", probe.get("compiler")) != probe.get("compiler") for r in cases if isinstance(r, dict)):
                 raise ValueError("mixed compiler cases")
+            # Dynamic case inventories may grow, but the runner must execute
+            # exactly the complete inventory emitted by the case generator.
+            declared = details.get("expected_case_ids")
+            if declared is not None:
+                if (not isinstance(declared, list) or not declared or
+                        any(not isinstance(x, str) or not x for x in declared) or
+                        len(declared) != len(set(declared))):
+                    raise ValueError("invalid or duplicate declared case IDs")
+                executed = [r.get("id") for r in cases if isinstance(r, dict)]
+                if len(executed) != len(set(executed)) or set(executed) != set(declared):
+                    raise ValueError("executed case IDs differ from dynamic declared inventory")
             if probe.get("required_case_ids"):
                 ids = [r.get("id") for r in cases if isinstance(r, dict)]
                 if len(ids) != len(set(ids)) or set(ids) != set(probe["required_case_ids"]):
