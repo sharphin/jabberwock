@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for the single-file safety report runner (no compiler needed)."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -55,6 +56,46 @@ class SafetyReportTests(unittest.TestCase):
             p = report.safety.probe("absent-test", [12], ["__nonexistent_safety_executable__"])
             result = report.run_probe(p, Path(d), False)
             self.assertEqual(result["status"], "NOT_RUN")
+
+    def test_retirement_without_clang_is_not_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = next(p for p in report.safety.catalog(1, Path(d)) if p["name"] == "retirement")
+            with mock.patch.object(report.shutil, "which", return_value=None), \
+                 mock.patch.object(report.subprocess, "run") as run:
+                result = report.run_probe(p, Path(d), False)
+            self.assertEqual(result["status"], "NOT_RUN")
+            self.assertEqual(result["reason"], "clang unavailable")
+            run.assert_not_called()
+
+    def test_native_retirement_requires_execution_and_does_not_regenerate_sources(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = next(p for p in report.safety.catalog(1, Path(d)) if p["name"] == "retirement")
+            completed = subprocess.CompletedProcess(p["cmd"], 0, "", "")
+            with mock.patch.object(report.shutil, "which", return_value="/tools/clang"), \
+                 mock.patch.dict(os.environ, {"JWC_REGEN": "1"}), \
+                 mock.patch.object(report.subprocess, "run", return_value=completed) as run:
+                result = report.run_probe(p, Path(d), False)
+            self.assertEqual(result["status"], "PROBE_PASS")
+            child_env = run.call_args.kwargs["env"]
+            self.assertEqual(child_env["JW_REQUIRE_RETIREMENT_TESTS"], "1")
+            self.assertNotIn("JWC_REGEN", child_env)
+
+    def test_rust_profiles_run_without_clang_but_disclose_missing_native_coverage(self):
+        with tempfile.TemporaryDirectory() as d:
+            for p in report.safety.catalog(1, Path(d)):
+                if p["name"] not in ("cargo-test", "release-test"):
+                    continue
+                completed = subprocess.CompletedProcess(p["cmd"], 0, "", "")
+                def which(name):
+                    return None if name == "clang" else "/tools/" + name
+                with mock.patch.dict(os.environ, {"JW_CLANG": "clang"}), \
+                     mock.patch.object(report.shutil, "which", side_effect=which), \
+                     mock.patch.object(report.subprocess, "run", return_value=completed) as run:
+                    result = report.run_probe(p, Path(d), False)
+                self.assertEqual(result["status"], "PROBE_PASS")
+                self.assertIn("coverage_notes", result)
+                self.assertIn("native/jwc/sanitizer", result["coverage_notes"][0])
+                run.assert_called_once()
 
 
 if __name__ == "__main__":

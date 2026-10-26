@@ -12,6 +12,18 @@
 - `clang --version`、`cargo --version`、`lake env lean --version` で準備状況を確認してください
 - sanitizerがランタイム起動に失敗する環境ではその試験は失敗です。スクリプトはOSの `sysctl` を勝手に書き換えません
 
+### Windowsで未実行が多いとき
+
+`tools.clang: null` / `clang unavailable` は、実行したシェルからclangを見つけられなかったことを示します。
+LLVMのclangと、対象に合うCリンカ・Windows SDKを準備し、同じシェルで `clang --version` が動くようにしてください。
+別の場所のclangを使う場合は `JW_CLANG` に実行ファイルのパスを設定できます。
+Leanは `formal/lean-toolchain` に合わせて用意し、同じシェルから `lake` が見える必要があります。
+
+Windows上でclangを用意しても、Linux専用のASan/TSan/MSan・RLIMIT検査は `NOT_RUN` のままです。
+これらの記録にはLinux環境での別実行が必要です。Windowsの失敗を無視してLinuxの結果だけで代用しないでください。
+Rustの通常テストとreleaseテストはclangなしでも実行しますが、native/jwcを使う一部のテストは内部でスキップされます。
+単一JSONの `coverage_notes` にその制限を記録し、native専用の退役検査は `NOT_RUN` にします。
+
 ## 12項目を番号順に実行し、1ファイルにまとめる
 
 **推奨コマンド（リポジトリルート）:**
@@ -25,10 +37,16 @@ Windowsでは `python3` を `python` に置き換えます。まずRust Debug/Re
 - **報告するファイルは `target/safety-report.json` 1つ**です。項目順の判定、コマンド、環境変数、Git SHA、OS、各ツールのバージョン、終了コード、stdout/stderr、実行時間、8・9・10・11・12番の個別ケースJSONを含みます。
 - 失敗後も他の検査を継続します。ログは各stdout/stderrの先頭・末尾を合計最大24 KiB保持し、切り詰められた場合はサイズとSHA-256を記録します。完全な出力が必要な場合は再実行してください。
 - `NOT_RUN`、`FAIL`、`CRASH`、`TIMEOUT`、`INFRA_ERROR`を区別します。全プローブ成功でも`PROBES_PASS_ONLY`であり、12項目の形式的な認定ではありません。
+- 同じ検査を複数項目が共有するため、1件の失敗が複数項目の `FAIL` に現れます。欠陥の件数は `results` のログで確認してください。
+- nativeを必須とするCargo検査には `JW_REQUIRE_RETIREMENT_TESTS=1` を設定します。通常のCargo検査の成功件数だけでnative実行を確認したことにはなりません。
 - サニタイザ等の実行に必要なLinux・clang・Leanがない場合も判定に記録します。Windowsのみの実行では全項目の合格判定になりません。
 - 中間ケースJSONやファズ入力は`target/safety-report-work/`にも保存されますが、通常の解析用には**単一の`safety-report.json`だけアップロード**すれば十分です。ファジングで生成した巨大な入力ファイルそのものは、レポートに埋め込まず別保存です。
 - 実行環境を変えずに概要を確認するには`python3 scripts/safety_report.py --dry-run`を使います（レポートは生成しません）。
 - ランナーの基本動作確認: `python3 scripts/test_safety_report.py`。
+
+`jwc/runtime.jw` の同期不一致が出た場合、修正側は `python3 scripts/sync_runtime.py` で生成ファイルを更新してコミットします。
+報告用ランナーは `JWC_REGEN` を子プロセスから外し、検査中に同期不一致を自動修正して隠さないようにします。
+2026-10-26のWindows結果の読み取りと修正範囲は [今回の記録](safety-report-2026-10-26-windows.md) を参照してください。
 
 重い包括テストです。メモリ・CPUの余裕がある環境で実行してください。詳細をすべて含む独立したJSONは大きくなるため、必要に応じて圧縮して送れます。
 

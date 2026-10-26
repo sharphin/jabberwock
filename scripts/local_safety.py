@@ -34,8 +34,16 @@ IS_LINUX = sys.platform.startswith("linux")
 
 
 def probe(name, items, cmd, *, env=None, linux=False, clang=False, lake=False, jwc=False, timeout=3600):
-    return dict(name=name, items=items, cmd=cmd, env=env or {},
+    environment = dict(env or {})
+    if clang and cmd[:2] == ["cargo", "test"]:
+        # A native-only probe must fail if its tests cannot reach clang.
+        environment["JW_REQUIRE_RETIREMENT_TESTS"] = "1"
+    return dict(name=name, items=items, cmd=cmd, env=environment,
                 linux=linux, clang=clang, lake=lake, jwc=jwc, timeout=timeout)
+
+
+def jwc_path():
+    return ROOT / "target" / "release" / ("jwc-local.exe" if os.name == "nt" else "jwc-local")
 
 
 def catalog(scale, output):
@@ -45,7 +53,7 @@ def catalog(scale, output):
         if o2:
             env["JW_NATIVE"] = "o2"
         if jwc:
-            env["JW_FUZZ_JWC"] = str(ROOT / "target" / "release" / ("jwc-local.exe" if os.name == "nt" else "jwc-local"))
+            env["JW_FUZZ_JWC"] = str(jwc_path())
         return env
 
     result = [
@@ -55,12 +63,12 @@ def catalog(scale, output):
         probe("native-differential", [1, 2, 4, 5, 7, 10, 11, 12],
               ["cargo", "test", "--no-fail-fast"], env={"JW_NATIVE": "1"}, clang=True),
         probe("retirement", [2, 11],
-              ["cargo", "test", "--test", "retirement", "--", "--nocapture"]),
+              ["cargo", "test", "--test", "retirement", "--", "--nocapture"], clang=True),
         probe("bench-checks", [1, 5], ["bash", "bench/checks.sh"], clang=True),
         probe("formal-model", [1, 7], [sys.executable, "scripts/check_formal.py"], lake=True),
         probe("jwc-build", [7, 12],
               [str(ROOT / "target" / "release" / ("jabberwock.exe" if os.name == "nt" else "jabberwock")),
-               "build", "-o", str(ROOT / "target" / "release" / ("jwc-local.exe" if os.name == "nt" else "jwc-local")),
+               "build", "-o", str(jwc_path()),
                "jwc/main.jw"], clang=True),
         probe("sanitizer-negative-asan", [2, 4, 5], ["cargo", "test", "--test", "sanitizers", "--", "--nocapture"],
               env={"JW_CFLAGS": ASAN}, linux=True, clang=True),
@@ -111,7 +119,7 @@ def catalog(scale, output):
                "--output", str(output / "practical-effects.json")],
               linux=True, clang=True, jwc=True),
         probe("release-test", [10, 11, 12],
-              ["cargo", "test", "--release", "--no-fail-fast"], clang=True),
+              ["cargo", "test", "--release", "--no-fail-fast"]),
     ]
     return result
 
@@ -172,7 +180,7 @@ def main():
             reason = "Lean lake unavailable"
         elif not shutil.which(p["cmd"][0]) and not Path(p["cmd"][0]).is_file():
             reason = "command executable unavailable: " + p["cmd"][0]
-        if p["jwc"] and not args.dry_run and not (ROOT / "target" / "release" / "jwc-local").exists():
+        if p["jwc"] and not args.dry_run and not jwc_path().is_file():
             reason = reason or "jwc-local was not built"
         status = "NOT_RUN" if reason else ("PLANNED" if args.dry_run else "FAIL")
         entry = {"name": p["name"], "items": p["items"], "status": status,
@@ -181,7 +189,7 @@ def main():
             env = dict(os.environ)
             # Avoid inherited flags changing which backend is actually verified.
             for key in ("JW_CFLAGS", "JW_NATIVE", "JW_ROBUST_ASAN", "JW_ROBUST_NATIVE",
-                        "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST"):
+                        "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST", "JWC_REGEN"):
                 env.pop(key, None)
             env.update(p["env"])
             log = output / (f"{index:02d}-" + p["name"] + ".log")
