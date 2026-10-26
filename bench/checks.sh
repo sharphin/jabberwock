@@ -13,9 +13,20 @@ NOW="$OUT/now.txt"
 : > "$NOW"
 for f in jabberwock/*.jw; do
     n=$(basename "$f" .jw)
-    st=$($JW build --stats -o "$OUT/$n" "$f" 2>&1 | sed -n 's/^\[stats\] 世代の検査 \([0-9]*\) か所・解析で消した \([0-9]*\) か所・添字の検査 \([0-9]*\) か所$/\1 \2 \3/p')
-    $JW build --count-checks -o "$OUT/$n.count" "$f" > /dev/null 2>&1
-    cnt=$("$OUT/$n.count" 2>&1 > /dev/null | sed -n 's/^\[checks\] //p' | awk '{ print $2, $4, $6 }')
+    if ! "$JW" build --stats -o "$OUT/$n" "$f" >"$OUT/$n.stats.log" 2>&1; then
+        echo "ERROR: compiler failed to collect statistics for $n" >&2
+        exit 1
+    fi
+    st=$(sed -n 's/^\[stats\] 世代の検査 \([0-9]*\) か所・解析で消した \([0-9]*\) か所・添字の検査 \([0-9]*\) か所$/\1 \2 \3/p' "$OUT/$n.stats.log")
+    if ! "$JW" build --count-checks -o "$OUT/$n.count" "$f" >"$OUT/$n.build.log" 2>&1; then
+        echo "ERROR: compiler failed to instrument $n" >&2
+        exit 1
+    fi
+    if ! "$OUT/$n.count" > /dev/null 2>"$OUT/$n.count.log"; then
+        echo "ERROR: instrumented program failed for $n" >&2
+        exit 1
+    fi
+    cnt=$(sed -n 's/^\[checks\] //p' "$OUT/$n.count.log" | awk '{ print $2, $4, $6 }')
     if ! printf "%s\\n" "$n $st $cnt" | awk 'NF != 7 { exit 1 } { for (i=2; i<=7; i++) if ($i !~ /^[0-9]+$/) exit 1 }'; then
         echo "ERROR: missing or malformed check counts for $n" >&2
         exit 1
