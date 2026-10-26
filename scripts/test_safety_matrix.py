@@ -69,6 +69,27 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(len(data["items"]), 24)
             self.assertTrue(any(x["status"] == "NOT_RUN" for x in data["items"] if x["compiler"] == "jwc"))
 
+    def test_dynamic_inventory_rejects_omission_and_duplicates(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "cases.json"
+            p = report.safety.probe("allocation", [8], [sys.executable])
+            p.update(compiler="jwc", expected_subject="jwc", case_report=str(output))
+            for expected, actual in [
+                (["a", "b"], ["a"]),
+                (["a", "a"], ["a"]),
+                (["a"], ["a", "a"]),
+                ([], []),
+            ]:
+                def execute(*args, **kwargs):
+                    output.write_text(json.dumps({
+                        "subject": "jwc", "expected_case_ids": expected,
+                        "results": [{"id": x, "compiler": "jwc", "status": "pass"} for x in actual]
+                    }))
+                    return subprocess.CompletedProcess(args[0], 0, "", "")
+                with mock.patch.object(report, "execute_probe", side_effect=execute), contextlib.redirect_stdout(io.StringIO()):
+                    result = report.run_probe(p, Path(d), False)
+                self.assertEqual(result["status"], "INFRA_ERROR")
+
     def test_zero_tests_cannot_pass_detector(self):
         p = report.safety.probe("negative", [2], [sys.executable])
         p["required_test_names"] = ["detector"]
