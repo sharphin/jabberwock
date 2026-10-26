@@ -2,6 +2,23 @@
 use std::process::Command;
 use jabberwock::{llvm_build, native, no_modules};
 
+fn selected_llvm(src: &str) -> String {
+    let subject = std::env::var("JW_SAFETY_COMPILER").unwrap_or_else(|_| "rust".to_string());
+    if subject == "rust" { return llvm_build(src, &no_modules, "main.jw", false).unwrap(); }
+    assert_eq!(subject, "jwc", "unknown compiler subject");
+    let compiler = std::env::var("JW_SAFETY_JWC").expect("jwc negative probe requires an explicit compiler path");
+    let dir = std::env::temp_dir().join(format!("jw-jwc-negative-source-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("main.jw");
+    std::fs::write(&source, src).unwrap();
+    let output = Command::new(&compiler).arg("--ll").arg(&source).output().expect("runs selected jwc");
+    assert!(output.status.success(), "selected jwc failed: {}", String::from_utf8_lossy(&output.stderr));
+    let ll = String::from_utf8(output.stdout).expect("jwc LLVM UTF-8");
+    assert!(ll.contains("define void @jw_main("), "selected jwc did not generate LLVM");
+    std::fs::remove_dir_all(dir).unwrap();
+    ll
+}
+
 #[test]
 fn generated_llvm_is_instrumented() {
     let flags = std::env::var("JW_CFLAGS").unwrap_or_default();
@@ -15,7 +32,7 @@ fn generated_llvm_is_instrumented() {
     let src = if flags.contains("thread") {
         "fn work() {} fn main() { let a = spawn(work); let b = spawn(work); a.join(); b.join(); }"
     } else { "fn main() {}" };
-    let mut ll = llvm_build(src, &no_modules, "main.jw", false).unwrap();
+    let mut ll = selected_llvm(src);
     let function = if flags.contains("thread") { "; work\n" } else { "; main\n" };
     let start = ll.find(function).expect("probe function");
     let entry = ll[start..].find("entry:\n").unwrap() + start + "entry:\n".len();

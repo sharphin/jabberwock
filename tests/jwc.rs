@@ -18,13 +18,17 @@ fn jwc_generated_checks_reject_a_matching_retired_generation() {
     }
     let source = std::env::temp_dir().join(format!("jw-retirement-jwc-{}.jw", std::process::id()));
     std::fs::write(&source, retirement_guard::SOURCE).unwrap();
-    let ll = run_jwc(&["--ll", source.to_str().unwrap()]);
-    retirement_guard::check_retired_marker(&ll, "jwc-checked");
+    for mode in ["--ll", "--ll-checked"] {
+        let ll = run_jwc(&[mode, source.to_str().unwrap()]);
+        retirement_guard::check_retired_marker(&ll, if mode == "--ll" { "jwc-elided" } else { "jwc-checked" });
+    }
     std::fs::remove_file(source).unwrap();
 }
 
 fn have_clang() -> bool {
-    Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    let available = Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+    assert!(available || std::env::var("JW_SAFETY_STRICT").is_err(), "required jwc tests cannot skip clang");
+    available
 }
 
 fn root() -> PathBuf {
@@ -38,6 +42,11 @@ fn big<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 
 /// jwc の実行ファイル（テストの中で 1 回だけ作る）
 fn jwc() -> PathBuf {
+    if let Ok(path) = std::env::var("JW_SAFETY_JWC") {
+        let path = PathBuf::from(path);
+        assert!(path.is_file(), "selected jwc executable missing: {}", path.display());
+        return path;
+    }
     static EXE: Mutex<Option<PathBuf>> = Mutex::new(None);
     let mut g = EXE.lock().unwrap_or_else(|e| e.into_inner());
     g.get_or_insert_with(|| {
@@ -53,6 +62,7 @@ fn jwc() -> PathBuf {
 
 fn run_jwc(args: &[&str]) -> String {
     let out = Command::new(jwc()).args(args).output().expect("jwc を起動できる");
+    assert!(out.status.success(), "jwc command failed: {:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
     assert!(!out.stdout.is_empty(), "jwc の出力がありません: {:?}: {}", out.status, String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).to_string()
 }
@@ -410,6 +420,7 @@ fn jwc_build_makes_an_executable() {
         let src = std::fs::read_to_string(&path).unwrap();
         let want = big(move || jabberwock::run_source(&src, false).output);
         let got = Command::new(&exe).output().expect("作った実行ファイルを起動できる");
+        assert!(got.status.success(), "jwc generated executable failed: {}", String::from_utf8_lossy(&got.stderr));
         assert_eq!(String::from_utf8_lossy(&got.stdout), want, "{}", name);
     }
 }

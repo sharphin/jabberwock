@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--jwc", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--items", choices=["8", "9", "8,9"], default="8,9")
+    parser.add_argument("--subject", choices=["all", "rust", "jwc"], default="all")
     args = parser.parse_args()
     selected = {int(n) for n in args.items.split(",")}
     if sys.platform != "win32" and not sys.platform.startswith("linux"):
@@ -30,8 +31,10 @@ def main():
     if os.environ.get("JW_CFLAGS", "").strip():
         parser.error("Run without JW_CFLAGS: these probes are uninstrumented")
     compiler = args.compiler.resolve()
-    engines = [("rust", compiler)]
-    if args.jwc:
+    engines = [("rust", compiler)] if args.subject != "jwc" else []
+    if args.subject == "jwc" and not args.jwc:
+        parser.error("--subject jwc requires --jwc")
+    if args.jwc and args.subject != "rust":
         engines.append(("jwc", args.jwc.resolve()))
     for name, path in engines:
         if not path.is_file():
@@ -66,13 +69,15 @@ def main():
         with tempfile.TemporaryDirectory(prefix="jw-resource-edges-") as temporary:
             directory = Path(temporary)
             executable = directory / "native"
-            built = run([compiler, "build", "-o", executable, source])
-            commands = [("interp", [compiler, source])]
-            if built["exit"] == 0:
-                commands.append(("rust-native", [executable]))
-            else:
-                infrastructure_errors.append({"case": "rust-native build", "observed": built})
-            if args.jwc:
+            commands = []
+            if args.subject != "jwc":
+                built = run([compiler, "build", "-o", executable, source])
+                commands.append(("interp", [compiler, source]))
+                if built["exit"] == 0:
+                    commands.append(("rust-native", [executable]))
+                else:
+                    infrastructure_errors.append({"case": "rust-native build", "observed": built})
+            if args.jwc and args.subject != "rust":
                 generated = run([args.jwc.resolve(), "--ll", source])
                 if generated["exit"] == 0:
                     ll = directory / "jwc.ll"
@@ -93,7 +98,7 @@ def main():
                                 "expected": "specified memory error, not an internal error or panic", "observed": record})
     report = {
         "scope": "Reproduction cases for existing items 8/9; passing cases alone do not complete either whole item",
-        "platform": sys.platform, "selected_items": sorted(selected),
+        "platform": sys.platform, "subject": args.subject, "selected_items": sorted(selected),
         "address_space_limit_bytes": (1 << 32) if 8 in selected else None,
         "runtime_sha256": hashlib.sha256((ROOT / "runtime/jw_rt.c").read_bytes()).hexdigest(),
         "compiler_sha256": {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in engines},

@@ -198,18 +198,18 @@ class SafetyReportTests(unittest.TestCase):
                     code = report.main([], target_os=target)
                 data = json.loads((root / "target" / ("safety-" + target + "-report.json")).read_text(encoding="utf-8"))
                 self.assertEqual(code, 1 if target == "windows" else 0)
-                self.assertEqual(data["suite"]["id"], target + "-12")
-                self.assertEqual([i["item"] for i in data["items"]], list(range(1, 13)))
-                self.assertEqual(len({i["id"] for i in data["items"]}), 12)
+                self.assertEqual(data["suite"]["id"], target + "-compiler-matrix")
+                self.assertEqual([i["item"] for i in data["items"]], list(range(1, 13)) * 2)
+                self.assertEqual(len({i["id"] for i in data["items"]}), 24)
                 self.assertTrue(all(i["target_os"] == target and i["id"].startswith(target + "-") for i in data["items"]))
-                self.assertTrue(all(i["acceptance"] == "NOT_ASSESSED" for i in data["items"]))
+                self.assertTrue(all(i["acceptance"] == "BLOCKED" for i in data["items"]))
                 if target == "windows":
-                    self.assertTrue(all(data["items"][i - 1]["status"] == "NOT_RUN" for i in (3, 4, 6, 8)))
+                    self.assertTrue(all(data["items"][i - 1]["status"] == "NOT_RUN" for i in (3, 4, 6)))
 
     def test_linux_array_failure_does_not_fail_resource_item(self):
         def fake_probe(p, work, dry):
             return {"name": p["name"], "items": p["items"],
-                    "status": "FAIL" if p["name"] == "array-limits" else "PROBE_PASS"}
+                    "status": "FAIL" if p["name"] == "jwc-array-limits" else "PROBE_PASS"}
         with tempfile.TemporaryDirectory() as d:
             output = Path(d) / "report.json"
             with mock.patch.object(report.suites, "host_os", return_value="linux"), \
@@ -234,11 +234,11 @@ class SafetyReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             output = Path(d) / "report.json"
             def probe(p, work, dry):
-                if p["name"] == "cargo-test":
+                if p["name"] == "rust-goal-semantics":
                     partial = json.loads(output.read_text(encoding="utf-8"))
-                    self.assertEqual(partial["active_probe"], "cargo-test")
+                    self.assertEqual(partial["active_probe"], "rust-goal-semantics")
                     self.assertEqual(partial["run_status"], "RUNNING")
-                    self.assertEqual(len(partial["items"]), 12)
+                    self.assertEqual(len(partial["items"]), 24)
                     failure = next(r for r in partial["results"] if r["name"] == "jwc-build")
                     self.assertEqual(failure["actual"]["stderr"]["text"], "link failed")
                     self.assertEqual(partial["items"][0]["status"], "NOT_RUN")
@@ -253,8 +253,8 @@ class SafetyReportTests(unittest.TestCase):
             final = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(code, 130)
             self.assertEqual(final["run_status"], "INTERRUPTED")
-            self.assertEqual(len(final["items"]), 12)
-            self.assertTrue(final["items"][0]["pending_probe_names"])
+            self.assertEqual(len(final["items"]), 24)
+            self.assertTrue(final["items"][12]["pending_probe_names"])
 
     def test_failed_jwc_build_blocks_consumers_even_if_old_binary_exists(self):
         called = []
@@ -271,10 +271,10 @@ class SafetyReportTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(report.main(["--output", str(output)], target_os="windows"), 1)
             data = json.loads(output.read_text(encoding="utf-8"))
-            arrays = next(r for r in data["results"] if r["name"] == "array-limits")
+            arrays = next(r for r in data["results"] if r["name"] == "jwc-array-limits")
             self.assertEqual(arrays["status"], "NOT_RUN")
             self.assertIn("jwc-build", arrays["reason"])
-            self.assertIn("release-test", called)
+            self.assertIn("rust-source-regression", called)
 
     def test_heartbeat_and_file_output_without_capture_pipes(self):
         with tempfile.TemporaryDirectory() as d:

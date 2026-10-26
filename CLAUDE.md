@@ -325,3 +325,7 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 
 文法や仕様で決めたことは `docs/design-decisions.md` に記録する。
 今の言語の決まりは `docs/spec.md`（言語仕様）にまとめる。仕様を変えたら同じコミットで spec.md も直す。
+
+## 安全性検査の作業メモ
+
+jwcを最優先に12項目×コンパイラ＋5目標の実用検査を分離。形式証明は `scripts/formal_report.py`。仕様と未検証範囲は `docs/compiler-safety-matrix.md`。テスト実行は利用者が担当し、結果から修正・PRを行う。今回の改修は未実行。

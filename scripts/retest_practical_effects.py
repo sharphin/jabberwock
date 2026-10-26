@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--release-compiler", type=Path, default=ROOT / "target/release" / ("jabberwock" + EXE))
     parser.add_argument("--jwc", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--subject", choices=["all", "rust", "jwc"], default="all")
     args = parser.parse_args()
     if sys.platform != "win32" and not sys.platform.startswith("linux"):
         parser.error("This runner requires Windows or Linux")
@@ -30,6 +31,8 @@ def main():
         parser.error("This runner is uninstrumented; run without JW_CFLAGS")
     engines = {"debug": args.debug_compiler.resolve(), "release": args.release_compiler.resolve(),
                "jwc": args.jwc.resolve()}
+    engines = {name: path for name, path in engines.items()
+               if args.subject == "all" or (name == "jwc") == (args.subject == "jwc")}
     for name, path in engines.items():
         if not path.is_file():
             parser.error(name + " compiler is missing: " + str(path))
@@ -55,12 +58,13 @@ def main():
         for filename, exit_code in fixtures:
             source = ROOT / "tests/safety" / filename
             commands = []
-            for name in ["debug", "release"]:
+            for name in [name for name in ("debug", "release") if name in engines]:
                 for elide in [False, True]:
                     options = [] if elide else ["--no-elide"]
                     commands.append((name + ("-elided" if elide else "-checked"),
                                      [engines[name], *options, source], False))
-            for name, compiler in [("rust", engines["release"]), ("jwc", engines["jwc"])]:
+            for name, compiler in [("rust" if name == "release" else name, path)
+                                   for name, path in engines.items() if name != "debug"]:
                 generated = run([compiler, "--ll", source])
                 if generated["exit"] != 0 or "define void @jw_main(" not in generated["stdout"]:
                     infrastructure.append({"case": name + ":" + filename, "phase": "LLVM generation", "observed": generated})
@@ -93,7 +97,7 @@ def main():
                                 "observed": observed})
     report = {
         "scope": "Partial practical items 10/11/12: effects occur exactly once before success/error; not whole-item acceptance",
-        "platform": sys.platform, "instrumentation": "none", "ordinary_cli_JW_NATIVE": "unset",
+        "platform": sys.platform, "subject": args.subject, "instrumentation": "none", "ordinary_cli_JW_NATIVE": "unset",
         "compiler_sha256": {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in engines.items()},
         "source_sha256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                           for path in [ROOT / "runtime/jw_rt.c", Path(__file__).resolve(),

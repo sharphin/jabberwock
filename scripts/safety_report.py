@@ -22,6 +22,8 @@ import time
 
 import local_safety as safety
 import safety_platforms as suites
+import safety_compilers
+import safety_goals
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_LIMIT = 24000
@@ -147,7 +149,9 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
     name, command = probe["name"], probe["cmd"]
     entry = {"name": name, "items": probe["items"], "command": command,
              "environment_overrides": probe["env"], "status": "NOT_RUN",
-             "expected": {"exit_code": 0}, "reason": None}
+             "expected": {"exit_code": 0}, "reason": None, "compiler": probe.get("compiler")}
+    if probe.get("evidence_scope"):
+        entry["evidence_scope"] = probe["evidence_scope"]
     if probe.get("target_os"):
         entry["target_os"] = probe["target_os"]
     if dry_run:
@@ -194,7 +198,7 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
 
     env = dict(os.environ)
     for k in ("JW_CFLAGS", "JW_NATIVE", "JW_ROBUST_ASAN", "JW_ROBUST_NATIVE",
-              "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST", "JWC_REGEN", "JW_REQUIRE_RETIREMENT_TESTS"):
+              "JW_SAFETY_COMPILER", "JW_SAFETY_JWC", "JW_SAFETY_STRICT", "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST", "JWC_REGEN", "JW_REQUIRE_RETIREMENT_TESTS"):
         env.pop(k, None)
     env.update(probe["env"])
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -207,6 +211,7 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
     begin = time.monotonic()
     try:
         run = execute_probe(command, env=env, timeout=probe["timeout"], name=name, log_paths=log_paths)
+        entry["executed_required_tests"] = [name for name in probe.get("required_test_names", []) if "test " + name + " ... ok" in run.stdout]
         entry["actual"] = {"exit_code": run.returncode,
                            "stdout": excerpt(run.stdout), "stderr": excerpt(run.stderr)}
         entry["status"] = "PROBE_PASS" if run.returncode == 0 else "FAIL"
@@ -239,6 +244,14 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
                 raise ValueError("expected an object containing a results list")
             entry["case_report"] = details
             cases = details["results"]
+            if probe.get("expected_subject") and details.get("subject") != probe["expected_subject"]:
+                raise ValueError("case report belongs to a different compiler")
+            if any(r.get("compiler", probe.get("compiler")) != probe.get("compiler") for r in cases if isinstance(r, dict)):
+                raise ValueError("mixed compiler cases")
+            if probe.get("required_case_ids"):
+                ids = [r.get("id") for r in cases if isinstance(r, dict)]
+                if len(ids) != len(set(ids)) or set(ids) != set(probe["required_case_ids"]):
+                    raise ValueError("missing, duplicate or unexpected case IDs")
             if not cases or any(not isinstance(r, dict) or r.get("case_status", r.get("status")) not in ("pass", "fail")
                                 for r in cases):
                 raise ValueError("no executed cases or invalid case status")
@@ -255,6 +268,9 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
                 entry["status"], entry["reason"] = "INFRA_ERROR", "invalid case report: " + str(error)
     elif nested and entry["status"] not in ("TIMEOUT", "CRASH", "INFRA_ERROR", "INTERRUPTED"):
         entry["status"], entry["reason"] = "INFRA_ERROR", "case report was not produced"
+    if entry["status"] == "PROBE_PASS" and probe.get("required_test_names"):
+        if set(entry.get("executed_required_tests", [])) != set(probe["required_test_names"]):
+            entry["status"], entry["reason"] = "INFRA_ERROR", "required Cargo test did not report execution"
     if entry["status"] != "PROBE_PASS":
         print(f"{entry['status']} {name}: {entry.get('reason') or 'exit ' + str(entry.get('actual', {}).get('exit_code'))}", flush=True)
         actual = entry.get("actual", {})
@@ -270,6 +286,7 @@ def main(argv=None, *, target_os=None) -> int:
     ap.add_argument("--output", type=Path, help="default: target/safety-<OS>-report.json")
     ap.add_argument("--scale", type=int, default=1, help="fuzz repetitions multiplier")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--compiler", choices=("all", "jwc", "rust"), default="all")
     args = ap.parse_args(argv)
     if args.scale < 1:
         ap.error("--scale must be >= 1")
@@ -285,34 +302,23 @@ def main(argv=None, *, target_os=None) -> int:
     if not args.dry_run:
         work.mkdir(parents=True, exist_ok=True)
 
-    catalog = suites.catalog(selected_os, args.scale, work)
-    # Build required tooling once, before running item 1. One probe may cover
-    # several criteria; run it once and reference its result from each item.
-    prereq = [safety.probe("cargo-debug-build", [12], ["cargo", "build"], timeout=1200)]
-    prereq[0]["target_os"] = selected_os
-    prereq.extend(p for p in catalog if p["name"] in ("cargo-build", "jwc-build"))
-    ordered = prereq[:]
-    seen = {p["name"] for p in ordered}
-    for n in range(1, 13):
-        for p in catalog:
-            if n in p["items"] and p["name"] not in seen:
-                ordered.append(p)
-                seen.add(p["name"])
+    compilers = safety_compilers.COMPILERS if args.compiler == "all" else (args.compiler,)
+    prereq, catalog = safety_compilers.catalog(selected_os, args.scale, work, compilers)
+    ordered = prereq + catalog
 
     def recorded_version(command):
         return None if args.dry_run else version(command)
     git = recorded_version(["git", "rev-parse", "HEAD"])
     report = {
-        "schema_version": 2,
-        "suite": {"id": selected_os + "-12", "target_os": selected_os, "item_count": 12},
+        "schema_version": 3,
+        "suite": {"id": selected_os + "-compiler-matrix", "target_os": selected_os, "compilers": compilers, "items_per_compiler": 12, "item_count": 12 * len(compilers), "goals_per_compiler": 5},
         "scope": "Probe results only. Not proof or certification of all 12 acceptance criteria.",
         "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "commit": git,
         "platform": {"os": platform.platform(), "system": platform.system(),
                      "machine": platform.machine(), "python": sys.version},
         "tools": {"rustc": recorded_version(["rustc", "--version"]), "cargo": recorded_version(["cargo", "--version"]),
-                  "clang": recorded_version([os.environ.get("JW_CLANG", "clang"), "--version"]),
-                  "lake": recorded_version(["lake", "--version"])},
+                  "clang": recorded_version([os.environ.get("JW_CLANG", "clang"), "--version"])},
         "scale": args.scale, "preparation": [], "items": [], "results": [],
     }
     produced = {}
@@ -323,22 +329,24 @@ def main(argv=None, *, target_os=None) -> int:
         report["results"] = [produced[p["name"]] for p in ordered if p["name"] in produced]
         report["preparation"] = [produced[p["name"]] for p in prereq if p["name"] in produced]
         report["items"] = []
-        for n in range(1, 13):
-            references = [p["name"] for p in ordered if n in p["items"]]
-            pending = [name for name in references if name not in produced]
-            results = [produced[name] for name in references if name in produced]
-            problems = [x for x in results if x["status"] in
-                        ("FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED")]
-            unavailable = [x["name"] for x in results if x["status"] in ("NOT_RUN", "PLANNED")]
-            status = ("FAIL" if problems else "NOT_RUN" if pending or unavailable or not results
-                      else "PROBES_PASS_ONLY")
-            report["items"].append({"item": n, "name": safety.NAMES[n],
-                                    "status": "PLANNED" if args.dry_run else status,
-                                    "id": selected_os + "-" + str(n).zfill(2), "target_os": selected_os,
-                                    "acceptance": "NOT_ASSESSED", "probe_names": references,
-                                    "pending_probe_names": pending,
-                                    "failures": [x["name"] for x in problems],
-                                    "unavailable": unavailable})
+        for compiler in compilers:
+            for n in range(1, 13):
+                references = [p["name"] for p in ordered if n in p["items"] and p.get("compiler") == compiler]
+                pending = [name for name in references if name not in produced]
+                results = [produced[name] for name in references if name in produced]
+                problems = [x for x in results if x["status"] in
+                            ("FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED")]
+                unavailable = [x["name"] for x in results if x["status"] in ("NOT_RUN", "PLANNED")]
+                status = ("FAIL" if problems else "NOT_RUN" if pending or unavailable or not results
+                          else "PROBES_PASS_ONLY")
+                report["items"].append({"item": n, "name": safety.NAMES[n],
+                                        "status": "PLANNED" if args.dry_run else status,
+                                        "compiler": compiler, "id": selected_os + "-" + compiler + "-" + str(n).zfill(2), "target_os": selected_os,
+                                        "acceptance": "BLOCKED", "coverage_gaps": safety_goals.GAPS[n], "probe_names": references,
+                                        "pending_probe_names": pending,
+                                        "failures": [x["name"] for x in problems],
+                                        "unavailable": unavailable})
+        report["goals"] = safety_goals.goals(report["items"], compilers, selected_os, catalog, produced)
         if not args.dry_run:
             report["updated_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             writer.save(report)
@@ -348,16 +356,10 @@ def main(argv=None, *, target_os=None) -> int:
         for p in ordered:
             report["active_probe"] = p["name"]
             checkpoint()
-            dependencies = []
-            if p["name"] == "jwc-build" or p.get("case_report"):
-                dependencies.append("cargo-build")
-            if p["jwc"]:
-                dependencies.append("jwc-build")
-            if p["name"] == "effects-10-11-12":
-                dependencies.append("cargo-debug-build")
-            blocked = [name for name in dependencies if produced[name]["status"] != "PROBE_PASS"]
+            dependencies = p.get("dependencies", [])
+            blocked = [name for name in dependencies if produced.get(name, {}).get("status") != "PROBE_PASS"]
             if blocked and not args.dry_run:
-                r = {"name": p["name"], "items": p["items"], "target_os": selected_os,
+                r = {"name": p["name"], "compiler": p.get("compiler"), "items": p["items"], "target_os": selected_os,
                      "command": p["cmd"], "environment_overrides": p["env"], "status": "NOT_RUN",
                      "reason": "prerequisite did not pass: " + ", ".join(blocked)}
             else:
@@ -386,12 +388,14 @@ def main(argv=None, *, target_os=None) -> int:
         print("Final results could not be saved; last saved report: " + str(writer.path), file=sys.stderr, flush=True)
         return 2
     for item in report["items"]:
-        print(f"{selected_os.upper()} ITEM {item['item']:02d}/12 {item['name']}: {item['status']}", flush=True)
+        print(f"{selected_os.upper()} {item['compiler']} ITEM {item['item']:02d}/12 {item['name']}: {item['status']}", flush=True)
+    for goal in report["goals"]:
+        print(f"{selected_os.upper()} {goal['compiler']} GOAL {goal['name']}: {goal['status']} (acceptance: {goal['acceptance']})", flush=True)
     if not args.dry_run:
         print("Report: " + str(writer.path), flush=True)
     else:
         print("Dry run; no report written", flush=True)
-    return 130 if report["run_status"] == "INTERRUPTED" else int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"]))
+    return 130 if report["run_status"] == "INTERRUPTED" else int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"] + report["goals"]))
 
 
 if __name__ == "__main__":

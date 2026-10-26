@@ -85,8 +85,8 @@ fn real_main() {
     }
 
     if show_ll {
-        match jabberwock::llvm_text(&src, &read, &path) {
-            Ok(t) => print!("{}", t),
+        match jabberwock::llvm_build_with(&src, &read, &path, false, elide, jabberwock::ir::llvm::Opts::default()) {
+            Ok((t, _)) => print!("{}", t),
             Err(e) => {
                 eprintln!("{}", e);
                 process::exit(1);
