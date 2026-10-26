@@ -69,6 +69,20 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(len(data["items"]), 24)
             self.assertTrue(any(x["status"] == "NOT_RUN" for x in data["items"] if x["compiler"] == "jwc"))
 
+    def test_legacy_effects_duplicate_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "effects.json"
+            probe = report.safety.probe("effects", [10], [sys.executable])
+            probe.update(compiler="jwc", expected_subject="jwc", case_report=str(output))
+            def execute(*args, **kw):
+                cases = [{"case": "effect.jw", "configuration": "jwc-native-O1",
+                          "compiler": "jwc", "status": "pass"}] * 2
+                output.write_text(json.dumps({"subject": "jwc", "results": cases}))
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+            with mock.patch.object(report, "execute_probe", side_effect=execute), contextlib.redirect_stdout(io.StringIO()):
+                verdict = report.run_probe(probe, Path(d), False)
+            self.assertEqual(verdict["status"], "INFRA_ERROR")
+
     def test_missing_per_case_compiler_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:
             output = Path(d) / "cases.json"
