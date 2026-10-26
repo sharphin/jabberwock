@@ -57,7 +57,12 @@ def main():
         for name, engine in engines:
             for mode in ["--typed", "--ir-raw", "--ir", "--ll"]:
                 record = run([engine, mode, oversized])
-                passed = record["exit"] == 1 and "配列が大きすぎます" in record["stderr"]
+                # Dump APIs intentionally print diagnostics to stdout and return 0.
+                # Require the rejection diagnostic and absence of emitted program text.
+                dump_mode = mode in ("--typed", "--ir-raw") or (name == "jwc" and mode == "--ir")
+                diagnostic = record["stdout"] if dump_mode else record["stderr"]
+                passed = record["exit"] == (0 if dump_mode else 1) and "配列が大きすぎます" in diagnostic
+                passed = passed and not any(marker in record["stdout"] for marker in ("define void @jw_main(", "bb0:", "structty Buffer"))
                 results.append({"item": 9, "case": name + mode, "case_status": "pass" if passed else "fail",
                                 "expected": "reject expanded array above 1 MiB", "observed": record})
                 record = run([engine, mode, boundary])

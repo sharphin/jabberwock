@@ -650,7 +650,18 @@ pub struct Checker {
                     return Err(diag.make("`{n}` の型の引数の数が違います").at(t.span, "{want} 個必要ですが {xs.len()} 個書かれています"));
                 }
                 let argv = resolve_all(xs)?;
-                if is_struct(n) { Ok(ty.Ty.Struct(n, own argv)) } else { Ok(ty.Ty.Enum(n, own argv)) }
+                if is_struct(n) {
+                    let d = s_at[n];
+                    let m = ty.targs(sdefs[d].tparams, argv);
+                    for f in sdefs[d].tys { check_size(ty.subst(f, m), t.span)?; }
+                    Ok(ty.Ty.Struct(n, own argv))
+                } else {
+                    let result = ty.Ty.Enum(n, own argv);
+                    for v in variants_of(result) {
+                        for f in v.tys { check_size(f, t.span)?; }
+                    }
+                    Ok(result)
+                }
             }
             case Ref(x, m) -> Ok(ty.Ty.Ref(own resolve_pointee(x)?, m));
             case Array(x, n) -> {

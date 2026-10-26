@@ -75,7 +75,7 @@ NULL注入はruntimeの5つの単一スレッドfixtureだけを対象とし、
 python scripts/formal_report.py --output target/formal-report.json
 ```
 
-既存の `check_formal.py` で抽象モデルのLean証明・公理監査を実行する。
+`--abstract-model` 指定時のみ既存の `check_formal.py` で共有抽象モデルのLean証明・公理監査を実行する。
 5目標×コンパイラの形式証明状況は別JSONに記録する。
 現状は実装全体に対応する証明がないため `NOT_PROVEN`。
 抽象モデルの成功 `MODEL_PASS` で5目標を証明済みに変更しない。
@@ -94,3 +94,14 @@ Rust CLIの `--no-elide --ll` が以前はフラグを無視していたため�
 両コンパイラでcheckedとelidedを区別して生成する。CLI回帰テストも追加したが未実行。
 共有C runtimeの退役検査とUB検出器負例は `evidence_scope` に共有基盤と記録する。
 これだけでコンパイラ生成コードを検証したとは扱わない。
+
+### コンパイラ別形式証明の入口
+
+`python scripts/formal_report.py --compiler jwc` または `--compiler rust`。
+既定は両方で、`formal/compilers/<compiler>/obligations.json` の5義務を独立に処理する。
+対象実装のソース一覧/hash、義務manifestのhash、証明入口、定理の公理監査を記録する。
+証明モジュールの名前空間は `JabberwockFormal.Jwc.*` と `JabberwockFormal.Rust.*`。
+別コンパイラのモジュールや、古い実装hashに結び付いた証明は使用しない。
+現時点で各実装の証明モジュールは未制作であり `NOT_IMPLEMENTED / NOT_PROVEN`。
+モジュール追加後もLean成功だけでは実装対応の正しさを認定せず、`KERNEL_CHECKED` と区別する。
+共有抽象モデルは明示的な `--abstract-model` でのみ追加実行する。

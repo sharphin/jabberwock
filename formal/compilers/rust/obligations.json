@@ -1,0 +1,35 @@
+{
+  "compiler": "rust",
+  "goals": {
+    "semantics": {
+      "statement": "定義されたソースプログラムの観測可能な振る舞いを、対象コンパイラの各変換と生成コードが保存する。",
+      "module": null,
+      "theorems": [],
+      "implementation_sha256": null
+    },
+    "memory": {
+      "statement": "対象コンパイラが受理したプログラムの実行で、runtime/FFIに明示した仮定の下、無効なメモリアクセスが起きない。",
+      "module": null,
+      "theorems": [],
+      "implementation_sha256": null
+    },
+    "types": {
+      "statement": "対象コンパイラの型付け規則と実装が対応し、型保存と進行（規定の安全な停止を含む）が成立する。",
+      "module": null,
+      "theorems": [],
+      "implementation_sha256": null
+    },
+    "ownership": {
+      "statement": "対象コンパイラとruntimeのmove/borrow/drop/退役/並行送信が所有者と参照の不変条件を保存する。",
+      "module": null,
+      "theorems": [],
+      "implementation_sha256": null
+    },
+    "checks": {
+      "statement": "対象コンパイラが挿入・省略する世代/境界/算術検査が仕様の成功または安全な停止に対応する。",
+      "module": null,
+      "theorems": [],
+      "implementation_sha256": null
+    }
+  }
+}
