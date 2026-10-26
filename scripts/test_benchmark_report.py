@@ -23,7 +23,8 @@ class BenchmarkReportTests(unittest.TestCase):
 
     def test_regression(self):
         metadata = {"schema_version": 2, "environment": {"os": "linux"},
-                    "runs": 5, "compiler_hashes": {"jwc": "same"},
+                    "runs": 5, "compiler_hashes": {"jwc": "same", "runtime": "fixed"},
+                    "source_hashes": {"fib": {"jwc": "a", "rust": "b", "cpp": "c"}},
                     "flags": {"rust": "-O3"}}
         baseline = {**metadata, "cases": {"fib": {"status": "PASS", "metrics": {
             "jwc": {"median_s": 1.0}}}}}
@@ -31,10 +32,18 @@ class BenchmarkReportTests(unittest.TestCase):
             "jwc": {"median_s": 1.2}}}}}
         self.assertEqual(bench.compare(current, baseline, 15)["regressions"], ["fib"])
 
-    def test_different_compiler_is_not_comparable(self):
+    def test_different_jwc_version_is_comparable(self):
         a = {"schema_version": 2, "environment": {}, "runs": 5,
-             "compiler_hashes": {"jwc": "new"}, "flags": {}, "cases": {}}
+             "compiler_hashes": {"jwc": "new", "runtime": "fixed"},
+             "source_hashes": {}, "flags": {}, "cases": {}}
         b = {**a, "compiler_hashes": {"jwc": "old"}}
+        self.assertEqual(bench.compare(a, b, 15)["status"], "NO_MATCHING_CASES")
+
+    def test_changed_workload_is_not_comparable(self):
+        a = {"schema_version": 2, "environment": {}, "runs": 5,
+             "compiler_hashes": {"jwc": "new", "runtime": "fixed"},
+             "source_hashes": {"fib": {"jwc": "new"}}, "flags": {}, "cases": {}}
+        b = {**a, "source_hashes": {"fib": {"jwc": "old"}}}
         self.assertEqual(bench.compare(a, b, 15)["status"], "NOT_COMPARABLE")
 
     def test_old_format_is_not_comparable(self):
