@@ -416,7 +416,9 @@ pub fn str check_ref(ref mut B b, str rt, str r, str use_site) {
     let st = b.val("extractvalue " + rt + " " + r + ", 3");
     let hp = b.val("getelementptr i8, ptr " + blk + ", i64 -8");
     let cur = b.val("load atomic i64, ptr " + hp + " monotonic, align 8");
-    let bad = b.val("icmp ne i64 " + cur + ", " + g);
+    let different = b.val("icmp ne i64 " + cur + ", " + g);
+    let retired = b.val("icmp eq i64 " + cur + ", -1");
+    let bad = b.val("or i1 " + different + ", " + retired);
     let ok = b.if_true(bad);
     b.op("call void @jw_fail_dangling(ptr " + use_site + ", ptr " + st + ", ptr " + blk + ", i64 " + g + ")");
     b.op("unreachable");

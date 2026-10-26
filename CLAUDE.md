@@ -14,7 +14,9 @@
 
 形式化は `formal/`（Lean 4.24.0、抽象的な世代・退役と所有位置間のムーブ）。
 `scripts/check_formal.py` で証明と公理依存を検査する。範囲と未証明事項は `docs/formal-semantics.md`。
-上限での退役は決定済み・本体未実装で、現行の世代周回を置き換える作業は別に必要。
+上限での退役はRust/IR/C/native/jwcに実装。経路・境界試験・未実施範囲は `docs/generation-retirement.md`。
+RustはSlot.retiredを空き表へ戻さず、Cは状態bitを除いたcounterの余地を確認して全1markerで退役する。
+Cの退役区画はatomicな保持表へ残し、参照検査は世代一致でもmarkerを拒否する。生存中の上限は規定の資源エラーで停止する。
 
 | ファイル | 役割 |
 |---|---|
@@ -38,6 +40,7 @@
 | `runtime/jw_rt.c` | 実行時ライブラリ（区画と世代・文字列・リスト・辞書・出力・エラー） |
 | `src/ir/analyze.rs` | IR の上で ref の世代チェックを消す解析（`Proj::Deref` の `Check` を書く） |
 | `tests/examples.rs` | 言語の基本動作 |
+| `tests/retirement.rs` / `tests/support/retirement.c` | 本当の世代上限と小さい上限、空き表・保持表・送信・リストの退役。生成LLVMのmarker一致の負例は support/retirement.rs、jwc側も同じ負例を実行 |
 | `tests/analyze.rs` | 検査を消す解析。消せる例と、消してはいけない例 |
 | `tests/structs.rs` | 構造体 |
 | `tests/control.rs` | loop / while / for / break / continue / if 式 |

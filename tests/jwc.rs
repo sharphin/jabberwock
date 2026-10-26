@@ -7,6 +7,22 @@ use std::sync::Mutex;
 
 use jabberwock::{llvm_build, native};
 
+#[path = "support/retirement.rs"]
+mod retirement_guard;
+
+#[test]
+fn jwc_generated_checks_reject_a_matching_retired_generation() {
+    if !have_clang() {
+        assert!(std::env::var("JW_REQUIRE_RETIREMENT_TESTS").is_err(), "退役のjwc検証にclangが必要です");
+        return;
+    }
+    let source = std::env::temp_dir().join(format!("jw-retirement-jwc-{}.jw", std::process::id()));
+    std::fs::write(&source, retirement_guard::SOURCE).unwrap();
+    let ll = run_jwc(&["--ll", source.to_str().unwrap()]);
+    retirement_guard::check_retired_marker(&ll, "jwc-checked");
+    std::fs::remove_file(source).unwrap();
+}
+
 fn have_clang() -> bool {
     Command::new(native::clang()).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }

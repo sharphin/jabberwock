@@ -9,6 +9,8 @@ on:
 
 jobs:
   test:
+    env:
+      JW_REQUIRE_RETIREMENT_TESTS: "1"
     strategy:
       fail-fast: false
       matrix:

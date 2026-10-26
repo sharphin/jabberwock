@@ -1875,6 +1875,8 @@ fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str, o: &Opts) -> String {
     let hp = b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
     let g = b.val(format!("load atomic i64, ptr {} monotonic, align 8", hp));
     let bad = b.val(format!("icmp ne i64 {}, {}", g, gen));
+    let retired = b.val(format!("icmp eq i64 {}, -1", g));
+    let bad = b.val(format!("or i1 {}, {}", bad, retired));
     let (_, ok) = b.if_true(&bad);
     b.op(format!("call void @jw_fail_dangling(ptr {}, ptr {}, ptr {}, i64 {})", use_site, site, blk, gen));
     b.op("unreachable");

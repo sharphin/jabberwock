@@ -49,6 +49,12 @@ struct Machine<'a> {
     views: Vec<Vec<Local>>,
 }
 
+#[cfg(test)]
+pub(crate) fn retirement_probe(prog: &Program, it: &mut Interp, slot: usize, span: Span) -> R<Value> {
+    let mut machine = Machine { prog, it, depth: 0, views: Vec::new() };
+    machine.seq_op("reverse", slot, &[], Vec::new(), span, span)
+}
+
 impl<'a> Machine<'a> {
     fn call(&mut self, fi: usize, args: Vec<Value>, views: Vec<Local>, span: Span) -> R<Value> {
         if self.it.world.aborted.load(Ordering::Relaxed) {
@@ -536,7 +542,7 @@ impl<'a> Machine<'a> {
             _ => false,
         };
         if list && moved {
-            self.it.list_moved(slot, span, name);
+            self.it.list_moved(slot, span, name)?;
         }
         Ok(self.it.adopt(r))
     }

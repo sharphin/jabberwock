@@ -1,6 +1,6 @@
 // jabberwock の実行時ライブラリ。`jabberwock build` が LLVM の書き出し（src/ir/llvm.rs）と一緒に clang でコンパイルする。
 //
-// - own の先は「区画」。区画の頭（16 バイト）に世代と「最後に解放された場所」を置く。解放しても OS には返さず、
+// - own の先は「区画」。区画の頭（8 バイト）に世代を置く。解放しても OS には返さず、
 //   同じ大きさの区画の置き場に戻すだけ（世代は進めたまま残るので、古い ref は必ず見つかる）。
 // - ref は (指す先, 区画, 借りたときの世代, 借りた場所)。区画の世代と比べて確かめる（比べるのは書き出したコード）。
 // - own の「読むだけの写し」（for の要素・クロージャが取り込んだ値）は、下の 1 ビットを立てたポインタで、
@@ -363,6 +363,49 @@ typedef struct WHdr {
 static uint64_t gen_get(void *p) { return __atomic_load_n(&HDR(p)->gen, __ATOMIC_RELAXED); }
 static void gen_set(void *p, uint64_t gen) { __atomic_store_n(&HDR(p)->gen, gen, __ATOMIC_RELAXED); }
 
+// bit62はリストの保持印、bit0/1は解放/借用印。bit63を含む全1は退役専用で、refには発行しない。
+#define GEN_RETIRED UINT64_MAX
+#define GEN_COUNTER_MASK ((UINT64_C(1) << 62) - 1)
+#ifdef JW_TEST_GENERATION_LIMIT
+_Static_assert(JW_TEST_GENERATION_LIMIT >= 3 && JW_TEST_GENERATION_LIMIT <= GEN_COUNTER_MASK
+               && (JW_TEST_GENERATION_LIMIT & 3) == 3,
+               "test generation limit must include both low state bits");
+#define GEN_LIMIT ((uint64_t)JW_TEST_GENERATION_LIMIT)
+#else
+#define GEN_LIMIT GEN_COUNTER_MASK
+#endif
+// live payloadとは別に、全スレッドの退役識別子を数える。
+static uint64_t retired_blocks;
+static void *retired_head;
+static uint64_t retired_count(void) { return __atomic_load_n(&retired_blocks, __ATOMIC_RELAXED); }
+
+static int gen_has_room(uint64_t gen, uint64_t step) {
+    return gen != GEN_RETIRED && step <= GEN_LIMIT && (gen & GEN_COUNTER_MASK) <= GEN_LIMIT - step;
+}
+
+static void gen_retire(void *p) {
+    if (gen_get(p) != GEN_RETIRED) {
+        gen_set(p, GEN_RETIRED);
+        // 退役後の先頭語は保持表のリンクに転用する。古いrefはpayloadを読む前に拒否する。
+        // 保持表はプロセス終了まで削除しない。別スレッドの退役も安全に公開する。
+        void *head = __atomic_load_n(&retired_head, __ATOMIC_RELAXED);
+        do { *(void **)p = head; }
+        while (!__atomic_compare_exchange_n(&retired_head, &head, p, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+        __atomic_fetch_add(&retired_blocks, 1, __ATOMIC_RELAXED);
+    }
+}
+
+// 所有者だけが書く。上限確認からstoreの間にも過去の世代値を公開しない。
+static int gen_advance(void *p, uint64_t step) {
+    uint64_t gen = gen_get(p);
+    if (!gen_has_room(gen, step)) {
+        gen_retire(p);
+        return 0;
+    }
+    gen_set(p, gen + step);
+    return 1;
+}
+
 // 使い回した区画の、前の解放の位置（エラーで「ここで解放された」を出すため。古いものから消える）
 #define NREUSED 4096
 static _Thread_local struct {
@@ -381,9 +424,19 @@ static _Thread_local struct {
 } sent[NREUSED];
 static _Thread_local unsigned sent_n;
 
+static void remember_sent(void *p, const WSite *why) {
+    unsigned i = sent_n++ % NREUSED;
+    sent[i].block = p;
+    sent[i].gen = gen_get(p);
+    sent[i].why = why;
+}
+
 // 世代 gen の ref を無効にした出来事（解放なら世代 gen+1、送った・要素が動いたなら表の中）の位置
 static const WSite *freed_at(void *block, uint64_t gen) {
-    if (gen_get(block) == gen + 1) return FREED_SITE(block);
+    if (gen == GEN_RETIRED) return NULL;
+    // 退役したpayloadは診断用にも読まない。保持したmetadata/スレッドローカル履歴だけを使う。
+    uint64_t current = gen_get(block);
+    if (current != GEN_RETIRED && current == gen + 1) return FREED_SITE(block);
     for (unsigned k = 0; k < NREUSED; k++) {
         unsigned i = (reused_n - 1 - k) % NREUSED;
         if (reused[i].block == block && reused[i].gen == gen + 1) return reused[i].freed;
@@ -406,6 +459,11 @@ _Noreturn void jw_fail_dangling(const WSite *use, const WSite *borrowed, void *b
         put_site(f, label);
     }
     finish_error(use, "ここで使ったが、借りた先はもう存在しない", "参照は、借りた元の所有者より長くは生きられません");
+}
+
+static _Noreturn void fail_generation(const WSite *at) {
+    begin_error("世代番号の上限に達しました");
+    finish_error(at, "これ以上この区画の参照を安全に無効化できません", NULL);
 }
 
 // 整数を 10 進の文字にする（buf は 21 バイト以上）。書いた長さを返す
@@ -495,12 +553,16 @@ static void *slab_take(size_t n) {
     return r;
 }
 
-static void remember_reuse(void *p) {
+static int remember_reuse(void *p) {
+    if (!gen_has_room(gen_get(p), 1)) {
+        gen_retire(p);
+        return 0;
+    }
     unsigned i = reused_n++ % NREUSED;
     reused[i].block = p;
     reused[i].gen = gen_get(p);
     reused[i].freed = FREED_SITE(p);
-    gen_set(p, gen_get(p) + 1);
+    return gen_advance(p, 1);
 }
 
 // 区画を確保する（生きている区画の数は数えない。リストの中身の区画はこれだけを使う）
@@ -508,25 +570,25 @@ static void *block_alloc(int64_t size) {
     size_t s = round8(size);
     void *p = NULL;
     if (s / 8 <= NCLASS) {
-        p = free_small[s / 8];
-        if (p) {
+        while ((p = free_small[s / 8]) != NULL) {
             free_small[s / 8] = *(void **)p;
-            remember_reuse(p);
-        } else {
+            if (remember_reuse(p)) break;
+        }
+        if (!p) {
             WHdr *h = slab_take(sizeof(WHdr) + s);
             gen_set(h + 1, 0);
             p = h + 1;
         }
     } else {
-        for (Big **b = &free_big; *b; b = &(*b)->next) {
+        for (Big **b = &free_big; *b;) {
             if ((*b)->size == s) {
                 Big *x = *b;
                 *b = x->next;
                 p = x->payload;
                 free(x);
-                remember_reuse(p);
-                break;
-            }
+                if (remember_reuse(p)) break;
+                p = NULL;
+            } else b = &(*b)->next;
         }
         if (!p) {
             // 中身を 64 バイトの境目にそろえる（リストの要素をまとめて読み書きする命令が速くなる）。大きな区画は OS に返さない
@@ -546,7 +608,13 @@ void *jw_alloc(int64_t size) {
 
 // 区画を解放する（生きている区画の数は数えない）
 static void block_free(void *p, int64_t size, const WSite *why) {
-    gen_set(p, gen_get(p) + 1);
+    // 解放+次の再利用の両方の余地がなければ、空き表へ戻さず早期退役する。
+    if (!gen_has_room(gen_get(p), 2)) {
+        remember_sent(p, why);
+        gen_retire(p);
+        return;
+    }
+    (void)gen_advance(p, 1);
     FREED_SITE(p) = why;
     size_t s = round8(size);
     if (s / 8 <= NCLASS) {
@@ -606,7 +674,8 @@ void jw_view_free(void *v) {
 // 写しの先（世代を確かめる）
 void *jw_view_target(void *v, const WSite *use) {
     WCell *c = CELL(v);
-    if (gen_get(c->target) != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
+    uint64_t gen = gen_get(c->target);
+    if (gen == GEN_RETIRED || gen != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
     return c->target;
 }
 
@@ -925,7 +994,6 @@ int64_t jw_f2i(double x, int32_t bits, int32_t is_signed) {
 
 // ---------------------------------------------------------------- リスト
 
-static void remember_sent(void *p, const WSite *why);
 
 // リストの中身は own の先と同じく、頭に世代を持つ区画に置く（要素を借りた ref はこの区画と世代を持つ）。
 // 要素を借りるときは世代に「借りられた」の印（2 のビット）と「借りられたことがある」の印（LIST_SHARED）を立てる（書き出したコード）。
@@ -952,7 +1020,9 @@ static char *list_new_data(int64_t bytes) {
 void jw_list_moved(WList *l, const WSite *why) {
     if (!l->data || !why || !(gen_get(l->data) & 2)) return;
     remember_sent(l->data, why);
-    gen_set(l->data, (gen_get(l->data) & ~(uint64_t)3) + 4);
+    // 借用中のlive世代は下位2bitが10なので、従来の (gen & ~3) + 4 と同じ遷移。
+    // counterがbit62へはみ出して保持印と衝突する前に停止する。
+    if (!gen_advance(l->data, 2)) fail_generation(why);
 }
 
 // 長さ n まで入れられるようにする。取り直したら true
@@ -2105,18 +2175,11 @@ void jw_wait_all(const WSite *at) {
 }
 
 // ほかのスレッドへ送る区画: 世代を進める（送った側に残った ref は、使うとダングリングとして見つかる）
-static void remember_sent(void *p, const WSite *why) {
-    unsigned i = sent_n++ % NREUSED;
-    sent[i].block = p;
-    sent[i].gen = gen_get(p);
-    sent[i].why = why;
-}
-
 void jw_send_block(void *p, const WSite *why) {
     // 読むだけの写し（下の 1 ビット）は送れない（型検査と取り出しのエラーで来ないはず。来たら区画を壊す前に止める）
     if ((uintptr_t)p & 1) jw_bug("読むだけの写しをほかのスレッドへ送ろうとした");
     remember_sent(p, why);
-    gen_set(p, gen_get(p) + 2);
+    if (!gen_advance(p, 2)) fail_generation(why);
 }
 
 // ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）
@@ -2406,5 +2469,6 @@ int main(int argc, char **argv) {
     jw_main();
     jw_flush();
     if (getenv("JW_LEAKS")) fprintf(stderr, "[live] %lld\n", (long long)(jw_live + g_live_done));
+    if (getenv("JW_RETIREMENTS")) fprintf(stderr, "[retired] %llu\n", (unsigned long long)retired_count());
     return 0;
 }
