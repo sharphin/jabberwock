@@ -147,11 +147,9 @@ def main():
     # Keep prerequisite producers ahead of consumers even when the user selects only one item.
     producers = {"cargo-build", "jwc-build"}
     if any(p["jwc"] for p in selected):
-        for p in catalog(args.scale, output):
-            if p["name"] in producers and p not in selected:
-                selected.insert(0, p)
-    elif any(p["name"].startswith(("effects-", "edges-")) for p in selected):
-        pass
+        missing = [p for p in catalog(args.scale, output)
+                   if p["name"] in producers and p not in selected]
+        selected = missing + selected
     if not args.dry_run:
         output.mkdir(parents=True, exist_ok=True)
     git = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
