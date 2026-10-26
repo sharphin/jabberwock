@@ -51,7 +51,7 @@ class SafetyReportTests(unittest.TestCase):
                                   "observed": {"exit": 2, "stderr": "internal error"}}]}), encoding="utf-8")
                 return subprocess.CompletedProcess(args[0], 0, "", "")
             p = report.safety.probe("edges-8-9", [8, 9], [sys.executable, "-c", "pass"])
-            with mock.patch.object(report.subprocess, "run", side_effect=produce):
+            with mock.patch.object(report, "execute_probe", side_effect=produce):
                 result = report.run_probe(p, location, False)
             self.assertEqual(result["status"], "FAIL")
             self.assertEqual(result["case_report"]["results"][0]["observed"]["exit"], 2)
@@ -66,7 +66,7 @@ class SafetyReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = next(p for p in report.safety.catalog(1, Path(d)) if p["name"] == "retirement")
             with mock.patch.object(report.shutil, "which", return_value=None), \
-                 mock.patch.object(report.subprocess, "run") as run:
+                 mock.patch.object(report, "execute_probe") as run:
                 result = report.run_probe(p, Path(d), False)
             self.assertEqual(result["status"], "NOT_RUN")
             self.assertEqual(result["reason"], "clang unavailable")
@@ -78,7 +78,7 @@ class SafetyReportTests(unittest.TestCase):
             completed = subprocess.CompletedProcess(p["cmd"], 0, "", "")
             with mock.patch.object(report.shutil, "which", return_value="/tools/clang"), \
                  mock.patch.dict(os.environ, {"JWC_REGEN": "1"}), \
-                 mock.patch.object(report.subprocess, "run", return_value=completed) as run:
+                 mock.patch.object(report, "execute_probe", return_value=completed) as run:
                 result = report.run_probe(p, Path(d), False)
             self.assertEqual(result["status"], "PROBE_PASS")
             child_env = run.call_args.kwargs["env"]
@@ -95,7 +95,7 @@ class SafetyReportTests(unittest.TestCase):
                     return None if name == "clang" else "/tools/" + name
                 with mock.patch.dict(os.environ, {"JW_CLANG": "clang"}), \
                      mock.patch.object(report.shutil, "which", side_effect=which), \
-                     mock.patch.object(report.subprocess, "run", return_value=completed) as run:
+                     mock.patch.object(report, "execute_probe", return_value=completed) as run:
                     result = report.run_probe(p, Path(d), False)
                 self.assertEqual(result["status"], "PROBE_PASS")
                 self.assertIn("coverage_notes", result)
@@ -108,7 +108,7 @@ class SafetyReportTests(unittest.TestCase):
             old = location / "edges-8-9.json"
             old.write_text(json.dumps({"results": [{"item": 8, "case_status": "pass"}]}))
             p = report.safety.probe("edges-8-9", [8, 9], [sys.executable, "-c", "pass"])
-            with mock.patch.object(report.subprocess, "run", return_value=subprocess.CompletedProcess(p["cmd"], 0, "", "")):
+            with mock.patch.object(report, "execute_probe", return_value=subprocess.CompletedProcess(p["cmd"], 0, "", "")):
                 result = report.run_probe(p, location, False)
             self.assertEqual(result["status"], "INFRA_ERROR")
             self.assertNotIn("case_report", result)
@@ -122,7 +122,7 @@ class SafetyReportTests(unittest.TestCase):
             def produce(*args, **kwargs):
                 destination.write_text(json.dumps({"results": [{"item": 9, "case_status": "pass"}]}))
                 return subprocess.CompletedProcess(args[0], 0, "", "")
-            with mock.patch.object(report.subprocess, "run", side_effect=produce):
+            with mock.patch.object(report, "execute_probe", side_effect=produce):
                 result = report.run_probe(p, location, False)
             self.assertEqual(result["status"], "INFRA_ERROR")
             self.assertIn("expected 16 cases", result["reason"])
@@ -181,6 +181,97 @@ class SafetyReportTests(unittest.TestCase):
         arrays = next(p for p in probes if p["name"] == "array-limits")
         self.assertEqual(arrays["cmd"][arrays["cmd"].index("--items") + 1], "9")
         self.assertTrue(arrays["jwc_executable"].endswith(".exe"))
+
+    def test_failure_is_saved_before_next_probe_and_interrupt_keeps_twelve_items(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "report.json"
+            def probe(p, work, dry):
+                if p["name"] == "cargo-test":
+                    partial = json.loads(output.read_text(encoding="utf-8"))
+                    self.assertEqual(partial["active_probe"], "cargo-test")
+                    self.assertEqual(partial["run_status"], "RUNNING")
+                    self.assertEqual(len(partial["items"]), 12)
+                    failure = next(r for r in partial["results"] if r["name"] == "jwc-build")
+                    self.assertEqual(failure["actual"]["stderr"]["text"], "link failed")
+                    self.assertEqual(partial["items"][0]["status"], "NOT_RUN")
+                    raise KeyboardInterrupt
+                return {"name": p["name"], "status": "FAIL" if p["name"] == "jwc-build" else "PROBE_PASS",
+                        "actual": {"stderr": {"text": "link failed"}}}
+            with mock.patch.object(report.suites, "host_os", return_value="windows"), \
+                 mock.patch.object(report, "version", return_value="mock-version"), \
+                 mock.patch.object(report, "run_probe", side_effect=probe), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                code = report.main(["--output", str(output)], target_os="windows")
+            final = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(code, 130)
+            self.assertEqual(final["run_status"], "INTERRUPTED")
+            self.assertEqual(len(final["items"]), 12)
+            self.assertTrue(final["items"][0]["pending_probe_names"])
+
+    def test_failed_jwc_build_blocks_consumers_even_if_old_binary_exists(self):
+        called = []
+        def probe(p, work, dry):
+            called.append(p["name"])
+            self.assertFalse(p["jwc"])
+            return {"name": p["name"], "status": "FAIL" if p["name"] == "jwc-build" else "PROBE_PASS"}
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "report.json"
+            with mock.patch.object(report.suites, "host_os", return_value="windows"), \
+                 mock.patch.object(report, "version", return_value="mock-version"), \
+                 mock.patch.object(report, "run_probe", side_effect=probe), \
+                 mock.patch.object(Path, "is_file", return_value=True), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(report.main(["--output", str(output)], target_os="windows"), 1)
+            data = json.loads(output.read_text(encoding="utf-8"))
+            arrays = next(r for r in data["results"] if r["name"] == "array-limits")
+            self.assertEqual(arrays["status"], "NOT_RUN")
+            self.assertIn("jwc-build", arrays["reason"])
+            self.assertIn("release-test", called)
+
+    def test_heartbeat_and_file_output_without_capture_pipes(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = {s: Path(d) / s for s in ("stdout", "stderr")}
+            process = mock.Mock(pid=123, returncode=0)
+            process.wait.side_effect = [subprocess.TimeoutExpired(["mock"], 15), 0]
+            def launch(*args, **kwargs):
+                kwargs["stdout"].write(b"partial output\n")
+                return process
+            console = io.StringIO()
+            with mock.patch.object(report.subprocess, "Popen", side_effect=launch) as popen, \
+                 mock.patch.object(report.time, "monotonic", side_effect=[0, 0, 15, 15]), \
+                 contextlib.redirect_stdout(console):
+                result = report.execute_probe(["mock"], env={}, timeout=30, name="example", log_paths=paths)
+            self.assertIn("RUNNING example: 15s", console.getvalue())
+            self.assertEqual(result.stdout, "partial output\n")
+            self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_timeout_cleans_up_and_leaves_diagnostics_on_disk(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = {s: Path(d) / s for s in ("stdout", "stderr")}
+            process = mock.Mock(pid=123)
+            process.wait.side_effect = subprocess.TimeoutExpired(["mock"], 1)
+            def launch(*args, **kwargs):
+                kwargs["stderr"].write(b"before timeout\n")
+                return process
+            with mock.patch.object(report.subprocess, "Popen", side_effect=launch), \
+                 mock.patch.object(report, "stop_process") as stop, \
+                 mock.patch.object(report.time, "monotonic", side_effect=[0, 0, 1, 2]), \
+                 contextlib.redirect_stdout(io.StringIO()), self.assertRaises(subprocess.TimeoutExpired):
+                report.execute_probe(["mock"], env={}, timeout=1, name="example", log_paths=paths)
+            stop.assert_called_once_with(process)
+            self.assertEqual(paths["stderr"].read_text(), "before timeout\n")
+
+    def test_interrupt_preserves_probe_diagnostics(self):
+        with tempfile.TemporaryDirectory() as d:
+            def execute(*args, **kwargs):
+                kwargs["log_paths"]["stderr"].write_text("before interrupt", encoding="utf-8")
+                raise KeyboardInterrupt
+            p = report.safety.probe("interrupt", [1], [sys.executable, "-c", "pass"])
+            with mock.patch.object(report, "execute_probe", side_effect=execute), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                result = report.run_probe(p, Path(d), False)
+            self.assertEqual(result["status"], "INTERRUPTED")
+            self.assertEqual(result["actual"]["stderr"]["text"], "before interrupt")
 
 
 if __name__ == "__main__":

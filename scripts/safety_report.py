@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -23,6 +24,58 @@ import safety_platforms as suites
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_LIMIT = 24000
+HEARTBEAT_SECONDS = 15
+
+
+def stop_process(process):
+    """Bound cleanup time and stop compiler/test descendants where supported."""
+    try:
+        if os.name == "nt":
+            stopped = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            if stopped.returncode:
+                print("WARNING: taskkill could not confirm process-tree termination for PID " + str(process.pid), flush=True)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print("WARNING: process-tree cleanup failed: " + str(error), flush=True)
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError as error:
+            print("WARNING: child termination failed: " + str(error), flush=True)
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        print("WARNING: child cleanup did not finish; inspect PID " + str(process.pid), flush=True)
+
+
+def execute_probe(command, *, env, timeout, name, log_paths):
+    """Write directly to files: inherited child pipes cannot block timeout cleanup."""
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+               else {"start_new_session": True})
+    begin = time.monotonic()
+    with log_paths["stdout"].open("wb") as out, log_paths["stderr"].open("wb") as err:
+        process = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                                   stdout=out, stderr=err, **options)
+        try:
+            while True:
+                remaining = timeout - (time.monotonic() - begin)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    process.wait(timeout=min(HEARTBEAT_SECONDS, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    print(f"RUNNING {name}: {int(time.monotonic() - begin)}s / {timeout}s (PID {process.pid})", flush=True)
+        except BaseException:
+            stop_process(process)
+            raise
+    return subprocess.CompletedProcess(command, process.returncode,
+                                       log_paths["stdout"].read_text(encoding="utf-8", errors="replace"),
+                                       log_paths["stderr"].read_text(encoding="utf-8", errors="replace"))
 
 
 def excerpt(value: str) -> dict:
@@ -101,11 +154,16 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
               "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST", "JWC_REGEN", "JW_REQUIRE_RETIREMENT_TESTS"):
         env.pop(k, None)
     env.update(probe["env"])
+    report_dir.mkdir(parents=True, exist_ok=True)
+    log_paths = {stream: report_dir / (name + "." + stream + ".log")
+                 for stream in ("stdout", "stderr")}
+    entry["log_files"] = {k: str(v) for k, v in log_paths.items()}
+    print(f"START {name}: timeout {probe['timeout']}s", flush=True)
+    print("  command: " + subprocess.list2cmdline(command), flush=True)
+    print("  logs: " + str(log_paths["stdout"]) + " | " + str(log_paths["stderr"]), flush=True)
     begin = time.monotonic()
     try:
-        run = subprocess.run(command, cwd=ROOT, env=env, text=True,
-                             encoding="utf-8", errors="replace",
-                             capture_output=True, timeout=probe["timeout"])
+        run = execute_probe(command, env=env, timeout=probe["timeout"], name=name, log_paths=log_paths)
         entry["actual"] = {"exit_code": run.returncode,
                            "stdout": excerpt(run.stdout), "stderr": excerpt(run.stderr)}
         entry["status"] = "PROBE_PASS" if run.returncode == 0 else "FAIL"
@@ -120,6 +178,13 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
                            "stderr": excerpt((error.stderr or b"").decode("utf-8", "replace") if isinstance(error.stderr, bytes) else (error.stderr or ""))}
     except OSError as error:
         entry["status"], entry["reason"] = "INFRA_ERROR", str(error)
+    except KeyboardInterrupt:
+        entry["status"], entry["reason"] = "INTERRUPTED", "interrupted by user"
+    if entry["status"] in ("TIMEOUT", "INFRA_ERROR", "INTERRUPTED"):
+        actual = entry.setdefault("actual", {})
+        for stream, path in log_paths.items():
+            if path.is_file():
+                actual[stream] = excerpt(path.read_text(encoding="utf-8", errors="replace"))
     entry["seconds"] = round(time.monotonic() - begin, 3)
 
     # Existing targeted scripts write per-case details. Inline them so the JSON is
@@ -136,17 +201,23 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
                 raise ValueError("no executed cases or invalid case status")
             if probe.get("expected_cases") is not None and len(cases) != probe["expected_cases"]:
                 raise ValueError("expected " + str(probe["expected_cases"]) + " cases, got " + str(len(cases)))
-            if entry["status"] not in ("TIMEOUT", "CRASH", "INFRA_ERROR"):
+            if entry["status"] not in ("TIMEOUT", "CRASH", "INFRA_ERROR", "INTERRUPTED"):
                 if details.get("infrastructure_errors"):
                     entry["status"] = "INFRA_ERROR"
                     entry["reason"] = "case report contains infrastructure errors"
                 elif any(r.get("case_status", r.get("status")) == "fail" for r in cases):
                     entry["status"] = "FAIL"
         except (OSError, ValueError) as error:
-            if entry["status"] not in ("TIMEOUT", "CRASH"):
+            if entry["status"] not in ("TIMEOUT", "CRASH", "INTERRUPTED"):
                 entry["status"], entry["reason"] = "INFRA_ERROR", "invalid case report: " + str(error)
-    elif nested and entry["status"] not in ("TIMEOUT", "CRASH", "INFRA_ERROR"):
+    elif nested and entry["status"] not in ("TIMEOUT", "CRASH", "INFRA_ERROR", "INTERRUPTED"):
         entry["status"], entry["reason"] = "INFRA_ERROR", "case report was not produced"
+    if entry["status"] != "PROBE_PASS":
+        print(f"{entry['status']} {name}: {entry.get('reason') or 'exit ' + str(entry.get('actual', {}).get('exit_code'))}", flush=True)
+        actual = entry.get("actual", {})
+        diagnostic = actual.get("stderr", {}).get("text") or actual.get("stdout", {}).get("text", "")
+        if diagnostic:
+            print(diagnostic[-3000:], flush=True)
     return entry
 
 
@@ -202,45 +273,76 @@ def main(argv=None, *, target_os=None) -> int:
         "scale": args.scale, "preparation": [], "items": [], "results": [],
     }
     produced = {}
-    for p in prereq:
-        r = run_probe(p, work, args.dry_run)
-        produced[p["name"]] = r
-        report["preparation"].append(r)
-        print("PREP " + p["name"] + ": " + r["status"], flush=True)
-    for n in range(1, 13):
-        references = []
+    report.update(run_status="RUNNING", active_probe=None)
+
+    def checkpoint():
+        report["results"] = [produced[p["name"]] for p in ordered if p["name"] in produced]
+        report["preparation"] = [produced[p["name"]] for p in prereq if p["name"] in produced]
+        report["items"] = []
+        for n in range(1, 13):
+            references = [p["name"] for p in ordered if n in p["items"]]
+            pending = [name for name in references if name not in produced]
+            results = [produced[name] for name in references if name in produced]
+            problems = [x for x in results if x["status"] in
+                        ("FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED")]
+            unavailable = [x["name"] for x in results if x["status"] in ("NOT_RUN", "PLANNED")]
+            status = ("FAIL" if problems else "NOT_RUN" if pending or unavailable or not results
+                      else "PROBES_PASS_ONLY")
+            report["items"].append({"item": n, "name": safety.NAMES[n],
+                                    "status": "PLANNED" if args.dry_run else status,
+                                    "id": selected_os + "-" + str(n).zfill(2), "target_os": selected_os,
+                                    "acceptance": "NOT_ASSESSED", "probe_names": references,
+                                    "pending_probe_names": pending,
+                                    "failures": [x["name"] for x in problems],
+                                    "unavailable": unavailable})
+        if not args.dry_run:
+            report["updated_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            temporary = output.with_name(output.name + ".tmp")
+            temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temporary.replace(output)
+
+    try:
+        checkpoint()
         for p in ordered:
-            if p["name"] in {q["name"] for q in prereq} or n not in p["items"]:
-                continue
-            if p["name"] not in produced:
-                produced[p["name"]] = run_probe(p, work, args.dry_run)
-                print(f"[{n:02d}/12] {p['name']}: {produced[p['name']]['status']}", flush=True)
-            references.append(p["name"])
-        # Include previously run shared probes for this criterion.
-        references = [p["name"] for p in ordered if n in p["items"] and p["name"] in produced]
-        results = [produced[x] for x in references]
-        problems = [x for x in results if x["status"] in
-                    ("FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR")]
-        not_run = [x for x in results if x["status"] in ("NOT_RUN", "PLANNED")]
-        status = ("FAIL" if problems else "NOT_RUN" if not_run or not results
-                  else "PROBES_PASS_ONLY")
-        if args.dry_run:
-            status = "PLANNED"
-        report["items"].append({"item": n, "name": safety.NAMES[n], "status": status,
-                                "id": selected_os + "-" + str(n).zfill(2), "target_os": selected_os,
-                                "acceptance": "NOT_ASSESSED", "probe_names": references,
-                                "failures": [x["name"] for x in problems],
-                                "unavailable": [x["name"] for x in not_run]})
-        print(f"{selected_os.upper()} ITEM {n:02d}/12 {safety.NAMES[n]}: {status}", flush=True)
-    report["results"] = [produced[p["name"]] for p in ordered if p["name"] in produced]
+            report["active_probe"] = p["name"]
+            checkpoint()
+            dependencies = []
+            if p["name"] == "jwc-build" or p.get("case_report"):
+                dependencies.append("cargo-build")
+            if p["jwc"]:
+                dependencies.append("jwc-build")
+            if p["name"] == "effects-10-11-12":
+                dependencies.append("cargo-debug-build")
+            blocked = [name for name in dependencies if produced[name]["status"] != "PROBE_PASS"]
+            if blocked and not args.dry_run:
+                r = {"name": p["name"], "items": p["items"], "target_os": selected_os,
+                     "command": p["cmd"], "environment_overrides": p["env"], "status": "NOT_RUN",
+                     "reason": "prerequisite did not pass: " + ", ".join(blocked)}
+            else:
+                r = run_probe(p, work, args.dry_run)
+            produced[p["name"]] = r
+            report["active_probe"] = None
+            checkpoint()
+            label = "PREP " if p in prereq else "PROBE "
+            print(label + p["name"] + ": " + r["status"], flush=True)
+            if r["status"] == "INTERRUPTED":
+                report["run_status"] = "INTERRUPTED"
+                break
+        else:
+            report["run_status"] = "COMPLETE"
+    except KeyboardInterrupt:
+        report["run_status"] = "INTERRUPTED"
+    finally:
+        checkpoint()
     report["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    checkpoint()
+    for item in report["items"]:
+        print(f"{selected_os.upper()} ITEM {item['item']:02d}/12 {item['name']}: {item['status']}", flush=True)
     if not args.dry_run:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print("Report: " + str(output), flush=True)
     else:
         print("Dry run; no report written", flush=True)
-    return int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"]))
+    return 130 if report["run_status"] == "INTERRUPTED" else int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"]))
 
 
 if __name__ == "__main__":
