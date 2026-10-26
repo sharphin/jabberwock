@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""One-command Jabberwock benchmark: one JSON, optional same-machine regression comparison.
+"""Compare programs compiled by self-hosted jwc with Rust and C++ ONLY.
 
-Uses the existing bench/run.sh measurements and compiler flags unchanged.
-A mismatch (the legacy script only warns) is treated as a hard failure here.
+The Rust-based Jabberwock compiler is used to bootstrap jwc, not benchmarked.
+Linux-only measurement uses bench/measure.c (wait4). One JSON report.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -22,197 +21,226 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "bench"
 QUICK = ("fib", "matmul", "mandelbrot", "sort", "linkedlist")
-VARIANTS = ("jabberwock", "no_elide", "unchecked", "go", "cpp", "cpp_assert", "rust")
-CELL = re.compile(r"^([0-9.]+) \[([0-9.]+)[–-]([0-9.]+)\]$")
-EXCERPT = 12000
+TARGETS = ("jwc", "rust", "cpp")
+MAX_LOG = 12000
 
 
-def version(argv: list[str]) -> str | None:
-    if not shutil.which(argv[0]):
-        return None
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run(command, *, timeout=600, env=None):
+    p = subprocess.run([str(v) for v in command], cwd=ROOT, env=env, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    return {"cmd": [str(v) for v in command], "exit": p.returncode,
+            "stdout": p.stdout[-MAX_LOG:], "stderr": p.stderr[-MAX_LOG:]}
+
+
+def version(command):
     try:
-        p = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=10)
-        return ((p.stdout or p.stderr).splitlines() or [""])[0] if p.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
+        p = run(command, timeout=20)
+        return (p["stdout"] or p["stderr"]).splitlines()[0] if p["exit"] == 0 else None
+    except (OSError, subprocess.TimeoutExpired, IndexError):
         return None
 
 
-def md_rows(path: Path) -> list[list[str]]:
-    if not path.exists():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("|") or line.startswith("|---"):
-            continue
-        vals = [x.strip() for x in line.strip().strip("|").split("|")]
-        if vals and vals[0] not in ("名前", ""):
-            rows.append(vals)
-    return rows
-
-
-def parse_case(work: Path, name: str) -> dict:
-    time_rows = [row for row in md_rows(work / "time.md") if row[0] == name]
-    rss_rows = [row for row in md_rows(work / "rss.md") if row[0] == name]
-    check_rows = [row for row in md_rows(work / "checks.md") if row[0] == name]
-    if len(time_rows) != 1 or len(time_rows[0]) != 8:
-        raise ValueError("missing or malformed timing row")
-    if len(rss_rows) != 1 or len(rss_rows[0]) != 5:
-        raise ValueError("missing or malformed memory row")
-    timings = {}
-    for key, cell in zip(VARIANTS, time_rows[0][1:]):
-        m = CELL.fullmatch(cell)
-        if not m:
-            raise ValueError("malformed timing cell: " + cell)
-        median, smallest, largest = (float(v) for v in m.groups())
-        timings[key] = {"min_s": smallest, "median_s": median, "max_s": largest}
-    rss = {name: float(value) for name, value in
-           zip(("jabberwock", "go", "cpp", "rust"), rss_rows[0][1:])}
-    checks = None
-    if len(check_rows) == 1 and len(check_rows[0]) == 7:
-        checks = dict(zip(("sites_generation", "sites_elided", "sites_index",
-                           "executed_generation", "executed_elided", "executed_index"),
-                          [int(x) for x in check_rows[0][1:]]))
-    return {"timings": timings, "peak_rss_mb": rss, "checks": checks,
-            "ratios": {
-                "jw_vs_cpp": round(timings["jabberwock"]["median_s"] / timings["cpp"]["median_s"], 4),
-                "jw_vs_rust": round(timings["jabberwock"]["median_s"] / timings["rust"]["median_s"], 4)
-            }}
-
-
-def fingerprint() -> dict:
+def fingerprint():
     return {"platform": platform.platform(), "machine": platform.machine(),
             "processor": platform.processor(),
             "clang": version(["clang", "--version"]),
             "clang++": version(["clang++", "--version"]),
-            "rustc": version(["rustc", "--version"]),
-            "go": version(["go", "version"])}
+            "rustc": version(["rustc", "--version"])}
 
 
-def compare(current: dict, baseline: dict, threshold: float) -> dict:
-    if current["environment"] != baseline.get("environment") or current["runs"] != baseline.get("runs"):
-        return {"status": "NOT_COMPARABLE", "reason": "platform/compiler fingerprint or repeats differ"}
-    diffs = []
-    for name, item in current["cases"].items():
-        before = baseline.get("cases", {}).get(name, {})
-        if item.get("status") != "PASS" or before.get("status") != "PASS":
+def parse_measure(value):
+    try:
+        low, median, high, rss = (float(v) for v in value.strip().split())
+    except ValueError as e:
+        raise ValueError("invalid measure.c result: " + repr(value)) from e
+    if low < 0 or median < low or high < median or rss < 0:
+        raise ValueError("invalid measurement ordering: " + repr(value))
+    return {"min_s": low, "median_s": median, "max_s": high, "peak_rss_mb": rss}
+
+
+def compare(current, baseline, threshold):
+    if current.get("schema_version") != 2 or baseline.get("schema_version") != 2:
+        return {"status": "NOT_COMPARABLE", "reason": "report schema differs"}
+    if (current["environment"] != baseline.get("environment")
+            or current["runs"] != baseline.get("runs")
+            or current["flags"] != baseline.get("flags")
+            or current["compiler_hashes"].get("runtime") != baseline.get("compiler_hashes", {}).get("runtime")
+            or current["source_hashes"] != baseline.get("source_hashes")):
+        return {"status": "NOT_COMPARABLE", "reason": "environment, workload sources, runtime, flags or repeats differ"}
+    rows = []
+    for name, case in current["cases"].items():
+        prev = baseline.get("cases", {}).get(name, {})
+        if case.get("status") != "PASS" or prev.get("status") != "PASS":
             continue
-        old = before["metrics"]["timings"]["jabberwock"]["median_s"]
-        new = item["metrics"]["timings"]["jabberwock"]["median_s"]
+        old = prev["metrics"]["jwc"]["median_s"]
+        new = case["metrics"]["jwc"]["median_s"]
         if old <= 0:
             continue
-        pct = (new / old - 1) * 100
-        diffs.append({"case": name, "old_s": old, "new_s": new,
-                      "change_percent": round(pct, 2),
-                      "regression": pct > threshold})
-    return {"status": "COMPARED" if diffs else "NO_MATCHING_CASES",
-            "regression_threshold_percent": threshold, "cases": diffs,
-            "regressions": [r["case"] for r in diffs if r["regression"]]}
+        percent = (new / old - 1) * 100
+        rows.append({"case": name, "old_s": old, "new_s": new,
+                     "change_percent": round(percent, 2), "regression": percent > threshold})
+    return {"status": "COMPARED" if rows else "NO_MATCHING_CASES",
+            "threshold_percent": threshold, "cases": rows,
+            "regressions": [r["case"] for r in rows if r["regression"]]}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--full", action="store_true", help="all available benchmarks instead of quick sample")
-    parser.add_argument("--cases", nargs="+", help="specific benchmark names, e.g. --cases sort fib")
-    parser.add_argument("--runs", type=int, default=5, help="repeated measurements; default 5")
-    parser.add_argument("--output", type=Path, default=ROOT / "target/benchmark-report.json")
-    parser.add_argument("--baseline", type=Path, help="previous benchmark-report.json to compare")
-    parser.add_argument("--threshold", type=float, default=15.0, help="regression threshold percent")
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-    if args.runs < 1 or args.threshold < 0:
-        parser.error("--runs must be >= 1; --threshold must be >= 0")
-    names = sorted(p.stem for p in (BENCH / "jabberwock").glob("*.jw"))
-    selected = list(args.cases) if args.cases else names if args.full else list(QUICK)
-    if not selected or len(set(selected)) != len(selected) or set(selected) - set(names):
-        parser.error("invalid or duplicate benchmark names; available: " + ", ".join(names))
-    if args.dry_run:
-        print("Cases:", ", ".join(selected), "| runs:", args.runs)
-        print("Output:", args.output)
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--full", action="store_true")
+    p.add_argument("--cases", nargs="+")
+    p.add_argument("--runs", type=int, default=5)
+    p.add_argument("--jwc", type=Path, help="existing self-hosted compiler (skips bootstrap)")
+    p.add_argument("--output", type=Path, default=ROOT / "target/benchmark-report.json")
+    p.add_argument("--baseline", type=Path)
+    p.add_argument("--threshold", type=float, default=15)
+    p.add_argument("--dry-run", action="store_true")
+    a = p.parse_args()
+    if a.runs < 1 or a.threshold < 0:
+        p.error("runs must be >=1, threshold >=0")
+    all_names = sorted(x.stem for x in (BENCH / "jabberwock").glob("*.jw"))
+    selected = a.cases if a.cases else all_names if a.full else list(QUICK)
+    if not selected or len(selected) != len(set(selected)) or set(selected) - set(all_names):
+        p.error("unknown or duplicate case; available: " + ", ".join(all_names))
+    if a.dry_run:
+        print("Compilers: jwc (self-hosted) / Rust (rustc) / C++ (clang++)")
+        print("Cases:", ", ".join(selected))
         return 0
 
-    output = args.output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    work = output.parent / (output.stem + "-work")
+    out = a.output.resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    work = out.parent / (out.stem + "-work")
     work.mkdir(parents=True, exist_ok=True)
-    env_info = fingerprint()
-    git = version(["git", "rev-parse", "HEAD"])
-    report = {"schema_version": 1, "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-              "commit": git, "environment": env_info, "runs": args.runs,
-              "suite": selected, "comparison_notes": (
-                  "Jabberwock build may use LTO; C++ -O2, Rust opt-level=3, Go default. "
-                  "Algorithms and library behavior differ; unchecked is UNSAFE. "
-                  "Relative performance does not prove language-wide superiority."),
-              "cases": {}, "baseline_comparison": None}
+    exe_suffix = ".exe" if os.name == "nt" else ""
+    jwc = a.jwc.resolve() if a.jwc else ROOT / "target/release/jwc-benchmark"
+    rust_bootstrap = ROOT / "target/release" / ("jabberwock" + exe_suffix)
+    measure = work / "measure"
+    flags = {"jwc_codegen": ["--ll"], "jwc_native": ["clang", "-O2", "-flto", "-fuse-ld=lld"],
+             "rust": ["rustc", "-C", "opt-level=3", "-C", "lto=fat", "--edition", "2021"],
+             "cpp": ["clang++", "-O2", "-flto", "-fuse-ld=lld", "-std=c++17", "-pthread"]}
+    report = {"schema_version": 2, "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+              "git_sha": version(["git", "rev-parse", "HEAD"]), "environment": fingerprint(),
+              "runs": a.runs, "suite": selected, "subjects": list(TARGETS),
+              "flags": flags, "compiler_hashes": {}, "source_hashes": {}, "preparation": [], "cases": {},
+              "baseline_comparison": None,
+              "limitations": ("Rust-based Jabberwock compiler is bootstrap only. jwc emits LLVM; clang links shared C runtime. "
+                              "Equivalent outputs required. Differences in libraries and algorithms remain; "
+                              "LTO flags are set for each compiled target but are not identical optimizers.")}
 
-    missing = [tool for tool in ("cargo", "cc", "go", "clang++", "rustc")
-               if not shutil.which(tool)]
-    jw = ROOT / "target/release" / ("jabberwock.exe" if os.name == "nt" else "jabberwock")
-    # Explicitly report unsupported measurement rather than presenting zero timings.
-    infrastructure = []
-    if not sys.platform.startswith("linux"):
-        infrastructure.append("bench/measure.c uses Linux wait4; this benchmark suite requires Linux")
-    if missing:
-        infrastructure.append("missing executables: " + ", ".join(missing))
-    if infrastructure:
-        for name in selected:
-            report["cases"][name] = {"status": "NOT_RUN", "reason": "; ".join(infrastructure)}
-    else:
-        start = time.monotonic()
-        built = subprocess.run(["cargo", "build", "--release"], cwd=ROOT, capture_output=True,
-                               text=True, encoding="utf-8", errors="replace", timeout=1200)
-        report["build"] = {"exit_code": built.returncode, "seconds": round(time.monotonic()-start, 2),
-                           "stderr": built.stderr[-EXCERPT:]}
-        if built.returncode or not jw.is_file():
-            for name in selected:
-                report["cases"][name] = {"status": "INFRA_ERROR", "reason": "release compiler build failed"}
-        else:
-            for i, name in enumerate(selected, 1):
-                # Isolated directory prevents stale Markdown tables from previous cases.
-                directory = work / name
-                directory.mkdir(exist_ok=True)
-                runenv = dict(os.environ, BENCH_OUT=str(directory), RUNS=str(args.runs), JW=str(jw))
-                start = time.monotonic()
-                try:
-                    run = subprocess.run(["sh", "bench/run.sh", name], cwd=ROOT, env=runenv,
-                                         capture_output=True, text=True, encoding="utf-8",
-                                         errors="replace", timeout=3600)
-                    item = {"status": "PASS", "exit_code": run.returncode,
-                            "seconds": round(time.monotonic() - start, 2),
-                            "stdout_tail": run.stdout[-EXCERPT:],
-                            "stderr_tail": run.stderr[-EXCERPT:]}
-                    if run.returncode != 0:
-                        item["status"] = "FAIL"
-                    elif "!!" in run.stderr:
-                        # Original run.sh prints a warning, but doesn't fail mismatches.
-                        item["status"] = "OUTPUT_MISMATCH"
-                    if run.returncode == 0:
-                        try:
-                            item["metrics"] = parse_case(directory, name)
-                        except (ValueError, OSError) as error:
-                            item["status"], item["reason"] = "INFRA_ERROR", str(error)
-                except subprocess.TimeoutExpired as error:
-                    item = {"status": "TIMEOUT", "reason": "one benchmark exceeded 3600s",
-                            "seconds": round(time.monotonic() - start, 2)}
-                except OSError as error:
-                    item = {"status": "INFRA_ERROR", "reason": str(error)}
-                report["cases"][name] = item
-                print(f"[{i}/{len(selected)}] {name}: {item['status']}", flush=True)
-    if args.baseline:
+    def save():
+        report["updated_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def prepare(command, label, timeout=1200):
         try:
-            base = json.loads(args.baseline.read_text(encoding="utf-8"))
-            report["baseline_comparison"] = compare(report, base, args.threshold)
-        except (OSError, ValueError, KeyError, TypeError) as error:
-            report["baseline_comparison"] = {"status": "INVALID_BASELINE", "reason": str(error)}
-    report["finished_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
-    output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print("Report:", output)
-    bad = any(x["status"] != "PASS" for x in report["cases"].values())
+            res = run(command, timeout=timeout)
+            report["preparation"].append({"name": label, **res})
+            save()
+            return res["exit"] == 0
+        except (OSError, subprocess.TimeoutExpired) as e:
+            report["preparation"].append({"name": label, "error": str(e)})
+            save()
+            return False
+
+    missing = [v for v in ("cc", "clang", "clang++", "rustc", "ld.lld") if not shutil.which(v)]
+    if not a.jwc and not shutil.which("cargo"):
+        missing.append("cargo")
+    reason = None
+    if not sys.platform.startswith("linux"):
+        reason = "bench/measure.c needs Linux wait4; use Linux or WSL2"
+    elif missing:
+        reason = "missing programs: " + ", ".join(missing)
+    elif not a.jwc:
+        if not prepare(["cargo", "build", "--release"], "bootstrap-rust-compiler"):
+            reason = "failed to build bootstrap Rust Jabberwock compiler"
+        elif not prepare([rust_bootstrap, "build", "-o", jwc, ROOT / "jwc/main.jw"], "bootstrap-jwc", timeout=1800):
+            reason = "failed to bootstrap jwc"
+    if not reason and not jwc.is_file():
+        reason = "jwc executable missing: " + str(jwc)
+    if not reason and not prepare(["cc", "-O2", "-o", measure, BENCH / "measure.c"], "measure-helper"):
+        reason = "failed to compile Linux timing helper"
+    if reason:
+        for name in selected:
+            report["cases"][name] = {"status": "NOT_RUN", "reason": reason}
+        save()
+        print("NOT_RUN:", reason)
+        return 2
+
+    report["compiler_hashes"] = {"jwc": sha(jwc), "runtime": sha(ROOT / "runtime/jw_rt.c"),
+                                 "rustc": report["environment"]["rustc"],
+                                 "clang++": report["environment"]["clang++"]}
+    save()
+    for index, name in enumerate(selected, 1):
+        dest = work / name
+        dest.mkdir(exist_ok=True)
+        source = BENCH / "jabberwock" / (name + ".jw")
+        cpp = BENCH / "cpp" / (name + ".cpp")
+        rust = BENCH / "rust" / (name + ".rs")
+        report["source_hashes"][name] = {lang: sha(path) for lang, path in (("jwc", source), ("cpp", cpp), ("rust", rust))}
+        ll = dest / "jwc.ll"
+        binaries = {k: dest / k for k in TARGETS}
+        item = {"status": "INFRA_ERROR", "commands": [], "metrics": {}, "outputs": {}}
+        report["cases"][name] = item
+        try:
+            # LLVM can be larger than log excerpts: capture full stdout as bytes.
+            ll_process = subprocess.run([str(jwc), "--ll", str(source)], cwd=ROOT,
+                                        capture_output=True, timeout=600)
+            if ll_process.returncode or b"define void @jw_main(" not in ll_process.stdout:
+                raise ValueError("jwc LLVM capture failed")
+            ll.write_bytes(ll_process.stdout)
+            item["commands"].append({"stage": "jwc-LLVM", "exit": ll_process.returncode,
+                                     "cmd": [str(jwc), "--ll", str(source)],
+                                     "llvm_bytes": len(ll_process.stdout),
+                                     "stderr": ll_process.stderr.decode("utf-8", "replace")[-MAX_LOG:]})
+            compile_steps = [
+                ("jwc-native", [*flags["jwc_native"], ll, ROOT / "runtime/jw_rt.c",
+                                "-lm", "-pthread", "-Wno-override-module", "-o", binaries["jwc"]]),
+                ("rust", [*flags["rust"], "-o", binaries["rust"], rust]),
+                ("cpp", [*flags["cpp"], "-o", binaries["cpp"], cpp])]
+            for label, command in compile_steps:
+                result = run(command, timeout=600)
+                item["commands"].append({"stage": label, **result})
+                if result["exit"]:
+                    raise ValueError(label + " compilation failed")
+            for target in TARGETS:
+                output = dest / (target + ".stdout")
+                result = run([measure, a.runs, output, binaries[target]], timeout=3600)
+                item["commands"].append({"stage": "measure-" + target, **result})
+                if result["exit"]:
+                    raise ValueError(target + " execution failed")
+                item["metrics"][target] = parse_measure(result["stdout"])
+                data = output.read_bytes()
+                item["outputs"][target] = {"sha256": hashlib.sha256(data).hexdigest(),
+                                           "bytes": len(data), "excerpt": data[:256].decode("utf-8", "replace")}
+            if len({v["sha256"] for v in item["outputs"].values()}) != 1:
+                item["status"] = "OUTPUT_MISMATCH"
+            else:
+                item["status"] = "PASS"
+                item["ratios"] = {
+                    "jwc_vs_rust": round(item["metrics"]["jwc"]["median_s"] /
+                                         item["metrics"]["rust"]["median_s"], 4),
+                    "jwc_vs_cpp": round(item["metrics"]["jwc"]["median_s"] /
+                                        item["metrics"]["cpp"]["median_s"], 4)}
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            item["status"] = "FAIL"
+            item["reason"] = str(e)
+        save()
+        print(f"[{index}/{len(selected)}] {name}: {item['status']}", flush=True)
+    if a.baseline:
+        try:
+            baseline = json.loads(a.baseline.read_text(encoding="utf-8"))
+            report["baseline_comparison"] = compare(report, baseline, a.threshold)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            report["baseline_comparison"] = {"status": "INVALID_BASELINE", "reason": str(e)}
+    save()
+    print("Report:", out)
     comparison = report["baseline_comparison"]
-    if comparison and comparison["status"] != "COMPARED":
-        bad = True
-    if comparison and comparison.get("regressions"):
-        bad = True
-    return int(bad)
+    return int(any(x["status"] != "PASS" for x in report["cases"].values())
+               or (comparison is not None and
+                   (comparison["status"] != "COMPARED" or bool(comparison.get("regressions")))))
 
 
 if __name__ == "__main__":
