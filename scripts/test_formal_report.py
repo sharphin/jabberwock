@@ -56,7 +56,7 @@ class FormalTests(unittest.TestCase):
     def test_full_proof_is_not_claimed_by_kernel_success(self):
         with tempfile.TemporaryDirectory() as d:
             dest = Path(d) / "formal.json"
-            with mock.patch.object(sys, "argv", ["formal_report", "--require-full", "--output", str(dest)]), \\
+            with mock.patch.object(sys, "argv", ["formal_report", "--require-full", "--output", str(dest)]), \
                  mock.patch.object(formal, "audit_module", return_value={"status": "KERNEL_CHECKED"}), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(formal.main(), 1)
             data = json.loads(dest.read_text(encoding="utf-8"))
