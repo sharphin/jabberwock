@@ -183,16 +183,16 @@ def main():
         item = {"status": "INFRA_ERROR", "commands": [], "metrics": {}, "outputs": {}}
         report["cases"][name] = item
         try:
-            generated = run([jwc, "--ll", source], timeout=600)
-            item["commands"].append({"stage": "jwc-LLVM", **generated})
-            if generated["exit"] or "define void @jw_main(" not in generated["stdout"]:
-                raise ValueError("jwc failed to generate LLVM")
-            # Avoid run() stdout excerpt truncation corrupting large LLVM output.
+            # LLVM can be larger than log excerpts: capture full stdout as bytes.
             ll_process = subprocess.run([str(jwc), "--ll", str(source)], cwd=ROOT,
                                         capture_output=True, timeout=600)
             if ll_process.returncode or b"define void @jw_main(" not in ll_process.stdout:
                 raise ValueError("jwc LLVM capture failed")
             ll.write_bytes(ll_process.stdout)
+            item["commands"].append({"stage": "jwc-LLVM", "exit": ll_process.returncode,
+                                     "cmd": [str(jwc), "--ll", str(source)],
+                                     "llvm_bytes": len(ll_process.stdout),
+                                     "stderr": ll_process.stderr.decode("utf-8", "replace")[-MAX_LOG:]})
             compile_steps = [
                 ("jwc-native", [*flags["jwc_native"], ll, ROOT / "runtime/jw_rt.c",
                                 "-lm", "-pthread", "-Wno-override-module", "-o", binaries["jwc"]]),
