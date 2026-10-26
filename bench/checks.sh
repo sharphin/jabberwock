@@ -35,7 +35,7 @@ function numeric_row(label) {
         if ($k !~ /^[0-9]+$/) { print "ERROR: invalid numeric field in " label ": " $0; bad = 1; return 0 }
     return 1
 }
-NR == FNR {
+FILENAME == ARGV[1] {
     if ($1 ~ /^#/ || NF == 0) next
     if (!numeric_row("baseline")) next
     if (seen_base[$1]++) { print "ERROR: duplicate baseline " $1; bad = 1 }
