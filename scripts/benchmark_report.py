@@ -67,9 +67,10 @@ def compare(current, baseline, threshold):
         return {"status": "NOT_COMPARABLE", "reason": "report schema differs"}
     if (current["environment"] != baseline.get("environment")
             or current["runs"] != baseline.get("runs")
-            or current["compiler_hashes"] != baseline.get("compiler_hashes")
-            or current["flags"] != baseline.get("flags")):
-        return {"status": "NOT_COMPARABLE", "reason": "environment, compiler binary, flags or repeats differ"}
+            or current["flags"] != baseline.get("flags")
+            or current["compiler_hashes"].get("runtime") != baseline.get("compiler_hashes", {}).get("runtime")
+            or current["source_hashes"] != baseline.get("source_hashes")):
+        return {"status": "NOT_COMPARABLE", "reason": "environment, workload sources, runtime, flags or repeats differ"}
     rows = []
     for name, case in current["cases"].items():
         prev = baseline.get("cases", {}).get(name, {})
@@ -123,7 +124,7 @@ def main():
     report = {"schema_version": 2, "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
               "git_sha": version(["git", "rev-parse", "HEAD"]), "environment": fingerprint(),
               "runs": a.runs, "suite": selected, "subjects": list(TARGETS),
-              "flags": flags, "compiler_hashes": {}, "preparation": [], "cases": {},
+              "flags": flags, "compiler_hashes": {}, "source_hashes": {}, "preparation": [], "cases": {},
               "baseline_comparison": None,
               "limitations": ("Rust-based Jabberwock compiler is bootstrap only. jwc emits LLVM; clang links shared C runtime. "
                               "Equivalent outputs required. Differences in libraries and algorithms remain; "
@@ -178,6 +179,7 @@ def main():
         source = BENCH / "jabberwock" / (name + ".jw")
         cpp = BENCH / "cpp" / (name + ".cpp")
         rust = BENCH / "rust" / (name + ".rs")
+        report["source_hashes"][name] = {lang: sha(path) for lang, path in (("jwc", source), ("cpp", cpp), ("rust", rust))}
         ll = dest / "jwc.ll"
         binaries = {k: dest / k for k in TARGETS}
         item = {"status": "INFRA_ERROR", "commands": [], "metrics": {}, "outputs": {}}
