@@ -312,3 +312,5 @@ cargo run --release -- build -o jwc1 jwc/main.jw   # Rust 版で 1 代目の jwc
 1. 実行時に見つけているエラーの一部を、型検査で実行前に見つけるようにする
 2. ベンチマークの残りの項目（[bench/README.md](bench/README.md) の「まだやっていないこと」）
 3. パッケージ（`alice`）: 手元の依存先だけはできた（docs/packages.md）。ネットからの取得・版の指定と、標準ライブラリ
+
+Windows ASanの起動エラーは [DLL診断](docs/windows-asan-diagnostics.md) を参照。診断情報は通常の安全性JSONにも含まれる。

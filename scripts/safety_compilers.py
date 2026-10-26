@@ -16,8 +16,11 @@ def catalog(target, scale, work, compilers=COMPILERS):
         p["dependencies"] = ["cargo-build"]
         preparations.append(p)
     if target == "windows":
-        preparations.append(safety.probe("windows-asan-preflight", [],
-                            [sys.executable, "scripts/check_windows_asan.py"], clang=True, timeout=180))
+        diagnostic = work / "windows-asan-diagnostic.json"
+        preflight = safety.probe("windows-asan-preflight", [],
+                            [sys.executable, "scripts/check_windows_asan.py", "--output", str(diagnostic)], clang=True, timeout=360)
+        preflight["case_report"] = str(diagnostic)
+        preparations.append(preflight)
     result = []
     for subject in compilers:
         compiler = jwc if subject == "jwc" else rust
