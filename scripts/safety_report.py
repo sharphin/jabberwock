@@ -251,6 +251,21 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
                 raise ValueError("case report belongs to a different compiler")
             if probe.get("compiler") and any(r.get("compiler") != probe["compiler"] for r in cases if isinstance(r, dict)):
                 raise ValueError("mixed compiler cases")
+            # Every nested report must identify individual executed cases.
+            # Some legacy probes use (case, configuration) rather than id.
+            identities = []
+            for item in cases:
+                if not isinstance(item, dict):
+                    raise ValueError("non-object executed case")
+                identity = item.get("id")
+                if identity is None and isinstance(item.get("case"), str):
+                    configuration = item.get("configuration")
+                    identity = item["case"] + (":" + configuration if isinstance(configuration, str) else "")
+                if not isinstance(identity, str) or not identity:
+                    raise ValueError("executed case without identity")
+                identities.append(identity)
+            if len(identities) != len(set(identities)):
+                raise ValueError("duplicate executed case identity")
             # Dynamic case inventories may grow, but the runner must execute
             # exactly the complete inventory emitted by the case generator.
             declared = details.get("expected_case_ids")
