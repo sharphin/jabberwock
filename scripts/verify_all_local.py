@@ -20,6 +20,8 @@ GOALS = ("semantics", "memory", "types", "ownership", "checks")
 
 
 def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
+    if not isinstance(practical, dict) or not isinstance(formal, dict):
+        return {"status": "INVALID_EVIDENCE", "reason": "reports must be JSON objects"}
     expected = set(compilers)
     expected_items = {(c, n) for c in expected for n in range(1, 13)}
     expected_goals = {(c, g) for c in expected for g in GOALS}
@@ -37,7 +39,7 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
         return {"status": "INVALID_EVIDENCE", "reason": "missing, duplicate or alien goal/item"}
     if practical.get("run_status") != "COMPLETE" or formal.get("infrastructure_error") or formal.get("interrupted"):
         return {"status": "NOT_PROVEN", "reason": "incomplete run or proof infrastructure problem"}
-    if practical.get("suite", {}).get("compilers") not in (list(compilers), tuple(compilers)):
+    if not isinstance(practical.get("suite"), dict) or practical["suite"].get("compilers") not in (list(compilers), tuple(compilers)):
         return {"status": "INVALID_EVIDENCE", "reason": "compiler provenance mismatch"}
     if not isinstance(formal.get("compilers"), dict) or set(formal["compilers"]) != expected:
         return {"status": "INVALID_EVIDENCE", "reason": "formal compiler provenance mismatch"}
