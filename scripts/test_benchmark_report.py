@@ -29,8 +29,10 @@ class BenchmarkReportTests(unittest.TestCase):
         self.assertEqual(result["peak_rss_mb"], 4.5)
 
     def test_invalid_measure(self):
-        with self.assertRaises(ValueError):
-            bench.parse_measure("0.2 0.1 0.3 1")
+        for invalid in ("0.2 0.1 0.3 1", "nan nan nan 2",
+                        "0.1 0.2 inf 2", "0 0 0 2"):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                bench.parse_measure(invalid)
 
     def test_regression(self):
         metadata = {"schema_version": 2, "environment": {"os": "linux"},
