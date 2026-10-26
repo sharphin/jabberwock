@@ -34,8 +34,11 @@ Rustの通常テストとreleaseテストはclangなしでも実行しますが�
 Windows（PowerShell）:
 
 ```powershell
-python scripts/safety_windows.py
+.\scripts\safety_windows.cmd
 ```
+
+Windowsの永続PATH設定と起動時のx64準備は [windows-setup.md](windows-setup.md)。
+準備済み端末での直接実行は `py -3 scripts/safety_windows.py`。
 
 Linux（WSL2を含む）:
 

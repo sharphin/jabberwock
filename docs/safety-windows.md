@@ -4,9 +4,14 @@ Windowsでビルド・実行した結果だけを、この12項目の証拠と�
 Linux版の12項目とは独立した検証セットで、WSL2での実行結果はWindowsの合格に充当しない。
 共通の受け入れ基準は [verification-plan.md](verification-plan.md)、実行方法全般は [local-safety.md](local-safety.md)。
 
+永続PATH設定とx64環境の準備は [windows-setup.md](windows-setup.md) を参照する。
+通常のPowerShell/コマンドプロンプトから、環境準備を含む入口を利用できる。
+
 ```powershell
-python scripts/safety_windows.py
+.\scripts\safety_windows.cmd
 ```
+
+すでに環境を準備した端末で直接起動する場合は `py -3 scripts/safety_windows.py`。
 
 アップロードするファイル: **`target/safety-windows-report.json`**。
 JSONの `suite.id` は `windows-12`、項目IDは `windows-01`〜`windows-12`。
