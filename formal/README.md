@@ -4,6 +4,10 @@
 Lean 4.24.0の標準ライブラリだけを使用し、mathlibや外部パッケージは追加しない。
 `lean-toolchain` と `lake-manifest.json` を固定する。
 
+実用テスト1〜12とは別に、[形式証明専用の検証様式](../docs/formal-verification.md) でF1〜F5を管理する。
+[テンプレート](records/TEMPLATE.md) と既存の [世代・退役](records/F2-001-generation.md) / [所有位置のムーブ](records/F4-001-ownership.md) の記録を用意した。
+`records/` は検査した時点の証拠と進捗であり、Leanの証明やCIの成功を追加するものではない。
+
 Lean/elanを導入済みなら、リポジトリのルートから次を実行する。
 
 ```sh
