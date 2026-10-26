@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 import local_safety as safety
@@ -25,6 +26,48 @@ import safety_platforms as suites
 ROOT = Path(__file__).resolve().parents[1]
 LOG_LIMIT = 24000
 HEARTBEAT_SECONDS = 15
+
+
+class ReportSaveError(Exception):
+    pass
+
+
+class ReportWriter:
+    """Keep a complete snapshot even when Windows refuses destination replacement."""
+    def __init__(self, path):
+        self.path = path
+
+    def save(self, report):
+        temporary = None
+        try:
+            # Unique names also avoid sharing the old fixed .json.tmp file.
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
+                                             prefix=self.path.stem + "-", suffix=".json",
+                                             delete=False) as handle:
+                temporary = Path(handle.name)
+                json.dump(report, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            # Close the handle before rename, as required on Windows.
+            for delay in (0, 0.05, 0.1, 0.2, 0.4):
+                if delay:
+                    time.sleep(delay)
+                try:
+                    temporary.replace(self.path)
+                    return
+                except PermissionError:
+                    continue
+            previous = self.path
+            self.path = temporary
+            print("WARNING: report replacement denied: " + str(previous), flush=True)
+            print("Report redirected to: " + str(self.path), flush=True)
+        except OSError as error:
+            # Preserve the existing report; remove only our incomplete new file.
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise ReportSaveError("cannot save report in " + str(self.path.parent) + ": " + str(error)) from error
 
 
 def stop_process(process):
@@ -274,6 +317,7 @@ def main(argv=None, *, target_os=None) -> int:
     }
     produced = {}
     report.update(run_status="RUNNING", active_probe=None)
+    writer = ReportWriter(output)
 
     def checkpoint():
         report["results"] = [produced[p["name"]] for p in ordered if p["name"] in produced]
@@ -297,9 +341,7 @@ def main(argv=None, *, target_os=None) -> int:
                                     "unavailable": unavailable})
         if not args.dry_run:
             report["updated_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            temporary = output.with_name(output.name + ".tmp")
-            temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            temporary.replace(output)
+            writer.save(report)
 
     try:
         checkpoint()
@@ -332,14 +374,21 @@ def main(argv=None, *, target_os=None) -> int:
             report["run_status"] = "COMPLETE"
     except KeyboardInterrupt:
         report["run_status"] = "INTERRUPTED"
-    finally:
-        checkpoint()
+    except ReportSaveError as error:
+        print("INFRA_ERROR: " + str(error), file=sys.stderr, flush=True)
+        print("Stopped; last saved report (if present): " + str(writer.path), file=sys.stderr, flush=True)
+        return 2
     report["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    checkpoint()
+    try:
+        checkpoint()
+    except ReportSaveError as error:
+        print("INFRA_ERROR: " + str(error), file=sys.stderr, flush=True)
+        print("Final results could not be saved; last saved report: " + str(writer.path), file=sys.stderr, flush=True)
+        return 2
     for item in report["items"]:
         print(f"{selected_os.upper()} ITEM {item['item']:02d}/12 {item['name']}: {item['status']}", flush=True)
     if not args.dry_run:
-        print("Report: " + str(output), flush=True)
+        print("Report: " + str(writer.path), flush=True)
     else:
         print("Dry run; no report written", flush=True)
     return 130 if report["run_status"] == "INTERRUPTED" else int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"]))

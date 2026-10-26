@@ -17,6 +17,54 @@ import safety_report as report
 
 
 class SafetyReportTests(unittest.TestCase):
+    def test_locked_destination_keeps_complete_alternate_and_original(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "report.json"
+            target.write_text('OLD', encoding="utf-8")
+            writer = report.ReportWriter(target)
+            with mock.patch.object(Path, "replace", side_effect=PermissionError("locked")) as replace, \
+                 mock.patch.object(report.time, "sleep"), contextlib.redirect_stdout(io.StringIO()):
+                writer.save({"run_status": "RUNNING", "results": ["saved"]})
+            self.assertEqual(replace.call_count, 5)
+            self.assertEqual(target.read_text(), "OLD")
+            self.assertNotEqual(writer.path, target)
+            self.assertEqual(json.loads(writer.path.read_text())["results"], ["saved"])
+            alternate = writer.path
+            writer.save({"run_status": "COMPLETE"})
+            self.assertEqual(writer.path, alternate)
+            self.assertEqual(json.loads(alternate.read_text())["run_status"], "COMPLETE")
+
+    def test_transient_lock_retries_without_changing_destination(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "report.json"
+            writer = report.ReportWriter(target)
+            original_replace = Path.replace
+            attempts = []
+            def replace(source, destination):
+                attempts.append(source)
+                if len(attempts) < 3:
+                    raise PermissionError("temporary lock")
+                return original_replace(source, destination)
+            with mock.patch.object(Path, "replace", new=replace), mock.patch.object(report.time, "sleep"):
+                writer.save({"saved": True})
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(writer.path, target)
+            self.assertEqual(json.loads(target.read_text()), {"saved": True})
+            self.assertEqual(list(Path(d).iterdir()), [target])
+
+    def test_unwritable_report_stops_before_probes_without_repeating_save(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(report.suites, "host_os", return_value="windows"), \
+                 mock.patch.object(report, "version", return_value="mock-version"), \
+                 mock.patch.object(report.ReportWriter, "save", side_effect=report.ReportSaveError("disk unavailable")) as save, \
+                 mock.patch.object(report, "run_probe") as probe, \
+                 contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                code = report.main(["--output", str(Path(d) / "report.json")], target_os="windows")
+            self.assertEqual(code, 2)
+            save.assert_called_once()
+            probe.assert_not_called()
+            self.assertIn("INFRA_ERROR", diagnostic.getvalue())
+
     def test_excerpt_preserves_both_ends(self):
         raw = "FIRST ERROR\n" + "x" * 50000 + "\nFINAL SUMMARY"
         trimmed = report.excerpt(raw)
