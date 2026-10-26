@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+// All runtime allocation failures are language errors, including metadata and output buffers.
+static void *jw_checked_malloc(size_t n);
+static void *jw_checked_calloc(size_t n, size_t size);
+static void *jw_checked_realloc(void *old, size_t n);
+
 // LLVM の計測版から呼ぶ。標準エラーの FILE は C 側で扱い、Windows でも同じ表示にする。
 void jw_report_checks(int64_t gen, int64_t elided, int64_t bounds) {
     fprintf(stderr, "[checks] gen %lld elided %lld bounds %lld\n",
@@ -110,6 +115,13 @@ typedef struct WSb {
 static char *out_buf;
 static size_t out_len, out_cap;
 static WLock out_lock = WLOCK_INIT;
+static _Thread_local int out_owned;
+static void out_enter(void) {
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) { lock(&out_lock); out_owned = 1; }
+}
+static void out_leave(void) {
+    if (out_owned) { out_owned = 0; unlock(&out_lock); }
+}
 
 static void flush_locked(void) {
     if (out_len) fwrite(out_buf, 1, out_len, stdout);
@@ -118,9 +130,11 @@ static void flush_locked(void) {
 }
 
 void jw_flush(void) {
-    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&out_lock);
+    // Allocation failure may occur while this thread is assembling a print line.
+    if (out_owned) { flush_locked(); return; }
+    out_enter();
     flush_locked();
-    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) unlock(&out_lock);
+    out_leave();
 }
 
 // エラーと exit で終わる: 片づけずに終わる（atexit の処理も動かさない。ほかのスレッドがまだ動いていても
@@ -135,7 +149,7 @@ static void out_write(const char *p, size_t n) {
     if (out_len + n > out_cap) {
         size_t cap = out_cap ? out_cap * 2 : 1 << 16;
         while (cap < out_len + n) cap *= 2;
-        out_buf = realloc(out_buf, cap);
+        out_buf = jw_checked_realloc(out_buf, cap);
         out_cap = cap;
     }
     memcpy(out_buf + out_len, p, n);
@@ -145,7 +159,7 @@ static void out_write(const char *p, size_t n) {
 
 // 1 回の print のあいだ出力の錠を持つ（行が混ざらない）
 void jw_print_begin(void) {
-    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&out_lock);
+    out_enter();
 }
 
 // print の 1 つ分（first でなければ前に空白）
@@ -156,12 +170,12 @@ void jw_print_part(WStr *s, int32_t first) {
 
 void jw_print_end(void) {
     out_write("\n", 1);
-    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) unlock(&out_lock);
+    out_leave();
 }
 
 // eprint: 標準エラーへ 1 行。先に標準出力を出しておく（端末で順番が入れ替わらないように）
 void jw_eprint_begin(void) {
-    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&out_lock);
+    out_enter();
     flush_locked();
 }
 
@@ -173,7 +187,7 @@ void jw_eprint_part(WStr *s, int32_t first) {
 void jw_eprint_end(void) {
     fputc('\n', stderr);
     fflush(stderr);
-    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) unlock(&out_lock);
+    out_leave();
 }
 
 // ---------------------------------------------------------------- エラー
@@ -330,6 +344,23 @@ static _Noreturn void jw_oom(void) {
     jw_flush();
     fputs("error: メモリが足りません\n", stderr);
     quit(1);
+}
+
+static void *jw_checked_malloc(size_t n) {
+    void *p = malloc(n ? n : 1);
+    if (!p) jw_oom();
+    return p;
+}
+static void *jw_checked_calloc(size_t n, size_t size) {
+    if (size && n > SIZE_MAX / size) jw_oom();
+    void *p = calloc(n && size ? n : 1, n && size ? size : 1);
+    if (!p) jw_oom();
+    return p;
+}
+static void *jw_checked_realloc(void *old, size_t n) {
+    void *p = realloc(old, n ? n : 1);
+    if (!p) jw_oom();
+    return p;
 }
 
 // IR では来ないはずの場所（書き出しの誤り）
@@ -551,7 +582,7 @@ static size_t round8(int64_t n) { return n <= 16 ? 16 : ((size_t)n + 7) & ~(size
 static void *slab_take(size_t n) {
     if ((size_t)(slab_end - slab_cur) < n) {
         size_t sz = 256 * 1024;
-        slab_cur = malloc(sz);
+        slab_cur = jw_checked_malloc(sz);
         if (!slab_cur) jw_oom();
         slab_end = slab_cur + sz;
     }
@@ -599,7 +630,7 @@ static void *block_alloc(int64_t size) {
         }
         if (!p) {
             // 中身を 64 バイトの境目にそろえる（リストの要素をまとめて読み書きする命令が速くなる）。大きな区画は OS に返さない
-            char *raw = malloc(sizeof(WHdr) + s + 64);
+            char *raw = jw_checked_malloc(sizeof(WHdr) + s + 64);
             if (!raw) jw_oom();
             p = (void *)(((uintptr_t)raw + sizeof(WHdr) + 63) & ~(uintptr_t)63);
             gen_set(p, 0);
@@ -628,7 +659,7 @@ static void block_free(void *p, int64_t size, const WSite *why) {
         *(void **)p = free_small[s / 8];
         free_small[s / 8] = p;
     } else {
-        Big *b = malloc(sizeof(Big));
+        Big *b = jw_checked_malloc(sizeof(Big));
         b->next = free_big;
         b->size = s;
         b->payload = p;
@@ -700,7 +731,7 @@ static _Thread_local void *free_bytes[SCLASS + 1];
 static void *bytes_alloc(size_t n) {
     size_t c = (n + 15) >> 4;
     if (c > SCLASS) {
-        void *p = malloc(n);
+        void *p = jw_checked_malloc(n);
         if (!p) jw_oom();
         return p;
     }
@@ -772,7 +803,7 @@ WStr *jw_str_append(WStr **slot, WStr *b) {
     size_t old = str_bytes(a->len), need = str_bytes(n);
     if (need != old) {
         if (((old + 15) >> 4) > SCLASS) {
-            a = realloc(a, need);
+            a = jw_checked_realloc(a, need);
             if (!a) jw_oom();
         } else {
             WStr *s = bytes_alloc(need);
@@ -1016,7 +1047,7 @@ int64_t jw_f2i(double x, int32_t bits, int32_t is_signed) {
 static int64_t list_bytes(int64_t esize, int64_t n) { return (int64_t)round8(n * (esize ? esize : 1)); }
 
 static char *list_new_data(int64_t bytes) {
-    char *raw = malloc((size_t)(LIST_PAD + bytes));
+    char *raw = jw_checked_malloc((size_t)(LIST_PAD + bytes));
     if (!raw) jw_oom();
     char *d = raw + LIST_PAD;
     gen_set(d, 0);
@@ -1046,7 +1077,7 @@ static int list_grow(WList *l, int64_t esize, int64_t n, const WSite *why) {
         block_free(l->data, list_bytes(esize, l->cap), why);
         l->data = nd;
     } else {
-        char *raw = realloc(l->data - LIST_PAD, (size_t)(LIST_PAD + bytes));
+        char *raw = jw_checked_realloc(l->data - LIST_PAD, (size_t)(LIST_PAD + bytes));
         if (!raw) jw_oom();
         l->data = raw + LIST_PAD;
     }
@@ -1080,7 +1111,7 @@ void jw_list_remove(WList *l, int64_t esize, int64_t i, void *out, const WSite *
 
 void jw_list_reverse(WList *l, int64_t esize, const WSite *why) {
     char tmp[256];
-    char *big = esize > (int64_t)sizeof tmp ? malloc((size_t)esize) : tmp;
+    char *big = esize > (int64_t)sizeof tmp ? jw_checked_malloc((size_t)esize) : tmp;
     for (int64_t i = 0, j = l->len - 1; i < j; i++, j--) {
         memcpy(big, l->data + i * esize, (size_t)esize);
         memcpy(l->data + i * esize, l->data + j * esize, (size_t)esize);
@@ -1223,7 +1254,7 @@ static void s_binsert(WSort *S, int64_t lo, int64_t done, int64_t n) {
 static void s_stable(WSort *S) {
     int64_t n = S->n, es = S->es;
     if (n < 64) { s_binsert(S, 0, 1, n); return; }
-    S->s = malloc((size_t)(n * es));
+    S->s = jw_checked_malloc((size_t)(n * es));
     int64_t minrun = s_minrun(n);
     // (始め, 長さ, 次の run との境目の深さ)
     int64_t rs[130], rl[130];
@@ -1342,7 +1373,7 @@ static void s_init(WSort *S, char *data, int64_t n, int64_t es, WLess less, void
     S->es = es;
     S->less = less;
     S->env = env;
-    S->xb = malloc((size_t)(2 * es));
+    S->xb = jw_checked_malloc((size_t)(2 * es));
     S->sw = S->xb + es;
 }
 
@@ -1417,7 +1448,7 @@ void jw_sort_int(char *data, int64_t n, int32_t bytes, int32_t sgn) {
         return;
     }
     // 8 バイトの整数は data をそのまま鍵の場所に使う（作業用の場所は n 個ぶんだけ）
-    uint64_t *buf = malloc((size_t)n * (bytes == 8 ? 8 : 16));
+    uint64_t *buf = jw_checked_malloc((size_t)n * (bytes == 8 ? 8 : 16));
     if (!buf) jw_oom();
     uint64_t *k = bytes == 8 ? (uint64_t *)data : buf + n, *t = buf;
     uint64_t mn = ~0ull, mx = 0;
@@ -1486,13 +1517,13 @@ static void reindex(WMap *m) {
     int64_t cap = 8;
     while (cap < m->len * 2 + 2) cap *= 2;
     free(m->idx);
-    m->idx = calloc((size_t)cap, sizeof(int64_t));
+    m->idx = jw_checked_calloc((size_t)cap, sizeof(int64_t));
     m->icap = cap;
     for (int64_t i = 0; i < m->len; i++) index_put(m, i);
 }
 
 WMap *jw_map_new(int64_t vsize, int32_t kind) {
-    WMap *m = calloc(1, sizeof(WMap));
+    WMap *m = jw_checked_calloc(1, sizeof(WMap));
     m->esize = 8 + ((vsize + 7) & ~(int64_t)7);
     m->kind = kind;
     return m;
@@ -1514,7 +1545,7 @@ int64_t jw_map_find(WMap *m, int64_t key) {
 int64_t jw_map_add(WMap *m, int64_t key) {
     if (m->len == m->cap) {
         m->cap = m->cap ? m->cap * 2 : 4;
-        m->e = realloc(m->e, (size_t)(m->cap * m->esize));
+        m->e = jw_checked_realloc(m->e, (size_t)(m->cap * m->esize));
     }
     int64_t i = m->len++;
     *(int64_t *)(m->e + i * m->esize) = key;
@@ -1848,7 +1879,7 @@ int32_t jw_str_to_float(WStr *s, double *out) {
     if (i != n) return 0;
     char buf[128];
     char *heap = NULL, *t = buf;
-    if (n + 1 > (int64_t)sizeof buf) t = heap = malloc((size_t)n + 1);
+    if (n + 1 > (int64_t)sizeof buf) t = heap = jw_checked_malloc((size_t)n + 1);
     memcpy(t, p, (size_t)n);
     t[n] = 0;
     *out = strtod(t, NULL);
@@ -1888,7 +1919,7 @@ int32_t jw_str_to_int(WStr *s, int64_t *out) {
 // order の順に要素を並べ直す（sort_by）
 void jw_permute(char *data, int64_t n, int64_t es, const int64_t *order) {
     if (n < 2) return;
-    char *tmp = malloc((size_t)(n * es));
+    char *tmp = jw_checked_malloc((size_t)(n * es));
     for (int64_t k = 0; k < n; k++) memcpy(tmp + k * es, data + order[k] * es, (size_t)es);
     memcpy(data, tmp, (size_t)(n * es));
     free(tmp);
@@ -1911,7 +1942,7 @@ typedef struct WEnv {
 } WEnv;
 
 void *jw_env_new(int64_t size, const WEnvVt *vt) {
-    WEnv *e = calloc(1, (size_t)size);
+    WEnv *e = jw_checked_calloc(1, (size_t)size);
     e->rc = 1;
     e->vt = vt;
     return e;
@@ -1990,7 +2021,7 @@ typedef struct WChan {
 } WChan;
 
 WChan *jw_chan_new(int64_t esize, WDrop drop) {
-    WChan *c = calloc(1, sizeof(WChan));
+    WChan *c = jw_checked_calloc(1, sizeof(WChan));
     c->rc = 1;
     c->esize = esize > 0 ? esize : 1;
     c->drop = drop;
@@ -2018,7 +2049,7 @@ void jw_chan_send(WChan *c, void *v, const WSite *at) {
     }
     if (c->len == c->cap) {
         int64_t cap = c->cap ? c->cap * 2 : 8; // いつも 2 のべき（位置は & で回す）
-        char *nb = malloc((size_t)(cap * c->esize));
+        char *nb = jw_checked_malloc((size_t)(cap * c->esize));
         for (int64_t i = 0; i < c->len; i++)
             memcpy(nb + i * c->esize, c->buf + ((c->head + i) & (c->cap - 1)) * c->esize, (size_t)c->esize);
         free(c->buf);
@@ -2113,11 +2144,11 @@ static int64_t max_threads(void) {
 // spawn: thunk(args, 戻り値の置き場) を新しいスレッドで動かす。args は malloc したもの（終わったら解放する）。
 // 作れなければ at でエラー（生きているスレッドの数には入れない。錠を持ったまま作るので、新しいスレッドが先に終わって数を減らすことはない）
 WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop, const WSite *at) {
-    WTask *t = calloc(1, sizeof(WTask));
+    WTask *t = jw_checked_calloc(1, sizeof(WTask));
     t->thunk = thunk;
     t->args = args;
     t->rsize = rsize > 0 ? rsize : 1;
-    t->result = calloc(1, (size_t)t->rsize);
+    t->result = jw_checked_calloc(1, (size_t)t->rsize);
     t->drop = drop;
     __atomic_store_n(&g_threaded, 1, __ATOMIC_RELAXED);
     lock(&g_lock);
@@ -2133,7 +2164,7 @@ WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop, const WSite
     return t;
 }
 
-void *jw_spawn_args(int64_t size) { return calloc(1, (size_t)(size > 0 ? size : 1)); }
+void *jw_spawn_args(int64_t size) { return jw_checked_calloc(1, (size_t)(size > 0 ? size : 1)); }
 
 static int task_ready(void *p) { return ((WTask *)p)->done; }
 
@@ -2247,7 +2278,7 @@ intptr_t _wspawnvp(int, const wchar_t *, const wchar_t *const *);
 
 static wchar_t *to_wide(const char *s) {
     int n = MultiByteToWideChar(65001, 0, s, -1, NULL, 0);
-    wchar_t *w = malloc(sizeof(wchar_t) * (size_t)(n > 0 ? n : 1));
+    wchar_t *w = jw_checked_malloc(sizeof(wchar_t) * (size_t)(n > 0 ? n : 1));
     if (n <= 0) w[0] = 0;
     else MultiByteToWideChar(65001, 0, s, -1, w, n);
     return w;
@@ -2272,7 +2303,7 @@ extern char **environ;
 
 // 終わりに 0 のある写し（WStr は 0 で終わるとは限らない）
 static char *c_str(WStr *s) {
-    char *c = malloc((size_t)s->len + 1);
+    char *c = jw_checked_malloc((size_t)s->len + 1);
     memcpy(c, s->data, (size_t)s->len);
     c[s->len] = 0;
     return c;
@@ -2386,13 +2417,13 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
     jw_flush();
     int64_t n = args->len;
     WStr **items = (WStr **)args->data;
-    char **argv = malloc(sizeof(char *) * (size_t)(n + 2));
+    char **argv = jw_checked_malloc(sizeof(char *) * (size_t)(n + 2));
     argv[0] = c_str(cmd);
     for (int64_t i = 0; i < n; i++) argv[i + 1] = c_str(items[i]);
     argv[n + 1] = NULL;
     int ok;
 #ifdef _WIN32
-    wchar_t **wargv = malloc(sizeof(wchar_t *) * (size_t)(n + 2));
+    wchar_t **wargv = jw_checked_malloc(sizeof(wchar_t *) * (size_t)(n + 2));
     for (int64_t i = 0; i <= n; i++) {
         WSb *b = jw_sb_new();
         quote_arg(b, argv[i]);
@@ -2455,10 +2486,10 @@ static void win_setup(int *argc, char ***argv) {
     int n = 0;
     wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
     if (!w) return;
-    char **a = malloc(sizeof(char *) * (size_t)(n + 1));
+    char **a = jw_checked_malloc(sizeof(char *) * (size_t)(n + 1));
     for (int i = 0; i < n; i++) {
         int len = WideCharToMultiByte(65001, 0, w[i], -1, NULL, 0, NULL, NULL);
-        a[i] = malloc((size_t)len);
+        a[i] = jw_checked_malloc((size_t)len);
         WideCharToMultiByte(65001, 0, w[i], -1, a[i], len, NULL, NULL);
     }
     a[n] = NULL;
