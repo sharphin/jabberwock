@@ -82,10 +82,12 @@ def validate_manifest(manifest, compiler):
         theorems = entry.get("theorems")
         if not isinstance(module, str) or not IDENTIFIER.fullmatch(module) or not module.startswith(prefix):
             raise ValueError("invalid or foreign proof module: " + goal)
-        if not isinstance(theorems, list) or not theorems or len(theorems) != len(set(theorems)):
-            raise ValueError("missing or duplicate theorem: " + goal)
+        if not isinstance(theorems, list) or not theorems or any(not isinstance(t, str) for t in theorems):
+            raise ValueError("missing or malformed theorem: " + goal)
+        if len(theorems) != len(set(theorems)):
+            raise ValueError("duplicate theorem: " + goal)
         for theorem in theorems:
-            if not isinstance(theorem, str) or not IDENTIFIER.fullmatch(theorem) or not theorem.startswith(module + "."):
+            if not IDENTIFIER.fullmatch(theorem) or not theorem.startswith(module + "."):
                 raise ValueError("foreign or malformed theorem: " + goal)
     return goals
 
