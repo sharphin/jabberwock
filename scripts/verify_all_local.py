@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -29,7 +30,7 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
     try:
         item_keys = [(x["compiler"], x["item"]) for x in items]
         goal_keys = [(x["compiler"], x["goal"]) for x in proofs]
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, AttributeError):
         return {"status": "INVALID_EVIDENCE", "reason": "item or proof identity missing"}
     if (len(item_keys) != len(expected_items) or set(item_keys) != expected_items or
             len(goal_keys) != len(expected_goals) or set(goal_keys) != expected_goals):
@@ -38,7 +39,7 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
         return {"status": "NOT_PROVEN", "reason": "incomplete run or proof infrastructure problem"}
     if practical.get("suite", {}).get("compilers") not in (list(compilers), tuple(compilers)):
         return {"status": "INVALID_EVIDENCE", "reason": "compiler provenance mismatch"}
-    if set(formal.get("compilers", {})) != expected:
+    if not isinstance(formal.get("compilers"), dict) or set(formal["compilers"]) != expected:
         return {"status": "INVALID_EVIDENCE", "reason": "formal compiler provenance mismatch"}
     # Report strings are untrusted input. Do not certify safety from claimed PASS.
     # A future acceptance verifier must validate proof terms, implementation
@@ -68,12 +69,22 @@ def main() -> int:
     practical_path = args.practical or ROOT / "target" / ("safety-" + os_name + "-report.json")
     formal_path = args.formal or ROOT / "target/formal-report.json"
     executed = []
+    practical_command = (["cmd", "/d", "/c", str(ROOT / "scripts/safety_windows.cmd"),
+                          "--compiler", "all", "--output", str(practical_path)]
+                         if os_name == "windows" else
+                         [sys.executable, str(ROOT / "scripts/safety_linux.py"),
+                          "--compiler", "all", "--output", str(practical_path)])
     for supplied, label, command in (
-        (args.practical, "practical", [sys.executable, str(ROOT / "scripts" / ("safety_" + os_name + ".py")),
-                                      "--compiler", "all", "--output", str(practical_path)]),
+        (args.practical, "practical", practical_command),
         (args.formal, "formal", [sys.executable, str(ROOT / "scripts/formal_report.py"),
                                 "--compiler", "all", "--require-full", "--output", str(formal_path)])):
         if supplied is None:
+            # Never interpret a report left by an older run as fresh evidence.
+            try:
+                Path(practical_path if label == "practical" else formal_path).unlink(missing_ok=True)
+            except OSError as exc:
+                executed.append({"stage": label, "error": "cannot remove stale report: " + str(exc)})
+                continue
             try:
                 result = subprocess.run(command, cwd=ROOT, timeout=86400)
                 executed.append({"stage": label, "exit_code": result.returncode})
@@ -87,15 +98,16 @@ def main() -> int:
     practical = read(practical_path)
     formal = read(formal_path)
     verdict = judge(practical, formal)
-    if any("error" in x for x in executed):
-        verdict = {"status": "INFRA_ERROR", "reason": "local suite could not be executed"}
+    errors = [r for r in executed if "error" in r or r.get("exit_code") not in (0, 1)]
+    if errors:
+        verdict = {"status": "INFRA_ERROR", "reason": "local suite failed to start or encountered infrastructure failure", "stages": errors}
     report = {"schema_version": 1, "kind": "local-verification", "verdict": verdict,
               "runs": executed, "practical_report": str(practical_path), "formal_report": str(formal_path)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(verdict, ensure_ascii=False, indent=2))
     print("Report:", args.output)
-    return 0 if verdict["status"] == "PASS" and all(r.get("exit_code") == 0 for r in executed) else 1
+    return 2 if verdict["status"] in ("INFRA_ERROR", "INVALID_EVIDENCE") else (0 if verdict["status"] == "PASS" and all(r.get("exit_code") == 0 for r in executed) else 1)
 
 
 if __name__ == "__main__":
