@@ -1,35 +1,37 @@
-# ベンチマーク（jabberwock build・Go・C++・Rust）
+# ベンチマーク（セルフホストjwc・Rust・C++のみ）
 
-## ワンコマンド計測・JSONレポート（新）
+## 一括コマンド
+
+Linux / WSL2で、リポジトリ直下から実行する。
 
 ```sh
-# 普段の簡易確認（fib/matmul/mandelbrot/sort/linkedlist）
+# 5種類の簡易計測
 python3 scripts/benchmark_report.py
 
-# 全21種類
+# 全21種類 × 5回（3者比較）
 python3 scripts/benchmark_report.py --full
 
-# 同一マシンの過去のJSONと比較（15%以上遅くなったら回帰）
-python3 scripts/benchmark_report.py --full --baseline path/to/previous-benchmark-report.json
+# 既存のセルフホストjwcを指定する場合（ブートストラップ省略）
+python3 scripts/benchmark_report.py --full --jwc path/to/jwc
 
-# 対象指定
-python3 scripts/benchmark_report.py --cases sort bst --runs 7
+# 個別ケース・実行回数
+python3 scripts/benchmark_report.py --cases fib sort --runs 7
+
+# 同一環境・同一入力の過去結果と比較
+python3 scripts/benchmark_report.py --full --baseline path/to/previous-benchmark-report.json
 ```
 
-出力は既定で `target/benchmark-report.json` **1ファイル**。Git SHA、実行環境、コンパイラのバージョン、繰り返し回数、各言語の中央値・範囲・最大RSS、Jabberwockの実行時チェック数、Rust/C++に対する比率、失敗・タイムアウト、前回比較を収めます。作業用の元表は `target/benchmark-report-work/` に残ります。
+計測対象は **jwcが生成した実行ファイル、rustcが生成した実行ファイル、clang++が生成した実行ファイルの3つだけ**。Rust製Jabberwockコンパイラはデフォルトではセルフホストjwcの初回ビルドのために使用するが、ベンチマーク結果に含めない。Go、`--no-elide`、`--unchecked` も含めない。
 
-従来の `bench/run.sh` は出力不一致時に警告を出すだけでしたが、このラッパーでは `OUTPUT_MISMATCH` を不合格として扱います。計測不能なOS・ツール欠落も成功扱いしません。Linuxの `wait4` を使うため、現行の計測実行はLinux環境専用です。Windowsの場合はWSL2などLinux環境で実行してください。
+出力は `target/benchmark-report.json`。各ケースについて3者すべての標準出力SHA-256が一致した場合にのみPASSとし、実行時間の中央値、最大RSS、jwc対Rust・C++の比率を記録する。正の速度低下率は `(jwcの中央値 / 比較対象の中央値 - 1) × 100%`。機械環境、ビルドフラグ、ソース入力のSHA-256、生成に用いたjwcのSHA-256も保存する。
 
-`--baseline` はCPU/OS/コンパイラのフィンガープリントと計測回数が一致する場合にだけ数値比較します。ただし同一マシンの負荷・電力制御・CPU周波数が異なれば測定値はぶれます。前回からの悪化が15%を超えたものを回帰候補として記録し、数回測って再確認してください。
+**旧計測の注意:** 以下に残す2026-10-25のベンチマーク表と従来の`bench/run.sh`はRust製Jabberwockコンパイラ・Go等を含む**旧方式**であり、セルフホストjwcの実測結果ではない。現在のjwc性能の主比較へ流用しない。
 
-**公正性の注意:** 現状の言語間比較はJabberwockがLTOを使う一方、C++は `-O2`、Rustは `opt-level=3`（LTOなし）です。また標準ライブラリやアルゴリズムが一致しないテストもあります。結果は開発中の性能変化の監視に使い、「C++/Rustより全面的に高速」の証拠とはみなしません。`--unchecked` は安全性チェックを取り除く**非安全モード**なので、主比較のJabberwockとして扱いません。
+このランナーはLinuxの`wait4`を利用する。WindowsではWSL2などが必要。依存はPython 3、cargo/rustc（jwcを事前指定する場合cargo不要）、clang/clang++、lld、cc。コンパイラの最適化器やアルゴリズムの差は残るので、数値は個々のケースの比較であり言語全体の優劣を証明しない。
 
-レポートの単体テストは `python3 scripts/test_benchmark_report.py` です。
+## 旧スイート・履歴資料
 
-
-同じ処理を `jabberwock/`・`go/`・`cpp/`・`rust/` に書いたもの。`./bench/run.sh [名前...]` で、全部を作って走らせ、Markdown の表を出す（`$BENCH_OUT/results.md` にも書く）。
-`RUNS=回数`（既定 5）・`JW=jabberwock の場所`・`BENCH_OUT=作業フォルダ`。出力が C++ と違えば `!!` の行が出る。
-要るもの: `cargo build --release` 済みの jabberwock・clang（clang++）・cc・go・rustc。時間と最大メモリは `measure.c`（fork して `wait4` の rusage を読む。Linux 用）で取る。
+従来の`bench/run.sh`はGo、複数のJabberwock検査設定などを含む。互換・履歴用として残し、新しい`scripts/benchmark_report.py`からは呼び出さない。
 
 解析の変更前後だけを比べる実験は `experiments/` に置く。`experiments/scalar-call.jw` は数値の補助関数の呼び出し後に残る要素 ref の検査を測るもの。
 通常の言語間比較には混ぜない。再現手順・結果・限界は [docs/scalar-call-handoff.md](../docs/scalar-call-handoff.md) にある。
