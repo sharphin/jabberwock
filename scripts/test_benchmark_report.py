@@ -73,6 +73,15 @@ class BenchmarkReportTests(unittest.TestCase):
         b = {**a, "source_hashes": {"fib": {"jwc": "old"}}}
         self.assertEqual(bench.compare(a, b, 15)["status"], "NOT_COMPARABLE")
 
+    def test_missing_or_wrong_compiler_subjects_rejected(self):
+        common = {"schema_version": 2, "environment": {}, "runs": 8,
+                  "subjects": list(bench.TARGETS), "compiler_hashes": {"runtime": "ok"},
+                  "source_hashes": {}, "flags": {}, "cases": {}}
+        old = dict(common)
+        old["subjects"] = ["jwc", "rust", "cpp"]
+        self.assertEqual(bench.compare(common, old, 15)["status"], "NOT_COMPARABLE")
+        self.assertEqual(bench.compare(old, common, 15)["status"], "NOT_COMPARABLE")
+
     def test_old_format_is_not_comparable(self):
         a = {"schema_version": 2}
         b = {"schema_version": 1}
