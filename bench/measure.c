@@ -46,6 +46,7 @@ int main(int argc, char **argv) {
             int fd = open(destination, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             free(destination);
             if (fd < 0 || dup2(fd, 1) < 0) _exit(127);
+            close(fd);
             execvp(argv[3], argv + 3);
             _exit(127);
         }
