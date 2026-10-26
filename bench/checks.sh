@@ -27,13 +27,13 @@ for f in jabberwock/*.jw; do
         exit 1
     fi
     cnt=$(sed -n 's/^\[checks\] //p' "$OUT/$n.count.log" | awk '{ print $2, $4, $6 }')
-    if ! printf "%s\\n" "$n $st $cnt" | awk 'NF != 7 { exit 1 } { for (i=2; i<=7; i++) if ($i !~ /^[0-9]+$/) exit 1 }'; then
+    if ! printf "%s\n" "$n $st $cnt" | awk 'NF != 7 { exit 1 } { for (i=2; i<=7; i++) if ($i !~ /^[0-9]+$/) exit 1 }'; then
         echo "ERROR: missing or malformed check counts for $n" >&2
         exit 1
     fi
     echo "$n $st $cnt" >> "$NOW"
 done
-if [ -n "$UPDATE" ]; then
+if [ -n "${UPDATE:-}" ]; then
     { echo "# 名前 場所:世代 場所:消した 場所:添字 実行時:世代 実行時:消した 実行時:添字（bench/checks.sh が書く）"; cat "$NOW"; } > checks.txt
     cat checks.txt
     exit 0
