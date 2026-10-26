@@ -8,7 +8,7 @@ import verify_all_local as verify
 
 def fixture():
     compilers = list(verify.COMPILERS)
-    items = [{"compiler": c, "item": n, "acceptance": "BLOCKED"}
+    items = [{"compiler": c, "item": n, "status": "PROBES_PASS_ONLY", "acceptance": "BLOCKED"}
              for c in compilers for n in range(1, 13)]
     proofs = [{"compiler": c, "goal": g, "acceptance": "NOT_PROVEN",
                "proof_check": {"status": "KERNEL_CHECKED"}}
