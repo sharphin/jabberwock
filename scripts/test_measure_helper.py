@@ -22,13 +22,13 @@ class MeasureHelperTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             stdout = folder / "result.stdout"
             measured = subprocess.run([str(binary), "3", str(stdout),
-                                       "/bin/sh", "-c", "printf 'same\\n'"],
+                                       "/bin/sh", "-c", "printf 'same\n'"],
                                       capture_output=True, text=True)
             self.assertEqual(measured.returncode, 0, measured.stderr)
             self.assertEqual(len(measured.stdout.split()), 4)
             for output in (stdout, Path(str(stdout) + ".run0"),
                            Path(str(stdout) + ".run1")):
-                self.assertEqual(output.read_bytes(), b"same\\n")
+                self.assertEqual(output.read_bytes(), b"same\n")
             for count in ("0", "-1", "garbage", "100001"):
                 result = subprocess.run([str(binary), count, str(stdout), "/bin/true"],
                                         capture_output=True)
