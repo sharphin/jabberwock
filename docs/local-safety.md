@@ -12,6 +12,26 @@
 - `clang --version`、`cargo --version`、`lake env lean --version` で準備状況を確認してください
 - sanitizerがランタイム起動に失敗する環境ではその試験は失敗です。スクリプトはOSの `sysctl` を勝手に書き換えません
 
+## 12項目を番号順に実行し、1ファイルにまとめる
+
+**推奨コマンド（リポジトリルート）:**
+
+```sh
+python3 scripts/safety_report.py --output target/safety-report.json
+```
+
+Windowsでは `python3` を `python` に置き換えます。まずRust Debug/Releaseコンパイラとセルフホスト版を準備し、続いて1番から12番まで順番に対応する検査を起動します。複数項目に共通する検査は**一度だけ**実行し、その結果を各項目から参照します。
+
+- **報告するファイルは `target/safety-report.json` 1つ**です。項目順の判定、コマンド、環境変数、Git SHA、OS、各ツールのバージョン、終了コード、stdout/stderr、実行時間、8・9・10・11・12番の個別ケースJSONを含みます。
+- 失敗後も他の検査を継続します。ログは各stdout/stderrの先頭・末尾を合計最大24 KiB保持し、切り詰められた場合はサイズとSHA-256を記録します。完全な出力が必要な場合は再実行してください。
+- `NOT_RUN`、`FAIL`、`CRASH`、`TIMEOUT`、`INFRA_ERROR`を区別します。全プローブ成功でも`PROBES_PASS_ONLY`であり、12項目の形式的な認定ではありません。
+- サニタイザ等の実行に必要なLinux・clang・Leanがない場合も判定に記録します。Windowsのみの実行では全項目の合格判定になりません。
+- 中間ケースJSONやファズ入力は`target/safety-report-work/`にも保存されますが、通常の解析用には**単一の`safety-report.json`だけアップロード**すれば十分です。ファジングで生成した巨大な入力ファイルそのものは、レポートに埋め込まず別保存です。
+- 実行環境を変えずに概要を確認するには`python3 scripts/safety_report.py --dry-run`を使います（レポートは生成しません）。
+- ランナーの基本動作確認: `python3 scripts/test_safety_report.py`。
+
+重い包括テストです。メモリ・CPUの余裕がある環境で実行してください。詳細をすべて含む独立したJSONは大きくなるため、必要に応じて圧縮して送れます。
+
 ## 使い方
 
 リポジトリルートで実行します。
