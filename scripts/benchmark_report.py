@@ -117,7 +117,12 @@ def main():
     work = out.parent / (out.stem + "-work")
     work.mkdir(parents=True, exist_ok=True)
     exe_suffix = ".exe" if os.name == "nt" else ""
-    jwc = a.jwc.resolve() if a.jwc else ROOT / "target/release/jwc-benchmark"
+    known_jwc = [ROOT / "target/release/jwc-local", ROOT / "target/release/jwc",
+                 ROOT / "jwc-bin", ROOT / "target/release/jwc-benchmark"]
+    existing_jwc = next((candidate for candidate in known_jwc
+                         if candidate.is_file() and os.access(candidate, os.X_OK)), None)
+    jwc = a.jwc.resolve() if a.jwc else (existing_jwc or ROOT / "target/release/jwc-benchmark")
+    bootstrap_needed = not a.jwc and existing_jwc is None
     rust_bootstrap = ROOT / "target/release" / ("jabberwock" + exe_suffix)
     measure = work / "measure"
     flags = {"jwc_codegen": ["--ll"], "jwc_native": ["clang", "-O2", "-flto", "-fuse-ld=lld"],
@@ -149,14 +154,14 @@ def main():
             return False
 
     missing = [v for v in ("cc", "clang", "clang++", "rustc", "ld.lld", "go") if not shutil.which(v)]
-    if not a.jwc and not shutil.which("cargo"):
+    if bootstrap_needed and not shutil.which("cargo"):
         missing.append("cargo")
     reason = None
     if not sys.platform.startswith("linux"):
         reason = "bench/measure.c needs Linux wait4; use Linux or WSL2"
     elif missing:
         reason = "missing programs: " + ", ".join(missing)
-    elif not a.jwc:
+    elif bootstrap_needed:
         if not prepare(["cargo", "build", "--release"], "bootstrap-rust-compiler"):
             reason = "failed to build bootstrap Rust Jabberwock compiler"
         elif not prepare([rust_bootstrap, "build", "-o", jwc, ROOT / "jwc/main.jw"], "bootstrap-jwc", timeout=1800):
