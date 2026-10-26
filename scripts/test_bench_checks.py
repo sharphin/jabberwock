@@ -50,7 +50,7 @@ class CheckCountAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             bogus = root / "failing-jw"
-            bogus.write_text("#!/bin/sh\\necho '[stats] 世代の検査 0 か所・解析で消した 0 か所・添字の検査 0 か所'\\nexit 17\\n", encoding="utf-8")
+            bogus.write_text("#!/bin/sh\necho '[stats] 世代の検査 0 か所・解析で消した 0 か所・添字の検査 0 か所'\nexit 17\n", encoding="utf-8")
             bogus.chmod(0o755)
             env = dict(os.environ, JW=str(bogus), BENCH_OUT=str(root))
             script = AWK.parent / "checks.sh"
