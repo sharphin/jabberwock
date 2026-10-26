@@ -67,7 +67,7 @@ def main():
                                 "expected": "reject expanded array above 1 MiB", "observed": record})
                 record = run([engine, mode, boundary])
                 passed = record["exit"] == 0 and bool(record["stdout"].strip())
-                results.append({"item": 9, "case": name + mode + "-within-limit", "case_status": "pass" if passed else "fail",
+                results.append({"compiler": name, "item": 9, "case": name + mode + "-within-limit", "case_status": "pass" if passed else "fail",
                                 "expected": "accept expanded array exactly at 1 MiB", "observed": record})
     if 8 in selected:
         source = ROOT / "tests/safety/resource-exhaustion.jw"
