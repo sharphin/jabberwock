@@ -24,6 +24,7 @@ import local_safety as safety
 import safety_platforms as suites
 import safety_compilers
 import safety_goals
+from windows_asan_runtime import environment as runtime_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_LIMIT = 24000
@@ -363,7 +364,26 @@ def main(argv=None, *, target_os=None) -> int:
                      "command": p["cmd"], "environment_overrides": p["env"], "status": "NOT_RUN",
                      "reason": "prerequisite did not pass: " + ", ".join(blocked)}
             else:
-                r = run_probe(p, work, args.dry_run)
+                provider = p.get("runtime_environment_from")
+                if provider and not args.dry_run:
+                    supplied = produced.get(provider, {}).get("case_report", {}).get("runtime_environment", {})
+                    directory = supplied.get("path_prepend")
+                    dll = supplied.get("dll_path")
+                    # Check the exact file verified by preflight has not changed/disappeared.
+                    try:
+                        valid = directory and dll and Path(dll).is_file() and Path(dll).parent == Path(directory)
+                        valid = valid and hashlib.sha256(Path(dll).read_bytes()).hexdigest() == supplied.get("dll_sha256")
+                    except OSError:
+                        valid = False
+                    if not valid:
+                        r = {"name": p["name"], "items": p["items"], "compiler": p.get("compiler"),
+                             "status": "INFRA_ERROR", "reason": "verified ASan runtime environment missing or changed"}
+                    else:
+                        effective = {**p, "env": {**p["env"], "PATH": runtime_environment(directory)["PATH"]}}
+                        r = run_probe(effective, work, args.dry_run)
+                        r["verified_runtime"] = supplied
+                else:
+                    r = run_probe(p, work, args.dry_run)
             produced[p["name"]] = r
             report["active_probe"] = None
             checkpoint()

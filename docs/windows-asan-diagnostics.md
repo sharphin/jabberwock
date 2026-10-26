@@ -36,3 +36,24 @@ Windowsデバッガ起動権限がない場合や途中でローダーが停止�
 起動・検出器の失敗はINFRA_ERRORになり、ASan依存テストを合格にしない。
 
 実装時にはWindows実行・テストを行っていない。回帰テストには合成PEの名前/ordinal/転送と一ファイル報告への格納を追加した。
+
+## clangに対応するASan DLLの選択
+
+0xC0000139の報告で、`C:\Program Files\LLVM\bin\clang.exe` が生成したexeに対して
+MSVC 14.38.33130の `clang_rt.asan_dynamic-x86_64.dll` が読み込まれ、13関数が不足していた。
+例は `__sanitizer_cov_load1__dll`、`__sanitizer_get_dtls_size__dll`。
+
+事前検査は選択clangの `--print-runtime-dir`、`--print-resource-dir`、
+`--print-file-name=clang_rt.asan_dynamic-x86_64.dll` とclangのbinディレクトリからDLLを探索する。
+PATH上の別コンパイラのDLLは代用しない。
+x64と要求exportを確認したDLLを、診断/正常起動/負例、および後続ASan検査の子プロセスPATHで優先する。
+正常起動と負例は同じDLLを使用し、後続検査の前にもSHA256を再確認する。
+システム/ユーザーの恒久PATHは変更せず、DLLもコピーしない。
+
+`case_report.runtime_discovery` に問い合わせ結果と存在有無、`runtime_selections` にexport照合結果、
+`runtime_environment` に選択DLLとhashを記録する。
+一致するDLLがインストールされていなければ `No compatible ASan DLL found...` と明示して停止する。
+その場合は選択LLVMと同じ配布・バージョンのcompiler-rt（ASan runtime）の導入が必要。
+任意バージョンのDLLを流用して合格にはしない。必要な具体的パスは診断JSONに残る。
+
+実行コマンドは引き続き `.\scripts\safety_windows.cmd`。

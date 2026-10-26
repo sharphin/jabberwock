@@ -11,17 +11,18 @@ import sys
 import tempfile
 
 from windows_pe import diagnose
+from windows_asan_runtime import discover, select, environment
 
 ROOT = Path(__file__).resolve().parents[1]
 LOADER_ERRORS = {0xc0000135: 'DLL_NOT_FOUND', 0xc0000139: 'ENTRYPOINT_NOT_FOUND', 0xc000007b: 'INVALID_IMAGE_FORMAT'}
 
 
-def collect_diagnostics(executable, folder):
+def collect_diagnostics(executable, folder, env=None):
     output = folder / 'loader-trace.json'
     result = {'loader_trace': {}, 'pe_analysis': {}, 'errors': []}
     try:
         run = subprocess.run([sys.executable, str(ROOT / 'scripts/windows_loader.py'), '--executable', str(executable),
-                              '--output', str(output)], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
+                              '--output', str(output)], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30, env=env)
         result['trace_command'] = {'exit': run.returncode, 'stdout': run.stdout, 'stderr': run.stderr}
         if output.is_file():
             result['loader_trace'] = json.loads(output.read_text(encoding='utf-8'))
@@ -60,6 +61,10 @@ def main(argv=None):
         # Prevent missing-DLL/error dialogs from blocking unattended subprocess capture.
         mode = ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
         print('Selected clang: '+str(selected), flush=True)
+        discovery = discover(selected or os.environ.get('JW_CLANG', 'clang'))
+        report['runtime_discovery'] = discovery
+        run_env = dict(os.environ)
+        verified_dll = None
         directories = ([str(Path(selected).parent)] if selected else []) + os.environ.get('PATH', '').split(os.pathsep)
         for directory in dict.fromkeys(d for d in directories if d):
             try:
@@ -78,8 +83,27 @@ def main(argv=None):
                     record(name+'-build', False, {'command': command, 'exit': built.returncode, 'stdout': built.stdout, 'stderr': built.stderr})
                     report['infrastructure_errors'].append('ASan link failed')
                     return 2
+                available = discovery if verified_dll is None else {'candidates': [verified_dll]}
+                selection = select(exe, available)
+                report.setdefault('runtime_selections', {})[name] = selection
+                if selection['selected']:
+                    chosen = selection['selected']
+                    if verified_dll and chosen['sha256'] != verified_dll['sha256']:
+                        raise OSError('ASan runtime changed during preflight')
+                    verified_dll = {**chosen, 'exists': True}
+                    directory = str(Path(chosen['path']).parent)
+                    run_env = environment(directory)
+                    report['runtime_environment'] = {'path_prepend': directory, 'dll_path': chosen['path'], 'dll_sha256': chosen['sha256']}
+                    print('Selected ASan runtime: '+chosen['path'], flush=True)
+                else:
+                    # Keep the original environment for the diagnostic reproduction only.
+                    entry = record(name+'-runtime-selection', False, selection)
+                    entry['diagnostics'] = collect_diagnostics(exe, folder, run_env)
+                    report['infrastructure_errors'].append(selection['reason'])
+                    print(selection['reason'], file=sys.stderr, flush=True)
+                    return 2
                 try:
-                    run = subprocess.run([str(exe)], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
+                    run = subprocess.run([str(exe)], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30, env=run_env)
                     observed = {'exit': run.returncode, 'exit_hex': f'0x{run.returncode & 0xffffffff:08X}', 'stdout': run.stdout, 'stderr': run.stderr}
                     code = run.returncode & 0xffffffff
                     passed = (run.returncode == 0 if name == 'startup' else run.returncode != 0 and 'AddressSanitizer: heap-use-after-free' in run.stderr)
@@ -88,7 +112,7 @@ def main(argv=None):
                 entry = record(name, passed, observed)
                 if not passed:
                     entry['loader_error'] = LOADER_ERRORS.get(code, 'UNCLASSIFIED_STARTUP_OR_DETECTOR_FAILURE')
-                    entry['diagnostics'] = collect_diagnostics(exe, folder)
+                    entry['diagnostics'] = collect_diagnostics(exe, folder, run_env)
                     report['infrastructure_errors'].append(entry['loader_error'])
                     missing = entry['diagnostics'].get('pe_analysis', {}).get('missing_exports', [])
                     for item in missing:
