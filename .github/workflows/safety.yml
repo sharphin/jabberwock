@@ -142,3 +142,25 @@ jobs:
             target/safety-linux-report.json
             target/safety-linux-report-work/**
           if-no-files-found: warn
+
+  compiler-matrix-windows:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify both compilers across 12 Windows practical safety categories
+        shell: cmd
+        run: call scripts\safety_windows.cmd --compiler all --scale 1
+      - name: Archive full Windows matrix even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safety-windows-compiler-matrix
+          path: |
+            target/safety-windows-report.json
+            target/safety-windows-report-work/**
+            target/windows-toolchain-probe.log
+          if-no-files-found: warn
