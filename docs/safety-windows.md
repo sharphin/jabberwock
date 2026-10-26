@@ -27,10 +27,10 @@ JSONの `suite.id` は `windows-12`、項目IDは `windows-01`〜`windows-12`。
 |---|---|---|
 | 1 | 検査省略の解析 | AST/IR・native差分、O1/O2、型の通る入力、ASan。Leanモデルは補助証拠 |
 | 2 | 型の通る攻撃 | 攻撃ケース、ASanとその負例、変異入力、native退役検査 |
-| 3 | データ競合 | Windowsスレッド・native・system・退役の実行。競合検出器による検証は未対応でNOT_RUN |
-| 4 | 生成LLVMの未定義動作 | IRの守り、異常入力、O1/O2差分。Windows向けC実行時処理の未定義動作検出器と負例は未対応でNOT_RUN |
+| 3 | データ競合 | Windowsスレッド関連の実行＋暫定Intel Inspector接続。未導入ならNOT_RUN |
+| 4 | 生成LLVMの未定義動作 | 暫定UBSanの負例・正常ケース＋LLVM opt verifier。対応ツール/実行環境が必要 |
 | 5 | 最適化後の動作 | Windows nativeのO1/O2、LTO、Rust/jwcの生成コードのASan付き差分 |
-| 6 | 未初期化メモリ | Windows向け未初期化メモリ検出器のプローブは未対応でNOT_RUN |
+| 6 | 未初期化メモリ | 暫定Dr. Memoryの未初期化負例・正常ケース。未導入ならNOT_RUN |
 | 7 | 自己ホスト版 | Windowsでjwcをビルドし、Rust/jwcの生成コードをASan付きで比較。Leanモデルは補助証拠 |
 | 8 | 資源枯渇 | Windowsのメモリ制限・確保失敗注入プローブは未対応でNOT_RUN |
 | 9 | 巨大な配列型 | Rust/jwcのtyped・IR raw・IR・LLVMの4入口。上限超過と上限ちょうどを計16ケース確認 |
@@ -86,3 +86,5 @@ ASanの検査に失敗したとき、検査を外して成功に置き換える�
 Windows向けに追加したASanプローブ、巨大配列・副作用検査も、ユーザー側での再テスト待ち。
 
 ASanのDLL起動失敗については [診断コマンドとJSON項目](windows-asan-diagnostics.md) を参照。通常の実用レポートにも実読み込みパスと要求関数の照合結果を格納する。
+
+項目3・4・6の暫定構成とツール指定方法は [暫定検出器](provisional-detectors.md)。後で専用検出器を実装して置き換える。
