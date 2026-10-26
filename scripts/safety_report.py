@@ -417,7 +417,11 @@ def main(argv=None, *, target_os=None) -> int:
         print("Report: " + str(writer.path), flush=True)
     else:
         print("Dry run; no report written", flush=True)
-    return 130 if report["run_status"] == "INTERRUPTED" else int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"] + report["goals"]))
+    return (130 if report["run_status"] == "INTERRUPTED" else
+            int(report["run_status"] != "COMPLETE" or
+                len(report["items"]) != 12 * len(compilers) or
+                len(report["goals"]) != 5 * len(compilers) or
+                any(i["status"] != "PROBES_PASS_ONLY" for i in report["items"] + report["goals"])))
 
 
 if __name__ == "__main__":
