@@ -40,16 +40,20 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
         return {"status": "INVALID_EVIDENCE", "reason": "compiler provenance mismatch"}
     if set(formal.get("compilers", {})) != expected:
         return {"status": "INVALID_EVIDENCE", "reason": "formal compiler provenance mismatch"}
-    practical_ok = all(x.get("acceptance") == "PASS" for x in items)
-    formal_ok = all(x.get("acceptance") == "PROVEN" and
-                    x.get("proof_check", {}).get("status") == "KERNEL_CHECKED" for x in proofs)
-    return {"status": "PASS" if practical_ok and formal_ok else "NOT_PROVEN",
-            "practical_accepted": sum(x.get("acceptance") == "PASS" for x in items),
-            "formal_accepted": sum(x.get("acceptance") == "PROVEN" and
-                                   x.get("proof_check", {}).get("status") == "KERNEL_CHECKED" for x in proofs),
+    # Report strings are untrusted input. Do not certify safety from claimed PASS.
+    # A future acceptance verifier must validate proof terms, implementation
+    # correspondence, exact tool provenance and runtime assumptions first.
+    claimed_practical = sum(x.get("acceptance") == "PASS" for x in items)
+    claimed_formal = sum(x.get("acceptance") == "PROVEN" and
+                         x.get("proof_check", {}).get("status") == "KERNEL_CHECKED" for x in proofs)
+    return {"status": "NOT_PROVEN",
+            "claimed_practical": claimed_practical,
+            "claimed_formal": claimed_formal,
+            "verified_practical": 0,
+            "verified_formal": 0,
             "required_practical": len(expected_items),
             "required_formal": len(expected_goals),
-            "note": "Local report audit only. Acceptance predicates must be backed by independently checked evidence."}
+            "reason": "No independent whole-implementation acceptance verifier exists; report strings are not proof"}
 
 
 def main() -> int:
