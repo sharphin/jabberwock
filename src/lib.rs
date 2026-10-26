@@ -415,7 +415,11 @@ fn run_inner(
         exit: it.exit_code(),
     };
     // 入力を使うプログラムは、同じ入力をもう一度渡せるときだけ突き合わせる
-    let lowered = lowered.filter(|p| io.0.is_some() || !p.uses_input());
+    // 通常実行後の IR/native 比較は同じプログラムをもう一度実行する。
+    // ファイルや外部コマンドを扱うプログラムでは、二重書込み・コマンドの
+    // 二重起動だけでなく、一度目の実行で変わった状態を読んでしまう。
+    // 外部効果を持つプログラムの比較は、独立した環境を使う専用テストで行う。
+    let lowered = lowered.filter(|p| (io.0.is_some() || !p.uses_input()) && !p.uses_external_system());
     if let Some(irp) = lowered {
         let input = io.0.clone().unwrap_or_default();
         if let Some(diff) = ir_mismatch(&irp, &files, &want, &input, &io.1, elide) {
