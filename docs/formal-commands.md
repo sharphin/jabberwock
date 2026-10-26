@@ -37,6 +37,12 @@ python3 scripts/formal_report.py --compiler all --output target/formal-report.js
 py -3 scripts/formal_report.py --compiler all --abstract-model --require-full --output target/formal-full-report.json
 ```
 
+## レポートの完全性と限界
+
+レポートはschema 3。各コンパイラのG1〜G5について、証明モジュールの帰属、登録定理の欠落・重複・不正な完全修飾名、対象ソースhashの整合を検査する。`summary` に目標件数、局所カーネル検査済み件数、処理系全体の証明済み件数を明示する。これは**登録内容の整合性検査**であり、形式モデルが言語仕様に十分対応することの証明ではない。
+
+`--require-full`は現段階で常に未完了（終了1）とする。将来、実装対応の機械的証拠とG1〜G5の充足を検証するロジックが実装されるまで、この判定を緩めない。
+
 ## 結果と終了コード
 
 - `proof_check: KERNEL_CHECKED`: このソースhashに紐付けた局所モデルの定理がLeanのカーネル監査を通過。
