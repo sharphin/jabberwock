@@ -1,5 +1,32 @@
 # ベンチマーク（jabberwock build・Go・C++・Rust）
 
+## ワンコマンド計測・JSONレポート（新）
+
+```sh
+# 普段の簡易確認（fib/matmul/mandelbrot/sort/linkedlist）
+python3 scripts/benchmark_report.py
+
+# 全21種類
+python3 scripts/benchmark_report.py --full
+
+# 同一マシンの過去のJSONと比較（15%以上遅くなったら回帰）
+python3 scripts/benchmark_report.py --full --baseline path/to/previous-benchmark-report.json
+
+# 対象指定
+python3 scripts/benchmark_report.py --cases sort bst --runs 7
+```
+
+出力は既定で `target/benchmark-report.json` **1ファイル**。Git SHA、実行環境、コンパイラのバージョン、繰り返し回数、各言語の中央値・範囲・最大RSS、Jabberwockの実行時チェック数、Rust/C++に対する比率、失敗・タイムアウト、前回比較を収めます。作業用の元表は `target/benchmark-report-work/` に残ります。
+
+従来の `bench/run.sh` は出力不一致時に警告を出すだけでしたが、このラッパーでは `OUTPUT_MISMATCH` を不合格として扱います。計測不能なOS・ツール欠落も成功扱いしません。Linuxの `wait4` を使うため、現行の計測実行はLinux環境専用です。Windowsの場合はWSL2などLinux環境で実行してください。
+
+`--baseline` はCPU/OS/コンパイラのフィンガープリントと計測回数が一致する場合にだけ数値比較します。ただし同一マシンの負荷・電力制御・CPU周波数が異なれば測定値はぶれます。前回からの悪化が15%を超えたものを回帰候補として記録し、数回測って再確認してください。
+
+**公正性の注意:** 現状の言語間比較はJabberwockがLTOを使う一方、C++は `-O2`、Rustは `opt-level=3`（LTOなし）です。また標準ライブラリやアルゴリズムが一致しないテストもあります。結果は開発中の性能変化の監視に使い、「C++/Rustより全面的に高速」の証拠とはみなしません。`--unchecked` は安全性チェックを取り除く**非安全モード**なので、主比較のJabberwockとして扱いません。
+
+レポートの単体テストは `python3 scripts/test_benchmark_report.py` です。
+
+
 同じ処理を `jabberwock/`・`go/`・`cpp/`・`rust/` に書いたもの。`./bench/run.sh [名前...]` で、全部を作って走らせ、Markdown の表を出す（`$BENCH_OUT/results.md` にも書く）。
 `RUNS=回数`（既定 5）・`JW=jabberwock の場所`・`BENCH_OUT=作業フォルダ`。出力が C++ と違えば `!!` の行が出る。
 要るもの: `cargo build --release` 済みの jabberwock・clang（clang++）・cc・go・rustc。時間と最大メモリは `measure.c`（fork して `wait4` の rusage を読む。Linux 用）で取る。
