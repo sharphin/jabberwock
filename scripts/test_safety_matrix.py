@@ -69,6 +69,20 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(len(data["items"]), 24)
             self.assertTrue(any(x["status"] == "NOT_RUN" for x in data["items"] if x["compiler"] == "jwc"))
 
+    def test_missing_per_case_compiler_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "cases.json"
+            probe = report.safety.probe("contracts", [1], [sys.executable])
+            probe.update(compiler="jwc", expected_subject="jwc",
+                         case_report=str(output), required_case_ids=["a"])
+            def execute(*a, **kw):
+                output.write_text(json.dumps({
+                    "subject": "jwc", "results": [{"id": "a", "status": "pass"}]}))
+                return subprocess.CompletedProcess(a[0], 0, "", "")
+            with mock.patch.object(report, "execute_probe", side_effect=execute), contextlib.redirect_stdout(io.StringIO()):
+                verdict = report.run_probe(probe, Path(d), False)
+            self.assertEqual(verdict["status"], "INFRA_ERROR")
+
     def test_dynamic_inventory_rejects_omission_and_duplicates(self):
         with tempfile.TemporaryDirectory() as d:
             output = Path(d) / "cases.json"
