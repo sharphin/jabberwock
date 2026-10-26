@@ -41,6 +41,18 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
         return {"status": "INVALID_EVIDENCE", "reason": "compiler provenance mismatch"}
     if not isinstance(formal.get("compilers"), dict) or set(formal["compilers"]) != expected:
         return {"status": "INVALID_EVIDENCE", "reason": "formal compiler provenance mismatch"}
+    # Preserve why the local evidence is incomplete. A successful kernel proof
+    # audit does not establish correspondence to compiled programs.
+    practical_states = [x.get("status", "NOT_RUN") for x in items]
+    proof_states = [x.get("proof_check", {}).get("status", "NOT_IMPLEMENTED") for x in proofs]
+    if any(x == "FAIL" for x in practical_states):
+        return {"status": "PROBE_FAILURE", "reason": "at least one practical item failed"}
+    if any(x == "FAIL" for x in proof_states):
+        return {"status": "PROOF_CHECK_FAILURE", "reason": "Lean proof check failed"}
+    if any(x in ("NOT_RUN", "PLANNED") for x in practical_states):
+        return {"status": "NOT_RUN", "reason": "practical probes are missing"}
+    if any(x == "STALE" for x in proof_states):
+        return {"status": "PROOF_STALE", "reason": "proof binding does not match sources"}
     # Report strings are untrusted input. Do not certify safety from claimed PASS.
     # A future acceptance verifier must validate proof terms, implementation
     # correspondence, exact tool provenance and runtime assumptions first.
