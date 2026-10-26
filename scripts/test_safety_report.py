@@ -2,6 +2,8 @@
 """Regression tests for the single-file safety report runner (no compiler needed)."""
 import json
 import os
+import contextlib
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -43,11 +45,14 @@ class SafetyReportTests(unittest.TestCase):
     def test_nested_case_failure_is_not_green(self):
         with tempfile.TemporaryDirectory() as d:
             location = Path(d)
-            (location / "edges-8-9.json").write_text(json.dumps(
-                {"results": [{"item": 8, "case_status": "fail",
-                              "observed": {"exit": 2, "stderr": "internal error"}}]}), encoding="utf-8")
+            def produce(*args, **kwargs):
+                (location / "edges-8-9.json").write_text(json.dumps(
+                    {"results": [{"item": 8, "case_status": "fail",
+                                  "observed": {"exit": 2, "stderr": "internal error"}}]}), encoding="utf-8")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
             p = report.safety.probe("edges-8-9", [8, 9], [sys.executable, "-c", "pass"])
-            result = report.run_probe(p, location, False)
+            with mock.patch.object(report.subprocess, "run", side_effect=produce):
+                result = report.run_probe(p, location, False)
             self.assertEqual(result["status"], "FAIL")
             self.assertEqual(result["case_report"]["results"][0]["observed"]["exit"], 2)
 
@@ -96,6 +101,86 @@ class SafetyReportTests(unittest.TestCase):
                 self.assertIn("coverage_notes", result)
                 self.assertIn("native/jwc/sanitizer", result["coverage_notes"][0])
                 run.assert_called_once()
+
+    def test_stale_case_report_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as d:
+            location = Path(d)
+            old = location / "edges-8-9.json"
+            old.write_text(json.dumps({"results": [{"item": 8, "case_status": "pass"}]}))
+            p = report.safety.probe("edges-8-9", [8, 9], [sys.executable, "-c", "pass"])
+            with mock.patch.object(report.subprocess, "run", return_value=subprocess.CompletedProcess(p["cmd"], 0, "", "")):
+                result = report.run_probe(p, location, False)
+            self.assertEqual(result["status"], "INFRA_ERROR")
+            self.assertNotIn("case_report", result)
+            self.assertFalse(old.exists())
+
+    def test_incomplete_detailed_report_is_not_passed(self):
+        with tempfile.TemporaryDirectory() as d:
+            location = Path(d)
+            destination = location / "array-limits.json"
+            p = report.suites.detailed("array-limits", [9], [sys.executable, "-c", "pass"], destination, 16)
+            def produce(*args, **kwargs):
+                destination.write_text(json.dumps({"results": [{"item": 9, "case_status": "pass"}]}))
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+            with mock.patch.object(report.subprocess, "run", side_effect=produce):
+                result = report.run_probe(p, location, False)
+            self.assertEqual(result["status"], "INFRA_ERROR")
+            self.assertIn("expected 16 cases", result["reason"])
+
+    def test_cannot_label_linux_execution_as_windows(self):
+        with mock.patch.object(report.suites, "host_os", return_value="linux"), \
+             mock.patch.object(report, "run_probe") as run, \
+             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            report.main([], target_os="windows")
+        self.assertEqual(error.exception.code, 2)
+        run.assert_not_called()
+
+    def test_each_os_has_its_own_twelve_items_and_default_output(self):
+        def fake_probe(p, work, dry):
+            return {"name": p["name"], "items": p["items"], "target_os": p["target_os"],
+                    "status": "NOT_RUN" if p.get("unavailable_reason") else "PROBE_PASS"}
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for target in ("windows", "linux"):
+                with mock.patch.object(report, "ROOT", root), \
+                     mock.patch.object(report.suites, "host_os", return_value=target), \
+                     mock.patch.object(report, "version", return_value="recorded-version"), \
+                     mock.patch.object(report, "run_probe", side_effect=fake_probe), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    code = report.main([], target_os=target)
+                data = json.loads((root / "target" / ("safety-" + target + "-report.json")).read_text(encoding="utf-8"))
+                self.assertEqual(code, 1 if target == "windows" else 0)
+                self.assertEqual(data["suite"]["id"], target + "-12")
+                self.assertEqual([i["item"] for i in data["items"]], list(range(1, 13)))
+                self.assertEqual(len({i["id"] for i in data["items"]}), 12)
+                self.assertTrue(all(i["target_os"] == target and i["id"].startswith(target + "-") for i in data["items"]))
+                self.assertTrue(all(i["acceptance"] == "NOT_ASSESSED" for i in data["items"]))
+                if target == "windows":
+                    self.assertTrue(all(data["items"][i - 1]["status"] == "NOT_RUN" for i in (3, 4, 6, 8)))
+
+    def test_linux_array_failure_does_not_fail_resource_item(self):
+        def fake_probe(p, work, dry):
+            return {"name": p["name"], "items": p["items"],
+                    "status": "FAIL" if p["name"] == "array-limits" else "PROBE_PASS"}
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "report.json"
+            with mock.patch.object(report.suites, "host_os", return_value="linux"), \
+                 mock.patch.object(report, "version", return_value="recorded-version"), \
+                 mock.patch.object(report, "run_probe", side_effect=fake_probe), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                report.main(["--output", str(output)], target_os="linux")
+            data = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(data["items"][7]["status"], "PROBES_PASS_ONLY")
+            self.assertEqual(data["items"][8]["status"], "FAIL")
+
+    def test_windows_plan_has_no_linux_only_commands(self):
+        probes = report.suites.catalog("windows", 1, Path("work"))
+        self.assertFalse(any(p["linux"] for p in probes))
+        self.assertEqual(set(n for p in probes for n in p["items"]), set(range(1, 13)))
+        self.assertEqual(set(n for p in probes if p.get("unavailable_reason") for n in p["items"]), {3, 4, 6, 8})
+        arrays = next(p for p in probes if p["name"] == "array-limits")
+        self.assertEqual(arrays["cmd"][arrays["cmd"].index("--items") + 1], "9")
+        self.assertTrue(arrays["jwc_executable"].endswith(".exe"))
 
 
 if __name__ == "__main__":
