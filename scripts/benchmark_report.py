@@ -2,7 +2,7 @@
 """Compare programs compiled by self-hosted jwc with Rust, C++, and Go ONLY.
 
 The Rust-based Jabberwock compiler is used to bootstrap jwc, not benchmarked.
-Linux-only measurement uses bench/measure.c (wait4). One JSON report.
+Linux uses bench/measure.c (wait4); Windows uses PeakWorkingSetSize. One JSON report.
 """
 from __future__ import annotations
 
@@ -200,7 +200,7 @@ def main():
     measure = work / "measure"
     flags = {"jwc_codegen": ["--ll"], "jwc_native": ["clang", "-O2", "-flto", "-fuse-ld=lld"],
              "rust": ["rustc", "-C", "opt-level=3", "-C", "lto=fat", "--edition", "2021"],
-             "cpp": ["clang++", "-O2", "-flto", "-fuse-ld=lld", "-std=c++17", "-pthread"],
+             "cpp": ["clang++", "-O2", "-flto", "-fuse-ld=lld", "-std=c++17"] + ([] if os.name == "nt" else ["-pthread"]),
              "go": ["go", "build"]}
     report = {"schema_version": 2, "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
               "git_sha": version(["git", "rev-parse", "HEAD"]), "environment": fingerprint(),
