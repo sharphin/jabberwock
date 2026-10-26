@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare programs compiled by self-hosted jwc with Rust and C++ ONLY.
+"""Compare programs compiled by self-hosted jwc with Rust, C++, and Go ONLY.
 
 The Rust-based Jabberwock compiler is used to bootstrap jwc, not benchmarked.
 Linux-only measurement uses bench/measure.c (wait4). One JSON report.
@@ -21,7 +21,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "bench"
 QUICK = ("fib", "matmul", "mandelbrot", "sort", "linkedlist")
-TARGETS = ("jwc", "rust", "cpp")
+TARGETS = ("jwc", "rust", "cpp", "go")
 MAX_LOG = 12000
 
 
@@ -49,7 +49,8 @@ def fingerprint():
             "processor": platform.processor(),
             "clang": version(["clang", "--version"]),
             "clang++": version(["clang++", "--version"]),
-            "rustc": version(["rustc", "--version"])}
+            "rustc": version(["rustc", "--version"]),
+            "go": version(["go", "version"])}
 
 
 def parse_measure(value):
@@ -106,7 +107,7 @@ def main():
     if not selected or len(selected) != len(set(selected)) or set(selected) - set(all_names):
         p.error("unknown or duplicate case; available: " + ", ".join(all_names))
     if a.dry_run:
-        print("Compilers: jwc (self-hosted) / Rust (rustc) / C++ (clang++)")
+        print("Compilers: jwc (self-hosted) / Rust (rustc) / C++ (clang++) / Go (go)")
         print("Cases:", ", ".join(selected))
         return 0
 
@@ -120,7 +121,8 @@ def main():
     measure = work / "measure"
     flags = {"jwc_codegen": ["--ll"], "jwc_native": ["clang", "-O2", "-flto", "-fuse-ld=lld"],
              "rust": ["rustc", "-C", "opt-level=3", "-C", "lto=fat", "--edition", "2021"],
-             "cpp": ["clang++", "-O2", "-flto", "-fuse-ld=lld", "-std=c++17", "-pthread"]}
+             "cpp": ["clang++", "-O2", "-flto", "-fuse-ld=lld", "-std=c++17", "-pthread"],
+             "go": ["go", "build"]}
     report = {"schema_version": 2, "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
               "git_sha": version(["git", "rev-parse", "HEAD"]), "environment": fingerprint(),
               "runs": a.runs, "suite": selected, "subjects": list(TARGETS),
@@ -145,7 +147,7 @@ def main():
             save()
             return False
 
-    missing = [v for v in ("cc", "clang", "clang++", "rustc", "ld.lld") if not shutil.which(v)]
+    missing = [v for v in ("cc", "clang", "clang++", "rustc", "ld.lld", "go") if not shutil.which(v)]
     if not a.jwc and not shutil.which("cargo"):
         missing.append("cargo")
     reason = None
@@ -171,7 +173,8 @@ def main():
 
     report["compiler_hashes"] = {"jwc": sha(jwc), "runtime": sha(ROOT / "runtime/jw_rt.c"),
                                  "rustc": report["environment"]["rustc"],
-                                 "clang++": report["environment"]["clang++"]}
+                                 "clang++": report["environment"]["clang++"],
+                                 "go": report["environment"]["go"]}
     save()
     for index, name in enumerate(selected, 1):
         dest = work / name
@@ -179,7 +182,8 @@ def main():
         source = BENCH / "jabberwock" / (name + ".jw")
         cpp = BENCH / "cpp" / (name + ".cpp")
         rust = BENCH / "rust" / (name + ".rs")
-        report["source_hashes"][name] = {lang: sha(path) for lang, path in (("jwc", source), ("cpp", cpp), ("rust", rust))}
+        go = BENCH / "go" / (name + ".go")
+        report["source_hashes"][name] = {lang: sha(path) for lang, path in (("jwc", source), ("cpp", cpp), ("rust", rust), ("go", go))}
         ll = dest / "jwc.ll"
         binaries = {k: dest / k for k in TARGETS}
         item = {"status": "INFRA_ERROR", "commands": [], "metrics": {}, "outputs": {}}
@@ -199,7 +203,8 @@ def main():
                 ("jwc-native", [*flags["jwc_native"], ll, ROOT / "runtime/jw_rt.c",
                                 "-lm", "-pthread", "-Wno-override-module", "-o", binaries["jwc"]]),
                 ("rust", [*flags["rust"], "-o", binaries["rust"], rust]),
-                ("cpp", [*flags["cpp"], "-o", binaries["cpp"], cpp])]
+                ("cpp", [*flags["cpp"], "-o", binaries["cpp"], cpp]),
+                ("go", [*flags["go"], "-o", binaries["go"], go])]
             for label, command in compile_steps:
                 result = run(command, timeout=600)
                 item["commands"].append({"stage": label, **result})
@@ -223,7 +228,9 @@ def main():
                     "jwc_vs_rust": round(item["metrics"]["jwc"]["median_s"] /
                                          item["metrics"]["rust"]["median_s"], 4),
                     "jwc_vs_cpp": round(item["metrics"]["jwc"]["median_s"] /
-                                        item["metrics"]["cpp"]["median_s"], 4)}
+                                        item["metrics"]["cpp"]["median_s"], 4),
+                    "jwc_vs_go": round(item["metrics"]["jwc"]["median_s"] /
+                                       item["metrics"]["go"]["median_s"], 4)}
         except (OSError, ValueError, subprocess.TimeoutExpired) as e:
             item["status"] = "FAIL"
             item["reason"] = str(e)
