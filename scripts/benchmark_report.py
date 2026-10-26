@@ -128,9 +128,10 @@ def run_windows_measure(binary: Path, output: Path, *, timeout: int = 3600) -> d
     start = time.perf_counter()
     peak = 0
     measured = False
-    with output.open("wb") as dest:
+    error_output = Path(str(output) + ".stderr")
+    with output.open("wb") as dest, error_output.open("wb") as errors:
         proc = subprocess.Popen([str(binary)], cwd=ROOT, stdout=dest,
-                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+                                stderr=errors, stdin=subprocess.DEVNULL)
         try:
             while True:
                 counters = MemoryCounters()
@@ -153,7 +154,7 @@ def run_windows_measure(binary: Path, output: Path, *, timeout: int = 3600) -> d
     elapsed = time.perf_counter() - start
     if proc.returncode != 0:
         return {"cmd": [str(binary)], "exit": proc.returncode,
-                "stdout": "", "stderr": "benchmark process exited unsuccessfully"}
+                "stdout": "", "stderr": error_output.read_text(encoding="utf-8", errors="replace")[-MAX_LOG:]}
     if not measured:
         raise ValueError("Windows peak working set could not be measured")
     return {"cmd": [str(binary)], "exit": 0,
