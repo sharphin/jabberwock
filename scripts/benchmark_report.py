@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -210,16 +211,36 @@ def main():
                 item["commands"].append({"stage": label, **result})
                 if result["exit"]:
                     raise ValueError(label + " compilation failed")
+            timings = {target: [] for target in TARGETS}
+            memory = {target: [] for target in TARGETS}
+            checksums = {target: [] for target in TARGETS}
+            for round_id in range(a.runs):
+                # Rotate the order so one language is not always first or last.
+                order = TARGETS[round_id % len(TARGETS):] + TARGETS[:round_id % len(TARGETS)]
+                if (round_id // len(TARGETS)) % 2:
+                    order = tuple(reversed(order))
+                for target in order:
+                    output = dest / (target + ".run" + str(round_id) + ".stdout")
+                    result = run([measure, 1, output, binaries[target]], timeout=3600)
+                    item["commands"].append({"stage": "measure-" + target, "round": round_id, **result})
+                    if result["exit"]:
+                        raise ValueError(target + " execution failed in round " + str(round_id))
+                    one = parse_measure(result["stdout"])
+                    timings[target].append(one["median_s"])
+                    memory[target].append(one["peak_rss_mb"])
+                    data = output.read_bytes()
+                    checksums[target].append(hashlib.sha256(data).hexdigest())
             for target in TARGETS:
-                output = dest / (target + ".stdout")
-                result = run([measure, a.runs, output, binaries[target]], timeout=3600)
-                item["commands"].append({"stage": "measure-" + target, **result})
-                if result["exit"]:
-                    raise ValueError(target + " execution failed")
-                item["metrics"][target] = parse_measure(result["stdout"])
-                data = output.read_bytes()
-                item["outputs"][target] = {"sha256": hashlib.sha256(data).hexdigest(),
-                                           "bytes": len(data), "excerpt": data[:256].decode("utf-8", "replace")}
+                if len(set(checksums[target])) != 1:
+                    raise ValueError(target + " output changes across repetitions")
+                values = sorted(timings[target])
+                item["metrics"][target] = {"min_s": values[0],
+                                           "median_s": statistics.median(values),
+                                           "max_s": values[-1],
+                                           "peak_rss_mb": max(memory[target]),
+                                           "samples_s": timings[target]}
+                item["outputs"][target] = {"sha256": checksums[target][0],
+                                           "all_repetitions_verified": len(checksums[target])}
             if len({v["sha256"] for v in item["outputs"].values()}) != 1:
                 item["status"] = "OUTPUT_MISMATCH"
             else:
