@@ -10,6 +10,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -59,8 +60,9 @@ def parse_measure(value):
         low, median, high, rss = (float(v) for v in value.strip().split())
     except ValueError as e:
         raise ValueError("invalid measure.c result: " + repr(value)) from e
-    if low < 0 or median < low or high < median or rss < 0:
-        raise ValueError("invalid measurement ordering: " + repr(value))
+    if (not all(math.isfinite(v) for v in (low, median, high, rss))
+            or low <= 0 or median < low or high < median or rss < 0):
+        raise ValueError("invalid, zero or nonfinite measurement: " + repr(value))
     return {"min_s": low, "median_s": median, "max_s": high, "peak_rss_mb": rss}
 
 
@@ -246,6 +248,8 @@ def main():
                     timings[target].append(one["median_s"])
                     memory[target].append(one["peak_rss_mb"])
                     data = output.read_bytes()
+                    if not data:
+                        raise ValueError(target + " produced empty output in round " + str(round_id))
                     checksums[target].append(hashlib.sha256(data).hexdigest())
             for target in TARGETS:
                 if not stable_output(checksums[target]):
