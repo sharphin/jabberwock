@@ -19,6 +19,22 @@ def fixture():
 
 
 class LocalVerifierTests(unittest.TestCase):
+    def test_windows_entry_invokes_toolchain_initializing_batch(self):
+        command = verify.practical_command_for("windows", Path("result.json"))
+        self.assertEqual(command[:3], ["cmd", "/d", "/c"])
+        self.assertTrue(command[3].endswith("safety_windows.cmd"))
+        self.assertEqual(command[4:], ["--compiler", "all", "--output", "result.json"])
+        self.assertTrue(verify.practical_command_for("linux", Path("result.json"))[1].endswith("safety_linux.py"))
+        with self.assertRaises(ValueError):
+            verify.practical_command_for("macos", Path("result.json"))
+
+    def test_lean_tool_paths_are_available_on_windows(self):
+        import os
+        search = verify.formal_environment_for("windows")["PATH"]
+        self.assertIn(".elan", search)
+        self.assertIn(".cargo", search)
+        self.assertEqual(verify.formal_environment_for("linux")["PATH"], os.environ.get("PATH", ""))
+
     def test_unproved_with_complete_counts(self):
         practical, formal = fixture()
         result = verify.judge(practical, formal)
