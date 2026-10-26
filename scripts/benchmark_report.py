@@ -71,7 +71,8 @@ def parse_measure(value):
 def compare(current, baseline, threshold):
     if current.get("schema_version") != 2 or baseline.get("schema_version") != 2:
         return {"status": "NOT_COMPARABLE", "reason": "report schema differs"}
-    if (current["environment"] != baseline.get("environment")
+    if (current.get("subjects") != list(TARGETS) or baseline.get("subjects") != list(TARGETS)
+            or current["environment"] != baseline.get("environment")
             or current["runs"] != baseline.get("runs")
             or current["flags"] != baseline.get("flags")
             or current["compiler_hashes"].get("runtime") != baseline.get("compiler_hashes", {}).get("runtime")
@@ -166,7 +167,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--full", action="store_true")
     p.add_argument("--cases", nargs="+")
-    p.add_argument("--runs", type=int, default=5)
+    p.add_argument("--runs", type=int, default=8)
     p.add_argument("--jwc", type=Path, help="existing self-hosted compiler (skips bootstrap)")
     p.add_argument("--output", type=Path, default=ROOT / "target/benchmark-report.json")
     p.add_argument("--baseline", type=Path)
@@ -206,6 +207,7 @@ def main():
     report = {"schema_version": 2, "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
               "git_sha": version(["git", "rev-parse", "HEAD"]), "environment": fingerprint(),
               "runs": a.runs, "suite": selected, "subjects": list(TARGETS),
+              "measurement_order_balance": ("BALANCED" if a.runs % len(TARGETS) == 0 else "PARTIAL_CYCLE"),
               "flags": flags, "compiler_hashes": {}, "source_hashes": {}, "preparation": [], "cases": {},
               "baseline_comparison": None,
               "limitations": ("Rust-based Jabberwock compiler is bootstrap only. jwc emits LLVM; clang links shared C runtime. "
