@@ -39,6 +39,12 @@ CASES = [
     case("reject-missing-type", [10], "fn f(x) {} fn main() {}", reject="型が必要"),
 ]
 
+CASES.extend([
+    case("generic-enum-array-expanded-limit", [9,10], "enum Buffer<T> { Data(T[131072] cells); } fn accept(Buffer<i64[2]> b) {} fn main() {}", reject="配列が大きすぎます"),
+    case("generic-array-expanded-limit", [9,10], "struct Buffer<T> { T[131072] cells; } fn accept(Buffer<i64[2]> b) {} fn main() {}", reject="配列が大きすぎます"),
+    case("generic-array-expanded-boundary", [9,10], "struct Buffer<T> { T[131072] cells; } fn accept(Buffer<i64> b) {} fn main() {}"),
+])
+
 # Every invalidating list operation must reach the final read (not a type error).
 for name, operation in [
     ("push", "a.push(8);"), ("pop", "a.pop();"), ("insert", "a.insert(0, 8);"),

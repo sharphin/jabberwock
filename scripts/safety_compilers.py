@@ -15,6 +15,9 @@ def catalog(target, scale, work, compilers=COMPILERS):
         p = safety.probe("jwc-build", [], [str(rust), "build", "-o", str(jwc), "jwc/main.jw"], clang=True)
         p["dependencies"] = ["cargo-build"]
         preparations.append(p)
+    if target == "windows":
+        preparations.append(safety.probe("windows-asan-preflight", [],
+                            [sys.executable, "scripts/check_windows_asan.py"], clang=True, timeout=180))
     result = []
     for subject in compilers:
         compiler = jwc if subject == "jwc" else rust
@@ -96,4 +99,6 @@ def catalog(target, scale, work, compilers=COMPILERS):
     for p in preparations + result:
         p["target_os"] = target
         p.setdefault("dependencies", [])
+        if target == "windows" and p.get("compiler") and ("address" in p["name"] or "-fuzz-" in p["name"]):
+            p["dependencies"].append("windows-asan-preflight")
     return preparations, result
