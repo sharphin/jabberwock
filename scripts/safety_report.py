@@ -63,15 +63,21 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
         reason = "Lean lake unavailable"
     elif not shutil.which(command[0]) and not Path(command[0]).is_file():
         reason = "command executable unavailable: " + command[0]
-    elif probe["jwc"] and not (ROOT / "target/release/jwc-local").is_file():
+    elif probe["jwc"] and not safety.jwc_path().is_file():
         reason = "jwc-local not available"
     if reason:
         entry["reason"] = reason
         return entry
 
+    if name in ("cargo-test", "release-test") and not shutil.which(os.environ.get("JW_CLANG", "clang")):
+        entry["coverage_notes"] = [
+            "clang unavailable: some Cargo tests return early but are displayed as ok; "
+            "native/jwc/sanitizer coverage is not established by this result"
+        ]
+
     env = dict(os.environ)
     for k in ("JW_CFLAGS", "JW_NATIVE", "JW_ROBUST_ASAN", "JW_ROBUST_NATIVE",
-              "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST"):
+              "JW_FUZZ_JWC", "JW_FUZZ", "JW_ROBUST", "JWC_REGEN"):
         env.pop(k, None)
     env.update(probe["env"])
     begin = time.monotonic()

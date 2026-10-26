@@ -373,7 +373,7 @@ fn runtime_jw() -> String {
     let body = native::RUNTIME_C.replace('\\', "\\\\").replace('{', "{{").replace('}', "}}");
     format!(
         "// 実行時ライブラリ（runtime/jw_rt.c）を文字列にしたもの。`jwc build` が書き出して一緒にコンパイルする。\n\
-         // 手で書き換えない: runtime/jw_rt.c を直したら `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す。\n\
+         // 手で書き換えない: runtime/jw_rt.c を直したら `python3 scripts/sync_runtime.py` で作り直す。\n\
          pub fn str source() {{\n    \"\"\"\n{}\"\"\"\n}}\n",
         body
     )
@@ -387,7 +387,7 @@ fn runtime_is_up_to_date() {
         std::fs::write(&path, &want).unwrap();
     }
     let got = std::fs::read_to_string(&path).unwrap_or_default();
-    assert!(got == want, "jwc/runtime.jw が runtime/jw_rt.c と合っていません。`JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直してください");
+    assert!(got == want, "jwc/runtime.jw が runtime/jw_rt.c と合っていません。`python3 scripts/sync_runtime.py` で作り直してください");
 }
 
 /// `jwc build` で作った実行ファイルが、interp と同じものを出す

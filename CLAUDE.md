@@ -18,6 +18,11 @@
 RustはSlot.retiredを空き表へ戻さず、Cは状態bitを除いたcounterの余地を確認して全1markerで退役する。
 Cの退役区画はatomicな保持表へ残し、参照検査は世代一致でもmarkerを拒否する。生存中の上限は規定の資源エラーで停止する。
 
+`runtime/jw_rt.c` を変更したら `python3 scripts/sync_runtime.py` で `jwc/runtime.jw` を再生成する。
+このコマンドは生成ファイルだけを更新し、ビルドやテストを実行しない。同期の検証は既存の `runtime_is_up_to_date` テストが担当する。
+安全性の単一JSONは `scripts/safety_report.py`、共通の検査一覧は `scripts/local_safety.py`。
+native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`とし、スキップを成功扱いしない。
+
 | ファイル | 役割 |
 |---|---|
 | `src/lexer.rs` | 字句解析。改行はただの空白（文の区切りは `;`）。`"""..."""` だけ途中で改行できる（トークンの位置は開きの行） |
@@ -68,7 +73,7 @@ Cの退役区画はatomicな保持表へ残し、参照検査は世代一致で�
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |
 | `tests/threads.rs` | スレッド（spawn / join / chan・送れる型・デッドロック） |
 | `tests/mutability.rs` | `mut` / `ref mut` / `;` / ブロックの値 / 複合代入 / `++` |
-| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw` / `--ir`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く）・`analyze.jw`（ir/analyze.rs の移植。事実は変数ごとの数 1 つを、分かっている変数だけ番号の順に並べる）・`llvm.jw`（ir/llvm.rs の Module: 型の形・手伝いの関数）・`llvmfn.jw`（FnGen と `emit`。Rust 版と同じ順に同じ番号をつける）。`--ll` も。`jwc build` で実行ファイルまで作れ、jwc 自身もコンパイルできる。`runtime.jw` は runtime/jw_rt.c を文字列にしたもの（手で直さず `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す） |
+| `jwc/` | jabberwock で書いた jabberwock のコンパイラ（設計は docs/self-hosting.md）。`main.jw`（`--tokens` / `--ast` / `--typed` / `--ir-raw` / `--ir`・PRELUDE）・`lexer.jw`・`diag.jw`・`ast.jw`・`parser.jw`・`modules.jw`・`astdump.jw`・`ty.jw`（型）・`typeck.jw`（型検査）・`ir.jw`（IR の形と表示）・`lower.jw`（IR への書き出し。lower.rs と同じ順に同じ IR を書く）・`analyze.jw`（ir/analyze.rs の移植。事実は変数ごとの数 1 つを、分かっている変数だけ番号の順に並べる）・`llvm.jw`（ir/llvm.rs の Module: 型の形・手伝いの関数）・`llvmfn.jw`（FnGen と `emit`。Rust 版と同じ順に同じ番号をつける）。`--ll` も。`jwc build` で実行ファイルまで作れ、jwc 自身もコンパイルできる。`runtime.jw` は runtime/jw_rt.c を文字列にしたもの（手で直さず `python3 scripts/sync_runtime.py` で作り直す） |
 | `src/astdump.rs` | 構文木を文字にする（`jabberwock --ast`。jwc/astdump.jw と同じ形）。`--typed`（`dump_typed`）は型検査の結果も足す |
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/fuzz.rs` | 解析あり・なしのAST/IRとネイティブ、jwc生成LLVMをsanitizer付きでも比べる。型の通る攻撃78件と演算の端76件はスキップを認めない。共通入力は tests/support/attacks.rs。差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
@@ -243,7 +248,7 @@ Cの退役区画はatomicな保持表へ残し、参照検査は世代一致で�
 - LLVM（`ir::llvm::emit`）: 値の形は docs/ir-design.md の「7 で決めたこと」。**`JW_NATIVE=1 cargo test` で全テストを実行ファイルでも突き合わせる**
   （`lib.rs` の `native_mismatch`。clang が要る）。IR の動きを変えたら llvm.rs も同じに直し、これを走らせること。
   own の写し（下の 1 ビット）・interface の構造体の番号・変数の状態（null / `@jw.unset` / ムーブした位置）が要。
-  実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す（jwc/llvm.jw の PRELUDE も）。jw_rt.c を直したら jwc/runtime.jw を作り直す（`JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date`）。
+  実行時ライブラリの関数を足したら、llvm.rs の `PRELUDE` の `declare` も足す（jwc/llvm.jw の PRELUDE も）。jw_rt.c を直したら jwc/runtime.jw を作り直す（`python3 scripts/sync_runtime.py`）。
   実行時エラーは interp の `render_in` と一字一句同じに出す（突き合わせは全文を比べる）。interp のエラーの文を変えたら llvm.rs / jw_rt.c も直す。
   測定用の切り替えは `llvm::Opts`（`emit_with`・lib.rs の `llvm_build_with`。世代の検査・添字の検査を消す、通った回数を `@jw.count.*` に数えて `jw_main` の正常終了時に出す）。ふだんは `Opts::default()` で、jwc は持たない。
   `begin_error` → `put_site`（副の位置）→ `finish_error`（主の位置と note）。ソースは `emit` の `sources`（空なら `--release` の短い形）。Rust 1.65 で `div_ceil` は使えない（`ceil_div`）。
