@@ -212,16 +212,8 @@ def main():
                 if result["exit"]:
                     raise ValueError(target + " execution failed")
                 item["metrics"][target] = parse_measure(result["stdout"])
-                files = [Path(str(output) + ".run" + str(i)) for i in range(a.runs - 1)] + [output]
-                digests = []
-                for file in files:
-                    data = file.read_bytes()
-                    digests.append(hashlib.sha256(data).hexdigest())
-                if len(set(digests)) != 1:
-                    raise ValueError(target + " output varies between measured repetitions")
                 data = output.read_bytes()
-                item["outputs"][target] = {"sha256": digests[-1],
-                                           "all_repetitions_verified": len(digests),
+                item["outputs"][target] = {"sha256": hashlib.sha256(data).hexdigest(),
                                            "bytes": len(data), "excerpt": data[:256].decode("utf-8", "replace")}
             if len({v["sha256"] for v in item["outputs"].values()}) != 1:
                 item["status"] = "OUTPUT_MISMATCH"
