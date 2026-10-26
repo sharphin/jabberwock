@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the self-hosted jwc / Rust / C++ report. No benchmark executed."""
+"""Tests for the self-hosted jwc / Rust / C++ / Go report. No benchmark executed."""
 from pathlib import Path
 import sys
 import unittest
@@ -9,8 +9,8 @@ import benchmark_report as bench
 
 
 class BenchmarkReportTests(unittest.TestCase):
-    def test_targets_exactly_three(self):
-        self.assertEqual(bench.TARGETS, ("jwc", "rust", "cpp"))
+    def test_targets_exactly_four(self):
+        self.assertEqual(bench.TARGETS, ("jwc", "rust", "cpp", "go"))
 
     def test_measure_parser(self):
         result = bench.parse_measure("0.12 0.15 0.20 4.5")
@@ -23,8 +23,8 @@ class BenchmarkReportTests(unittest.TestCase):
 
     def test_regression(self):
         metadata = {"schema_version": 2, "environment": {"os": "linux"},
-                    "runs": 5, "compiler_hashes": {"jwc": "same", "runtime": "fixed"},
-                    "source_hashes": {"fib": {"jwc": "a", "rust": "b", "cpp": "c"}},
+                    "runs": 5, "subjects": list(bench.TARGETS), "compiler_hashes": {"jwc": "same", "runtime": "fixed"},
+                    "source_hashes": {"fib": {"jwc": "a", "rust": "b", "cpp": "c", "go": "d"}},
                     "flags": {"rust": "-O3"}}
         baseline = {**metadata, "cases": {"fib": {"status": "PASS", "metrics": {
             "jwc": {"median_s": 1.0}}}}}
@@ -34,7 +34,7 @@ class BenchmarkReportTests(unittest.TestCase):
 
     def test_different_jwc_version_is_comparable(self):
         a = {"schema_version": 2, "environment": {}, "runs": 5,
-             "compiler_hashes": {"jwc": "new", "runtime": "fixed"},
+             "compiler_hashes": {"jwc": "new", "runtime": "fixed"}, "subjects": list(bench.TARGETS),
              "source_hashes": {}, "flags": {}, "cases": {}}
         b = {**a, "compiler_hashes": {"jwc": "old"}}
         self.assertEqual(bench.compare(a, b, 15)["status"], "NO_MATCHING_CASES")
