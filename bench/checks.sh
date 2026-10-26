@@ -16,6 +16,10 @@ for f in jabberwock/*.jw; do
     st=$($JW build --stats -o "$OUT/$n" "$f" 2>&1 | sed -n 's/^\[stats\] 世代の検査 \([0-9]*\) か所・解析で消した \([0-9]*\) か所・添字の検査 \([0-9]*\) か所$/\1 \2 \3/p')
     $JW build --count-checks -o "$OUT/$n.count" "$f" > /dev/null 2>&1
     cnt=$("$OUT/$n.count" 2>&1 > /dev/null | sed -n 's/^\[checks\] //p' | awk '{ print $2, $4, $6 }')
+    if ! printf "%s\\n" "$n $st $cnt" | awk 'NF != 7 { exit 1 } { for (i=2; i<=7; i++) if ($i !~ /^[0-9]+$/) exit 1 }'; then
+        echo "ERROR: missing or malformed check counts for $n" >&2
+        exit 1
+    fi
     echo "$n $st $cnt" >> "$NOW"
 done
 if [ -n "$UPDATE" ]; then
@@ -23,13 +27,33 @@ if [ -n "$UPDATE" ]; then
     cat checks.txt
     exit 0
 fi
-# 世代の検査と添字の検査が増えたら失敗。「消した」は増えてよい（減ったら失敗）
-awk 'NR == FNR { if ($1 !~ /^#/) base[$1] = $0; next }
-     {
-         if (!($1 in base)) { print "!! " $1 ": checks.txt にない（UPDATE=1 で足す）"; bad = 1; next }
-         split(base[$1], b, " ")
-         if ($2 > b[2] || $4 > b[4] || $5 > b[5] || $7 > b[7] || $3 < b[3] || $6 < b[6]) {
-             print "!! " $1 ": 前 [" base[$1] "] 今 [" $0 "]"; bad = 1
-         } else print "ok " $0
-     }
-     END { exit bad }' checks.txt "$NOW"
+# A missing case, malformed row, duplicate, or empty metrics must never pass.
+awk '
+function numeric_row(label) {
+    if (NF != 7) { print "ERROR: invalid field count in " label ": " $0; bad = 1; return 0 }
+    for (k = 2; k <= 7; k++)
+        if ($k !~ /^[0-9]+$/) { print "ERROR: invalid numeric field in " label ": " $0; bad = 1; return 0 }
+    return 1
+}
+NR == FNR {
+    if ($1 ~ /^#/ || NF == 0) next
+    if (!numeric_row("baseline")) next
+    if (seen_base[$1]++) { print "ERROR: duplicate baseline " $1; bad = 1 }
+    base[$1] = $0
+    next
+}
+{
+    if (!numeric_row("current")) next
+    if (seen_now[$1]++) { print "ERROR: duplicate current " $1; bad = 1; next }
+    if (!($1 in base)) { print "ERROR: unexpected case " $1; bad = 1; next }
+    split(base[$1], b, " ")
+    if ($2 > b[2] || $4 > b[4] || $5 > b[5] || $7 > b[7] || $3 < b[3] || $6 < b[6]) {
+        print "!! " $1 ": baseline [" base[$1] "] current [" $0 "]"
+        bad = 1
+    } else print "ok " $0
+}
+END {
+    for (name in base) if (!(name in seen_now)) { print "ERROR: missing case " name; bad = 1 }
+    if (length(base) == 0) { print "ERROR: empty baseline"; bad = 1 }
+    exit bad
+}' checks.txt "$NOW"
