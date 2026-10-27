@@ -48,7 +48,8 @@ theorem enqueue_requires_erasure {blocks locals : Nat}
       old key = some fact ∧ update old incoming key = none := by
   by_cases stable : update old incoming = old
   · have impossible : pending = item :: pending := by
-      simpa [enqueueIfChanged, stable] using scheduled
+      have unchanged := stable_entry_does_not_enqueue old incoming item pending stable
+      exact unchanged.symm.trans scheduled
     exact False.elim (notAlreadyHead impossible)
   · exact changed_update_erases_fact old incoming stable
 
