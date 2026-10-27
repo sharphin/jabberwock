@@ -8,5 +8,6 @@ import JabberwockFormal.ElisionDecision
 import JabberwockFormal.OwnershipInvalidation
 import JabberwockFormal.CfgMeetElision
 import JabberwockFormal.LoopConvergence
+import JabberwockFormal.FiniteMeetProgress
 import JabberwockFormal.SafetyComposition
 import JabberwockFormal.TypedPipeline
