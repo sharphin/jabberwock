@@ -78,11 +78,19 @@ def compare(current, baseline, threshold):
             or current["compiler_hashes"].get("runtime") != baseline.get("compiler_hashes", {}).get("runtime")
             or current["source_hashes"] != baseline.get("source_hashes")):
         return {"status": "NOT_COMPARABLE", "reason": "environment, workload sources, runtime, flags or repeats differ"}
+    current_cases = current.get("cases", {})
+    baseline_cases = baseline.get("cases", {})
+    if (not isinstance(current_cases, dict) or not isinstance(baseline_cases, dict)
+            or set(current_cases) != set(baseline_cases)):
+        return {"status": "INCOMPLETE_BASELINE",
+                "missing_from_baseline": sorted(set(current_cases) - set(baseline_cases)),
+                "missing_from_current": sorted(set(baseline_cases) - set(current_cases))}
+    if any(v.get("status") != "PASS" for v in current_cases.values()) or any(
+            v.get("status") != "PASS" for v in baseline_cases.values()):
+        return {"status": "INCOMPLETE_BASELINE", "reason": "one or more cases lack passing results"}
     rows = []
-    for name, case in current["cases"].items():
-        prev = baseline.get("cases", {}).get(name, {})
-        if case.get("status") != "PASS" or prev.get("status") != "PASS":
-            continue
+    for name, case in current_cases.items():
+        prev = baseline_cases[name]
         old = prev["metrics"]["jwc"]["median_s"]
         new = case["metrics"]["jwc"]["median_s"]
         if old <= 0:
