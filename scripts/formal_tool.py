@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--runtime-model", str(output / "runtime-generation-proof.json"),
                 "--output", str(output / "refinement-frontier.json")]
     if args.evidence:
-        frontier += ["--evidence", str(args.evidence.resolve())]
+        frontier += ["--evidence", str(frozen_paths["evidence"])]
     plans.append(("refinement-frontier", frontier))
     coverage = [py, str(scripts / "formal_proof_coverage.py"),
                 "--boundaries", str(output / "semantic-boundaries.json"),
@@ -219,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--inventory", str(output / "inventory.json"),
                 "--output", str(output / "proof-coverage.json")]
     if args.evidence:
-        coverage += ["--evidence", str(args.evidence.resolve())]
+        coverage += ["--evidence", str(frozen_paths["evidence"])]
     plans.append(("coverage", coverage))
     # Bind every stage output to its declared report schema. A successful
     # process exit must not let an unrelated or malformed JSON report satisfy
