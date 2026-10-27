@@ -1,6 +1,7 @@
 //! Deterministic source-to-typed-IR regression matrix for the Rust compiler.
 //! These are finite implementation tests, not a universal semantics proof.
-use jabberwock::{ir_text, no_modules, run_source_with, typed};
+use jabberwock::{ir_text, llvm_build_with, no_modules, run_source_with, typed};
+use jabberwock::ir::llvm::Opts;
 
 fn check_case(label: &str, source: &str, expected: &str) {
     let (_, info) = typed(source, &no_modules)
@@ -10,6 +11,15 @@ fn check_case(label: &str, source: &str, expected: &str) {
     let ir = ir_text(source, &no_modules)
         .unwrap_or_else(|e| panic!("{label}: IR lowering failed: {e}"));
     assert!(ir.contains("fn main()"), "{label}: missing main in IR: {ir}");
+    // Also compile the very same accepted program through both LLVM paths.
+    // The emitter must not reject a case already accepted by typed lowering.
+    // LLVM text generation is a smoke test, not a machine-code equivalence proof.
+    for elide in [false, true] {
+        let (llvm, _) = llvm_build_with(
+            source, &no_modules, "test.jw", false, elide, Opts::default())
+            .unwrap_or_else(|e| panic!("{label}: LLVM emission failed (elide={elide}): {e}"));
+        assert!(llvm.contains("define "), "{label}: LLVM module has no definitions");
+    }
     let checked = run_source_with(source, false, false);
     let optimized = run_source_with(source, false, true);
     for (mode, result) in [("checked", &checked), ("optimized", &optimized)] {
@@ -64,6 +74,12 @@ fn typed_rejection_is_not_silently_lowered() {
     let program = "fn main() { let x = true; print(x + 1); }";
     assert!(typed(program, &no_modules).is_err());
     assert!(ir_text(program, &no_modules).is_err());
+    for elide in [false, true] {
+        assert!(
+            llvm_build_with(program, &no_modules, "test.jw", false, elide, Opts::default()).is_err(),
+            "typed rejection reached LLVM emission with elide={elide}"
+        );
+    }
     for elide in [false, true] {
         let result = run_source_with(program, false, elide);
         assert!(result.error.is_some(), "type error accepted with elide={elide}");
