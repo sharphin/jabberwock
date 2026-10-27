@@ -89,14 +89,19 @@ theorem instructions_implement_gate (saved current : Word) :
     precisely on a valid, non-retired generation. -/
 theorem branch_continues_iff_valid (saved current : Word) :
     executeGateBranch saved current = .continue ↔ valid saved current := by
-  rw [← llvm_continues_iff saved current]
-  cases h : llvmContinues saved current with
+  change (if llvmBad saved current then GateBranch.reject else .continue) =
+    .continue ↔ valid saved current
+  cases h : llvmBad saved current with
   | false =>
-      simp [executeGateBranch, instructions_implement_gate,
-        llvmContinues] at h ⊢
+      have good : valid saved current :=
+        (llvm_continues_iff saved current).mp (by simp [llvmContinues, h])
+      simp [h, good]
   | true =>
-      simp [executeGateBranch, instructions_implement_gate,
-        llvmContinues] at h ⊢
+      have invalid : ¬ valid saved current := by
+        intro good
+        have continues := (llvm_continues_iff saved current).mpr good
+        simp [llvmContinues, h] at continues
+      simp [h, invalid]
 
 /-- Bind the jwc local gate model to the instruction-level branch. -/
 theorem jwc_gate_matches_instruction_branch (saved current : Word) :
