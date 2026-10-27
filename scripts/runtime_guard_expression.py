@@ -93,9 +93,9 @@ def lean_definition(source: str, declaration: str, arguments: str, result: str) 
     # Exclude the next top-level declaration: do not search for a familiar
     # snippet elsewhere in the file or inside a later theorem.
     pattern = (
-        r"(?m)^def\\s+" + re.escape(declaration) +
-        r"\\s*" + arguments + r"\\s*:\\s*" + result +
-        r"\\s*:=\\s*(.*?)(?=^(?:def|theorem|abbrev|end)\\b|\\Z)"
+        r"(?m)^def\s+" + re.escape(declaration) +
+        r"\s*" + arguments + r"\s*:\s*" + result +
+        r"\s*:=\s*(.*?)(?=^(?:def|theorem|abbrev|end)\b|\Z)"
     )
     matches = re.findall(pattern, source, re.DOTALL | re.MULTILINE)
     if len(matches) != 1:
@@ -111,7 +111,7 @@ def inspect_lean(lean: Path) -> dict:
     if lean.is_symlink() or not lean.is_file():
         raise ValueError("Lean BitVec source missing or symlinked")
     contents = lean.read_text(encoding="utf-8")
-    parameters = r"\\(\\s*gen\\s+step\\s+limit\\s*:\\s*Word\\s*\\)"
+    parameters = r"\(\s*gen\s+step\s+limit\s*:\s*Word\s*\)"
     actual_guard = lean_definition(contents, "guard", parameters, "Bool")
     actual_spec = lean_definition(contents, "guardSpec", parameters, "Prop")
     if actual_guard != LEAN_GUARD or actual_spec != LEAN_SPEC:
