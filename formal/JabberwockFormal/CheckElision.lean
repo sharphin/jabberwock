@@ -187,4 +187,52 @@ theorem plan_semantics_iff_valid (plan : List PlannedAccess) :
           intro q member elided
           exact valid q (List.mem_cons_of_mem p member) elided
 
+/-- Checked read paths using each compiler's modeled generation predicate. -/
+def jwcCheckedRead (a : Access) : Option Nat :=
+  if JabberwockFormal.Jwc.ReferenceAccess.emittedGate a.saved a.current
+  then some a.payload else none
+
+def rustCheckedRead (a : Access) : Option Nat :=
+  if JabberwockFormal.Rust.ReferenceAccess.emittedGate a.saved a.current
+  then some a.payload else none
+
+/-- Each compiler's modeled reference gate agrees with the common
+    instruction-level evaluation for every bit-vector generation pair. -/
+theorem jwc_read_refines_gate (a : Access) :
+    jwcCheckedRead a = checkedRead a.saved a.current a.payload := by
+  simp [jwcCheckedRead, checkedRead,
+    JabberwockFormal.EmittedGate.jwc_gate_correspondence]
+
+theorem rust_read_refines_gate (a : Access) :
+    rustCheckedRead a = checkedRead a.saved a.current a.payload := by
+  simp [rustCheckedRead, checkedRead,
+    JabberwockFormal.EmittedGate.rust_gate_correspondence]
+
+/-- The two independently defined gate models yield identical checked traces. -/
+theorem modeled_compilers_agree_on_checked_plan (plan : List PlannedAccess) :
+    plan.map (fun p => jwcCheckedRead p.access) =
+    plan.map (fun p => rustCheckedRead p.access) := by
+  apply List.map_congr_left
+  intro p _
+  rw [jwc_read_refines_gate, rust_read_refines_gate]
+
+/-- The actual optimizer must establish PlanValid from its own analysis.
+    Assuming that separate implementation proof, either modeled compiler
+    can omit selected checks without changing its checked trace. -/
+theorem jwc_selective_elision_refinement (plan : List PlannedAccess)
+    (safe : PlanValid plan) :
+    plan.map (fun p => jwcCheckedRead p.access) = optimizedPlan plan := by
+  rw [← (plan_semantics_iff_valid plan).mpr safe]
+  apply List.map_congr_left
+  intro p _
+  exact jwc_read_refines_gate p.access
+
+theorem rust_selective_elision_refinement (plan : List PlannedAccess)
+    (safe : PlanValid plan) :
+    plan.map (fun p => rustCheckedRead p.access) = optimizedPlan plan := by
+  rw [← (plan_semantics_iff_valid plan).mpr safe]
+  apply List.map_congr_left
+  intro p _
+  exact rust_read_refines_gate p.access
+
 end JabberwockFormal.CheckElision
