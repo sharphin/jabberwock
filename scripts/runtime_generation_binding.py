@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Fail-closed structural binding check for the C generation runtime and Lean model.
+
+STRUCTURE_MATCHED means the reviewed source fragments and Lean declarations are
+present in this snapshot. It is deliberately NOT a semantic refinement proof.
+"""
+from __future__ import annotations
+import argparse
+import json
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+C_SOURCE = ROOT / "runtime" / "jw_rt.c"
+LEAN_SOURCE = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationEncoding.lean"
+
+C_PATTERNS = {
+    "retired_sentinel": r"#define\s+GEN_RETIRED\s+UINT64_MAX",
+    "counter_mask": r"#define\s+GEN_COUNTER_MASK\s+\(\(UINT64_C\(1\)\s*<<\s*62\)\s*-\s*1\)",
+    "capacity_guard": r"return\s+gen\s*!=\s*GEN_RETIRED\s*&&\s*step\s*<=\s*GEN_LIMIT\s*&&\s*\(gen\s*&\s*GEN_COUNTER_MASK\)\s*<=\s*GEN_LIMIT\s*-\s*step\s*;",
+    "advance_retires_on_failure": r"if\s*\(!gen_has_room\(gen,\s*step\)\)\s*\{\s*gen_retire\(p\);\s*return\s+0;\s*\}\s*gen_set\(p,\s*gen\s*\+\s*step\);\s*return\s+1;",
+    "retire_sentinel_store": r"gen_set\(p,\s*GEN_RETIRED\);",
+    "retire_list_release_cas": r"__atomic_compare_exchange_n\(&retired_head,\s*&head,\s*p,\s*0,\s*__ATOMIC_RELEASE,\s*__ATOMIC_RELAXED\)",
+    "view_generation_gate": r"uint64_t\s+gen\s*=\s*gen_get\(c->target\);\s*if\s*\(gen\s*==\s*GEN_RETIRED\s*\|\|\s*gen\s*!=\s*c->gen\)\s*jw_fail_dangling\(use,\s*c->site,\s*c->target,\s*c->gen\);\s*return\s+c->target;",
+}
+LEAN_TOKENS = (
+    "def wordCounter",
+    "def concreteGuard",
+    "theorem packed_counter_mod",
+    "theorem concreteGuard_matches_abstract",
+    "def concreteAdvance",
+    "theorem concreteAdvance_matches_abstract",
+)
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=ROOT / "target/runtime-generation-binding.json")
+    args = parser.parse_args(argv)
+    findings = []
+    try:
+        c_text = C_SOURCE.read_text(encoding="utf-8")
+        lean_text = LEAN_SOURCE.read_text(encoding="utf-8")
+        for name, pattern in C_PATTERNS.items():
+            matched = re.search(pattern, c_text, flags=re.MULTILINE) is not None
+            findings.append({"id": "c:" + name, "status": "MATCHED" if matched else "MISSING"})
+        for token in LEAN_TOKENS:
+            matched = token in lean_text
+            findings.append({"id": "lean:" + token, "status": "MATCHED" if matched else "MISSING"})
+        missing = [item["id"] for item in findings if item["status"] != "MATCHED"]
+        result = {
+            "schema_version": 1,
+            "kind": "runtime-generation-structural-binding",
+            "status": "STRUCTURE_MATCHED" if not missing else "STRUCTURE_MISMATCH",
+            "checked": len(findings),
+            "matched": len(findings) - len(missing),
+            "findings": findings,
+            "limitations": [
+                "Structural matching is not semantic equivalence or a kernel proof.",
+                "The Lean model uses Nat arithmetic and does not establish C uint64_t execution semantics.",
+                "This check does not prove concurrent lifetime safety, allocator correctness, or memory ordering.",
+                "GEN_LIMIT test-build overrides require separate parameterized proof coverage."
+            ],
+        }
+        if missing:
+            result["missing"] = missing
+    except OSError as exc:
+        result = {"schema_version": 1, "kind": "runtime-generation-structural-binding",
+                  "status": "STRUCTURE_MISMATCH", "reason": str(exc), "findings": []}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(result["status"], result.get("matched", 0), "/", result.get("checked", 0),
+          "C/Lean structural bindings ->", args.output, flush=True)
+    return 0 if result["status"] == "STRUCTURE_MATCHED" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
