@@ -104,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         refinement += ["--evidence", str(args.evidence.resolve())]
     plans.append(("refinement", refinement))
+    plans.append(("refinement-frontier", [py, str(scripts / "refinement_frontier.py"),
+                                          "--inventory", str(output / "inventory.json"),
+                                          "--refinement", str(output / "refinement.json"),
+                                          "--runtime-model", str(output / "runtime-generation-proof.json"),
+                                          "--output", str(output / "refinement-frontier.json")]))
     plans.append(("coverage", [py, str(scripts / "formal_proof_coverage.py"),
                                 "--boundaries", str(output / "semantic-boundaries.json"),
                                 "--bindings", str(output / "stage-refinement-binding.json"),
@@ -114,7 +119,8 @@ def main(argv: list[str] | None = None) -> int:
                      "coverage": "proof-coverage.json", "emitter-semantics": "emitter-semantics.json",
                      "worklist-structure": "worklist-structure.json",
                      "runtime-generation-binding": "runtime-generation-binding.json",
-                     "runtime-generation-proof": "runtime-generation-proof.json"}
+                     "runtime-generation-proof": "runtime-generation-proof.json",
+                     "refinement-frontier": "refinement-frontier.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
         (output / filename).unlink(missing_ok=True)
@@ -174,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     if by_name["runtime-generation-binding"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
         broken = True
     if by_name["runtime-generation-proof"].get("report", {}).get("status") != "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY":
+        broken = True
+    if by_name["refinement-frontier"].get("report", {}).get("status") != "PLAN_READY_NOT_PROVEN":
         broken = True
     if broken:
         overall = "TOOL_ERROR"
