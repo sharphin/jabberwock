@@ -14,6 +14,9 @@ import platform
 import subprocess
 import sys
 
+from acceptance_report import review as review_acceptance
+from formal_report import source_identity
+
 ROOT = Path(__file__).resolve().parents[1]
 COMPILERS = ("jwc", "rust")
 GOALS = ("semantics", "memory", "types", "ownership", "checks")
@@ -129,16 +132,26 @@ def main() -> int:
     practical = read(practical_path)
     formal = read(formal_path)
     verdict = judge(practical, formal)
+    acceptance = {"status": "INVALID_EVIDENCE", "reason": "reports not reviewed"}
+    try:
+        acceptance = review_acceptance(
+            practical, formal, local_os=os_name,
+            identities={compiler: source_identity(compiler) for compiler in COMPILERS})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        acceptance = {"status": "INVALID_EVIDENCE", "reason": str(exc)}
     errors = [r for r in executed if "error" in r or r.get("exit_code") not in (0, 1)]
     if errors:
         verdict = {"status": "INFRA_ERROR", "reason": "local suite failed to start or encountered infrastructure failure", "stages": errors}
-    report = {"schema_version": 1, "kind": "local-verification", "verdict": verdict,
+    report = {"schema_version": 2, "kind": "local-verification", "verdict": verdict,
+              "acceptance_34": acceptance,
               "runs": executed, "practical_report": str(practical_path), "formal_report": str(formal_path)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(verdict, ensure_ascii=False, indent=2))
     print("Report:", args.output)
-    return 2 if verdict["status"] in ("INFRA_ERROR", "INVALID_EVIDENCE") else (0 if verdict["status"] == "PASS" and all(r.get("exit_code") == 0 for r in executed) else 1)
+    if acceptance["status"] == "INVALID_EVIDENCE":
+        return 2
+    return 2 if verdict["status"] in ("INFRA_ERROR", "INVALID_EVIDENCE") else (0 if verdict["status"] == "PASS" and acceptance["status"] == "ACCEPTED" and all(r.get("exit_code") == 0 for r in executed) else 1)
 
 
 if __name__ == "__main__":
