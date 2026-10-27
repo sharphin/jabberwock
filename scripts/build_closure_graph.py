@@ -15,6 +15,8 @@ from pathlib import Path
 import re
 import sys
 
+from formal_report import source_identity
+
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -22,7 +24,8 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def audit(manifest: dict, root: Path, environment: dict[str, str]) -> dict:
+def audit(manifest: dict, root: Path, environment: dict[str, str],
+          compiler: str | None = None) -> dict:
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         raise ValueError("unsupported closure manifest")
     nodes = manifest.get("nodes")
@@ -107,6 +110,19 @@ def audit(manifest: dict, root: Path, environment: dict[str, str]) -> dict:
     if visited != set(nodes):
         raise ValueError("unreachable/unaccounted manifest nodes: " +
                          repr(sorted(set(nodes) - visited)))
+    source_coverage = None
+    if compiler is not None:
+        if compiler not in ("jwc", "rust"):
+            raise ValueError("unsupported compiler")
+        required = source_identity(compiler)["files"]
+        by_path = {nodes[k]["path"]: leaf_hashes[k] for k in leaf_hashes
+                   if nodes[k]["kind"] == "file"}
+        missing = sorted(name for name, sha in required.items()
+                         if by_path.get(name) != sha)
+        if missing:
+            raise ValueError("missing compiler source leaves: " + repr(missing[:20]))
+        source_coverage = {"compiler": compiler, "required": len(required),
+                           "accounted_for": len(required)}
     return {
         "schema_version": 1,
         "kind": "declared-build-closure",
@@ -115,6 +131,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str]) -> dict:
         "visited_nodes": len(visited),
         "dependencies": dependencies,
         "leaf_hashes": leaf_hashes,
+        "source_coverage": source_coverage,
         "observed_inputs_complete": False,
         "external_toolchain_semantics_proven": False,
     }
@@ -124,12 +141,13 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--root", type=Path, required=True)
+    p.add_argument("--compiler", choices=("jwc", "rust"), required=True)
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args(argv)
     import os
     try:
         report = audit(json.loads(args.manifest.read_text(encoding="utf-8")),
-                       args.root, dict(os.environ))
+                       args.root, dict(os.environ), compiler=args.compiler)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         report = {"schema_version": 1, "kind": "declared-build-closure",
                   "status": "BLOCKED", "reason": str(exc)}
