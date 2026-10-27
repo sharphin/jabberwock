@@ -1,3 +1,5 @@
+> **最優先の開発指示（2026-10-27）:** 現在の依頼は「形式証明テストを行うツールの完成」であり「Jabberwock全体の形式証明を成立させること」ではない。ツールの実装完了、ツールのテスト実施状況、検証対象の証明結果は独立して報告する。未証明の項目数・全命令/全IRの未証明数をツールの実装進捗率に用いない。未証明は正しく NOT_PROVEN と返し、証明成功を偽装しない。詳しくは `docs/formal-tool-completion.md`。ツールの進捗報告は `python scripts/tool_implementation_progress.py` を用い、`docs/tool-capabilities.json` の各項目をコード監査で根拠付き更新する。実機テストの未実施は実装未完成と混同しない。
+
 # CLAUDE.md
 
 自作言語 jabberwock の Rust 実装。`own` と世代付き `ref` だけで「C++より安全、Rustより簡単、Goより速い」を狙う。
