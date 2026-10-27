@@ -195,5 +195,13 @@ class BuildGraphTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate tracked file/tool path"):
                 audit(graph, root, {})
 
+    def test_untracked_executable_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["build"]["command"][0] = "untracked-tool"
+            with self.assertRaisesRegex(ValueError, "executable not tracked"):
+                audit(graph, root, {})
+
 if __name__ == "__main__":
     unittest.main()
