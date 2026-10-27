@@ -137,6 +137,31 @@ class FullRunnerTests(unittest.TestCase):
                     self.assertEqual(result["status"], "FAIL")
                     self.assertIn(target, result["failed_stages"])
 
+    def test_stage_log_integrity_detects_tampering_and_missing_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            stage = full.execute_stage(
+                "sealed-stage", [sys.executable, "-c", "print('original')"],
+                folder, timeout=10)
+            self.assertTrue(full.verify_stage_log_integrity(stage))
+            path = Path(stage["stdout_log"])
+            path.write_text("changed", encoding="utf-8")
+            self.assertFalse(full.verify_stage_log_integrity(stage))
+            path.unlink()
+            self.assertFalse(full.verify_stage_log_integrity(stage))
+            self.assertFalse(full.verify_stage_log_integrity(
+                {"name": "forged", "status": "EXIT_ZERO", "exit_code": 0}))
+
+    def test_all_exit_zero_without_sealed_logs_cannot_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                      for name, _ in full.plans(folder)]
+            verdict = full.summarize(stages, folder, quick=False)
+            self.assertEqual(verdict["status"], "FAIL")
+            self.assertEqual(set(verdict["invalid_stage_logs"]),
+                             {name for name, _ in full.plans(folder)})
+
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)
