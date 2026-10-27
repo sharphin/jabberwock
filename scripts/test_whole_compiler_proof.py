@@ -29,6 +29,29 @@ class WholeProofInventoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             proof.validate(duplicated)
 
+    def test_missing_single_goal_for_existing_source_rejected(self):
+        result = proof.inventory()
+        damaged = copy.deepcopy(result)
+        damaged["components"].pop(2)
+        with self.assertRaises(ValueError):
+            proof.validate(damaged)
+
+    def test_phase_or_goal_relabelled_rejected(self):
+        result = proof.inventory()
+        for key, value in (("phase", "integration"), ("goal", "memory"),
+                           ("status", "REFINEMENT_PROVEN")):
+            damaged = copy.deepcopy(result)
+            damaged["components"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                proof.validate(damaged)
+
+    def test_claimed_full_success_metadata_rejected(self):
+        result = proof.inventory()
+        result["status"] = "PROVEN"
+        result["proved_obligations"] = result["total_obligations"]
+        with self.assertRaises(ValueError):
+            proof.validate(result)
+
     def test_tampered_source_hash_rejected(self):
         result = proof.inventory()
         damaged = copy.deepcopy(result)
