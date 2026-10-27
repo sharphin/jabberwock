@@ -6,6 +6,7 @@ compiler and per safety item/goal; cases may be added without changing IDs.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -60,3 +61,14 @@ def obligation_catalog() -> list[dict]:
 def load_manifest(compiler):
     path = ROOT / "formal" / "compilers" / compiler / "obligations.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_input_identity() -> dict:
+    """Hash the safety test definitions and fixtures, not just the compilers."""
+    roots = (ROOT / "scripts", ROOT / "tests")
+    suffixes = {".py", ".cmd", ".sh", ".jw", ".rs", ".c", ".h", ".json", ".toml", ".lean"}
+    files = sorted(p for root in roots if root.exists()
+                   for p in root.rglob("*") if p.is_file() and p.suffix.lower() in suffixes)
+    manifest = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+    encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return {"sha256": hashlib.sha256(encoded).hexdigest(), "files": manifest}
