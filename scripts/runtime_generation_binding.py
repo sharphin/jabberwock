@@ -30,6 +30,7 @@ LEAN_TOKENS = (
     "theorem concreteGuard_matches_abstract",
     "def concreteAdvance",
     "theorem concreteAdvance_matches_abstract",
+    "theorem packed_word_step_no_uint64_wrap",
 )
 
 
