@@ -22,11 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 FORMAL = ROOT / "formal"
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
 LEAN_SOURCE = FORMAL / "JabberwockFormal" / "RuntimeGenerationBitVec.lean"
+NAT_SOURCE = FORMAL / "JabberwockFormal" / "RuntimeGenerationEncoding.lean"
 ALLOWED_AXIOMS = {"propext", "Quot.sound", "Classical.choice"}
 
 CONTRACTS = r"""
 import JabberwockFormal.RuntimeGenerationBitVec
+import JabberwockFormal.RuntimeGenerationEncoding
 open JabberwockFormal.RuntimeGenerationBitVec
+open JabberwockFormal.RuntimeGenerationEncoding
 
 example (gen : Word) :
     (gen &&& counterMask).toNat = gen.toNat % radix :=
@@ -57,6 +60,37 @@ example (gen step limit : Word)
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.guard_matches_nat
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_no_wrap
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_changes_word
+
+example (limit counter step : Nat) :
+    capacityCheckAt limit counter step ↔ counter + step ≤ limit :=
+  capacityCheckAt_iff_sum limit counter step
+
+example (retained : Bool) {counter step : Nat}
+    (bounded : counter < radix) :
+    concreteGuard (pack retained counter) step ↔ hasRoom counter step :=
+  concreteGuard_matches_abstract retained bounded
+
+example (retained : Bool) {counter step : Nat}
+    (bounded : counter < radix) :
+    concreteAdvance (pack retained counter) step = advance retained (counter + 0) step :=
+  by simpa using concreteAdvance_matches_abstract retained bounded
+
+example (retained : Bool) {counter step limit : Nat}
+    (limitBound : limit ≤ maxCounter)
+    (room : capacityCheckAt limit counter step) :
+    uint64Add (pack retained counter) step = pack retained (counter + step) :=
+  packed_word_step_no_uint64_wrap_at_limit retained limitBound room
+
+example (retained : Bool) {counter step : Nat}
+    (room : runtimeGuard false counter step) (positive : 0 < step) :
+    ¬ accepts (pack retained counter) (runtimeAdvance false retained counter step) :=
+  runtimeAdvance_rejects_old_word retained room positive
+
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt_iff_sum
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.concreteGuard_matches_abstract
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance_matches_abstract
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.packed_word_step_no_uint64_wrap_at_limit
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.runtimeAdvance_rejects_old_word
 """
 
 THEOREMS = (
@@ -64,6 +98,11 @@ THEOREMS = (
     "JabberwockFormal.RuntimeGenerationBitVec.guard_matches_nat",
     "JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_no_wrap",
     "JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_changes_word",
+    "JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt_iff_sum",
+    "JabberwockFormal.RuntimeGenerationEncoding.concreteGuard_matches_abstract",
+    "JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance_matches_abstract",
+    "JabberwockFormal.RuntimeGenerationEncoding.packed_word_step_no_uint64_wrap_at_limit",
+    "JabberwockFormal.RuntimeGenerationEncoding.runtimeAdvance_rejects_old_word",
 )
 
 
@@ -83,7 +122,8 @@ def audit(timeout: int) -> dict:
     if not lake:
         raise ValueError("lake is required; refusing to skip kernel checking")
     before = {"runtime/jw_rt.c": digest(C_SOURCE),
-              "formal/JabberwockFormal/RuntimeGenerationBitVec.lean": digest(LEAN_SOURCE)}
+              "formal/JabberwockFormal/RuntimeGenerationBitVec.lean": digest(LEAN_SOURCE),
+              "formal/JabberwockFormal/RuntimeGenerationEncoding.lean": digest(NAT_SOURCE)}
     version = run([lake, "env", "lean", "--version"], FORMAL, timeout)
     if version.returncode != 0 or "version 4.24.0," not in (version.stdout + version.stderr):
         raise ValueError("expected Lean 4.24.0: " + (version.stderr or version.stdout).strip())
@@ -122,13 +162,14 @@ def audit(timeout: int) -> dict:
                 raise ValueError("unapproved axioms for " + theorem + ": " + repr(sorted(unexpected)))
 
     after = {"runtime/jw_rt.c": digest(C_SOURCE),
-             "formal/JabberwockFormal/RuntimeGenerationBitVec.lean": digest(LEAN_SOURCE)}
+             "formal/JabberwockFormal/RuntimeGenerationBitVec.lean": digest(LEAN_SOURCE),
+             "formal/JabberwockFormal/RuntimeGenerationEncoding.lean": digest(NAT_SOURCE)}
     if before != after:
         raise ValueError("C or Lean source changed during runtime-generation audit")
     return {
         "schema_version": 1,
         "kind": "runtime-generation-arithmetic-proof",
-        "status": "KERNEL_CHECKED_RUNTIME_ARITHMETIC_ONLY",
+        "status": "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY",
         "lean_version": version.stdout.strip(),
         "checked_theorems": list(THEOREMS),
         "checked_count": len(THEOREMS),
@@ -139,7 +180,7 @@ def audit(timeout: int) -> dict:
             "checked": binding_report.get("checked"),
         },
         "limitations": [
-            "The Lean kernel checks the stated BitVec arithmetic contracts only.",
+            "The Lean kernel checks the stated Nat and BitVec generation-model contracts only.",
             "C-to-Lean binding is structural pattern matching, not a verified C parser or C compiler proof.",
             "This does not prove pointer lifetime, allocator correctness, atomic memory ordering, concurrency safety, or whole-compiler refinement.",
             "This narrow result does not discharge any of the 390 whole-implementation refinement obligations."
