@@ -9,6 +9,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from runtime_guard_expression import inspect as inspect_guard
 
 ROOT = Path(__file__).resolve().parents[1]
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
@@ -73,6 +74,9 @@ def main(argv=None) -> int:
         c_text = C_SOURCE.read_text(encoding="utf-8")
         lean_text = LEAN_SOURCE.read_text(encoding="utf-8")
         bitvec_text = BITVEC_SOURCE.read_text(encoding="utf-8")
+        guard = inspect_guard(C_SOURCE)
+        findings.append({"id": "c:guard_expression_semantics",
+                         "status": "MATCHED" if guard["status"] == "EXPRESSION_ALIGNED_MODEL_ONLY" else "MISSING"})
         for name, pattern in C_PATTERNS.items():
             matched = re.search(pattern, c_text, flags=re.MULTILINE) is not None
             findings.append({"id": "c:" + name, "status": "MATCHED" if matched else "MISSING"})
@@ -91,6 +95,7 @@ def main(argv=None) -> int:
             "matched": len(findings) - len(missing),
             "findings": findings,
             "limitations": [
+                "The restricted generation guard AST aligns with the reviewed BitVec expression; this is not a verified C semantics proof.",
                 "Structural matching is not semantic equivalence or a kernel proof.",
                 "The BitVec model kernel-checks 64-bit arithmetic, but source matching is structural, not a verified C parser or compiler proof.",
                 "The Nat model remains an abstraction; its mask operation is not itself a proof of C bitwise-and semantics.",
@@ -100,7 +105,7 @@ def main(argv=None) -> int:
         }
         if missing:
             result["missing"] = missing
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         result = {"schema_version": 1, "kind": "runtime-generation-structural-binding",
                   "status": "STRUCTURE_MISMATCH", "reason": str(exc), "findings": []}
     args.output.parent.mkdir(parents=True, exist_ok=True)
