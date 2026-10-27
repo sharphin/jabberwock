@@ -16,7 +16,8 @@ import sys
 
 from acceptance_requirements import COMPILERS, GOALS, obligation_catalog, test_input_identity
 from formal_report import source_identity, proof_sources_identity
-from whole_compiler_proof import validate as validate_whole_inventory, inventory as canonical_whole_inventory
+from whole_compiler_proof import validate as validate_whole_inventory
+from refinement_transition import validate_transition_report
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILURES = {"FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED"}
@@ -117,6 +118,7 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None, who
         expected = {row["id"] for row in whole_inventory["components"]}
         if not isinstance(refinement, dict) or refinement.get("schema_version") != 1:
             raise ValueError("invalid refinement report envelope")
+        validate_transition_report(whole_inventory, refinement)
         findings = keyed(refinement.get("findings"), "id")
         if set(findings) != expected:
             raise ValueError("refinement report missing or foreign obligations")
