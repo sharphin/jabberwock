@@ -31,7 +31,8 @@ def fixture():
     formal = {"schema_version": 3, "compilers": {c: {"source": {"sha256": c + "-sha"}}
                                                for c in req.COMPILERS},
               "goals": goals}
-    identity = {c: {"sha256": c + "-sha"} for c in req.COMPILERS}
+    identity = {c: {"sha256": c + "-sha", "files": {"runtime/jw_rt.c": "demo"}} for c in req.COMPILERS}
+    practical["source_snapshots"] = copy.deepcopy(identity)
     return practical, formal, identity
 
 
@@ -82,6 +83,19 @@ class AcceptanceRequirementsTests(unittest.TestCase):
                 f["goals"][0]["compiler"] = "rust"
             with self.subTest(change=change), self.assertRaises(ValueError):
                 self.check(p, f, identity)
+
+    def test_practical_source_snapshot_stale_or_missing_rejected(self):
+        practical, formal, identity = fixture()
+        for change in ("missing", "stale", "files"):
+            p = copy.deepcopy(practical)
+            if change == "missing":
+                p.pop("source_snapshots")
+            elif change == "stale":
+                p["source_snapshots"]["jwc"]["sha256"] = "old"
+            else:
+                p["source_snapshots"]["rust"]["files"] = {}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check(p, formal, identity)
 
     def test_wrong_os_rejected(self):
         practical, formal, identities = fixture()
