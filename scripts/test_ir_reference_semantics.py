@@ -47,5 +47,46 @@ class IRReferenceSemanticsTests(unittest.TestCase):
             machine.dereference(ref)
 
 
+    def test_cfg_branch_and_return(self):
+        machine = Machine()
+        blocks = [
+            {"insts": [], "term": {"kind": "branch",
+                "condition": {"kind": "const", "value": True}, "yes": 1, "no": 2}},
+            {"insts": [], "term": {"kind": "return",
+                "value": {"kind": "const", "value": 42}}},
+            {"insts": [], "term": {"kind": "fail", "message": "wrong path"}},
+        ]
+        self.assertEqual(machine.run_cfg(blocks)["value"], 42)
+
+    def test_cfg_infinite_loop_exhausts_fuel(self):
+        machine = Machine()
+        result = machine.run_cfg(
+            [{"insts": [], "term": {"kind": "goto", "target": 0}}],
+            max_steps=3)
+        self.assertEqual(result["status"], "TRAP")
+        self.assertIn("fuel", result["reason"])
+
+    def test_cfg_unreachable_is_not_success(self):
+        machine = Machine()
+        result = machine.run_cfg(
+            [{"insts": [], "term": {"kind": "unreachable"}}])
+        self.assertEqual(result["status"], "TRAP")
+
+    def test_cfg_step_overflow_uses_done_edge(self):
+        machine = Machine(locals={0: 127})
+        blocks = [
+            {"insts": [], "term": {"kind": "step", "counter": 0,
+                "amount": {"kind": "const", "value": 1},
+                "min": -128, "max": 127, "next": 1, "done": 2}},
+            {"insts": [], "term": {"kind": "fail", "message": "wrong step"}},
+            {"insts": [], "term": {"kind": "return",
+                "value": {"kind": "copy", "local": 0}}},
+        ]
+        result = machine.run_cfg(blocks)
+        self.assertEqual(result["status"], "RETURN")
+        self.assertEqual(result["value"], 127)
+
+
+
 if __name__ == "__main__":
     unittest.main()
