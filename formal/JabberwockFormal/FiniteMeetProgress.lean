@@ -231,10 +231,10 @@ theorem exhausted_initial_facts_remain_stable {n : Nat}
 
 /-- Splitting a sequence of predecessor meets does not change its result. -/
 theorem updateMany_append {n : Nat}
-    (old : Facts n) (prefix suffix : List (Facts n)) :
-    updateMany old (prefix ++ suffix) =
-      updateMany (updateMany old prefix) suffix := by
-  induction prefix generalizing old with
+    (old : Facts n) (before after : List (Facts n)) :
+    updateMany old (before ++ after) =
+      updateMany (updateMany old before) after := by
+  induction before generalizing old with
   | nil =>
       rfl
   | cons head tail ih =>
