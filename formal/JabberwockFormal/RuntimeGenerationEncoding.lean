@@ -59,7 +59,6 @@ theorem advance_changes_word
   unfold advance
   rw [if_pos room]
   intro same
-  have noWrap := hasRoom_prevents_counter_wrap room
   cases retained <;> simp [pack] at same <;> omega
 
 /-- The saved pre-free word cannot pass the runtime's equality gate after a
