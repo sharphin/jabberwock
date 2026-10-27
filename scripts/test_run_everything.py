@@ -76,7 +76,7 @@ class FullRunnerTests(unittest.TestCase):
             evidence = result["evidence"]["implementation_inventory"]
             self.assertEqual(evidence["required"], 2)
             self.assertEqual(len(evidence["uncovered"]), 2)
-            self.assertIn("refinement obligations", result["reason"])
+            self.assertEqual(set(result["failed_stages"]), set(names))
 
     def test_no_summary_pass_with_duplicate_stage(self):
         with tempfile.TemporaryDirectory() as d:
