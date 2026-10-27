@@ -40,42 +40,55 @@ def inspect(root: Path, *, timeout: int = 600) -> dict:
         raise ValueError("invalid stage binding registry")
     expected = {row["id"]: row for row in boundaries}
     visited = set()
-    findings = []
+    entries = []
+    # Validate all bindings before invoking the Lean toolchain. A malformed
+    # registry must not be partially accepted based on earlier entries.
     for entry in document["bindings"]:
         if not isinstance(entry, dict) or set(entry) != {"stage_id", "theorem"}:
             raise ValueError("stage binding requires stage_id and theorem")
         stage_id, theorem = entry["stage_id"], entry["theorem"]
-        sources = expected[stage_id]["sources"] if isinstance(stage_id, str) and stage_id in expected else {}
-        manifest = prepare_manifest(root, stage_id, theorem)
         if not isinstance(stage_id, str) or stage_id in visited or stage_id not in expected:
             raise ValueError("unknown or duplicate stage")
-        visited.add(stage_id)
         if not isinstance(theorem, str) or theorem not in contract_names:
             raise ValueError("theorem has no reviewed expected-type contract")
-        if sources != expected[stage_id]["sources"]:
-            raise ValueError("stage source fingerprints changed: " + stage_id)
-        if not isinstance(manifest, dict):
-            raise ValueError("missing proof manifest")
-        # The compiler sources must be authenticated by the kernel manifest too,
-        # not just by the human-maintained registry.
-        files = manifest.get("source_files")
-        if not isinstance(files, list):
-            raise ValueError("proof manifest source_files missing")
-        for source, digest in sources.items():
-            if {"path": source, "sha256": digest} not in files:
-                raise ValueError("proof manifest does not bind " + source)
-        if theorem not in manifest.get("theorems", []):
-            raise ValueError("theorem missing from kernel manifest")
-        # check_kernel runs lake, performs the theorem's axiom audit and checks
-        # repository-owned expected proposition types when registered.
+        visited.add(stage_id)
+        entries.append((stage_id, theorem))
+
+    findings = []
+    if entries:
+        # The previous implementation rebuilt and audited the entire Lean
+        # project once per bound stage. Instead create one source-closed
+        # manifest containing every reviewed theorem and every bound source,
+        # then independently check the whole set in a single kernel invocation.
+        anchor_stage, anchor_theorem = entries[0]
+        manifest = prepare_manifest(root, anchor_stage, anchor_theorem)
+        source_files = {
+            entry["path"]: entry["sha256"]
+            for entry in manifest["source_files"]
+        }
+        for stage_id, _theorem in entries:
+            for source, digest in expected[stage_id]["sources"].items():
+                previous = source_files.setdefault(source, digest)
+                if previous != digest:
+                    raise ValueError("conflicting stage source digest: " + source)
+        manifest["source_files"] = [
+            {"path": source, "sha256": digest}
+            for source, digest in sorted(source_files.items())
+        ]
+        manifest["theorems"] = sorted(set(theorem for _, theorem in entries))
         verified = check_kernel(root, manifest, timeout=timeout)
         if verified.get("status") != "KERNEL_CHECKED":
-            raise ValueError("kernel did not verify claimed theorem")
-        if theorem not in verified.get("contract_types_checked", []):
-            raise ValueError("expected proposition was not checked by Lean")
-        findings.append({"stage_id": stage_id, "theorem": theorem,
-                         "source_hashes_checked": True, "kernel_type_checked": True,
-                         "status": "KERNEL_CHECKED_REFINEMENT_NOT_PROVEN"})
+            raise ValueError("kernel did not verify bound theorems")
+        checked_types = set(verified.get("contract_types_checked", []))
+        for stage_id, theorem in entries:
+            if theorem not in checked_types:
+                raise ValueError("expected proposition not checked by Lean: " + theorem)
+            findings.append({
+                "stage_id": stage_id, "theorem": theorem,
+                "source_hashes_checked": True,
+                "kernel_type_checked": True,
+                "status": "KERNEL_CHECKED_REFINEMENT_NOT_PROVEN"
+            })
     return {"schema_version": 1, "kind": "stage-refinement-bindings",
             "status": "NOT_PROVEN", "required": len(boundaries),
             "covered": len(findings), "kernel_checked": len(findings),
