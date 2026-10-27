@@ -78,7 +78,8 @@ def main(argv: list[str] | None = None) -> int:
         ("semantic-boundaries", [py, str(scripts / "semantic_refinement_boundaries.py"),
                                  "--output", str(output / "semantic-boundaries.json")]),
         ("stage-refinement-binding", [py, str(scripts / "stage_refinement_binding.py"),
-                                       "--output", str(output / "stage-refinement-binding.json")]),
+                                       "--output", str(output / "stage-refinement-binding.json"),
+                                       "--stage-timeout", str(args.stage_timeout)]),
         ("emitter-binding", [py, str(scripts / "proof_emitter_correspondence.py"),
                              "--output", str(output / "emitter-binding.json")]),
     ]
