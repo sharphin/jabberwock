@@ -34,15 +34,14 @@ def advance (retained : Bool) (counter step : Nat) : Nat :=
 
 theorem hasRoom_bounds_sum {counter step : Nat}
     (room : hasRoom counter step) :
-    counter + step ≤ maxCounter := by
-  unfold hasRoom maxCounter radix at room
-  omega
+    counter + step ≤ maxCounter := room
 
 theorem hasRoom_prevents_counter_wrap {counter step : Nat}
     (room : hasRoom counter step) :
     counter + step < radix := by
   have bound := hasRoom_bounds_sum room
-  unfold maxCounter radix at bound ⊢
+  unfold maxCounter at bound
+  unfold radix
   omega
 
 theorem packed_word_is_below_retired
