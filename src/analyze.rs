@@ -250,6 +250,9 @@ impl<'a> FnAnalyzer<'a> {
     }
 
     fn kill_all_elements(&mut self) {
+        if self.facts.values().any(|f| matches!(f, Fact::RefToElement(_))) {
+            eprintln!("JWDBG kill_all_elements facts={:?}", self.facts);
+        }
         self.facts.retain(|_, f| !matches!(f, Fact::RefToElement(_)));
     }
 
@@ -386,7 +389,11 @@ impl<'a> FnAnalyzer<'a> {
             ExprKind::Index(base, _, _) => {
                 let ExprKind::Var(name) = &base.kind else { return None };
                 let id = self.lookup(name)?;
-                match self.facts.get(&id).copied()? {
+                let owner_fact = self.facts.get(&id).copied();
+                if matches!(name.as_str(), "xs" | "ps") {
+                    eprintln!("JWDBG ref_of index base={} id={} fact={:?} all={:?}", name, id, owner_fact, self.facts);
+                }
+                match owner_fact? {
                     Fact::Own | Fact::Container | Fact::Pinned => Some(Fact::RefToElement(id)),
                     Fact::RefTo(owner) => Some(Fact::RefToElement(owner)),
                     // ネストしたコンテナ等は所有関係を確定できないので保守的に扱う
@@ -696,8 +703,11 @@ impl<'a> FnAnalyzer<'a> {
         let safe = match &inner.kind {
             ExprKind::Var(name) => {
                 let f = self.fact_of(name);
-                // own / リスト変数の先は安定した場所。ref は借りた先が生きていれば安全。
-                matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f)
+                let safe = matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f);
+                if matches!(name.as_str(), "p" | "ps" | "xs" | "q") {
+                    eprintln!("JWDBG deref name={} fact={:?} safe={} all={:?}", name, f, safe, self.facts);
+                }
+                safe
             }
             _ => false,
         };
