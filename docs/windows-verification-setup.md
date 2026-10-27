@@ -1,5 +1,19 @@
 # Windows実機の検証環境セットアップ
 
+## 自動セットアップ（先に実行）
+
+Windows PowerShellでリポジトリルートから次を実行します。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_lean_windows.ps1
+```
+
+このスクリプトは `formal/lean-toolchain` のLean 4.24.0を確認し、必要ならwingetでelanを導入、Leanツールチェーン取得、`lake build`、`scripts/check_formal.py` による公理監査を順番に行います。
+結果は `target/lean-setup/status.json` と `target/lean-setup/setup.log` に保存します。
+環境構築後にすでにelanがある環境でインストールを禁止したいときは `-SkipInstall` を指定します。
+ネットワークに接続できず必要なツールチェーンが未導入なら失敗します。成功しても実コンパイラ全体の証明完了は意味しません。
+
+
 この手順はWindows x64用です。環境の構築と、34項目の正式受入合格は別物です。
 
 ## 1. Windows x64に公式ツールをインストール
