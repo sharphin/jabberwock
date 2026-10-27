@@ -91,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
                                "--timeout", str(args.stage_timeout)]),
         ("runtime-generation-binding", [py, str(scripts / "runtime_generation_binding.py"),
                                          "--output", str(output / "runtime-generation-binding.json")]),
+        ("runtime-generation-proof", [py, str(scripts / "runtime_generation_proof.py"),
+                                       "--output", str(output / "runtime-generation-proof.json"),
+                                       "--timeout", str(args.stage_timeout)]),
     ]
     if args.lean_manifest:
         plans.append(("lean-evidence", [py, str(scripts / "lean_evidence_engine.py"),
@@ -110,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
                      "lean-evidence": "lean-evidence.json", "refinement": "refinement.json",
                      "coverage": "proof-coverage.json", "emitter-semantics": "emitter-semantics.json",
                      "worklist-structure": "worklist-structure.json",
-                     "runtime-generation-binding": "runtime-generation-binding.json"}
+                     "runtime-generation-binding": "runtime-generation-binding.json",
+                     "runtime-generation-proof": "runtime-generation-proof.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
         (output / filename).unlink(missing_ok=True)
@@ -168,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     if by_name["worklist-structure"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
         broken = True
     if by_name["runtime-generation-binding"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
+        broken = True
+    if by_name["runtime-generation-proof"].get("report", {}).get("status") != "KERNEL_CHECKED_RUNTIME_ARITHMETIC_ONLY":
         broken = True
     if broken:
         overall = "TOOL_ERROR"
