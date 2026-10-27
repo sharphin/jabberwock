@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 
 from acceptance_requirements import COMPILERS, GOALS, obligation_catalog, test_input_identity
-from formal_report import source_identity
+from formal_report import source_identity, proof_sources_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILURES = {"FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED"}
@@ -93,6 +93,9 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
         suite_complete = False
     else:
         suite_complete = True
+    proof_snapshot = formal.get("proof_sources_snapshot")
+    if not isinstance(proof_snapshot, dict) or proof_snapshot != proof_sources_identity():
+        raise ValueError("Lean sources or imported formal dependencies differ from proof audit")
     infrastructure = bool(formal.get("infrastructure_error") or formal.get("interrupted"))
     records = []
     for obligation in obligation_catalog():
