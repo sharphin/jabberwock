@@ -82,6 +82,20 @@ def evaluate(base: dict, evidence: dict, verifier_registry=None) -> dict:
     return result
 
 
+
+def validate_transition_report(base: dict, report: dict, evidence: dict | None = None) -> None:
+    """Authenticate the complete report by deterministically replaying its gate.
+
+    A list of REF-INEMENT_PROVEN strings, even with matching source hashes, is
+    never accepted as a verifier result. This currently replays the production
+    registry, which intentionally contains no whole-implementation verifier.
+    """
+    expected = evaluate(
+        base, {"schema_version": 1, "proofs": []} if evidence is None else evidence)
+    if not isinstance(report, dict) or report != expected:
+        raise ValueError("refinement report does not match independently replayed proof gate")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, help="optional proof artifacts, never a proof by itself")
