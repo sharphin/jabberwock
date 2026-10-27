@@ -18,6 +18,8 @@ import subprocess
 import sys
 import time
 
+from formal_report import source_identity, proof_sources_identity
+
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = platform.system() == "Windows"
 LINUX = platform.system() == "Linux"
@@ -233,6 +235,14 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat()}
 
 
+def source_snapshots() -> dict:
+    """Pin both compilers and all formal dependencies to exact file contents."""
+    return {
+        "compilers": {name: source_identity(name) for name in ("jwc", "rust")},
+        "formal": proof_sources_identity(),
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "target" / "verification-complete")
@@ -246,6 +256,12 @@ def main(argv=None):
         parser.error("stage timeout must be positive")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    try:
+        initial_snapshots = source_snapshots()
+        snapshot_error = None
+    except (OSError, ValueError, KeyError) as exc:
+        initial_snapshots = None
+        snapshot_error = "unable to snapshot starting sources: " + str(exc)
     stages = []
     for label, command in plans(output, quick=args.quick):
         # Delete prior output: never reuse a report from a previous attempt.
@@ -265,6 +281,16 @@ def main(argv=None):
                 continue
         stages.append(execute_stage(label, command, output, timeout=args.stage_timeout))
     result = summarize(stages, output, quick=args.quick)
+    try:
+        final_snapshots = source_snapshots()
+        if initial_snapshots != final_snapshots:
+            snapshot_error = "compiler or formal sources changed during verification"
+    except (OSError, ValueError, KeyError) as exc:
+        snapshot_error = "unable to snapshot final sources: " + str(exc)
+    result["source_snapshot_consistent"] = snapshot_error is None
+    if snapshot_error:
+        result["status"] = "FAIL"
+        result["reason"] = snapshot_error
     if args.quick:
         result["status"] = "FAIL"
         result["reason"] = "quick sampling cannot satisfy full acceptance"
