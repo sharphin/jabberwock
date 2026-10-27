@@ -51,6 +51,7 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
         ("acceptance-34", [py, str(ROOT / "scripts/acceptance_report.py"),
                             "--os", target_os, "--practical", str(practical), "--formal", str(formal),
                             "--inventory", str(output / "whole-proof-inventory.json"),
+                            "--transition", str(output / "refinement-transition.json"),
                             "--output", str(output / "acceptance-34.json")]),
         ("benchmark-four-way", [*benchmark, *(["--full"] if not quick else []),
                                 "--output", str(output / "benchmark-four-way.json")]),
