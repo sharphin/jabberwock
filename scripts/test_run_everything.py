@@ -5,6 +5,7 @@ These test stage contracts without executing the actual expensive suite.
 from pathlib import Path
 import sys
 import tempfile
+import json
 import unittest
 from unittest import mock
 
@@ -41,6 +42,35 @@ class FullRunnerTests(unittest.TestCase):
             self.assertEqual(full.summarize(stages[:-1], folder, quick=False)["status"], "FAIL")
             stages[1]["status"] = "EXIT_NONZERO"
             self.assertEqual(full.summarize(stages, folder, quick=False)["status"], "FAIL")
+
+    def test_unproved_implementation_links_appear_even_on_nonzero_stage(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d)
+            report = {"status": "NOT_PROVEN", "total_obligations": 2,
+                      "proved_obligations": 0,
+                      "components": [
+                          {"id": "jwc:types:jwc/typeck.jw", "status": "REFINEMENT_NOT_PROVEN"},
+                          {"id": "rust:memory:runtime/jw_rt.c", "status": "REFINEMENT_NOT_PROVEN"}
+                      ]}
+            (output / "whole-proof-inventory.json").write_text(json.dumps(report))
+            names = [name for name, _ in full.plans(output)]
+            failed = [{"name": name, "status": "EXIT_NONZERO", "exit_code": 1}
+                      for name in names]
+            result = full.summarize(failed, output, quick=False)
+            self.assertEqual(result["status"], "FAIL")
+            evidence = result["evidence"]["implementation_inventory"]
+            self.assertEqual(evidence["required"], 2)
+            self.assertEqual(len(evidence["uncovered"]), 2)
+            self.assertIn("refinement obligations", result["reason"])
+
+    def test_no_summary_pass_with_duplicate_stage(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d)
+            names = [name for name, _ in full.plans(output)]
+            stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                      for name in names]
+            stages[0] = stages[1].copy()
+            self.assertEqual(full.summarize(stages, output, quick=False)["status"], "FAIL")
 
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
