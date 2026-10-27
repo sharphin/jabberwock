@@ -109,4 +109,33 @@ theorem one_local_changeCount_le_one
             (update initial incoming) rest allAbsent
         simp [changeCount, stable, noFurtherChanges]
 
+/-- If the concrete history counter reports no strict changes, the
+    reachable entry after processing that history is unchanged. This
+    connects the numeric counter to the actual abstract entry state. -/
+theorem zero_changeCount_preserves_entry {n : Nat}
+    (initial : Facts n) (history : List (Facts n))
+    (zero : changeCount initial history = 0) :
+    updateMany initial history = initial := by
+  classical
+  induction history generalizing initial with
+  | nil =>
+      rfl
+  | cons incoming rest ih =>
+      by_cases stable : update initial incoming = initial
+      · have tailZero : changeCount (update initial incoming) rest = 0 := by
+          simpa [changeCount, stable] using zero
+        calc
+          updateMany initial (incoming :: rest) =
+              updateMany (update initial incoming) rest := rfl
+          _ = update initial incoming := ih (update initial incoming) tailZero
+          _ = initial := stable
+      · have impossible : False := by
+          have countPositive :
+              changeCount initial (incoming :: rest) =
+                changeCount (update initial incoming) rest + 1 :=
+            strict_change_count initial incoming rest stable
+          rw [countPositive] at zero
+          exact Nat.noConfusion zero
+        exact False.elim impossible
+
 end JabberwockFormal.MeetChangeCount
