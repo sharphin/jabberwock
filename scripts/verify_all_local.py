@@ -154,7 +154,7 @@ def main() -> int:
             practical, formal, local_os=os_name,
             identities={compiler: source_identity(compiler) for compiler in COMPILERS},
             inputs_identity=test_input_identity())
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         acceptance = {"status": "INVALID_EVIDENCE", "reason": str(exc)}
     errors = [r for r in executed if "error" in r or r.get("exit_code") not in (0, 1)]
     if errors:
