@@ -9,7 +9,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from runtime_guard_expression import inspect as inspect_guard
+from runtime_guard_expression import inspect as inspect_guard, inspect_lean
 
 ROOT = Path(__file__).resolve().parents[1]
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
@@ -75,6 +75,9 @@ def main(argv=None) -> int:
         lean_text = LEAN_SOURCE.read_text(encoding="utf-8")
         bitvec_text = BITVEC_SOURCE.read_text(encoding="utf-8")
         guard = inspect_guard(C_SOURCE)
+        lean_guard = inspect_lean(BITVEC_SOURCE)
+        findings.append({"id": "bitvec:guard_expression_body",
+                         "status": "MATCHED" if lean_guard["status"] == "LEAN_EXPRESSION_ALIGNED_MODEL_ONLY" else "MISSING"})
         findings.append({"id": "c:guard_expression_semantics",
                          "status": "MATCHED" if guard["status"] == "EXPRESSION_ALIGNED_MODEL_ONLY" else "MISSING"})
         for name, pattern in C_PATTERNS.items():
