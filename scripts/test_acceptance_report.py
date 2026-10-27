@@ -43,6 +43,7 @@ def fixture():
               "goals": goals}
     identity = {c: {"sha256": c + "-sha", "files": {"runtime/jw_rt.c": "demo"}} for c in req.COMPILERS}
     practical["source_snapshots"] = copy.deepcopy(identity)
+    practical["test_inputs_snapshot"] = {"sha256": "fixture-sha", "files": {"scripts/harness.py": "hash"}}
     return practical, formal, identity
 
 
@@ -124,6 +125,16 @@ class AcceptanceRequirementsTests(unittest.TestCase):
         p["results"].pop()
         with self.assertRaises(ValueError):
             self.check(p, formal, identity)
+
+    def test_missing_or_stale_test_harness_snapshot_rejected(self):
+        practical, formal, identity = fixture()
+        p = copy.deepcopy(practical)
+        p.pop("test_inputs_snapshot")
+        with self.assertRaises(ValueError):
+            self.check(p, formal, identity)
+        with self.assertRaises(ValueError):
+            audit.review(practical, formal, local_os="windows", identities=identity,
+                         inputs_identity={"sha256": "different", "files": {}})
 
     def test_wrong_os_rejected(self):
         practical, formal, identities = fixture()
