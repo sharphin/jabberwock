@@ -36,7 +36,7 @@ def guard (gen step limit : Word) : Bool :=
 
 theorem guard_iff_spec (gen step limit : Word) :
     guard gen step limit = true ↔ guardSpec gen step limit := by
-  simp [guard, guardSpec, BitVec.ule_eq_decide_le]
+  simp [guard, guardSpec, BitVec.ule_eq_decide_le, and_assoc]
 
 theorem guard_rejects_retired (step limit : Word) :
     guard retiredWord step limit = false := by
@@ -64,15 +64,14 @@ theorem accepted_increment_no_wrap
   have stepLeNat : step.toNat ≤ limit.toNat := by
     rw [BitVec.le_def] at stepLe
     exact stepLe
-  have stepBound : step.toNat < radix := by
-    unfold radix
-    omega
+  have stepBound : step.toNat < radix :=
+    Nat.lt_of_le_of_lt stepLeNat validLimit
   have numericBound : 2 ^ 63 + 2 ^ 62 < 2 ^ 64 := by
     decide
   have sumBelow : gen.toNat + step.toNat < 2 ^ 63 + 2 ^ 62 := by
-    exact Nat.add_lt_add validGen (by simpa [radix] using stepBound)
+    exact Nat.add_lt_add validGen stepBound
   have sumBound : gen.toNat + step.toNat < 2 ^ 64 := by
-    exact lt_trans sumBelow numericBound
+    exact Nat.lt_trans sumBelow numericBound
   exact BitVec.toNat_add_of_lt sumBound
 
 /-- A positive accepted increment changes the concrete 64-bit word. -/
