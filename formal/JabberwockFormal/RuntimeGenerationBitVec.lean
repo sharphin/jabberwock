@@ -41,6 +41,13 @@ theorem guard_rejects_retired (step limit : Word) :
     guard retiredWord step limit = false := by
   simp [guard, guardSpec]
 
+/-- On the accepted branch, uint64_t subtraction is ordinary natural
+    subtraction: the explicit unsigned comparison prevents underflow. -/
+theorem unsigned_subtraction_matches_nat
+    (limit step : Word) (ordered : step ≤ limit) :
+    (limit - step).toNat = limit.toNat - step.toNat := by
+  exact BitVec.toNat_sub_of_le ordered
+
 /-- If the packed runtime word has bit 63 clear and the configured limit is
     below 2^62, a successful guard proves that uint64_t addition does not wrap.
     This is an arithmetic theorem about the BitVec model, not a pointer-safety
