@@ -151,5 +151,15 @@ class BuildGraphTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "unsafe action output"):
                         audit(graph, root, {})
 
+    def test_nul_and_backslash_inputs_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            for candidate in ("input" + chr(0) + ".jw", "dir" + chr(92) + "input.jw"):
+                with self.subTest(candidate=repr(candidate)):
+                    graph["nodes"]["source"]["path"] = candidate
+                    with self.assertRaisesRegex(ValueError, "absolute/traversal input path"):
+                        audit(graph, root, {})
+
 if __name__ == "__main__":
     unittest.main()
