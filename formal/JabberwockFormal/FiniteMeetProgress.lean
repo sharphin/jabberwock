@@ -5,44 +5,29 @@ set_option warningAsError true
 
 namespace JabberwockFormal.FiniteMeetProgress
 
-variable {α : Type} [DecidableEq α]
+/-- One finite analysis entry is a vector of optional facts.
+    Each position represents one local variable and cannot gain new
+    information through the intersection operation. -/
+def update {α : Type} [DecidableEq α]
+    (old incoming : List (Option α)) : List (Option α) :=
+  (old.zip incoming).map fun (a, b) => if a = b then a else none
 
-/-- A finite block-local domain of possible analysis facts. Each element
-    represents a particular (variable, fact) pair; inconsistent pairs are
-    excluded by the actual analyzer's representation, not by this model. -/
-def update (old incoming : Finset α) : Finset α :=
-  old ∩ incoming
-
-/-- The analysis state cannot grow after a reachable block's meet update. -/
-theorem update_subset
-    (old incoming : Finset α) : update old incoming ⊆ old := by
-  exact Finset.inter_subset_left
-
-/-- Therefore the number of retained facts cannot grow. -/
-theorem update_card_le
-    (old incoming : Finset α) :
-    (update old incoming).card ≤ old.card := by
-  exact Finset.card_le_card (update_subset old incoming)
-
-/-- A single join cannot add a fact that was missing from the old state. -/
-theorem update_cannot_create
-    (old incoming : Finset α) (fact : α)
-    (newFact : fact ∈ update old incoming) : fact ∈ old := by
-  exact (update_subset old incoming) newFact
-
-/-- The reachable-block join is idempotent if the incoming facts have
-    already been intersected; repeated propagation of an identical edge
-    cannot keep modifying that state. -/
-theorem repeat_same_edge
-    (old incoming : Finset α) :
-    update (update old incoming) incoming = update old incoming := by
-  simp [update, Finset.inter_assoc]
-
-/-- No additional fact disappears if the next incoming edge includes every
-    fact currently retained at that block. -/
-theorem stable_if_supported
-    (old incoming : Finset α) (supported : old ⊆ incoming) :
-    update old incoming = old := by
-  exact Finset.inter_eq_left.mpr supported
+/-- A fact retained by a finite-vector meet was present at the same
+    position in the previous state. The proof uses ordinary list
+    membership; index-specific correspondence remains separate. -/
+theorem update_retained_from_old {α : Type} [DecidableEq α]
+    (old incoming : List (Option α)) (fact : α)
+    (h : some fact ∈ update old incoming) :
+    some fact ∈ old := by
+  unfold update at h
+  simp only [List.mem_map] at h
+  obtain ⟨pair, hp, heq⟩ := h
+  obtain ⟨a, b⟩ := pair
+  have ha : a = some fact := by
+    by_cases same : a = b
+    · simpa [same] using heq
+    · simp [same] at heq
+  have hold : a ∈ old := (List.mem_zip.mp hp).1
+  simpa [ha] using hold
 
 end JabberwockFormal.FiniteMeetProgress
