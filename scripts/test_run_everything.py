@@ -72,6 +72,23 @@ class FullRunnerTests(unittest.TestCase):
             stages[0] = stages[1].copy()
             self.assertEqual(full.summarize(stages, output, quick=False)["status"], "FAIL")
 
+    def test_actual_failure_is_not_masked_by_unproved_refinement(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            (folder / "whole-proof-inventory.json").write_text(json.dumps({
+                "status": "NOT_PROVEN", "total_obligations": 1,
+                "proved_obligations": 0, "components": [{
+                    "id": "jwc:semantics:jwc/main.jw",
+                    "status": "REFINEMENT_NOT_PROVEN"}]}), encoding="utf-8")
+            stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                      for name, _ in full.plans(folder)]
+            stages[0]["status"] = "EXIT_NONZERO"
+            stages[0]["exit_code"] = 7
+            result = full.summarize(stages, folder, quick=False)
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(result["failed_stages"], ["python-regressions"])
+            self.assertIn("python-regressions", result["reason"])
+
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)
