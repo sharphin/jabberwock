@@ -58,4 +58,56 @@ theorem no_retired_gate (saved : Word) :
     llvmContinues saved retired = false := by
   simp [llvmContinues, llvmBad, llvmRetired]
 
+/-- A symbolic interpretation of the exact LLVM instruction pattern emitted
+    by both compilers: icmp ne; icmp eq -1; or; conditional reject.
+    This is an instruction-level semantic model, not an LLVM interpreter. -/
+structure GateRegisters where
+  different : Bool
+  isRetired : Bool
+  reject : Bool
+
+def executeGateInstructions (saved current : Word) : GateRegisters :=
+  let different := decide (current ≠ saved)
+  let isRetired := decide (current = retired)
+  let reject := different || isRetired
+  ⟨different, isRetired, reject⟩
+
+inductive GateBranch where
+  | continue
+  | reject
+  deriving DecidableEq
+
+def executeGateBranch (saved current : Word) : GateBranch :=
+  if (executeGateInstructions saved current).reject then .reject else .continue
+
+/-- The symbolic instruction sequence implements the emitted guard predicate. -/
+theorem instructions_implement_gate (saved current : Word) :
+    (executeGateInstructions saved current).reject = llvmBad saved current := by
+  rfl
+
+/-- The conditional branch reaches the address-producing continuation
+    precisely on a valid, non-retired generation. -/
+theorem branch_continues_iff_valid (saved current : Word) :
+    executeGateBranch saved current = .continue ↔ valid saved current := by
+  rw [← llvm_continues_iff saved current]
+  cases h : llvmContinues saved current with
+  | false =>
+      simp [executeGateBranch, instructions_implement_gate,
+        llvmContinues] at h ⊢
+  | true =>
+      simp [executeGateBranch, instructions_implement_gate,
+        llvmContinues] at h ⊢
+
+/-- Bind the jwc local gate model to the instruction-level branch. -/
+theorem jwc_gate_matches_instruction_branch (saved current : Word) :
+    (JabberwockFormal.Jwc.ReferenceAccess.emittedGate saved current = true) ↔
+      executeGateBranch saved current = .continue := by
+  rw [jwc_gate_correspondence, llvm_continues_iff, branch_continues_iff_valid]
+
+/-- Bind the Rust local gate model to the very same instruction semantics. -/
+theorem rust_gate_matches_instruction_branch (saved current : Word) :
+    (JabberwockFormal.Rust.ReferenceAccess.emittedGate saved current = true) ↔
+      executeGateBranch saved current = .continue := by
+  rw [rust_gate_correspondence, llvm_continues_iff, branch_continues_iff_valid]
+
 end JabberwockFormal.EmittedGate
