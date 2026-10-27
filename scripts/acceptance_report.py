@@ -234,14 +234,17 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None, who
                 blockers.append("whole-implementation source-to-goal inventory is missing")
             if refinement is None:
                 blockers.append("independent refinement transition report is missing")
-            elif any(link["id"] not in transition_findings or transition_findings[link["id"]]["status"] != "REFINEMENT_PROVEN" for link in source_links):
+            elif any(link["id"] not in transition_findings or
+                     transition_findings[link["id"]]["status"] != "REFINEMENT_PROVEN"
+                     for link in source_links):
                 blockers.append("independent source-to-implementation transitions not proved")
-            else:
-                open_links = [link["id"] for link in source_links
-                              if link["status"] != "REFINEMENT_PROVEN"]
-                if open_links:
-                    blockers.append(str(len(open_links)) +
-                                    " implementation refinement obligations remain unproved")
+            # Keep inventory coverage visible even if the separate transition
+            # report is absent or incomplete.
+            open_links = [link["id"] for link in source_links
+                          if link["status"] != "REFINEMENT_PROVEN"]
+            if open_links:
+                blockers.append(str(len(open_links)) +
+                                " implementation refinement obligations remain unproved")
             if row.get("implementation_correspondence") != "KERNEL_VERIFIED_WHOLE_IMPLEMENTATION":
                 blockers.append("compiler/LLVM/runtime correspondence not kernel-verified")
             excluded = row.get("excluded", [])
