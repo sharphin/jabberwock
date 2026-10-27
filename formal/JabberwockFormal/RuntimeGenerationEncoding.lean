@@ -54,7 +54,12 @@ theorem hasRoom_prevents_counter_wrap {counter step : Nat}
     (room : hasRoom counter step) :
     counter + step < radix := by
   have bound := hasRoom_bounds_sum room
-  unfold maxCounter at bound
+  have radixPositive : 0 < radix := by
+    unfold radix
+    norm_num
+  have successorBound : maxCounter + 1 = radix := by
+    unfold maxCounter
+    omega
   omega
 
 theorem packed_word_is_below_retired
@@ -85,7 +90,9 @@ theorem old_word_rejected_after_advance
   unfold accepts advance
   rw [if_pos room]
   intro accepted
-  have changed := advance_changes_word retained room positive
+  have changed : pack retained (counter + step) ≠ pack retained counter := by
+    simpa [advance, room] using
+      (advance_changes_word retained room positive)
   exact changed accepted.2.symm
 
 /-- If gen_has_room fails, the runtime retires the block; retired words never
