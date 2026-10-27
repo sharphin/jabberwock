@@ -14,7 +14,22 @@ import run_everything as full
 
 
 class FullRunnerTests(unittest.TestCase):
-    def test_inventory_is_not_an_execution_failure(self):\n        with tempfile.TemporaryDirectory() as d:\n            output = Path(d)\n            inventory = {"status": "NOT_PROVEN", "total_obligations": 1,\n                         "proved_obligations": 0,\n                         "components": [{"id": "jwc:semantics:jwc/main.jw",\n                                         "status": "REFINEMENT_NOT_PROVEN"}]}\n            (output / "whole-proof-inventory.json").write_text(json.dumps(inventory))\n            stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}\n                      for name, _ in full.plans(output)]\n            summary = full.summarize(stages, output, quick=False)\n            self.assertEqual(summary["status"], "FAIL")\n            self.assertEqual(summary["evidence"]["implementation_inventory"]["proved"], 0)\n            self.assertNotEqual(summary["reason"], "one or more verification stages failed")\n\n    def test_default_plan_runs_every_required_stage(self):
+    def test_inventory_is_not_an_execution_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d)
+            inventory = {"status": "NOT_PROVEN", "total_obligations": 1,
+                         "proved_obligations": 0,
+                         "components": [{"id": "jwc:semantics:jwc/main.jw",
+                                         "status": "REFINEMENT_NOT_PROVEN"}]}
+            (output / "whole-proof-inventory.json").write_text(json.dumps(inventory))
+            stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                      for name, _ in full.plans(output)]
+            summary = full.summarize(stages, output, quick=False)
+            self.assertEqual(summary["status"], "FAIL")
+            self.assertEqual(summary["evidence"]["implementation_inventory"]["proved"], 0)
+            self.assertNotEqual(summary["reason"], "one or more verification stages failed")
+
+    def test_default_plan_runs_every_required_stage(self):
         output = Path("dummy")
         tasks = full.plans(output)
         self.assertEqual([x[0] for x in tasks], [
