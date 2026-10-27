@@ -235,4 +235,77 @@ theorem rust_selective_elision_refinement (plan : List PlannedAccess)
   intro p _
   exact rust_read_refines_gate p.access
 
+/-- A minimal formal image of the real analyzers' is_live decision:
+    Pinned, RefSlot, or RefTo(x) when the owner fact for x is Own.
+    This is only the decision predicate; the correctness of inferred facts and
+    their propagation through the real CFG remains a separate obligation. -/
+inductive AnalyzerFact where
+  | own
+  | refTo (owner : Nat)
+  | refSlot (slot : Nat)
+  | pinned
+  | refElem (list : Nat)
+  deriving DecidableEq
+
+abbrev AnalyzerFacts := Nat → Option AnalyzerFact
+
+def analyzerIsLive (facts : AnalyzerFacts) : Option AnalyzerFact → Bool
+  | some .pinned => true
+  | some (.refSlot _) => true
+  | some (.refTo x) => decide (facts x = some .own)
+  | _ => false
+
+/-- Interpret a positive abstract fact as a real generation witness. The
+    invariant must be proved for each CFG transfer, meet and function call. -/
+def FactInvariant (facts : AnalyzerFacts) (access : Access)
+    (fact : Option AnalyzerFact) : Prop :=
+  (fact = some .pinned ∨ (∃ slot, fact = some (.refSlot slot)) ∨
+   (∃ owner, fact = some (.refTo owner) ∧ facts owner = some .own)) →
+    JabberwockFormal.EmittedGate.valid access.saved access.current
+
+/-- Once the implementation's fact invariant is established, every positive
+    is_live result is sufficient to safely omit the runtime generation check. -/
+theorem analyzer_live_implies_valid
+    (facts : AnalyzerFacts) (access : Access) (fact : Option AnalyzerFact)
+    (invariant : FactInvariant facts access fact)
+    (live : analyzerIsLive facts fact = true) :
+    JabberwockFormal.EmittedGate.valid access.saved access.current := by
+  apply invariant
+  cases fact with
+  | none => simp [analyzerIsLive] at live
+  | some f =>
+      cases f with
+      | own => simp [analyzerIsLive] at live
+      | pinned => exact Or.inl rfl
+      | refSlot slot => exact Or.inr (Or.inl ⟨slot, rfl⟩)
+      | refElem xs => simp [analyzerIsLive] at live
+      | refTo owner =>
+          have owns : facts owner = some .own := by
+            simpa [analyzerIsLive] using live
+          exact Or.inr (Or.inr ⟨owner, rfl, owns⟩)
+
+/-- An analyzer-generated decision certificate is sufficient for modeled
+    trace equivalence, *provided* the independently proved fact invariants. -/
+structure AnalyzedAccess where
+  access : Access
+  facts : AnalyzerFacts
+  fact : Option AnalyzerFact
+  invariant : FactInvariant facts access fact
+
+def analyzedPlan (accesses : List AnalyzedAccess) : List PlannedAccess :=
+  accesses.map (fun item => ⟨item.access, analyzerIsLive item.facts item.fact⟩)
+
+theorem analyzed_plan_valid (accesses : List AnalyzedAccess) :
+    PlanValid (analyzedPlan accesses) := by
+  intro p member elided
+  unfold analyzedPlan at member
+  obtain ⟨a, belongs, equal⟩ := List.mem_map.mp member
+  subst p
+  exact analyzer_live_implies_valid a.facts a.access a.fact a.invariant elided
+
+theorem analyzed_plan_preserves_evaluation (accesses : List AnalyzedAccess) :
+    checkedPlan (analyzedPlan accesses) =
+      optimizedPlan (analyzedPlan accesses) := by
+  exact (plan_semantics_iff_valid _).mpr (analyzed_plan_valid accesses)
+
 end JabberwockFormal.CheckElision
