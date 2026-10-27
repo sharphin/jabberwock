@@ -1,2 +1,3 @@
 import JabberwockFormal.Generation
 import JabberwockFormal.Ownership
+import JabberwockFormal.EmittedGate
