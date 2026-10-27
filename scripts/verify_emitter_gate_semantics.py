@@ -29,7 +29,7 @@ open JabberwockFormal.EmittedGate
 /-- LLVM icmp ne, icmp eq -1, or, and reject-if-true, extracted
     from the narrowly validated templates in both compiler sources. -/
 def extractedReject (saved current : Word) : Bool :=
-  decide (current != saved) || decide (current == retired)
+  decide (current ≠ saved) || decide (current = retired)
 
 def extractedContinue (saved current : Word) : Bool :=
   !extractedReject saved current
@@ -52,7 +52,7 @@ end JabberwockFormal.ExtractedEmitterGate
 """
 # Turn the two operations into Lean using the same bitvector operations as
 # the compiler template. The extractor must refuse changes to either source.
-# '!=' and '==' in Lean are Bool-valued comparisons for DecidableEq.
+# The Lean model uses decidable propositions for 64-bit equality.
 def verify(timeout: int) -> dict:
     checks = [validate("jwc"), validate("rust")]
     lake = shutil.which("lake")
