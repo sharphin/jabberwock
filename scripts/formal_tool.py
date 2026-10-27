@@ -122,9 +122,11 @@ def run_stage(name: str, argv: list[str], output: Path, timeout: int) -> dict:
 
 def read_report(path: Path, expected_kind: str | None = None) -> dict:
     try:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("stage report must be a regular, non-symlink file")
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("report is not a JSON object")
+        if not isinstance(data, dict) or data.get("schema_version") != 1:
+            raise ValueError("report is not a versioned JSON object")
         if expected_kind is not None and data.get("kind") != expected_kind:
             raise ValueError("unexpected report kind")
         return data
@@ -259,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             filename, expected_kind = report_spec
             report = read_report(output / filename, expected_kind)
             stage["report"] = report
+            stage["report_evidence"] = log_fingerprint(output / filename)
             # A nonzero proof-obligation exit is not necessarily a tool crash.
         stages.append(stage)
         if name == "refinement":
@@ -410,6 +413,24 @@ def main(argv: list[str] | None = None) -> int:
     # A changing source or a log replaced after its stage ran invalidates the
     # evidence set instead of leaving a stale positive-looking report.
     log_faults = audit_stage_logs(stages, output)
+    # Reports are consumed at different times. Authenticate the bytes used
+    # by the aggregator again before writing the final summary, so a replaced
+    # or rewritten report cannot silently change the evidence after parsing.
+    for stage in stages:
+        if "report_evidence" not in stage:
+            continue
+        filename, _kind = known_reports[stage["name"]]
+        report_path = output / filename
+        expected_report = stage["report_evidence"]
+        if report_path.is_symlink() or not report_path.is_file():
+            log_faults.append(stage["name"] + ": report replaced or missing")
+            continue
+        current_report = log_fingerprint(report_path)
+        if (expected_report.get("status") != "AVAILABLE"
+                or current_report.get("status") != "AVAILABLE"
+                or current_report.get("bytes") != expected_report.get("bytes")
+                or current_report.get("sha256") != expected_report.get("sha256")):
+            log_faults.append(stage["name"] + ": report changed after inspection")
     if log_faults:
         infrastructure_errors = True
     try:
