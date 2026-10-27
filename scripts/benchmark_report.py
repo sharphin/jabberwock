@@ -159,7 +159,7 @@ def run_windows_measure(binary: Path | str | list[str], output: Path, *, timeout
                 if time.perf_counter() - start > timeout:
                     proc.kill()
                     proc.wait(timeout=10)
-                    raise subprocess.TimeoutExpired([str(binary)], timeout)
+                    raise subprocess.TimeoutExpired(command, timeout)
                 time.sleep(0.002)
             proc.wait()
         finally:
