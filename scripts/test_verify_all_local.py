@@ -56,7 +56,7 @@ class LocalVerifierTests(unittest.TestCase):
         p, f = fixture()
         self.assertEqual(verify.judge({}, f)["status"], "INVALID_EVIDENCE")
         p["run_status"] = "RUNNING"
-        self.assertEqual(verify.judge(p, f)["status"], "NOT_PROVEN")
+        self.assertEqual(verify.judge(p, f)["status"], "NOT_RUN")
 
     def test_stage_failures_are_not_collapsed_into_generic_unproved(self):
         p, f = fixture()
@@ -69,6 +69,21 @@ class LocalVerifierTests(unittest.TestCase):
         self.assertEqual(verify.judge(p, f)["status"], "PROOF_STALE")
         f["goals"][0]["proof_check"]["status"] = "FAIL"
         self.assertEqual(verify.judge(p, f)["status"], "PROOF_CHECK_FAILURE")
+
+    def test_all_failure_classes_are_visible(self):
+        p, f = fixture()
+        for state, expected in (("FAIL", "PROBE_FAILURE"),
+                                ("CRASH", "PROBE_FAILURE"),
+                                ("TIMEOUT", "PROBE_FAILURE"),
+                                ("INFRA_ERROR", "INFRA_ERROR"),
+                                ("INTERRUPTED", "INTERRUPTED"),
+                                ("UNKNOWN", "INVALID_EVIDENCE")):
+            p["items"][0]["status"] = state
+            with self.subTest(state=state):
+                self.assertEqual(verify.judge(p, f)["status"], expected)
+        p["items"][0]["status"] = "PROBES_PASS_ONLY"
+        f["infrastructure_error"] = "Lean unavailable"
+        self.assertEqual(verify.judge(p, f)["status"], "INFRA_ERROR")
 
     def test_kernel_only_is_never_formal_acceptance(self):
         p, f = fixture()
