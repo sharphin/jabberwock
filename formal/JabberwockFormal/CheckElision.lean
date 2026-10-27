@@ -118,4 +118,73 @@ theorem valid_trace_elision_preserves_results
         congrArg (fun t => checkedRead a.saved a.current a.payload :: t) tailEqual
 
 
+/-- The optimizer chooses which accesses omit generation checks.
+    Keeping a check is always sound; an omitted check requires validity. -/
+structure PlannedAccess where
+  access : Access
+  elide : Bool
+
+def optimizedRead (p : PlannedAccess) : Option Nat :=
+  if p.elide then
+    uncheckedRead p.access.saved p.access.current p.access.payload
+  else
+    checkedRead p.access.saved p.access.current p.access.payload
+
+def checkedPlan (plan : List PlannedAccess) : List (Option Nat) :=
+  plan.map (fun p => checkedRead p.access.saved p.access.current p.access.payload)
+
+def optimizedPlan (plan : List PlannedAccess) : List (Option Nat) :=
+  plan.map optimizedRead
+
+/-- A per-access soundness obligation. This is the condition that the real
+    compiler analysis must establish before eliding a given check. -/
+def PlanValid (plan : List PlannedAccess) : Prop :=
+  ∀ p ∈ plan, p.elide = true →
+    JabberwockFormal.EmittedGate.valid p.access.saved p.access.current
+
+private theorem optimized_read_eq_iff (p : PlannedAccess) :
+    checkedRead p.access.saved p.access.current p.access.payload =
+      optimizedRead p ↔
+    (p.elide = true →
+      JabberwockFormal.EmittedGate.valid p.access.saved p.access.current) := by
+  cases h : p.elide with
+  | false =>
+      simp [optimizedRead, h]
+  | true =>
+      simp only [optimizedRead, h, ite_true]
+      constructor
+      · intro equal _
+        exact (elision_equivalent_iff_valid
+          p.access.saved p.access.current p.access.payload).mp equal
+      · intro valid
+        exact (elision_equivalent_iff_valid
+          p.access.saved p.access.current p.access.payload).mpr (valid rfl)
+
+/-- Exact characterization of selective check elimination over a whole trace,
+    not just the sufficient condition for eliding every check. -/
+theorem plan_semantics_iff_valid (plan : List PlannedAccess) :
+    checkedPlan plan = optimizedPlan plan ↔ PlanValid plan := by
+  induction plan with
+  | nil =>
+      simp [checkedPlan, optimizedPlan, PlanValid]
+  | cons p rest ih =>
+      simp only [checkedPlan, optimizedPlan, List.map_cons, List.cons.injEq]
+      constructor
+      · intro equal
+        have head := (optimized_read_eq_iff p).mp equal.1
+        have tail := ih.mp equal.2
+        intro q member elided
+        rcases List.mem_cons.mp member with equal | later
+        · subst q
+          exact head elided
+        · exact tail q later elided
+      · intro valid
+        constructor
+        · apply (optimized_read_eq_iff p).mpr
+          intro elided
+          exact valid p (List.mem_cons_self ..) elided
+        · apply ih.mpr
+          intro q member elided
+          exact valid q (List.mem_cons_of_mem p member) elided
+
 end JabberwockFormal.CheckElision
