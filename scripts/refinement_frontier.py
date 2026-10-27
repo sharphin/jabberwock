@@ -111,9 +111,10 @@ def build_plan(inv: dict, refinement: dict, runtime_model: dict | None = None,
     result = {
         "schema_version": 1,
         "kind": "refinement-work-frontier",
-        "status": "PLAN_READY_NOT_PROVEN",
+        "status": "PLAN_COMPLETE_VERIFIED" if proved == expected and expected > 0 else "PLAN_READY_NOT_PROVEN",
         "underlying_obligations": expected,
         "underlying_proven": proved,
+        "underlying_remaining": expected - proved,
         "work_package_count": len(packages),
         "source_count": len(seen_source_hashes),
         "priority_order": list(PRIORITY),
@@ -129,7 +130,7 @@ def build_plan(inv: dict, refinement: dict, runtime_model: dict | None = None,
         "limitations": [
             "Packages are a planning view over all original source/goal obligations; no obligations are removed or merged for acceptance.",
             "The suggested order is a work-prioritization heuristic, not a formal dependency proof.",
-            "A successful plan report is not a proof and cannot change FINAL: NOT_PROVEN.",
+            "The planning report is not independent proof evidence; any completed status depends on separately replayed refinement verification.",
         ],
     }
     return result
@@ -157,7 +158,7 @@ def main() -> int:
     print(result["status"], result.get("work_package_count", 0), "work packages /",
           result.get("underlying_proven", 0), "/", result.get("underlying_obligations", 0),
           "proved ->", args.output, flush=True)
-    return 0 if result["status"] == "PLAN_READY_NOT_PROVEN" else 2
+    return 0 if result["status"] in ("PLAN_READY_NOT_PROVEN", "PLAN_COMPLETE_VERIFIED") else 2
 
 
 if __name__ == "__main__":
