@@ -75,5 +75,20 @@ class EmittedGateTests(unittest.TestCase):
                             bind.validate(compiler)
 
 
+
+    def test_real_ir_analyzers_keep_element_borrow_checks(self):
+        # Until the alias/reallocation invariant is proved, both compiler
+        # implementations must refuse RefElem as a standalone proof of safety.
+        root = Path(__file__).resolve().parents[1]
+        rust = (root / "src/ir/analyze.rs").read_text(encoding="utf-8")
+        jwc = (root / "jwc/analyze.jw").read_text(encoding="utf-8")
+        self.assertIn(
+            "f == Some(Fact::Own) || is_live(facts, f)", rust)
+        self.assertNotIn(
+            "matches!(f, Some(Fact::RefElem(_))) || is_live(facts, f)", rust)
+        self.assertIn("f == OWN || is_live(facts, f)", jwc)
+        self.assertNotIn("is_ref_elem(f) || is_live(facts, f)", jwc)
+
+
 if __name__ == "__main__":
     unittest.main()
