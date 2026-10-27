@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def inspect(root: Path) -> dict:
     boundaries = obligation_rows(root)
-    contracts = load_contracts(root, [])
+    contracts = load_contracts(root, None)
     # The contract loader validates the checked-in declaration format, while
     # this tool independently computes source fingerprints for every stage.
     path = root / "formal" / "stage-refinement-bindings.json"
