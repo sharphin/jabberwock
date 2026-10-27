@@ -9,7 +9,7 @@ import whole_compiler_proof as proof
 
 
 class WholeProofInventoryTests(unittest.TestCase):
-    def test_all_five_goals_for_both_compilers(self):
+    def test_inventory_command_succeeds_for_valid_unproved_inventory(self):\n        import tempfile\n        with tempfile.TemporaryDirectory() as d:\n            output = Path(d) / "inventory.json"\n            self.assertEqual(proof.main(["--output", str(output)]), 0)\n            data = __import__("json").loads(output.read_text(encoding="utf-8"))\n            self.assertEqual(data["status"], "NOT_PROVEN")\n            self.assertEqual(data["proved_obligations"], 0)\n\n    def test_all_five_goals_for_both_compilers(self):
         result = proof.inventory()
         proof.validate(result)
         self.assertEqual(result["status"], "NOT_PROVEN")
