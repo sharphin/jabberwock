@@ -78,7 +78,7 @@ theorem changeCount_append {n : Nat}
   classical
   induction before generalizing initial with
   | nil =>
-      rfl
+      simp only [List.nil_append, changeCount, updateMany, Nat.zero_add]
   | cons incoming rest ih =>
       simp only [List.cons_append, changeCount, updateMany]
       rw [ih]
