@@ -172,5 +172,28 @@ class BuildGraphTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate tracked file/tool path"):
                 audit(graph, root, {})
 
+    def test_case_folded_output_collision_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["other"] = {
+                "kind": "action", "inputs": ["compiler", "source"],
+                "command": ["tool.bin"], "outputs": ["OUT.ll"]}
+            graph["targets"].append("other")
+            with self.assertRaisesRegex(ValueError, "multiple producers"):
+                audit(graph, root, {})
+
+    def test_case_folded_input_collision_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            (root / "INPUT.jw").write_bytes(b"source")
+            graph["nodes"]["alias"] = {
+                "kind": "file", "path": "INPUT.jw",
+                "sha256": hashlib.sha256(b"source").hexdigest()}
+            graph["nodes"]["build"]["inputs"].append("alias")
+            with self.assertRaisesRegex(ValueError, "duplicate tracked file/tool path"):
+                audit(graph, root, {})
+
 if __name__ == "__main__":
     unittest.main()
