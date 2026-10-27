@@ -67,7 +67,7 @@ def capture(clang: str, flags: list[str], timeout: int) -> dict:
     # Derive which branch clang actually selected, rather than trusting the
     # caller's claimed build mode. The -dM output is the active macro table.
     override = macros.get("JW_TEST_GENERATION_LIMIT")
-    limit_definition = re.sub(r"\\s+", "", macros["GEN_LIMIT"])
+    limit_definition = re.sub(r"\s+", "", macros["GEN_LIMIT"])
     if override is None:
         if limit_definition != "GEN_COUNTER_MASK":
             raise ValueError("production GEN_LIMIT does not expand to counter mask")
@@ -87,19 +87,19 @@ def capture(clang: str, flags: list[str], timeout: int) -> dict:
     # A mere occurrence of the identifier is not proof of a surviving
     # definition. Require the reviewed function signature in clang output.
     processed = outputs["preprocessed"]["content"]
-    if len(re.findall(r"\\bgen_has_room\\s*\\(\\s*uint64_t\\s+gen\\s*,\\s*uint64_t\\s+step\\s*\\)\\s*\\{", processed)) != 1:
+    if len(re.findall(r"\bgen_has_room\s*\(\s*uint64_t\s+gen\s*,\s*uint64_t\s+step\s*\)\s*\{", processed)) != 1:
         raise ValueError("generation guard missing or ambiguous after preprocessing")
     # Do not claim that preprocessing preserved the expression merely
     # because the function name survived. Record the expanded body and leave
     # semantic authentication outstanding until a C frontend parses it.
     expanded_guard_bodies = re.findall(
-        r"static\\s+int\\s+gen_has_room\\s*\\(\\s*uint64_t\\s+gen\\s*,\\s*"
-        r"uint64_t\\s+step\\s*\\)\\s*\\{([^{}]*)\\}", processed
+        r"static\s+int\s+gen_has_room\s*\(\s*uint64_t\s+gen\s*,\s*"
+        r"uint64_t\s+step\s*\)\s*\{([^{}]*)\}", processed
     )
     if len(expanded_guard_bodies) != 1:
         raise ValueError("preprocessed guard body missing or ambiguous")
     expanded_guard_body = expanded_guard_bodies[0].strip()
-    if not re.fullmatch(r"return\\s+[^;{}]+;", expanded_guard_body, re.DOTALL):
+    if not re.fullmatch(r"return\s+[^;{}]+;", expanded_guard_body, re.DOTALL):
         raise ValueError("unsupported expanded guard body")
     return {
         "schema_version": 1,
