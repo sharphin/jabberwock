@@ -197,6 +197,37 @@ class AcceptanceRequirementsTests(unittest.TestCase):
                          identities=identities,
                          whole_inventory={"components": []})
 
+    def test_refinement_transition_forged_proof_rejected(self):
+        from unittest import mock
+        practical, formal, identities = fixture()
+        link = {"id": "jwc:semantics:jwc/parser.jw",
+                "compiler": "jwc", "goal": "semantics",
+                "status": "REFINEMENT_NOT_PROVEN"}
+        with mock.patch.object(audit, "validate_whole_inventory"):
+            inventory = {"components": [link]}
+            unproved = {"schema_version": 1, "status": "NOT_PROVEN",
+                        "findings": [{"id": link["id"], "status": "REFINEMENT_NOT_PROVEN"}]}
+            result = audit.review(practical, formal, local_os="windows",
+                                  identities=identities, whole_inventory=inventory,
+                                  refinement=unproved)
+            row = next(x for x in result["obligations"]
+                       if x["id"] == "jwc-G-semantics")
+            self.assertTrue(any("independent source-to-implementation" in b
+                                for b in row["blockers"]))
+            forged = copy.deepcopy(unproved)
+            forged["findings"][0]["status"] = "REFINEMENT_PROVEN"
+            forged["status"] = "PROVEN"
+            with self.assertRaises(ValueError):
+                audit.review(practical, formal, local_os="windows",
+                             identities=identities, whole_inventory=inventory,
+                             refinement=forged)
+            missing = copy.deepcopy(unproved)
+            missing["findings"] = []
+            with self.assertRaises(ValueError):
+                audit.review(practical, formal, local_os="windows",
+                             identities=identities, whole_inventory=inventory,
+                             refinement=missing)
+
     def test_wrong_os_rejected(self):
         practical, formal, identities = fixture()
         practical["suite"]["target_os"] = "linux"
