@@ -162,6 +162,22 @@ class FullRunnerTests(unittest.TestCase):
             self.assertEqual(set(verdict["invalid_stage_logs"]),
                              {name for name, _ in full.plans(folder)})
 
+    def test_false_success_with_nonzero_or_missing_exit_code_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            for bad_code in (None, 1, 101):
+                stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                          for name, _ in full.plans(output)]
+                forged = next(x for x in stages if x["name"] == "cargo-tests")
+                if bad_code is None:
+                    del forged["exit_code"]
+                else:
+                    forged["exit_code"] = bad_code
+                with self.subTest(exit_code=bad_code):
+                    result = full.summarize(stages, output, quick=False)
+                    self.assertEqual(result["status"], "FAIL")
+                    self.assertIn("cargo-tests", result["failed_stages"])
+
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)
