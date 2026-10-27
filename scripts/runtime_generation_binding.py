@@ -9,7 +9,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from runtime_guard_expression import inspect as inspect_guard, inspect_lean
+from runtime_guard_expression import inspect as inspect_guard, inspect_lean, inspect_symbolic_alignment
 
 ROOT = Path(__file__).resolve().parents[1]
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
@@ -76,6 +76,9 @@ def main(argv=None) -> int:
         bitvec_text = BITVEC_SOURCE.read_text(encoding="utf-8")
         guard = inspect_guard(C_SOURCE)
         lean_guard = inspect_lean(BITVEC_SOURCE)
+        symbolic = inspect_symbolic_alignment(C_SOURCE, BITVEC_SOURCE)
+        findings.append({"id": "c-bitvec:unsigned_guard_symbolic_semantics",
+                         "status": "MATCHED" if symbolic["status"] == "SYMBOLIC_SUBSET_ALIGNED_NOT_PROVEN" else "MISSING"})
         findings.append({"id": "bitvec:guard_expression_body",
                          "status": "MATCHED" if lean_guard["status"] == "LEAN_EXPRESSION_ALIGNED_MODEL_ONLY" else "MISSING"})
         findings.append({"id": "c:guard_expression_semantics",
@@ -98,7 +101,7 @@ def main(argv=None) -> int:
             "matched": len(findings) - len(missing),
             "findings": findings,
             "limitations": [
-                "The restricted generation guard AST aligns with the reviewed BitVec expression; this is not a verified C semantics proof.",
+                "The restricted generation guard AST and BitVec operator trees align symbolically under explicit assumptions; this is not a verified C semantics proof.",
                 "Structural matching is not semantic equivalence or a kernel proof.",
                 "The BitVec model kernel-checks 64-bit arithmetic, but source matching is structural, not a verified C parser or compiler proof.",
                 "The Nat model remains an abstraction; its mask operation is not itself a proof of C bitwise-and semantics.",
