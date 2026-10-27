@@ -12,7 +12,10 @@ import json
 from pathlib import Path
 import re
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10, still supported by Windows scripts
+    tomllib = None
 
 from formal_report import source_identity
 
@@ -91,11 +94,20 @@ def check(compiler: str) -> dict:
         if not cargo.is_file():
             errors.append("missing Cargo.toml")
         else:
-            manifest = tomllib.loads(cargo.read_text(encoding="utf-8"))
-            if manifest.get("build") or manifest.get("package", {}).get("build"):
-                errors.append("Cargo build script requires build execution dependency capture")
-            if manifest.get("dependencies") or manifest.get("build-dependencies") or manifest.get("target"):
-                errors.append("external Cargo dependencies require resolved build graph attestation")
+            manifest_text = cargo.read_text(encoding="utf-8")
+            if tomllib is None:
+                # On 3.10 conservatively reject dependency-related Cargo sections.
+                sections = re.findall(r"(?m)^\\s*\\[\\s*([^]]+)\\s*\\]", manifest_text)
+                if any("dependencies" in s or s.startswith("target.") for s in sections):
+                    errors.append("Cargo dependencies require resolved build graph attestation")
+                if re.search(r"(?m)^\\s*build\\s*=", manifest_text):
+                    errors.append("Cargo build script requires build execution dependency capture")
+            else:
+                manifest = tomllib.loads(manifest_text)
+                if manifest.get("build") or manifest.get("package", {}).get("build"):
+                    errors.append("Cargo build script requires build execution dependency capture")
+                if manifest.get("dependencies") or manifest.get("build-dependencies") or manifest.get("target"):
+                    errors.append("external Cargo dependencies require resolved build graph attestation")
     else:
         raise ValueError("unsupported compiler")
     for path, expected in snapshot.items():
