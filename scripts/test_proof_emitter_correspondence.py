@@ -46,5 +46,15 @@ class EmittedGateTests(unittest.TestCase):
                         bind.validate(compiler)
 
 
+    def test_duplicate_gate_fragments_are_rejected(self):
+        for compiler in ("jwc", "rust"):
+            path, code = bind.emitter_segment(compiler)
+            for fragment in bind.STEPS:
+                mutated = code + "\\n" + fragment
+                with self.subTest(compiler=compiler, fragment=fragment), mock.patch.object(
+                        bind, "emitter_segment", return_value=(path, mutated)):
+                    with self.assertRaises(ValueError):
+                        bind.validate(compiler)
+
 if __name__ == "__main__":
     unittest.main()
