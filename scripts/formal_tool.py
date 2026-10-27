@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
         ("emitter-semantics", [py, str(scripts / "verify_emitter_gate_semantics.py"),
                                "--output", str(output / "emitter-semantics.json"),
                                "--timeout", str(args.stage_timeout)]),
+        ("runtime-generation-binding", [py, str(scripts / "runtime_generation_binding.py"),
+                                         "--output", str(output / "runtime-generation-binding.json")]),
     ]
     if args.lean_manifest:
         plans.append(("lean-evidence", [py, str(scripts / "lean_evidence_engine.py"),
@@ -107,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
     known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "semantic-composition": "semantic-composition.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
                      "lean-evidence": "lean-evidence.json", "refinement": "refinement.json",
                      "coverage": "proof-coverage.json", "emitter-semantics": "emitter-semantics.json",
-                     "worklist-structure": "worklist-structure.json"}
+                     "worklist-structure": "worklist-structure.json",
+                     "runtime-generation-binding": "runtime-generation-binding.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
         (output / filename).unlink(missing_ok=True)
@@ -163,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     if by_name["emitter-semantics"].get("report", {}).get("status") != "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY":
         broken = True
     if by_name["worklist-structure"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
+        broken = True
+    if by_name["runtime-generation-binding"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
         broken = True
     if broken:
         overall = "TOOL_ERROR"
