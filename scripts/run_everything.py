@@ -52,6 +52,7 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
                                 "--output", str(output / "benchmark-four-way.json")]),
         ("llvm-concrete-ir-audit", [py, str(ROOT / "scripts/llvm_ir_audit.py"),
                                    "--ir-root", str(output / "benchmark-four-way-work"),
+                                   "--benchmark-report", str(output / "benchmark-four-way.json"),
                                    "--output", str(output / "llvm-ir-audit.json")]),
         ("legacy-optimization-counts", [py, str(ROOT / "scripts/check_bench_checks.py")]),
     ]
