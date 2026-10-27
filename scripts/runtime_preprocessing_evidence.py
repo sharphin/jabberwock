@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -63,9 +64,31 @@ def capture(clang: str, flags: list[str], timeout: int) -> dict:
     for required in ("GEN_RETIRED", "GEN_COUNTER_MASK", "GEN_LIMIT"):
         if required not in macros:
             raise ValueError("missing expanded generation macro " + required)
-    # Ensure the actual preprocessed translation unit includes the guard.
-    if "gen_has_room" not in outputs["preprocessed"]["content"]:
-        raise ValueError("generation guard missing from preprocessed source")
+    # Derive which branch clang actually selected, rather than trusting the
+    # caller's claimed build mode. The -dM output is the active macro table.
+    override = macros.get("JW_TEST_GENERATION_LIMIT")
+    limit_definition = re.sub(r"\\s+", "", macros["GEN_LIMIT"])
+    if override is None:
+        if limit_definition != "GEN_COUNTER_MASK":
+            raise ValueError("production GEN_LIMIT does not expand to counter mask")
+        branch = "production"
+    else:
+        if limit_definition != "((uint64_t)JW_TEST_GENERATION_LIMIT)":
+            raise ValueError("override GEN_LIMIT differs from reviewed macro")
+        branch = "override"
+        # A valid C integer literal is required, not a self-referential or
+        # arbitrary expression injected through build flags.
+        literal = override.strip()
+        if not re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?", literal):
+            raise ValueError("unsupported generation limit override literal")
+        value = int(re.sub(r"(?i)(?:ull|llu|ul|lu|ll|u|l)$", "", literal), 0 if literal.lower().startswith("0x") else 10)
+        if not (3 <= value <= (1 << 62) - 1 and (value & 3) == 3):
+            raise ValueError("generation override violates required bounds")
+    # A mere occurrence of the identifier is not proof of a surviving
+    # definition. Require the reviewed function signature in clang output.
+    processed = outputs["preprocessed"]["content"]
+    if len(re.findall(r"\\bgen_has_room\\s*\\(\\s*uint64_t\\s+gen\\s*,\\s*uint64_t\\s+step\\s*\\)\\s*\\{", processed)) != 1:
+        raise ValueError("generation guard missing or ambiguous after preprocessing")
     return {
         "schema_version": 1,
         "kind": "runtime-generation-clang-preprocessing",
@@ -75,6 +98,7 @@ def capture(clang: str, flags: list[str], timeout: int) -> dict:
         "clang": clang,
         "caller_supplied_flags": flags,
         "macros": macros,
+        "active_generation_limit_branch": branch,
         "macro_output_sha256": outputs["macros"]["sha256"],
         "preprocessed_output_sha256": outputs["preprocessed"]["sha256"],
         "macro_output_bytes": outputs["macros"]["bytes"],
