@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
 LEAN_SOURCE = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationEncoding.lean"
+BITVEC_SOURCE = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationBitVec.lean"
 
 C_PATTERNS = {
     "retired_sentinel": r"#define\s+GEN_RETIRED\s+UINT64_MAX",
@@ -35,6 +36,14 @@ LEAN_TOKENS = (
     "theorem capacityCheckAt_iff_sum",
     "theorem packed_word_step_no_uint64_wrap_at_limit",
 )
+BITVEC_TOKENS = (
+    "abbrev Word := BitVec 64",
+    "def guardSpec",
+    "theorem guard_iff_spec",
+    "theorem guard_rejects_retired",
+    "theorem accepted_increment_no_wrap",
+    "theorem accepted_increment_changes_word",
+)
 
 
 def main(argv=None) -> int:
@@ -45,12 +54,16 @@ def main(argv=None) -> int:
     try:
         c_text = C_SOURCE.read_text(encoding="utf-8")
         lean_text = LEAN_SOURCE.read_text(encoding="utf-8")
+        bitvec_text = BITVEC_SOURCE.read_text(encoding="utf-8")
         for name, pattern in C_PATTERNS.items():
             matched = re.search(pattern, c_text, flags=re.MULTILINE) is not None
             findings.append({"id": "c:" + name, "status": "MATCHED" if matched else "MISSING"})
         for token in LEAN_TOKENS:
             matched = token in lean_text
             findings.append({"id": "lean:" + token, "status": "MATCHED" if matched else "MISSING"})
+        for token in BITVEC_TOKENS:
+            matched = token in bitvec_text
+            findings.append({"id": "bitvec:" + token, "status": "MATCHED" if matched else "MISSING"})
         missing = [item["id"] for item in findings if item["status"] != "MATCHED"]
         result = {
             "schema_version": 1,
@@ -61,9 +74,10 @@ def main(argv=None) -> int:
             "findings": findings,
             "limitations": [
                 "Structural matching is not semantic equivalence or a kernel proof.",
-                "The Lean model uses Nat arithmetic and does not establish C uint64_t execution semantics.",
+                "The BitVec model kernel-checks 64-bit arithmetic, but source matching is structural, not a verified C parser or compiler proof.",
+                "The Nat model remains an abstraction; its mask operation is not itself a proof of C bitwise-and semantics.",
                 "This check does not prove concurrent lifetime safety, allocator correctness, or memory ordering.",
-                "GEN_LIMIT test-build overrides require separate parameterized proof coverage."
+                "The parameterized BitVec theorem covers limits below 2^62; actual build configuration and static-assert execution remain separate obligations."
             ],
         }
         if missing:
