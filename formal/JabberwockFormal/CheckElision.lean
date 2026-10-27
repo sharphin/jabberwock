@@ -426,4 +426,43 @@ theorem killed_borrow_cannot_elide
       (killOwnerFacts facts owner borrower) = false := by
   simp [killOwnerFacts, distinct, borrow, analyzerIsLive]
 
+/-- Overwriting an owner invalidates direct RefTo and RefElem aliases,
+    but preserves RefSlot aliases to the storage slot itself. -/
+def overwriteOwnerFacts (facts : AnalyzerFacts) (owner : Nat) : AnalyzerFacts :=
+  fun key =>
+    if key = owner then none
+    else match facts key with
+      | some (.refTo target) =>
+          if target = owner then none else facts key
+      | some (.refElem target) =>
+          if target = owner then none else facts key
+      | other => other
+
+theorem overwritten_owner_absent (facts : AnalyzerFacts) (owner : Nat) :
+    overwriteOwnerFacts facts owner owner = none := by
+  simp [overwriteOwnerFacts]
+
+theorem overwritten_owner_invalidates_borrow
+    (facts : AnalyzerFacts) (owner borrower : Nat)
+    (distinct : borrower ≠ owner)
+    (borrow : facts borrower = some (.refTo owner)) :
+    overwriteOwnerFacts facts owner borrower = none := by
+  simp [overwriteOwnerFacts, distinct, borrow]
+
+theorem overwritten_owner_invalidates_element
+    (facts : AnalyzerFacts) (owner borrower : Nat)
+    (distinct : borrower ≠ owner)
+    (borrow : facts borrower = some (.refElem owner)) :
+    overwriteOwnerFacts facts owner borrower = none := by
+  simp [overwriteOwnerFacts, distinct, borrow]
+
+/-- Reassigning an owner does not revoke references to the stable local
+    storage slot, unlike dropping or moving the slot itself. -/
+theorem overwrite_preserves_other_slot
+    (facts : AnalyzerFacts) (owner borrower slot : Nat)
+    (distinct : borrower ≠ owner)
+    (borrow : facts borrower = some (.refSlot slot)) :
+    overwriteOwnerFacts facts owner borrower = some (.refSlot slot) := by
+  simp [overwriteOwnerFacts, distinct, borrow]
+
 end JabberwockFormal.CheckElision
