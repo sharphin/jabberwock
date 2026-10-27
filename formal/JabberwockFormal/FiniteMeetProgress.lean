@@ -121,4 +121,32 @@ theorem zero_locals_cannot_change
   funext key
   exact Fin.elim0 key
 
+/-- Once a particular key has lost its fact, no later incoming edge can
+    cause a second loss at that same key. This is a per-variable bound
+    (at most one erasure), not yet the global n-variable count theorem. -/
+theorem no_second_erasure_at_key {n : Nat}
+    (old first second : Facts n) (key : Fin n)
+    (erased : update old first key = none) :
+    ¬ ∃ fact : Nat,
+      update old first key = some fact ∧
+      update (update old first) second key = none := by
+  intro claimed
+  obtain ⟨fact, present, _⟩ := claimed
+  rw [erased] at present
+  cases present
+
+/-- Two consecutive strict updates cannot both erase the only possible
+    local when the analysis has exactly one variable. This establishes
+    the explicit numeric bound 1 for the one-local case. -/
+theorem one_local_no_two_strict_updates
+    (old first second : Facts 1)
+    (firstChanged : update old first ≠ old) :
+    update (update old first) second = update old first := by
+  obtain ⟨key, fact, _, erased⟩ :=
+    changed_update_erases_fact old first firstChanged
+  funext other
+  have same : other = key := Subsingleton.elim other key
+  subst other
+  exact (absence_persists (update old first) second key erased).trans erased.symm
+
 end JabberwockFormal.FiniteMeetProgress
