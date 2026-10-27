@@ -70,7 +70,6 @@ theorem g1_scoped_semantics (e : Expr .number) :
       simp [lower, targetEval, sourceEval, ia, ib]
   | read saved current payload =>
       simp only [lower, targetEval, sourceEval]
-      rw [JabberwockFormal.EmittedGate.llvm_continues_iff]
       -- The Boolean branches coincide because their truth propositions coincide.
       by_cases valid : JabberwockFormal.EmittedGate.valid saved current
       · have eqTrue := (JabberwockFormal.EmittedGate.llvm_continues_iff saved current).mpr valid
