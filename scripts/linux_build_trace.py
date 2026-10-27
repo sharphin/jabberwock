@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 
-SYSCALLS = "open,openat,openat2,execve,execveat,chdir,fchdir,clone,fork,vfork,readlink,readlinkat,stat,statx,newfstatat,access,faccessat,connect"
+SYSCALLS = "open,openat,execve,chdir,clone,fork,vfork"
 UNKNOWN = ("unfinished ...", "resumed>", "detached", "ptrace", "+++ killed")
 CALL = re.compile(r'^(?:\[pid \d+\] )?(?:\d+\s+)?(\w+)\(')
 PATH = re.compile(r'\"((?:\\.|[^\"\\])*)\"')
@@ -44,6 +44,7 @@ def collect(command: list[str], cwd: Path, output: Path, timeout: int = 3600) ->
     if not lines:
         errors.append("empty strace trace")
     captured = []
+    from linux_trace_normalize import normalize
     for line in lines:
         if any(mark in line for mark in UNKNOWN):
             errors.append("unresolved trace fragment: " + line[:160])
@@ -59,11 +60,17 @@ def collect(command: list[str], cwd: Path, output: Path, timeout: int = 3600) ->
         if kind in ("open", "openat", "openat2", "execve", "execveat") and not paths:
             errors.append("missing path in " + kind)
         captured.append({"syscall": kind, "raw": line[:4096]})
+    normalized = None
+    if not errors:
+        try:
+            normalized = normalize(lines, cwd)
+        except (OSError, ValueError) as exc:
+            errors.append("trace cannot be normalized: " + str(exc))
     result = {"schema_version": 1, "kind": "build-syscall-trace",
               "status": "CAPTURED_UNVERIFIED" if not errors else "BLOCKED",
               "tool": binary, "command": command, "build_exit": process.returncode,
               "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
-              "events": captured, "errors": errors,
+              "events": captured, "normalized_events": normalized, "errors": errors,
               "complete_build_closure_proven": False,
               "limitations": ["strace does not prove absence of unobserved filesystem/environment or toolchain effects.",
                               "Raw syscall trace has not yet been resolved to a full per-process file dependency graph."]}
