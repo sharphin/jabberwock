@@ -32,6 +32,7 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
     formal = output / "formal.json"
     result = [
         ("python-regressions", [py, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"]),
+        ("cargo-tests", ["cargo", "test", "--offline", "--all-targets"]),
         ("practical-safety", [*safety, "--compiler", "all", "--output", str(practical)]),
         ("whole-implementation-obligations", [py, str(ROOT / "scripts/whole_compiler_proof.py"),
                                               "--output", str(output / "whole-proof-inventory.json")]),
@@ -137,7 +138,7 @@ def evidence_overview(output: Path) -> dict:
 
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
-    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
+    expected = {"python-regressions", "cargo-tests", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
                 "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"}
     verdict = "FAIL"
     reason = "one or more verification stages failed"
