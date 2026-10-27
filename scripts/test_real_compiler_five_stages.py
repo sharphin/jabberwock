@@ -12,12 +12,12 @@ import real_compiler_five_stages as tool
 class RealCompilerStagesTest(unittest.TestCase):
     def test_exact_stage_switches(self):
         self.assertEqual(list(tool.STAGES),
-                         ["source_semantics", "parse", "typecheck", "lower", "ir_semantics"])
+                         ["lex", "parse", "typecheck", "lower", "ir_semantics"])
         self.assertEqual(tool.STAGES["lower"], ("--ir-raw",))
         self.assertEqual(tool.STAGES["ir_semantics"], ("--ir",))
 
     def test_parser_covers_real_lexer_and_ast(self):
-        self.assertEqual(tool.PROBES["parse"], ("--tokens", "--ast"))
+        self.assertEqual(tool.STAGES["lex"], ("--tokens",))\n        self.assertEqual(tool.STAGES["parse"], ("--ast",))
 
     def test_source_bindings_are_production_files(self):
         root = Path(__file__).resolve().parents[1]
@@ -83,7 +83,7 @@ class RealCompilerStagesTest(unittest.TestCase):
                 report = tool.verify(root, {"rust": a, "jwc": b}, [sample],
                                      expectations=expectations)
             self.assertEqual(report["status"], "MATCH")
-            self.assertEqual(report["matched"], 6)
+            self.assertEqual(report["matched"], 5)
 
 
 if __name__ == "__main__":
