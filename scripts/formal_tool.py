@@ -120,7 +120,29 @@ def main(argv: list[str] | None = None) -> int:
             stage["report"] = report
             # A nonzero proof-obligation exit is not necessarily a tool crash.
         stages.append(stage)
-        print(name + ": " + stage["status"], flush=True)
+        if name == "refinement":
+            report = stage.get("report", {})
+            if stage.get("returncode") == 1 and report.get("status") == "NOT_PROVEN":
+                findings = report.get("findings", [])
+                counts = {}
+                for finding in findings:
+                    status = finding.get("status", "UNKNOWN")
+                    counts[status] = counts.get(status, 0) + 1
+                reasons = []
+                for finding in findings:
+                    reason = finding.get("reason")
+                    if isinstance(reason, str) and reason not in reasons:
+                        reasons.append(reason)
+                    if len(reasons) == 3:
+                        break
+                print("refinement: NOT_PROVEN (proof gate exited 1 as designed; "
+                      + str(report.get("proved", 0)) + "/" + str(report.get("required", len(findings)))
+                      + " obligations proven; " + json.dumps(counts, ensure_ascii=False)
+                      + "; reasons: " + json.dumps(reasons, ensure_ascii=False) + ")", flush=True)
+            else:
+                print(name + ": " + stage["status"], flush=True)
+        else:
+            print(name + ": " + stage["status"], flush=True)
     by_name = {stage["name"]: stage for stage in stages}
     broken = any(
         s["status"] in ("TIMEOUT", "EXECUTION_ERROR") or
