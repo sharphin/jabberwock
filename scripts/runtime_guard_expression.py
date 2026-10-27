@@ -206,6 +206,62 @@ LEAN_SYMBOLIC_GUARD = (
 )
 
 
+def inspect_generation_macros(source: Path) -> dict:
+    """Audit both preprocessing branches; do not guess which build branch ran."""
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("runtime generation source unavailable")
+    text = source.read_text(encoding="utf-8")
+    # Reject conflicting redefinitions, not just the absence of one good match.
+    declarations = {}
+    for macro in ("GEN_RETIRED", "GEN_COUNTER_MASK", "GEN_LIMIT"):
+        declarations[macro] = re.findall(
+            r"(?m)^\\s*#\\s*define\\s+" + macro + r"\\b([^\\n]*)", text
+        )
+    if len(declarations["GEN_RETIRED"]) != 1:
+        raise ValueError("ambiguous retired sentinel macro")
+    if declarations["GEN_RETIRED"][0].strip() != "UINT64_MAX":
+        raise ValueError("retired sentinel differs from 64-bit maximum")
+    if len(declarations["GEN_COUNTER_MASK"]) != 1:
+        raise ValueError("ambiguous counter mask macro")
+    if re.sub(r"\\s+", "", declarations["GEN_COUNTER_MASK"][0]) != "((UINT64_C(1)<<62)-1)":
+        raise ValueError("counter mask differs from low 62 bits")
+    if len(declarations["GEN_LIMIT"]) != 2:
+        raise ValueError("generation limit branch definitions missing or ambiguous")
+    # Inspect the full active preprocessor block rather than finding
+    # disconnected good-looking directives elsewhere in the source.
+    block = re.search(
+        r"(?m)^#ifdef JW_TEST_GENERATION_LIMIT\\s*\\n"
+        r"(.*?)^#else\\s*\\n(.*?)^#endif\\s*$",
+        text, flags=re.DOTALL | re.MULTILINE
+    )
+    if block is None or len(re.findall(r"(?m)^#ifdef JW_TEST_GENERATION_LIMIT\\b", text)) != 1:
+        raise ValueError("generation limit preprocessor branches ambiguous")
+    testing, production = block.groups()
+    if len(re.findall(r"(?m)^#define GEN_LIMIT\\s+\\(\\(uint64_t\\)JW_TEST_GENERATION_LIMIT\\)\\s*$", testing)) != 1:
+        raise ValueError("noncanonical overridden generation limit")
+    if len(re.findall(r"(?m)^#define GEN_LIMIT\\s+GEN_COUNTER_MASK\\s*$", production)) != 1:
+        raise ValueError("noncanonical production generation limit")
+    if (re.search(r"\\b_Static_assert\\s*\\(\\s*JW_TEST_GENERATION_LIMIT\\s*>=\\s*3\\s*&&"
+                  r"\\s*JW_TEST_GENERATION_LIMIT\\s*<=\\s*GEN_COUNTER_MASK\\s*&&"
+                  r"\\s*\\(JW_TEST_GENERATION_LIMIT\\s*&\\s*3\\)\\s*==\\s*3\\s*,", testing) is None):
+        raise ValueError("generation override static restriction missing")
+    if re.search(r"(?m)^\\s*#\\s*(?:define|undef|if|ifdef|ifndef|elif|else|endif)\\b", testing.replace(
+        "#define GEN_LIMIT ((uint64_t)JW_TEST_GENERATION_LIMIT)", ""
+    )):
+        raise ValueError("unreviewed directive in generation limit override branch")
+    if re.search(r"(?m)^\\s*#\\s*(?:define|undef|if|ifdef|ifndef|elif|else|endif)\\b", production.replace(
+        "#define GEN_LIMIT GEN_COUNTER_MASK", ""
+    )):
+        raise ValueError("unreviewed directive in production generation limit branch")
+    return {
+        "status": "MACRO_BRANCHES_REVIEWED_BUILD_CONFIGURATION_UNKNOWN",
+        "production_limit": COUNTER_MASK,
+        "override_constraints": "3 <= limit <= 2^62 - 1 and (limit & 3) == 3",
+        "active_branch": "UNDETERMINED",
+        "implementation_refinement": "NOT_PROVEN",
+    }
+
+
 def inspect_symbolic_alignment(c_source: Path, lean_source: Path) -> dict:
     # Both source inspections are mandatory; the evaluator alone must not
     # discharge this source-bound obligation.
