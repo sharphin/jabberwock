@@ -1,4 +1,5 @@
 """Tests for transitive build closure, including negative graph controls."""
+import errno
 import hashlib
 import sys
 import tempfile
@@ -138,8 +139,13 @@ class BuildGraphTests(unittest.TestCase):
             graph = self.graph(root)
             try:
                 (root / "redirect").symlink_to(Path(outside), target_is_directory=True)
-            except (OSError, NotImplementedError) as error:
+            except NotImplementedError as error:
                 self.skipTest("directory symlinks unavailable on this host: " + str(error))
+            except OSError as error:
+                if (getattr(error, "winerror", None) == 1314 or
+                        error.errno in (errno.EPERM, errno.EACCES)):
+                    self.skipTest("directory symlink privilege unavailable on this host: " + str(error))
+                raise
             graph["nodes"]["build"]["outputs"] = ["redirect/out.ll"]
             with self.assertRaisesRegex(ValueError, "action output escapes root"):
                 audit(graph, root, {})
