@@ -20,6 +20,39 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def audit_stage_logs(stages: list[dict], output: Path) -> list[str]:
+    """Re-read stage logs and reject missing, substituted, or modified bytes.
+
+    Hashes are integrity fingerprints within the current run, not signatures,
+    immutable storage, or semantic verification of compiler behavior.
+    """
+    faults = []
+    root = output.resolve()
+    for stage in stages:
+        name = stage.get("name", "<unnamed>")
+        records = stage.get("log_evidence", {})
+        for channel in ("stdout", "stderr"):
+            expected = root / (name + "." + channel + ".log")
+            observed = records.get(channel, {})
+            if (observed.get("path") != str(expected)
+                    or observed.get("status") != "AVAILABLE"):
+                faults.append(name + ": missing or foreign " + channel + " record")
+                continue
+            if expected.is_symlink() or not expected.is_file():
+                faults.append(name + ": unavailable or symlinked " + channel)
+                continue
+            try:
+                actual = log_fingerprint(expected)
+            except (OSError, ValueError) as exc:
+                faults.append(name + ": " + channel + ": " + str(exc))
+                continue
+            if (actual["status"] != "AVAILABLE"
+                    or actual["bytes"] != observed.get("bytes")
+                    or actual["sha256"] != observed.get("sha256")):
+                faults.append(name + ": " + channel + " changed after execution")
+    return faults
+
+
 def atomic_json(path: Path, value: dict) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -169,6 +202,14 @@ def main(argv: list[str] | None = None) -> int:
     # Remove stale reports even for optional stages.
     for filename, _expected_kind in known_reports.values():
         (output / filename).unlink(missing_ok=True)
+    # Freeze input identity before subprocess stages begin. Audit both compiler
+    # trees and the Lean sources, not just a single report selected by a user.
+    from formal_report import source_identity, proof_sources_identity
+    input_identity = {
+        "jwc": source_identity("jwc"),
+        "rust": source_identity("rust"),
+        "proofs": proof_sources_identity(),
+    }
     stages = []
     for name, command in plans:
         stage = run_stage(name, command, output, args.stage_timeout)
@@ -324,6 +365,24 @@ def main(argv: list[str] | None = None) -> int:
     # The current composition/coverage producers deliberately emit NOT_PROVEN.
     # This branch becomes reachable only after those producers implement real,
     # independently verified semantic evidence and consistently report it.
+    # Re-read every stage log and source closure before publishing a verdict.
+    # A changing source or a log replaced after its stage ran invalidates the
+    # evidence set instead of leaving a stale positive-looking report.
+    log_faults = audit_stage_logs(stages, output)
+    if log_faults:
+        infrastructure_errors = True
+    try:
+        current_identity = {
+            "jwc": source_identity("jwc"),
+            "rust": source_identity("rust"),
+            "proofs": proof_sources_identity(),
+        }
+        inputs_unchanged = current_identity == input_identity
+    except (OSError, ValueError) as exc:
+        inputs_unchanged = False
+        log_faults.append("source closure recheck failed: " + str(exc))
+    if not inputs_unchanged:
+        infrastructure_errors = True
     if infrastructure_errors:
         overall = "TOOL_ERROR"
     elif positive and all(stage["status"] == "COMPLETED" for stage in stages):
@@ -342,6 +401,10 @@ def main(argv: list[str] | None = None) -> int:
         },
         "status": overall,
         "refinement_status": refinement_status or "UNKNOWN",
+        "input_identity": {name: entry["sha256"] for name, entry in input_identity.items()},
+        "inputs_unchanged": inputs_unchanged,
+        "log_integrity": "MATCHED" if not log_faults else "INVALID_EVIDENCE",
+        "log_integrity_failures": log_faults,
         "stages": stages,
         "limitations": [
             "Lean kernel success does not prove whole compiler refinement.",
