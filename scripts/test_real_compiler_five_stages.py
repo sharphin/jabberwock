@@ -16,6 +16,9 @@ class RealCompilerStagesTest(unittest.TestCase):
         self.assertEqual(tool.STAGES["lower"], ("--ir-raw",))
         self.assertEqual(tool.STAGES["ir_semantics"], ("--ir",))
 
+    def test_parser_covers_real_lexer_and_ast(self):
+        self.assertEqual(tool.PROBES["parse"], ("--tokens", "--ast"))
+
     def test_source_bindings_are_production_files(self):
         root = Path(__file__).resolve().parents[1]
         bindings = tool.check_cli_sources(root)
@@ -27,14 +30,14 @@ class RealCompilerStagesTest(unittest.TestCase):
             for p in ("src/main.rs", "jwc/main.jw"):
                 file = root / p
                 file.parent.mkdir(parents=True, exist_ok=True)
-                file.write_text("--ast --typed --ir-raw --ir", encoding="utf-8")
+                file.write_text("--tokens --ast --typed --ir-raw --ir", encoding="utf-8")
             source = root / "sample.jw"
             source.write_text("{}", encoding="utf-8")
             rust = root / "rust.bin"
             jwc = root / "jwc.bin"
             rust.write_bytes(b"x")
             jwc.write_bytes(b"x")
-            def fake_run(binary, stage, source, *, root, timeout):
+            def fake_run(binary, stage, source, *, root, timeout, probe=None):
                 return {"status": "EXECUTED", "exit": 0,
                         "stdout": "rust" if binary == rust else "jwc", "stderr": ""}
             with patch.object(tool, "run_boundary", side_effect=fake_run):
@@ -49,7 +52,7 @@ class RealCompilerStagesTest(unittest.TestCase):
             for filename in ("src/main.rs", "jwc/main.jw"):
                 path = root / filename
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("--ast --typed --ir-raw --ir", encoding="utf-8")
+                path.write_text("--tokens --ast --typed --ir-raw --ir", encoding="utf-8")
             sample = root / "sample.jw"
             sample.write_text("invalid", encoding="utf-8")
             a, b = root / "a", root / "b"
@@ -67,7 +70,7 @@ class RealCompilerStagesTest(unittest.TestCase):
             for filename in ("src/main.rs", "jwc/main.jw"):
                 path = root / filename
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("--ast --typed --ir-raw --ir", encoding="utf-8")
+                path.write_text("--tokens --ast --typed --ir-raw --ir", encoding="utf-8")
             sample = root / "sample.jw"
             sample.write_text("invalid", encoding="utf-8")
             a, b = root / "a", root / "b"
@@ -80,7 +83,7 @@ class RealCompilerStagesTest(unittest.TestCase):
                 report = tool.verify(root, {"rust": a, "jwc": b}, [sample],
                                      expectations=expectations)
             self.assertEqual(report["status"], "MATCH")
-            self.assertEqual(report["matched"], 5)
+            self.assertEqual(report["matched"], 6)
 
 
 if __name__ == "__main__":
