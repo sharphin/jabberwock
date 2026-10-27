@@ -107,6 +107,22 @@ class ProofTransitionTests(unittest.TestCase):
                 self.assertEqual(transition.main(["--output", str(dest)]), 1)
                 self.assertEqual(__import__("json").loads(dest.read_text())["status"], "NOT_PROVEN")
 
+    def test_source_mutation_during_proof_audit_invalidates_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "audit.json"
+            first = {"components": [{"id": self.row["id"],
+                                     "source_sha256": "initial"}]}
+            second = {"components": [{"id": self.row["id"],
+                                      "source_sha256": "changed"}]}
+            with mock.patch.object(transition, "inventory", side_effect=[first, second]), \
+                 mock.patch.object(transition, "evaluate", return_value={
+                     "schema_version": 1, "status": "NOT_PROVEN", "required": 1,
+                     "proved": 0, "invalid": 0, "findings": []}):
+                self.assertEqual(transition.main(["--output", str(dest)]), 2)
+            report = __import__("json").loads(dest.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "INVALID_EVIDENCE")
+            self.assertIn("source changed", report["reason"])
+
     def test_cli_invalid_evidence_exits_two(self):
         with tempfile.TemporaryDirectory() as directory:
             dest = Path(directory) / "audit.json"
