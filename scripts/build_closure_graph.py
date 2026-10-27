@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import sys
 
@@ -49,7 +49,8 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         if (not isinstance(name, str) or not name or
                 not isinstance(sha, str) or not HEX.fullmatch(sha)):
             raise ValueError("invalid artifact description: " + label)
-        if Path(name).is_absolute() or ".." in Path(name).parts:
+        if (Path(name).is_absolute() or PureWindowsPath(name).is_absolute() or
+                "\\" in name or ".." in Path(name).parts):
             raise ValueError("absolute/traversal input path: " + label)
         path = (root / name).resolve(strict=True)
         if not path.is_relative_to(root) or not path.is_file():
@@ -105,7 +106,8 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
                 raise ValueError("duplicate action outputs: " + identifier)
             for output in node["outputs"]:
                 output_path = Path(output)
-                if output_path.is_absolute() or ".." in output_path.parts or output in ("", "."):
+                if (output_path.is_absolute() or PureWindowsPath(output).is_absolute() or
+                        "\\" in output or ".." in output_path.parts or output in ("", ".")):
                     raise ValueError("unsafe action output: " + identifier)
                 if output in produced_outputs:
                     raise ValueError("multiple producers for output: " + output)
