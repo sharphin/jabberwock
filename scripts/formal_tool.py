@@ -144,9 +144,9 @@ def main(argv: list[str] | None = None) -> int:
     # Reject the run instead of mixing reports generated from different proofs.
     external_paths = {}
     if args.evidence:
-        external_paths["evidence"] = args.evidence.resolve()
+        external_paths["evidence"] = args.evidence.absolute()
     if args.lean_manifest:
-        external_paths["lean_manifest"] = args.lean_manifest.resolve()
+        external_paths["lean_manifest"] = args.lean_manifest.absolute()
     try:
         external_before = snapshot_external_inputs(external_paths)
     except (OSError, ValueError) as exc:
