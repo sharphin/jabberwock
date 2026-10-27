@@ -11,8 +11,6 @@ import hashlib
 import json
 from pathlib import Path
 
-from whole_compiler_proof import production_files
-
 BOUNDARIES = (
     ("source_semantics", "Whole-language source evaluation, errors and observable I/O"),
     ("parse", "Concrete lexer/parser output refines source AST syntax"),
@@ -24,7 +22,7 @@ BOUNDARIES = (
 # This is a dependency map, NOT a claim that a filename proves any property.
 PHASE_SOURCES = {
     "jwc": {
-        "source_semantics": ("jwc/exec.jw",),
+        "source_semantics": ("jwc/main.jw",),
         "parse": ("jwc/lexer.jw", "jwc/parser.jw"),
         "typecheck": ("jwc/typeck.jw",),
         "lower": ("jwc/lower.jw",),
