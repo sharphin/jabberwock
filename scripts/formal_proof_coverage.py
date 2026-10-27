@@ -5,13 +5,25 @@ import argparse
 import json
 from pathlib import Path
 
+from semantic_refinement_boundaries import report as canonical_boundaries
+from refinement_transition import validate_transition_report
+from whole_compiler_proof import validate as validate_inventory
+
 def object_report(path: Path, kind: str) -> dict:
     result = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(result, dict) or result.get("schema_version") != 1 or result.get("kind") != kind:
         raise ValueError("malformed " + kind + " report")
     return result
 
-def aggregate(boundaries: dict, bindings: dict, refinement: dict) -> dict:
+def aggregate(boundaries: dict, bindings: dict, refinement: dict,
+              inventory: dict | None = None, evidence: dict | None = None) -> dict:
+    # The boundary rows must be regenerated from the current production files.
+    # A self-supplied obligation list may not omit a stage or alter its hashes.
+    if boundaries != canonical_boundaries():
+        raise ValueError("semantic boundaries differ from current production sources")
+    if inventory is not None:
+        validate_inventory(inventory)
+        validate_transition_report(inventory, refinement, evidence)
     if boundaries.get("status") != "NOT_PROVEN":
         raise ValueError("unexpected semantic boundary inventory state")
     obligations = boundaries.get("obligations")
@@ -60,6 +72,8 @@ def aggregate(boundaries: dict, bindings: dict, refinement: dict) -> dict:
     # never project its claims into a stage-level proof without a trusted bridge.
     if any(not isinstance(x, dict) for x in finding_rows):
         raise ValueError("invalid implementation refinement findings")
+    if inventory is not None and len(finding_rows) != inventory["total_obligations"]:
+        raise ValueError("refinement findings do not cover the full source inventory")
     missing = sum(row["status"] == "MISSING_PROOF_BINDING" for row in details)
     checked = len(details) - missing
     return {
@@ -78,13 +92,18 @@ def main() -> int:
     parser.add_argument("--boundaries", type=Path, required=True)
     parser.add_argument("--bindings", type=Path, required=True)
     parser.add_argument("--refinement", type=Path, required=True)
+    parser.add_argument("--inventory", type=Path,
+                        help="current source inventory for independently replayed refinement audit")
+    parser.add_argument("--evidence", type=Path, help="original refinement evidence for replay")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         result = aggregate(
             object_report(args.boundaries, "first-five-semantic-refinement-boundaries"),
             object_report(args.bindings, "stage-refinement-bindings"),
-            object_report(args.refinement, "refinement-transition-audit"))
+            object_report(args.refinement, "refinement-transition-audit"),
+            object_report(args.inventory, "whole-implementation-proof-inventory") if args.inventory else None,
+            json.loads(args.evidence.read_text(encoding="utf-8")) if args.evidence else None)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result = {"schema_version": 1, "kind": "formal-proof-coverage",
                   "status": "INVALID_EVIDENCE", "reason": str(exc)}
