@@ -128,6 +128,18 @@ theorem checked_read_iff (epoch : Nat) (c : Cell) :
     checkedRead epoch c = .ok () ↔ Valid epoch c := by
   simp [checkedRead, Valid]
 
+/-- A previously borrowed epoch cannot pass the checked read after any
+    invalidation and any finite sequence of modeled transitions. -/
+theorem no_successful_read_after_invalidation
+    {limit epoch : Nat} {before after final : Cell}
+    (borrowed : Valid epoch before)
+    (invalidated : Invalidates before after)
+    (future : Steps limit after final) :
+    checkedRead epoch final ≠ .ok () := by
+  intro accepted
+  exact (no_resurrection borrowed invalidated future)
+    ((checked_read_iff epoch final).mp accepted)
+
 theorem retired_read_rejected (epoch : Nat) (c : Cell) (retired : c.phase = .retired) :
     checkedRead epoch c = .error .dangling := by
   simp [checkedRead, retired]
@@ -150,7 +162,19 @@ theorem writable_access_iff (epoch : Nat) (c : Cell) :
     checkedWrite .readWrite epoch c = .ok () ↔ Valid epoch c := by
   exact checked_read_iff epoch c
 
-/-- A tiny counterexample to the former wrapping rule; this is not a runtime exploit. -/
+/-- Writable access also cannot succeed after any modeled invalidation,
+    provided the original reference was valid before that operation. -/
+theorem no_successful_write_after_invalidation
+    {limit epoch : Nat} {before after final : Cell}
+    (borrowed : Valid epoch before)
+    (invalidated : Invalidates before after)
+    (future : Steps limit after final) :
+    checkedWrite .readWrite epoch final ≠ .ok () := by
+  intro accepted
+  exact (no_resurrection borrowed invalidated future)
+    ((writable_access_iff epoch final).mp accepted)
+
+
 def wrappingNext (modulus epoch : Nat) : Nat := (epoch + 1) % modulus
 
 theorem wrapping_revives_at_two : wrappingNext 2 (wrappingNext 2 0) = 0 := by
