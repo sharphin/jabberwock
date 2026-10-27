@@ -17,6 +17,7 @@ from pathlib import Path
 from semantic_refinement_boundaries import obligation_rows
 from lean_refinement_contracts import load_contracts
 from lean_evidence_engine import check as check_kernel
+from prepare_lean_evidence import prepare as prepare_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,10 +42,11 @@ def inspect(root: Path, *, timeout: int = 600) -> dict:
     visited = set()
     findings = []
     for entry in document["bindings"]:
-        if not isinstance(entry, dict) or set(entry) != {"stage_id", "theorem", "sources", "manifest"}:
-            raise ValueError("stage binding requires stage_id, theorem, sources and manifest")
-        stage_id, theorem, sources, manifest = (
-            entry["stage_id"], entry["theorem"], entry["sources"], entry["manifest"])
+        if not isinstance(entry, dict) or set(entry) != {"stage_id", "theorem"}:
+            raise ValueError("stage binding requires stage_id and theorem")
+        stage_id, theorem = entry["stage_id"], entry["theorem"]
+        sources = expected[stage_id]["sources"] if isinstance(stage_id, str) and stage_id in expected else {}
+        manifest = prepare_manifest(root, stage_id, theorem)
         if not isinstance(stage_id, str) or stage_id in visited or stage_id not in expected:
             raise ValueError("unknown or duplicate stage")
         visited.add(stage_id)
