@@ -75,7 +75,7 @@ def production_files(compiler: str) -> dict[str, str]:
                 if rel in results:
                     raise ValueError("duplicate source: " + rel)
                 results[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
-    for relative in CONFIG_FILES[compiler]:\n        configuration = ROOT / relative\n        if not configuration.is_file():\n            raise ValueError("missing build input: " + relative)\n        results[relative] = hashlib.sha256(configuration.read_bytes()).hexdigest()\n    if not results or not any(p.startswith("runtime/") for p in results):
+    for relative in CONFIG_FILES[compiler]:\n        configuration = ROOT / relative\n        if not configuration.is_file():\n            raise ValueError("missing build input: " + relative)\n        results[relative] = hashlib.sha256(configuration.read_bytes()).hexdigest()\n    # Include every file that the independent formal-report source snapshot\n    # fingerprints, including build inputs and non-source compiler resources.\n    # It is still not a proof that all external build dependencies are covered.\n    for relative, digest in source_identity(compiler)["files"].items():\n        if relative in results and results[relative] != digest:\n            raise ValueError("inconsistent compiler source fingerprint: " + relative)\n        results[relative] = digest\n    if not results or not any(p.startswith("runtime/") for p in results):
         raise ValueError("missing compiler or runtime sources")
     return dict(sorted(results.items()))
 
