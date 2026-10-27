@@ -50,7 +50,7 @@ theorem masked_counter_matches_mod (gen : Word) :
     (gen &&& counterMask).toNat = gen.toNat % radix := by
   rw [BitVec.toNat_and]
   have maskNat : counterMask.toNat = 2 ^ 62 - 1 := by
-    simp [counterMask]
+    simp [counterMask, limitMaximum, radix]
   rw [maskNat]
   exact Nat.and_two_pow_sub_one_eq_mod gen.toNat 62
 
