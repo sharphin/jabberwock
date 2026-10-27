@@ -211,7 +211,7 @@ def main() -> int:
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(result["status"], result.get("checked_count", 0), "runtime arithmetic contracts ->", args.output,
           flush=True)
-    return 0 if result["status"] == "KERNEL_CHECKED_RUNTIME_ARITHMETIC_ONLY" else 2
+    return 0 if result["status"] == "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY" else 2
 
 
 if __name__ == "__main__":
