@@ -104,4 +104,22 @@ theorem empty_entry_stable {n : Nat} (incoming : Facts n)
   exact (absence_persists empty incoming key (allAbsent key)).trans
     (allAbsent key).symm
 
+/-- A concrete variable can lose its fact only once: after its first
+    removal, every later finite sequence of joins keeps that slot empty. -/
+theorem no_second_loss_at_same_local {n : Nat}
+    (old incoming : Facts n) (later : List (Facts n))
+    (key : Fin n) (fact : Nat)
+    (before : old key = some fact)
+    (erased : update old incoming key = none) :
+    updateMany (update old incoming) later key = none := by
+  exact absent_after_updates (update old incoming) later key erased
+
+/-- For a block with no locals, even an arbitrary incoming edge cannot
+    change the entry. This is the base case of the finite-state bound. -/
+theorem zero_locals_cannot_change
+    (old incoming : Facts 0) :
+    update old incoming = old := by
+  funext key
+  exact Fin.elim0 key
+
 end JabberwockFormal.FiniteMeetProgress
