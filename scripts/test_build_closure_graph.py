@@ -111,5 +111,25 @@ class BuildGraphTests(unittest.TestCase):
                 audit(graph, root, {})
 
 
+    def test_windows_absolute_paths_block_on_any_host(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["build"]["outputs"] = [r"C:\\outside.ll"]
+            with self.assertRaisesRegex(ValueError, "unsafe action output"):
+                audit(graph, root, {})
+            graph["nodes"]["build"]["outputs"] = ["out.ll"]
+            graph["nodes"]["source"]["path"] = r"C:\\source.jw"
+            with self.assertRaisesRegex(ValueError, "absolute/traversal input path"):
+                audit(graph, root, {})
+
+    def test_backslash_path_aliases_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["build"]["outputs"] = [r"a\\..\\out.ll"]
+            with self.assertRaisesRegex(ValueError, "unsafe action output"):
+                audit(graph, root, {})
+
 if __name__ == "__main__":
     unittest.main()
