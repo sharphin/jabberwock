@@ -51,8 +51,9 @@ def parse_runtime_counts(output: str) -> tuple[int, int, int]:
     if len(matches) != 1:
         raise ValueError("missing or duplicate runtime check counters")
     fields = matches[0].split()
-    if len(fields) != 6 or not all(re.fullmatch(r"\d+", fields[i]) for i in (1, 3, 5)):
-        raise ValueError("malformed runtime check counters")
+    if (len(fields) != 6 or fields[0::2] != ["gen", "elided", "bounds"]
+            or not all(re.fullmatch(r"\d+", fields[i]) for i in (1, 3, 5))):
+        raise ValueError("malformed or unexpected runtime check labels")
     return tuple(int(fields[i]) for i in (1, 3, 5))
 
 
