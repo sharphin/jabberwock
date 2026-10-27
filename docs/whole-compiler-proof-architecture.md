@@ -72,3 +72,14 @@ The remaining development work is substantive:
 
 Until these exist, output is **NOT_PROVEN**. No number of passing concrete
 tests or manifest entries can be promoted into a universal theorem.
+
+
+## 34件受入監査への証明義務の接続
+
+`acceptance_report.py --inventory target/whole-proof-inventory.json` によって、
+34件の正式受入判定に実装ソースごとの未証明リンクを必須入力として渡す。
+新規ソース、証明義務の単件欠落、フェーズの偽装、ソースハッシュ変更、
+`PROVEN` の自己申告は正規インベントリとの差分として拒否する。
+
+このリストは**証明義務の網羅を補助する索引**であり、関数・分岐・FFI境界の意味論上の網羅性や
+カーネルによる実装対応証明を保証するものではない。
