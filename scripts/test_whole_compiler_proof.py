@@ -9,7 +9,16 @@ import whole_compiler_proof as proof
 
 
 class WholeProofInventoryTests(unittest.TestCase):
-    def test_inventory_command_succeeds_for_valid_unproved_inventory(self):\n        import tempfile\n        with tempfile.TemporaryDirectory() as d:\n            output = Path(d) / "inventory.json"\n            self.assertEqual(proof.main(["--output", str(output)]), 0)\n            data = __import__("json").loads(output.read_text(encoding="utf-8"))\n            self.assertEqual(data["status"], "NOT_PROVEN")\n            self.assertEqual(data["proved_obligations"], 0)\n\n    def test_all_five_goals_for_both_compilers(self):
+    def test_inventory_command_succeeds_for_valid_unproved_inventory(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            output = Path(d) / "inventory.json"
+            self.assertEqual(proof.main(["--output", str(output)]), 0)
+            data = __import__("json").loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(data["status"], "NOT_PROVEN")
+            self.assertEqual(data["proved_obligations"], 0)
+
+    def test_all_five_goals_for_both_compilers(self):
         result = proof.inventory()
         proof.validate(result)
         self.assertEqual(result["status"], "NOT_PROVEN")
@@ -18,7 +27,30 @@ class WholeProofInventoryTests(unittest.TestCase):
             self.assertEqual({r["goal"] for r in result["components"]
                               if r["compiler"] == compiler}, set(proof.GOALS))
 
-    def test_proof_inventory_covers_compiler_source_snapshot(self):\n        from formal_report import source_identity\n        for compiler in ("jwc", "rust"):\n            with self.subTest(compiler=compiler):\n                self.assertEqual(set(proof.production_files(compiler)),\n                                 set(source_identity(compiler)["files"]))\n\n    def test_build_manifests_are_proof_inputs(self):\n        paths = proof.production_files("rust")\n        self.assertIn("Cargo.toml", paths)\n        self.assertIn("Cargo.lock", paths)\n        obligations = proof.inventory()["components"]\n        for name in ("Cargo.toml", "Cargo.lock"):\n            self.assertEqual({row["goal"] for row in obligations\n                              if row["compiler"] == "rust" and row["source"] == name},\n                             set(proof.GOALS))\n\n    def test_unhashable_identity_fails_closed(self):\n        result = proof.inventory()\n        result["components"][0]["id"] = []\n        with self.assertRaises(ValueError):\n            proof.validate(result)\n\n    def test_every_source_has_all_five_goals(self):
+    def test_proof_inventory_covers_compiler_source_snapshot(self):
+        from formal_report import source_identity
+        for compiler in ("jwc", "rust"):
+            with self.subTest(compiler=compiler):
+                self.assertEqual(set(proof.production_files(compiler)),
+                                 set(source_identity(compiler)["files"]))
+
+    def test_build_manifests_are_proof_inputs(self):
+        paths = proof.production_files("rust")
+        self.assertIn("Cargo.toml", paths)
+        self.assertIn("Cargo.lock", paths)
+        obligations = proof.inventory()["components"]
+        for name in ("Cargo.toml", "Cargo.lock"):
+            self.assertEqual({row["goal"] for row in obligations
+                              if row["compiler"] == "rust" and row["source"] == name},
+                             set(proof.GOALS))
+
+    def test_unhashable_identity_fails_closed(self):
+        result = proof.inventory()
+        result["components"][0]["id"] = []
+        with self.assertRaises(ValueError):
+            proof.validate(result)
+
+    def test_every_source_has_all_five_goals(self):
         records = proof.inventory()["components"]
         per_source = {}
         for row in records:
