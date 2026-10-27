@@ -33,6 +33,9 @@ def main(argv=None) -> int:
     parser.add_argument("--benchmark-report", type=Path,
                         help="require exact IR files for all reported benchmark cases")
     parser.add_argument("--opt", default="opt")
+    parser.add_argument("--semantic-pairs", type=Path,
+                        help="JSON source/optimized LLVM pairs checked with Alive2 alive-tv")
+    parser.add_argument("--alive-tv", default="alive-tv")
     args = parser.parse_args(argv)
     results = []
     errors = []
@@ -69,9 +72,54 @@ def main(argv=None) -> int:
                 results.append(verify_ir(path, tool))
             except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
                 errors.append(str(exc))
+    semantic_results = []
+    if args.semantic_pairs:
+        try:
+            pair_doc = json.loads(args.semantic_pairs.read_text(encoding="utf-8"))
+            pairs = pair_doc["pairs"]
+            if not isinstance(pairs, list) or not pairs:
+                raise ValueError("no semantic refinement pairs")
+            alive = shutil.which(args.alive_tv)
+            if alive is None:
+                raise ValueError("Alive2 alive-tv unavailable")
+            seen = set()
+            for pair in pairs:
+                if not isinstance(pair, dict) or set(pair) != {"before", "after"}:
+                    raise ValueError("semantic pair must contain only before/after paths")
+                before = (args.ir_root / pair["before"]).resolve()
+                after = (args.ir_root / pair["after"]).resolve()
+                if (not before.is_relative_to(args.ir_root.resolve()) or
+                        not after.is_relative_to(args.ir_root.resolve()) or
+                        not before.is_file() or not after.is_file() or
+                        before.suffix != ".ll" or after.suffix != ".ll"):
+                    raise ValueError("missing/escaping LLVM refinement input")
+                identity = (str(before), str(after))
+                if identity in seen:
+                    raise ValueError("duplicate LLVM refinement pair")
+                seen.add(identity)
+                execution = subprocess.run([alive, str(before), str(after)],
+                                           capture_output=True, text=True, encoding="utf-8",
+                                           errors="replace", timeout=120)
+                output_text = execution.stdout + execution.stderr
+                # Alive2 can fail or report unsupported/timeout without returning a
+                # semantic proof. Require explicit successful transformation proof.
+                success = (execution.returncode == 0 and
+                           "Transformation seems to be correct!" in output_text and
+                           "ERROR:" not in output_text and
+                           "Timeout" not in output_text)
+                semantic_results.append({"before": str(before), "after": str(after),
+                                         "before_sha256": hashlib.sha256(before.read_bytes()).hexdigest(),
+                                         "after_sha256": hashlib.sha256(after.read_bytes()).hexdigest(),
+                                         "status": "REFINEMENT_CHECKED" if success else "BLOCKED",
+                                         "checker_exit": execution.returncode,
+                                         "checker_output": output_text[-6000:]})
+                if not success:
+                    errors.append("Alive2 failed to establish IR refinement: " + str(identity))
+        except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
+            errors.append("semantic refinement failed: " + str(exc))
     status = "IR_VERIFIED_ONLY" if not errors and all(x["status"] == "IR_WELL_FORMED" for x in results) else "BLOCKED"
     report = {"schema_version": 1, "kind": "llvm-ir-audit", "status": status,
-              "results": results, "errors": errors,
+              "results": results, "semantic_results": semantic_results, "errors": errors,
               "semantic_refinement_proven": False,
               "limitations": ["LLVM verifier does not prove absence of undefined behavior.",
                               "Source-to-LLVM semantics and optimization refinement remain unproved."]}
