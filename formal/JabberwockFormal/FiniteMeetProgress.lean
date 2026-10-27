@@ -183,4 +183,50 @@ theorem historical_change_consumes_initial_fact {n : Nat}
     erased,
     absent_after_updates _ after key erased⟩
 
+/-- Once every initially occupied key has been erased by a finite history,
+    no further incoming edge can change the reachable block entry.
+    Unlike a free-standing budget certificate, this theorem directly
+    concerns the concrete updateMany history. -/
+theorem exhausted_initial_facts_stable {n : Nat}
+    (initial : Facts n) (history : List (Facts n))
+    (erasedInitiallyPresent :
+      ∀ key : Fin n, ∀ fact : Nat,
+        initial key = some fact →
+        updateMany initial history key = none)
+    (incoming : Facts n) :
+    update (updateMany initial history) incoming =
+      updateMany initial history := by
+  funext key
+  cases oldValue : updateMany initial history key with
+  | none =>
+      exact (absence_persists _ incoming key oldValue).trans oldValue.symm
+  | some fact =>
+      have initialPresent :=
+        updateMany_retained_from_initial initial history key fact oldValue
+      have erased := erasedInitiallyPresent key fact initialPresent
+      rw [oldValue] at erased
+      cases erased
+
+/-- An exhausted entry stays fixed even after arbitrarily many further
+    predecessor joins. -/
+theorem exhausted_initial_facts_remain_stable {n : Nat}
+    (initial : Facts n) (history later : List (Facts n))
+    (erasedInitiallyPresent :
+      ∀ key : Fin n, ∀ fact : Nat,
+        initial key = some fact →
+        updateMany initial history key = none) :
+    updateMany (updateMany initial history) later =
+      updateMany initial history := by
+  have allAbsent : ∀ key : Fin n,
+      updateMany initial history key = none := by
+    intro key
+    cases initialValue : initial key with
+    | none =>
+        exact absent_after_updates initial history key initialValue
+    | some fact =>
+        exact erasedInitiallyPresent key fact initialValue
+  funext key
+  exact (absent_after_updates _ later key (allAbsent key)).trans
+    (allAbsent key).symm
+
 end JabberwockFormal.FiniteMeetProgress
