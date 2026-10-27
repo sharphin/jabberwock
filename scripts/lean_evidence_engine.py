@@ -60,6 +60,20 @@ def verify_manifest(root: Path, manifest: dict) -> tuple[Path, list[str]]:
                 raise EvidenceError("source/proof content differs from manifest: " + path)
             if field == "proof_files" and not path.endswith(".lean"):
                 raise EvidenceError("proof must be Lean source")
+    project_dir = root / "formal"
+    proof_entries = {item["path"]: item["sha256"] for item in manifest["proof_files"]}
+    actual_proofs = {}
+    for proof in project_dir.rglob("*.lean"):
+        if proof.is_symlink():
+            raise EvidenceError("symlinked Lean proof source")
+        relative = proof.relative_to(root).as_posix()
+        actual_proofs[relative] = hashlib.sha256(proof.read_bytes()).hexdigest()
+    if not actual_proofs or actual_proofs != proof_entries:
+        raise EvidenceError("incomplete Lean source closure")
+    source_entries = {item["path"]: item["sha256"] for item in manifest["source_files"]}
+    for config in ("formal/lean-toolchain", "formal/lakefile.toml", "formal/lake-manifest.json"):
+        if source_entries.get(config) != hashlib.sha256(local_file(root, config).read_bytes()).hexdigest():
+            raise EvidenceError("missing or stale Lean config: " + config)
     formal = root / "formal"
     if formal.is_symlink() or not formal.is_dir():
         raise EvidenceError("invalid formal directory")
@@ -94,6 +108,7 @@ def check(root: Path, manifest: dict, timeout: int = 120) -> dict:
         observed = {a.strip() for a in (found.group(1) or "").split(",") if a.strip()}
         if observed - AXIOMS:
             raise EvidenceError("unapproved axioms in " + name)
+    verify_manifest(root.resolve(), manifest)
     return {"schema_version": 1, "status": "KERNEL_CHECKED", "theorems": names,
             "contract_types_checked": checked_types,
             "scope": "declared Lean theorems, plus checked-in expected types when present",
