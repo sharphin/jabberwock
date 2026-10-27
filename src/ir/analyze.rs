@@ -263,7 +263,11 @@ impl<'a> Cx<'a> {
     fn place(&mut self, p: &mut Place, facts: &mut Facts) {
         let safe = {
             let f = facts.get(&p.local).copied();
-            f == Some(Fact::Own) || is_live(facts, f)
+            // RefElem is valid for direct dereferences while its fact survives.
+            // Any operation that can move list elements removes RefElem facts.
+            // Do not use is_live here: call arguments intentionally treat RefElem as unsafe,
+            // because the callee may mutate the backing list.
+            f == Some(Fact::Own) || matches!(f, Some(Fact::RefElem(_))) || is_live(facts, f)
         };
         if self.set {
             for (i, pr) in p.proj.iter_mut().enumerate() {
