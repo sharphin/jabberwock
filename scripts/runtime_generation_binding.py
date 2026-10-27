@@ -44,6 +44,7 @@ BITVEC_TOKENS = (
     "def guardSpec",
     "theorem guard_iff_spec",
     "theorem guard_rejects_retired",
+    "theorem masked_counter_matches_mod",
     "theorem unsigned_subtraction_matches_nat",
     "theorem accepted_increment_no_wrap",
     "theorem accepted_increment_changes_word",
