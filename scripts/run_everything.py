@@ -189,7 +189,7 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     reason = "one or more verification stages failed"
     if set(by_name) != expected:
         reason = "required stages missing or duplicated"
-    elif len(stages) == len(expected) and all(x["status"] == "EXIT_ZERO" for x in stages) and all(verify_stage_log_integrity(x) for x in stages):
+    elif len(stages) == len(expected) and all(x.get("status") == "EXIT_ZERO" and x.get("exit_code") == 0 for x in stages) and all(verify_stage_log_integrity(x) for x in stages):
         try:
             acceptance = json.loads((output / "acceptance-34.json").read_text(encoding="utf-8"))
             benchmark = json.loads((output / "benchmark-four-way.json").read_text(encoding="utf-8"))
@@ -207,7 +207,7 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
         except (OSError, ValueError, TypeError, AttributeError) as error:
             reason = "missing or malformed final reports: " + str(error)
     evidence = evidence_overview(output)
-    failed_stage_names = [x["name"] for x in stages if x["status"] != "EXIT_ZERO"]
+    failed_stage_names = [x["name"] for x in stages if x.get("status") != "EXIT_ZERO" or x.get("exit_code") != 0]
     invalid_logs = [x["name"] for x in stages if not verify_stage_log_integrity(x)]
     if failed_stage_names:
         reason = "verification stages failed: " + ", ".join(failed_stage_names)
