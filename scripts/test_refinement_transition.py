@@ -76,6 +76,27 @@ class ProofTransitionTests(unittest.TestCase):
                 transition.evaluate(base, {"schema_version": 1, "proofs": [foreign]})
 
 
+    def test_transition_report_replay_detects_forgery(self):
+        base = {"components": [self.row]}
+        with mock.patch.object(transition, "validate", return_value=None):
+            evidence = {"schema_version": 1, "proofs": []}
+            real = transition.evaluate(base, evidence)
+            transition.validate_transition_report(base, real, evidence)
+            for field, value in (
+                ("status", "PROVEN"),
+                ("proved", 1),
+                ("required", 0),
+                ("invalid", 1),
+            ):
+                forged = copy.deepcopy(real)
+                forged[field] = value
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    transition.validate_transition_report(base, forged, evidence)
+            forged = copy.deepcopy(real)
+            forged["findings"][0]["status"] = "REFINEMENT_PROVEN"
+            with self.assertRaises(ValueError):
+                transition.validate_transition_report(base, forged, evidence)
+
     def test_cli_unproved_exits_nonzero(self):
         with tempfile.TemporaryDirectory() as directory:
             dest = Path(directory) / "audit.json"
