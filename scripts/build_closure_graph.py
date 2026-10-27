@@ -51,6 +51,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
     dependencies = {}
     leaf_hashes = {}
     produced_outputs = {}
+    declared_leaf_paths = {}
     root = root.resolve()
 
     def require_file(label: str, description: dict) -> None:
@@ -67,6 +68,9 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         actual = digest(path)
         if actual != sha:
             raise ValueError("artifact hash mismatch: " + label)
+        if name in declared_leaf_paths:
+            raise ValueError("duplicate tracked file/tool path: " + name)
+        declared_leaf_paths[name] = label
         leaf_hashes[label] = actual
 
     def visit(identifier: str) -> None:
