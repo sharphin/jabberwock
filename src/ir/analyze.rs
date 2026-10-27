@@ -307,11 +307,12 @@ impl<'a> Cx<'a> {
             });
         }
         // `f(ref a, a)` のように後の引数でムーブされるものは、前の命令で事実が消えている
-        let safe = fs.iter().map(|f| is_live(facts, *f)).collect();
         for o in os.iter_mut() {
             self.operand(o, facts);
         }
-        safe
+        // Evaluate argument liveness only after every argument has been consumed.
+        // A later Move may invalidate the owner borrowed by an earlier argument.
+        fs.iter().map(|f| is_live(facts, *f)).collect()
     }
 
     fn record(&mut self, fi: usize, safe: Vec<bool>) {
