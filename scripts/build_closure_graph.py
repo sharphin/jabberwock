@@ -116,6 +116,13 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
                 raise ValueError("malformed build action: " + identifier)
             if not any(nodes.get(child, {}).get("kind") == "tool" for child in children if isinstance(nodes.get(child), dict)):
                 raise ValueError("action missing executable dependency: " + identifier)
+            # The executable invoked by an action must be one of its
+            # explicitly tracked tool inputs, not an untracked binary.
+            tool_paths = {nodes[child]["path"] for child in children
+                          if isinstance(nodes.get(child), dict)
+                          and nodes[child].get("kind") == "tool"}
+            if node["command"][0] not in tool_paths:
+                raise ValueError("action command executable not tracked: " + identifier)
             # Reject ambiguous build outputs and path traversal.
             if len(node["outputs"]) != len(set(node["outputs"])):
                 raise ValueError("duplicate action outputs: " + identifier)
