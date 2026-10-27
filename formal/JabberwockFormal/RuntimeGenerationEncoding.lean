@@ -132,8 +132,6 @@ theorem runtimeAdvance_rejects_old_word
     (room : runtimeGuard false counter step) (positive : 0 < step) :
     ¬ accepts (pack retained counter)
       (runtimeAdvance false retained counter step) := by
-  have arithmeticRoom : hasRoom counter step :=
-    runtimeGuard_matches_arithmetic.mp room
   unfold accepts runtimeAdvance
   rw [if_pos room]
   intro accepted
