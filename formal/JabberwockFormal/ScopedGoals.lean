@@ -43,7 +43,7 @@ def sourceEval : Expr .number → Except Fault Nat
       let y ← sourceEval b
       pure (x + y)
   | .read saved current payload =>
-      if JabberwockFormal.EmittedGate.valid saved current then .ok payload
+      if JabberwockFormal.EmittedGate.llvmContinues saved current then .ok payload
       else .error .dangling
 
 def lower : Expr .number → Instr
