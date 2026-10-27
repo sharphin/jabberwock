@@ -55,7 +55,6 @@ theorem hasRoom_prevents_counter_wrap {counter step : Nat}
     counter + step < radix := by
   have bound := hasRoom_bounds_sum room
   unfold maxCounter at bound
-  unfold radix
   omega
 
 theorem packed_word_is_below_retired
