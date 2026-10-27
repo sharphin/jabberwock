@@ -76,6 +76,47 @@ def execute_stage(label: str, command: list[str], output: Path, *, timeout: int)
     return record
 
 
+def evidence_overview(output: Path) -> dict:
+    """Extract actionable proof gaps regardless of nonzero stage exit codes."""
+    paths = {
+        "implementation_inventory": "whole-proof-inventory.json",
+        "formal": "formal.json",
+        "acceptance": "acceptance-34.json",
+        "practical": "safety.json",
+        "benchmark": "benchmark-four-way.json",
+    }
+    summary = {}
+    for label, filename in paths.items():
+        try:
+            value = json.loads((output / filename).read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("report is not a JSON object")
+            data = {"status": value.get("status", value.get("run_status", "UNKNOWN"))}
+            if label == "implementation_inventory":
+                data.update(required=value.get("total_obligations"),
+                            proved=value.get("proved_obligations"),
+                            uncovered=[x.get("id") for x in value.get("components", [])
+                                       if x.get("status") != "REFINEMENT_PROVEN"])
+            elif label == "formal":
+                data.update(goals=value.get("summary", {}),
+                            infrastructure_error=value.get("infrastructure_error"))
+            elif label == "acceptance":
+                data.update(summary=value.get("summary", {}),
+                            blockers={x["id"]: x.get("blockers", [])
+                                      for x in value.get("obligations", [])
+                                      if x.get("blockers")})
+            elif label == "practical":
+                data.update(failed_items=[x.get("id") for x in value.get("items", [])
+                                          if x.get("status") != "PROBES_PASS_ONLY"])
+            elif label == "benchmark":
+                data.update(failed_cases=[name for name, case in value.get("cases", {}).items()
+                                          if case.get("status") != "PASS"])
+            summary[label] = data
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            summary[label] = {"status": "MISSING_OR_INVALID", "reason": str(exc)}
+    return summary
+
+
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
     expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "emitter-proof-binding", "formal-proofs",
@@ -101,9 +142,13 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
                 reason = "34-obligation proof, safety, or benchmark acceptance not established"
         except (OSError, ValueError, TypeError, AttributeError) as error:
             reason = "missing or malformed final reports: " + str(error)
-    return {"schema_version": 1, "kind": "local-full-verification",
+    evidence = evidence_overview(output)
+    if verdict != "PASS" and evidence["implementation_inventory"]["status"] == "NOT_PROVEN":
+        reason = "compiler-wide refinement obligations remain unproved; inspect evidence.implementation_inventory.uncovered"
+    return {"schema_version": 2, "kind": "local-full-verification",
             "status": verdict, "reason": reason, "mode": "quick" if quick else "full",
             "host_os": platform.system(), "stages": stages,
+            "evidence": evidence,
             "passed_stages": sum(x["status"] == "EXIT_ZERO" for x in stages),
             "required_stages": len(expected),
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat()}
