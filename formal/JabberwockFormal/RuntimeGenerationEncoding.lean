@@ -108,6 +108,49 @@ theorem old_word_rejected_on_retirement
   rw [if_neg noRoom]
   simp
 
+/-- Model of the complete gen_has_room guard from jw_rt.c after extracting
+    the masked counter: the block must not be retired, the step must fit,
+    and the subtraction-based capacity check must pass. -/
+def runtimeGuard (retired : Bool) (counter step : Nat) : Prop :=
+  retired = false ∧ cCapacityCheck counter step
+
+/-- Model of gen_advance: a failed guard retires the block; a successful
+    guard advances the packed generation word. -/
+def runtimeAdvance (retired retained : Bool) (counter step : Nat) : Nat :=
+  if runtimeGuard retired counter step
+  then pack retained (counter + step)
+  else retiredWord
+
+theorem runtimeGuard_matches_arithmetic {counter step : Nat} :
+    runtimeGuard false counter step ↔ hasRoom counter step := by
+  simp [runtimeGuard, cCapacityCheck_iff_hasRoom]
+
+/-- Under the exact successful C guard, the packed generation changes, so
+    the saved old generation cannot satisfy the runtime equality check. -/
+theorem runtimeAdvance_rejects_old_word
+    (retained : Bool) {counter step : Nat}
+    (room : runtimeGuard false counter step) (positive : 0 < step) :
+    ¬ accepts (pack retained counter)
+      (runtimeAdvance false retained counter step) := by
+  have arithmeticRoom : hasRoom counter step :=
+    runtimeGuard_matches_arithmetic.mp room
+  unfold accepts runtimeAdvance
+  rw [if_pos room]
+  intro accepted
+  have changed : pack retained (counter + step) ≠ pack retained counter := by
+    cases retained <;> simp [pack] at * <;> omega
+  exact changed accepted.2.symm
+
+/-- If the C capacity guard fails, gen_advance retires the block and the
+    reference gate rejects any saved generation word. -/
+theorem runtimeAdvance_rejects_after_retirement
+    (saved : Nat) (retained : Bool) (counter step : Nat)
+    (noRoom : ¬ runtimeGuard false counter step) :
+    ¬ accepts saved (runtimeAdvance false retained counter step) := by
+  unfold accepts runtimeAdvance
+  rw [if_neg noRoom]
+  simp
+
 /-- Every modeled live word differs from the retired sentinel. -/
 theorem live_word_not_retired
     (retained : Bool) {counter : Nat}
