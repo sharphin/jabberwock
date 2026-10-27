@@ -44,6 +44,7 @@ def fixture():
     formal = {"schema_version": 3, "compilers": {c: {"source": {"sha256": c + "-sha"}}
                                                for c in req.COMPILERS},
               "goals": goals}
+    formal["proof_sources_snapshot"] = audit.proof_sources_identity()
     identity = {c: {"sha256": c + "-sha", "files": {"runtime/jw_rt.c": "demo"}} for c in req.COMPILERS}
     practical["source_snapshots"] = copy.deepcopy(identity)
     practical["test_inputs_snapshot"] = {"sha256": "fixture-sha", "files": {"scripts/harness.py": "hash"}}
@@ -156,6 +157,12 @@ class AcceptanceRequirementsTests(unittest.TestCase):
         result = self.check(practical, formal, identities)
         row = next(x for x in result["obligations"] if x["id"] == "jwc-S01")
         self.assertTrue(any("without a successful process exit" in b for b in row["blockers"]))
+
+    def test_changed_lean_dependency_snapshot_rejected(self):
+        practical, formal, identity = fixture()
+        formal["proof_sources_snapshot"]["sha256"] = "stale"
+        with self.assertRaises(ValueError):
+            self.check(practical, formal, identity)
 
     def test_wrong_os_rejected(self):
         practical, formal, identities = fixture()
