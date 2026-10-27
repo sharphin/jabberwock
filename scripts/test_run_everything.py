@@ -178,6 +178,20 @@ class FullRunnerTests(unittest.TestCase):
                     self.assertEqual(result["status"], "FAIL")
                     self.assertIn("cargo-tests", result["failed_stages"])
 
+    def test_sealed_logs_must_belong_to_the_named_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            good = full.execute_stage(
+                "authentic", [sys.executable, "-c", "print('ok')"],
+                output, timeout=10)
+            self.assertTrue(full.verify_stage_log_integrity(good, output))
+            forged = dict(good)
+            forged["name"] = "other"
+            self.assertFalse(full.verify_stage_log_integrity(forged, output))
+            forged = dict(good)
+            forged["stdout_log"] = str(output / "missing.log")
+            self.assertFalse(full.verify_stage_log_integrity(forged, output))
+
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)
