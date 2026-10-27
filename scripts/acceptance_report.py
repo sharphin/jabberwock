@@ -66,6 +66,9 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
     goal_rows = keyed(formal.get("goals"), "id")
     practical_goal_rows = keyed(practical.get("goals"), "id")
     probe_rows = keyed(practical.get("results"), "name")
+    plan = keyed(practical.get("planned_probes"), "name")
+    if set(plan) != set(probe_rows):
+        raise ValueError("planned and executed probe inventories differ")
     expected_items = {f"{local_os}-{c}-{n:02}" for c in COMPILERS for n in range(1, 13)}
     expected_goals = {f"{c}-{g}" for c in COMPILERS for g in GOALS}
     practical_goals = {f"{local_os}-{c}-{g}" for c in COMPILERS for g in GOALS}
@@ -106,6 +109,10 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
             if not isinstance(row.get("probe_names"), list) or not row["probe_names"]:
                 raise ValueError("no probe evidence referenced")
             named = row["probe_names"]
+            planned_names = {name for name, p in plan.items()
+                             if p.get("compiler") == c and n in p.get("items", [])}
+            if set(named) != planned_names or len(named) != len(planned_names):
+                raise ValueError("item probe references do not match planned inventory")
             if len(named) != len(set(named)):
                 raise ValueError("duplicate probe name reference")
             if any(n not in probe_rows for n in named):
@@ -116,6 +123,15 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
             if any(n not in x.get("items", []) for x in observations):
                 raise ValueError("practical probe does not actually cover declared item")
             blockers = []
+            if any(x.get("status") == "PROBE_PASS" and
+                   x.get("actual", {}).get("exit_code") != 0 for x in observations):
+                blockers.append("probe claims success without a successful process exit")
+            if any(x.get("status") == "PROBE_PASS" and
+                   isinstance(x.get("case_report"), dict) and
+                   (not x["case_report"].get("results") or
+                    any(r.get("status", r.get("case_status")) != "pass"
+                        for r in x["case_report"]["results"])) for x in observations):
+                blockers.append("nested case results contradict probe success")
             if any(x.get("status") != "PROBE_PASS" for x in observations):
                 blockers.append("at least one referenced practical probe did not pass")
             if not suite_complete:
@@ -139,6 +155,10 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
             direct_names = direct.get("direct_probe_names", [])
             if not isinstance(direct_names, list) or len(direct_names) != len(set(direct_names)) or not direct_names:
                 raise ValueError("missing or duplicate direct goal probe names")
+            planned_direct = {name for name, p in plan.items()
+                              if p.get("compiler") == c and p.get("goal") == goal}
+            if set(direct_names) != planned_direct:
+                raise ValueError("direct practical goals do not match planned probes")
             if any(n not in probe_rows or probe_rows[n].get("compiler") != c
                    for n in direct_names):
                 raise ValueError("direct goal references absent or foreign probes")
