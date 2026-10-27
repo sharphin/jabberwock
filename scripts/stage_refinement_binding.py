@@ -22,19 +22,33 @@ from prepare_lean_evidence import prepare as prepare_manifest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def fingerprint(path: Path) -> str:
+    """Authenticate a regular review file, rejecting symlink substitutions."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("missing or symlinked review file: " + str(path))
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def inspect(root: Path, *, timeout: int = 600) -> dict:
     boundaries = obligation_rows(root)
-    reviewed = load_contracts(root, None)
-    contract_names = {x["theorem"] for x in reviewed}
     registry = root / "formal" / "stage-refinement-bindings.json"
+    contracts = root / "formal" / "refinement-contracts.json"
+    # Missing registries are an honest unproved state, but a partial
+    # registry must never silently lose its reviewed theorem contracts.
     if not registry.exists():
         return {"schema_version": 1, "kind": "stage-refinement-bindings",
                 "status": "NOT_PROVEN", "required": len(boundaries), "covered": 0,
                 "kernel_checked": 0, "bindings": [],
                 "reason": "no reviewed stage-to-theorem bindings provided"}
-    if registry.is_symlink() or not registry.is_file():
-        raise ValueError("stage binding registry must be an ordinary file")
+    registry_before = fingerprint(registry)
+    if not contracts.exists():
+        raise ValueError("stage bindings require a reviewed theorem contract registry")
+    contracts_before = fingerprint(contracts)
+    reviewed = load_contracts(root, None)
+    contract_names = {x["theorem"] for x in reviewed}
     document = json.loads(registry.read_text(encoding="utf-8"))
+    if fingerprint(registry) != registry_before or fingerprint(contracts) != contracts_before:
+        raise ValueError("review registry changed while being parsed")
     if (not isinstance(document, dict) or document.get("schema_version") != 1
             or not isinstance(document.get("bindings"), list)):
         raise ValueError("invalid stage binding registry")
@@ -89,6 +103,13 @@ def inspect(root: Path, *, timeout: int = 600) -> dict:
                 "kernel_type_checked": True,
                 "status": "KERNEL_CHECKED_REFINEMENT_NOT_PROVEN"
             })
+    # Check review files and the source closure again after the kernel audit.
+    # Otherwise source or theorem registry changes during the Lean build
+    # could leave a stale but successful-looking binding report.
+    if fingerprint(registry) != registry_before or fingerprint(contracts) != contracts_before:
+        raise ValueError("review registry changed during kernel audit")
+    if obligation_rows(root) != boundaries:
+        raise ValueError("compiler sources changed during stage binding audit")
     return {"schema_version": 1, "kind": "stage-refinement-bindings",
             "status": "NOT_PROVEN", "required": len(boundaries),
             "covered": len(findings), "kernel_checked": len(findings),
