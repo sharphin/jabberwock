@@ -92,8 +92,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         refinement += ["--evidence", str(args.evidence.resolve())]
     plans.append(("refinement", refinement))
+    plans.append(("coverage", [py, str(scripts / "formal_proof_coverage.py"),
+                                "--boundaries", str(output / "semantic-boundaries.json"),
+                                "--bindings", str(output / "stage-refinement-binding.json"),
+                                "--refinement", str(output / "refinement.json"),
+                                "--output", str(output / "proof-coverage.json")]))
     known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
-                     "lean-evidence": "lean-evidence.json", "refinement": "refinement.json"}
+                     "lean-evidence": "lean-evidence.json", "refinement": "refinement.json",
+                     "coverage": "proof-coverage.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
         (output / filename).unlink(missing_ok=True)
