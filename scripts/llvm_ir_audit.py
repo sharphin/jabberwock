@@ -16,6 +16,7 @@ import sys
 def verify_ir(path: Path, opt: str, timeout: int = 120) -> dict:
     if not path.is_file() or path.suffix.lower() != ".ll":
         raise ValueError("missing or non-LLVM IR file: " + str(path))
+    # LLVM verifier checks structural correctness, NOT behavioral equivalence.
     command = [opt, "-passes=verify", "-disable-output", str(path)]
     result = subprocess.run(command, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=timeout)
@@ -45,9 +46,13 @@ def main(argv=None) -> int:
         try:
             benchmark = json.loads(args.benchmark_report.read_text(encoding="utf-8"))
             cases = benchmark["cases"]
-            if not isinstance(cases, dict) or not cases:
-                raise ValueError("empty or malformed benchmark cases")
-            expected = {(args.ir_root / name / "jwc.ll").resolve() for name in cases}
+            suite = benchmark.get("suite")
+            if (not isinstance(cases, dict) or not cases or not isinstance(suite, list)
+                    or len(suite) != len(set(suite)) or set(suite) != set(cases)
+                    or any(not isinstance(n, str) or not n or n in (".", "..")
+                           or "/" in n or "\\\\" in n for n in suite)):
+                raise ValueError("missing, foreign or unsafe benchmark case identities")
+            expected = {(args.ir_root / name / "jwc.ll").resolve() for name in suite}
             actual = {p.resolve() for p in files}
             if actual != expected:
                 errors.append("missing or unexpected generated LLVM IR: " + str({
