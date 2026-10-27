@@ -17,7 +17,7 @@ class FullRunnerTests(unittest.TestCase):
         output = Path("dummy")
         tasks = full.plans(output)
         self.assertEqual([x[0] for x in tasks], [
-            "python-regressions", "practical-safety", "formal-proofs",
+            "python-regressions", "practical-safety", "emitter-proof-binding", "formal-proofs",
             "acceptance-34", "benchmark-four-way", "legacy-optimization-counts"])
         self.assertIn("test_*.py", tasks[0][1])
         self.assertIn("--require-full", tasks[2][1])
