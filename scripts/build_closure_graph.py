@@ -20,6 +20,16 @@ from formal_report import source_identity
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
+def safe_relative_path(name: str) -> bool:
+    """Reject cross-platform absolute paths, aliases, and traversal."""
+    if not isinstance(name, str) or not name or "\\x00" in name or "\\\\" in name:
+        return False
+    windows = PureWindowsPath(name)
+    return (not Path(name).is_absolute() and not windows.is_absolute()
+            and not windows.drive and
+            all(part not in ("", ".", "..") for part in name.split("/")))
+
+
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -49,8 +59,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         if (not isinstance(name, str) or not name or
                 not isinstance(sha, str) or not HEX.fullmatch(sha)):
             raise ValueError("invalid artifact description: " + label)
-        if (Path(name).is_absolute() or PureWindowsPath(name).is_absolute() or
-                "\\" in name or ".." in Path(name).parts):
+        if not safe_relative_path(name):
             raise ValueError("absolute/traversal input path: " + label)
         path = (root / name).resolve(strict=True)
         if not path.is_relative_to(root) or not path.is_file():
@@ -106,9 +115,10 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
                 raise ValueError("duplicate action outputs: " + identifier)
             for output in node["outputs"]:
                 output_path = Path(output)
-                if (output_path.is_absolute() or PureWindowsPath(output).is_absolute() or
-                        "\\" in output or ".." in output_path.parts or output in ("", ".")):
+                if not safe_relative_path(output):
                     raise ValueError("unsafe action output: " + identifier)
+                if not (root / output).resolve().is_relative_to(root):
+                    raise ValueError("action output escapes root: " + output)
                 if output in produced_outputs:
                     raise ValueError("multiple producers for output: " + output)
                 produced_outputs[output] = identifier
