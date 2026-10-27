@@ -118,13 +118,18 @@ def stable_output(digests: list[str]) -> bool:
 
 
 
-def run_windows_measure(binary: Path, output: Path, *, timeout: int = 3600) -> dict:
+def run_windows_measure(binary: Path | str | list[str], output: Path, *, timeout: int = 3600) -> dict:
     """Measure one Windows process with perf_counter and peak working set.
 
+    Accept an executable path or an explicit command for controlled probes.
     Values are working-set MB on Windows, not Linux wait4 maxrss.
     """
     if sys.platform != "win32":
         raise RuntimeError("Windows measurement requires Windows")
+    command = ([str(binary)] if isinstance(binary, (str, Path))
+               else [str(part) for part in binary])
+    if not command:
+        raise ValueError("missing Windows measurement command")
     class MemoryCounters(ctypes.Structure):
         _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
                     ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
@@ -140,7 +145,7 @@ def run_windows_measure(binary: Path, output: Path, *, timeout: int = 3600) -> d
     measured = False
     error_output = Path(str(output) + ".stderr")
     with output.open("wb") as dest, error_output.open("wb") as errors:
-        proc = subprocess.Popen([str(binary)], cwd=ROOT, stdout=dest,
+        proc = subprocess.Popen(command, cwd=ROOT, stdout=dest,
                                 stderr=errors, stdin=subprocess.DEVNULL)
         try:
             while True:
@@ -163,11 +168,11 @@ def run_windows_measure(binary: Path, output: Path, *, timeout: int = 3600) -> d
                 proc.wait()
     elapsed = time.perf_counter() - start
     if proc.returncode != 0:
-        return {"cmd": [str(binary)], "exit": proc.returncode,
+        return {"cmd": command, "exit": proc.returncode,
                 "stdout": "", "stderr": error_output.read_text(encoding="utf-8", errors="replace")[-MAX_LOG:]}
     if not measured:
         raise ValueError("Windows peak working set could not be measured")
-    return {"cmd": [str(binary)], "exit": 0,
+    return {"cmd": command, "exit": 0,
             "stdout": "{0:.6f} {0:.6f} {0:.6f} {1:.3f}".format(elapsed, peak / 1048576.0),
             "stderr": "", "memory_semantics": "Windows PeakWorkingSetSize; Linux maxrss is different"}
 
