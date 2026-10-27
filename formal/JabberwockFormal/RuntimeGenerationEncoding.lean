@@ -32,6 +32,17 @@ instance (counter step : Nat) : Decidable (hasRoom counter step) := by
   unfold hasRoom
   infer_instance
 
+/-- Parameterized form of the runtime capacity check. The parameter
+    permits reasoning about JW_TEST_GENERATION_LIMIT without assuming the
+    production default limit. -/
+def capacityCheckAt (limit counter step : Nat) : Prop :=
+  step ≤ limit ∧ counter ≤ limit - step
+
+theorem capacityCheckAt_iff_sum (limit counter step : Nat) :
+    capacityCheckAt limit counter step ↔ counter + step ≤ limit := by
+  unfold capacityCheckAt
+  omega
+
 /-- The normalized sum bound is equivalent to the subtraction check used by
     gen_has_room, provided the counter and step are natural numbers. -/
 def cCapacityCheck (counter step : Nat) : Prop :=
@@ -250,6 +261,22 @@ theorem packed_word_step_no_uint64_wrap
   unfold uint64Add
   rw [packed_word_step]
   exact Nat.mod_eq_of_lt packedBound
+
+/-- The no-wrap result also holds for any compile-time generation limit
+    no greater than the production counter mask, including the runtime's
+    bounded test override. -/
+theorem packed_word_step_no_uint64_wrap_at_limit
+    (retained : Bool) {counter step limit : Nat}
+    (limitBound : limit ≤ maxCounter)
+    (room : capacityCheckAt limit counter step) :
+    uint64Add (pack retained counter) step =
+      pack retained (counter + step) := by
+  have sumBound : counter + step ≤ limit :=
+    (capacityCheckAt_iff_sum limit counter step).1 room
+  have defaultRoom : hasRoom counter step := by
+    unfold hasRoom
+    omega
+  exact packed_word_step_no_uint64_wrap retained defaultRoom
 
 /-- Every modeled live word differs from the retired sentinel. -/
 theorem live_word_not_retired
