@@ -96,6 +96,18 @@ class BenchmarkReportTests(unittest.TestCase):
         baseline["cases"]["sort"] = {"status": "FAIL"}
         self.assertEqual(bench.compare(current, baseline, 15)["status"], "INCOMPLETE_BASELINE")
 
+    def test_nonfinite_baseline_time_is_invalid(self):
+        metadata = {"schema_version": 2, "environment": {}, "runs": 8,
+                    "subjects": list(bench.TARGETS), "compiler_hashes": {"runtime": "same"},
+                    "source_hashes": {}, "flags": {}}
+        ok = {"status": "PASS", "metrics": {"jwc": {"median_s": 1.0}}}
+        current = {**metadata, "cases": {"fib": ok}}
+        for bad in (0, -1, float("nan"), float("inf")):
+            baseline = {**metadata, "cases": {"fib": {"status": "PASS",
+                        "metrics": {"jwc": {"median_s": bad}}}}}
+            with self.subTest(bad=bad):
+                self.assertEqual(bench.compare(current, baseline, 15)["status"], "INVALID_BASELINE")
+
     def test_old_format_is_not_comparable(self):
         a = {"schema_version": 2}
         b = {"schema_version": 1}
