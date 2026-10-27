@@ -354,7 +354,7 @@ theorem kill_owner_cannot_create_liveness
                   | none => simp [killOwnerFacts, targetOwner, ht] at newOwn
                   | some kind =>
                       cases kind <;> simp [killOwnerFacts, targetOwner, ht] at newOwn
-                      exact ht
+                      exact Eq.refl _
               simp [analyzerIsLive, oldOwn]
 
 /-- The fact join used at a CFG merge: retain a fact only if both
@@ -520,7 +520,7 @@ theorem kill_elements_cannot_create_liveness
             | none => simp [killElementFacts, ho] at present
             | some ownerFact =>
                 cases ownerFact <;> simp [killElementFacts, ho] at present
-                · exact ho
-          simpa [analyzerIsLive, h, oldOwn]
+                · exact Eq.refl _
+          simp [analyzerIsLive, oldOwn]
 
 end JabberwockFormal.CheckElision
