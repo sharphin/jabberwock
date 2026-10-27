@@ -186,7 +186,7 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
             else:
                 theorem_file = ROOT / "formal" / (module.replace(".", "/") + ".lean")
                 if (not theorem_file.is_file() or
-                        row.get("proof_check", {}).get("module_sha256") != file_hash(theorem_file)):
+                        (row.get("proof_check") or {}).get("module_sha256") != file_hash(theorem_file)):
                     blockers.append("Lean theorem source was not audited at this hash")
             if (not manifest_path.is_file() or
                     formal["compilers"][c].get("manifest_sha256") != file_hash(manifest_path)):
@@ -228,7 +228,7 @@ def main(argv=None):
                         inputs_identity=test_input_identity())
         report["inputs"] = {"practical_sha256": file_hash(args.practical),
                             "formal_sha256": file_hash(args.formal)}
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         report = {"schema_version": 1, "kind": "whole-compiler-acceptance-audit",
                   "status": "INVALID_EVIDENCE", "reason": str(error)}
     report["checked_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
