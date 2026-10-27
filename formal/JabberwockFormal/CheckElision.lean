@@ -401,4 +401,29 @@ theorem meet_live_implies_right
   rw [comm] at live
   exact meet_live_implies_left right left key live
 
+/-- A straight-line transfer of an owner's destruction never retains
+    the stale fact that the destroyed owner is still present. -/
+theorem killed_owner_absent (facts : AnalyzerFacts) (owner : Nat) :
+    killOwnerFacts facts owner owner = none := by
+  simp [killOwnerFacts]
+
+/-- Each direct borrower of a destroyed owner is removed, independent
+    of other facts in the analysis state. -/
+theorem killed_owner_invalidates_direct_borrow
+    (facts : AnalyzerFacts) (owner borrower : Nat)
+    (distinct : borrower ≠ owner)
+    (borrow : facts borrower = some (.refTo owner)) :
+    killOwnerFacts facts owner borrower = none := by
+  simp [killOwnerFacts, distinct, borrow]
+
+/-- A conservative ownership transfer does not create a new check-elision
+    candidate at the destruction site. -/
+theorem killed_borrow_cannot_elide
+    (facts : AnalyzerFacts) (owner borrower : Nat)
+    (distinct : borrower ≠ owner)
+    (borrow : facts borrower = some (.refTo owner)) :
+    analyzerIsLive (killOwnerFacts facts owner)
+      (killOwnerFacts facts owner borrower) = false := by
+  simp [killOwnerFacts, distinct, borrow, analyzerIsLive]
+
 end JabberwockFormal.CheckElision
