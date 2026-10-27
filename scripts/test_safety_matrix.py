@@ -46,7 +46,7 @@ class MatrixTests(unittest.TestCase):
                  mock.patch.object(report, "version", return_value="mock"), \
                  mock.patch.object(report, "run_probe", side_effect=execute), contextlib.redirect_stdout(io.StringIO()):
                 code = report.main(["--output", str(path)])
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(code, 1)
             self.assertEqual(len(data["items"]), 24)
             self.assertEqual(len(data["goals"]), 10)
@@ -65,7 +65,7 @@ class MatrixTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 code = report.main(["--output", str(output)])
             self.assertEqual(code, 1)
-            data = json.loads(output.read_text())
+            data = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(len(data["items"]), 24)
             self.assertTrue(any(x["status"] == "NOT_RUN" for x in data["items"] if x["compiler"] == "jwc"))
 
