@@ -33,6 +33,8 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
     result = [
         ("python-regressions", [py, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"]),
         ("practical-safety", [*safety, "--compiler", "all", "--output", str(practical)]),
+        ("whole-implementation-obligations", [py, str(ROOT / "scripts/whole_compiler_proof.py"),
+                                              "--output", str(output / "whole-proof-inventory.json")]),
         ("emitter-proof-binding", [py, str(ROOT / "scripts/proof_emitter_correspondence.py"),
                                    "--output", str(output / "emitter-proof-binding.json")]),
         ("formal-proofs", [py, str(ROOT / "scripts/formal_report.py"),
@@ -75,7 +77,7 @@ def execute_stage(label: str, command: list[str], output: Path, *, timeout: int)
 
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
-    expected = {"python-regressions", "practical-safety", "emitter-proof-binding", "formal-proofs",
+    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "emitter-proof-binding", "formal-proofs",
                 "acceptance-34", "benchmark-four-way", "legacy-optimization-counts"}
     verdict = "FAIL"
     reason = "one or more verification stages failed"
@@ -124,6 +126,7 @@ def main(argv=None):
         # Delete prior output: never reuse a report from a previous attempt.
         report_name = {"practical-safety": "safety.json", "formal-proofs": "formal.json",
                        "emitter-proof-binding": "emitter-proof-binding.json",
+                       "whole-implementation-obligations": "whole-proof-inventory.json",
                        "acceptance-34": "acceptance-34.json",
                        "benchmark-four-way": "benchmark-four-way.json"}.get(label)
         if report_name:
