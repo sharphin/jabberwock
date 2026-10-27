@@ -28,6 +28,8 @@ type VarId = usize;
 enum Fact {
     /// ムーブされていない own を必ず持っている
     Own,
+    /// 生存しているリスト変数。構造変更やムーブで無効になる
+    Container,
     /// このフレームの own 変数を直接借りた ref。その変数が `Own` のままなら安全
     RefTo(VarId),
     /// 関数の実行中ずっと借りた先が生きている ref（安全な引数から来たもの）
@@ -42,6 +44,11 @@ type Facts = HashMap<VarId, Fact>;
 fn kill_in(facts: &mut Facts, id: VarId) {
     facts.remove(&id);
     facts.retain(|_, f| *f != Fact::RefTo(id) && *f != Fact::RefToElement(id));
+}
+
+fn is_list_binding(ty: &Option<TypeExpr>, init: &Expr) -> bool {
+    matches!(ty.as_ref().map(|t| &t.kind), Some(TypeKind::List(_)))
+        || matches!(&init.kind, ExprKind::ArrayLit(_, seq) if seq.get() == Seq::List)
 }
 
 /// 片方がまだない合流（break や continue が 1 つも出てこない場合）
@@ -216,9 +223,11 @@ impl<'a> FnAnalyzer<'a> {
     fn is_live_ref(&self, f: Option<Fact>) -> bool {
         match f {
             Some(Fact::Pinned) => true,
-            Some(Fact::RefTo(x)) => self.facts.get(&x) == Some(&Fact::Own),
+            Some(Fact::RefTo(x)) => {
+                matches!(self.facts.get(&x), Some(Fact::Own | Fact::Container | Fact::Pinned))
+            }
             Some(Fact::RefToElement(x)) => {
-                matches!(self.facts.get(&x), Some(Fact::Own | Fact::Pinned))
+                matches!(self.facts.get(&x), Some(Fact::Own | Fact::Container | Fact::Pinned))
             }
             _ => false,
         }
@@ -229,7 +238,7 @@ impl<'a> FnAnalyzer<'a> {
     fn container_owner(&self, name: &str) -> Option<VarId> {
         let id = self.lookup(name)?;
         match self.facts.get(&id).copied()? {
-            Fact::Own | Fact::Pinned => Some(id),
+            Fact::Own | Fact::Container | Fact::Pinned => Some(id),
             Fact::RefTo(owner) => Some(owner),
             _ => None,
         }
@@ -277,9 +286,9 @@ impl<'a> FnAnalyzer<'a> {
 
     fn stmt(&mut self, s: &Stmt) {
         match s {
-            Stmt::Let { name, init, .. } => {
+            Stmt::Let { name, ty, init, .. } => {
                 let f = self.expr(init, false);
-                self.declare(name, f);
+                self.declare(name, if is_list_binding(ty, init) { Some(Fact::Container) } else { f });
             }
             Stmt::Assign { target, value, .. } => {
                 // インタプリタと同じく、右辺を先に評価する
@@ -370,7 +379,7 @@ impl<'a> FnAnalyzer<'a> {
             ExprKind::Var(name) => {
                 let id = self.lookup(name)?;
                 match self.facts.get(&id).copied()? {
-                    Fact::Own => Some(Fact::RefTo(id)),
+                    Fact::Own | Fact::Container => Some(Fact::RefTo(id)),
                     f => Some(f), // ref の ref は同じ先を指す
                 }
             }
@@ -378,7 +387,7 @@ impl<'a> FnAnalyzer<'a> {
                 let ExprKind::Var(name) = &base.kind else { return None };
                 let id = self.lookup(name)?;
                 match self.facts.get(&id).copied()? {
-                    Fact::Own | Fact::Pinned => Some(Fact::RefToElement(id)),
+                    Fact::Own | Fact::Container | Fact::Pinned => Some(Fact::RefToElement(id)),
                     Fact::RefTo(owner) => Some(Fact::RefToElement(owner)),
                     // ネストしたコンテナ等は所有関係を確定できないので保守的に扱う
                     _ => None,
@@ -605,13 +614,13 @@ impl<'a> FnAnalyzer<'a> {
                 let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
                 // `this` が呼び出しのあいだ生きているか。一時的な own はこの呼び出しが終わるまで解放されない
                 let this_safe = match temp {
-                    Some(f) => f == Some(Fact::Own) || self.is_live_ref(f),
+                    Some(f) => matches!(f, Fact::Own | Fact::Container) || self.is_live_ref(f),
                     None => {
                         self.expr(recv, true);
                         match &recv.kind {
                             ExprKind::Var(n) => {
                                 let f = self.fact_of(n);
-                                f == Some(Fact::Own) || self.is_live_ref(f)
+                                matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f)
                             }
                             _ => false,
                         }
@@ -687,8 +696,8 @@ impl<'a> FnAnalyzer<'a> {
         let safe = match &inner.kind {
             ExprKind::Var(name) => {
                 let f = self.fact_of(name);
-                // own の先は世代チェックが要らない。ref は借りた先が生きていると言えれば安全。
-                f == Some(Fact::Own) || self.is_live_ref(f)
+                // own / リスト変数の先は安定した場所。ref は借りた先が生きていれば安全。
+                matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f)
             }
             _ => false,
         };
