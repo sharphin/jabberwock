@@ -12,7 +12,8 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from whole_compiler_proof import GOALS, PHASES, inventory as make_inventory, validate
+from whole_compiler_proof import GOALS, PHASES, validate
+from refinement_transition import validate_transition_report
 
 ROOT = Path(__file__).resolve().parents[1]
 # Work from the target/runtime side first, then move outward through the
@@ -41,8 +42,13 @@ def load_object(path: Path, kind: str) -> dict:
     return data
 
 
-def build_plan(inv: dict, refinement: dict, runtime_model: dict | None = None) -> dict:
+def build_plan(inv: dict, refinement: dict, runtime_model: dict | None = None,
+               evidence: dict | None = None) -> dict:
     validate(inv)
+    # Never trust a self-reported PROVEN status. Re-run the same production
+    # refinement gate against the exact current source snapshot and evidence.
+    validate_transition_report(inv, refinement, evidence)
+    verdicts = {finding["id"]: finding["status"] for finding in refinement["findings"]}
     rows = inv["components"]
     grouped = defaultdict(list)
     seen_source_hashes: dict[str, str] = {}
@@ -66,12 +72,16 @@ def build_plan(inv: dict, refinement: dict, runtime_model: dict | None = None) -
                 if row["goal"] not in goal_counts:
                     raise ValueError("unknown proof goal: " + str(row["goal"]))
                 goal_counts[row["goal"]] += 1
+            member_statuses = [verdicts[row["id"]] for row in members]
+            established = member_statuses.count("REFINEMENT_PROVEN")
             packages.append({
                 "id": compiler + ":" + phase,
                 "compiler": compiler,
                 "phase": phase,
                 "priority_rank": PRIORITY.index(phase) + 1,
-                "status": "NOT_PROVEN",
+                "status": "PROVEN" if established == len(members) else "NOT_PROVEN",
+                "verified_obligation_count": established,
+                "remaining_obligation_count": len(members) - established,
                 "source_count": len(source_hashes),
                 "source_sha256": dict(sorted(source_hashes.items())),
                 "underlying_obligation_count": len(members),
@@ -90,7 +100,9 @@ def build_plan(inv: dict, refinement: dict, runtime_model: dict | None = None) -
     covered = sum(p["underlying_obligation_count"] for p in packages)
     if covered != expected:
         raise ValueError("work packages do not cover the full inventory")
-    proved = refinement.get("proved", 0)
+    proved = sum(x == "REFINEMENT_PROVEN" for x in verdicts.values())
+    if refinement.get("proved") != proved:
+        raise ValueError("refinement proof count differs from authenticated findings")
     if refinement.get("required") != expected:
         raise ValueError("refinement report and inventory obligation counts differ")
     if refinement.get("status") not in ("NOT_PROVEN", "PROVEN"):
@@ -128,13 +140,15 @@ def main() -> int:
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--refinement", type=Path, required=True)
     parser.add_argument("--runtime-model", type=Path)
+    parser.add_argument("--evidence", type=Path, help="original evidence for independent replay")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         inv = load_object(args.inventory, "whole-implementation-proof-inventory")
         refinement = load_object(args.refinement, "refinement-transition-audit")
         runtime_model = load_object(args.runtime_model, "runtime-generation-arithmetic-proof") if args.runtime_model else None
-        result = build_plan(inv, refinement, runtime_model)
+        evidence = json.loads(args.evidence.read_text(encoding="utf-8")) if args.evidence else None
+        result = build_plan(inv, refinement, runtime_model, evidence)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result = {"schema_version": 1, "kind": "refinement-work-frontier",
                   "status": "INVALID_REPORT", "reason": str(exc)}
