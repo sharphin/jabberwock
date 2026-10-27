@@ -34,7 +34,7 @@ class FullRunnerTests(unittest.TestCase):
         tasks = full.plans(output)
         self.assertEqual([x[0] for x in tasks], [
             "python-regressions", "practical-safety", "whole-implementation-obligations", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
-            "acceptance-34", "benchmark-four-way", "legacy-optimization-counts"])
+            "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"])
         self.assertIn("test_*.py", tasks[0][1])
         self.assertIn("--require-full", dict(tasks)["formal-proofs"])
         self.assertIn("--full", dict(tasks)["benchmark-four-way"])
