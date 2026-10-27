@@ -54,4 +54,36 @@ theorem no_capacity_can_retire
       ⟨generation, .live⟩ ⟨generation, .retired⟩ := by
   exact JabberwockFormal.Generation.Step.retire generation bounded
 
+/-- A released block may be reused at the new epoch, but the saved epoch
+    of a reference issued before release cannot pass the generation gate.
+    This models the logical epoch transition; physical storage, C atomics,
+    and freelist correctness remain independent refinement obligations. -/
+theorem released_then_reused_rejects_old_reference
+    {limit generation : Nat}
+    (room : HasRoom limit generation 1) :
+    JabberwockFormal.Generation.checkedRead generation
+      ⟨generation + 1, .live⟩ ≠ .ok () := by
+  have released :=
+    JabberwockFormal.Generation.release_postcondition limit generation
+      (by
+        have bound := hasRoom_prevents_overflow room
+        omega)
+  have capacity : generation + 1 ≤ limit :=
+    hasRoom_prevents_overflow room
+  have reused : JabberwockFormal.Generation.Steps limit
+      ⟨generation + 1, .vacant⟩ ⟨generation + 1, .live⟩ :=
+    .tail (.refl _) (.allocate (generation + 1) capacity)
+  exact JabberwockFormal.Generation.no_successful_read_after_invalidation
+    (borrowed := ⟨rfl, rfl⟩)
+    released.2 reused
+
+/-- Retirement is a terminal state for old references in the generation
+    model, regardless of the saved epoch. -/
+theorem retired_block_rejects_old_reference
+    (generation saved : Nat) :
+    JabberwockFormal.Generation.checkedRead saved
+      ⟨generation, .retired⟩ = .error .dangling := by
+  exact JabberwockFormal.Generation.retired_read_rejected
+    saved ⟨generation, .retired⟩ rfl
+
 end JabberwockFormal.RuntimeGenerationRefinement
