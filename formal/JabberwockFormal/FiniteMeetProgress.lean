@@ -81,4 +81,27 @@ theorem absent_after_updates {n : Nat} (old : Facts n)
   | cons head tail ih =>
       exact ih (update old head) (absence_persists old head key absent)
 
+/-- A changed reachable entry consumes at least one fact slot permanently:
+    all later predecessor merges leave that slot absent. This is the key
+    per-block progress invariant needed for a future numeric worklist bound. -/
+theorem changed_update_permanently_erases_fact {n : Nat}
+    (old incoming : Facts n) (later : List (Facts n))
+    (changed : update old incoming ≠ old) :
+    ∃ key : Fin n, ∃ fact : Nat,
+      old key = some fact ∧
+      update old incoming key = none ∧
+      updateMany (update old incoming) later key = none := by
+  obtain ⟨key, fact, present, erased⟩ :=
+    changed_update_erases_fact old incoming changed
+  exact ⟨key, fact, present, erased,
+    absent_after_updates (update old incoming) later key erased⟩
+
+/-- An entry with no facts left is stable under every later meet. -/
+theorem empty_entry_stable {n : Nat} (incoming : Facts n)
+    (empty : Facts n) (allAbsent : ∀ key, empty key = none) :
+    update empty incoming = empty := by
+  funext key
+  exact (absence_persists empty incoming key (allAbsent key)).trans
+    (allAbsent key).symm
+
 end JabberwockFormal.FiniteMeetProgress
