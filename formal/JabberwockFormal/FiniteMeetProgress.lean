@@ -108,8 +108,7 @@ theorem empty_entry_stable {n : Nat} (incoming : Facts n)
     removal, every later finite sequence of joins keeps that slot empty. -/
 theorem no_second_loss_at_same_local {n : Nat}
     (old incoming : Facts n) (later : List (Facts n))
-    (key : Fin n) (fact : Nat)
-    (before : old key = some fact)
+    (key : Fin n)
     (erased : update old incoming key = none) :
     updateMany (update old incoming) later key = none := by
   exact absent_after_updates (update old incoming) later key erased
