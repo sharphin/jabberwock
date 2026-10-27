@@ -130,11 +130,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         refinement += ["--evidence", str(args.evidence.resolve())]
     plans.append(("refinement", refinement))
-    plans.append(("refinement-frontier", [py, str(scripts / "refinement_frontier.py"),
-                                          "--inventory", str(output / "inventory.json"),
-                                          "--refinement", str(output / "refinement.json"),
-                                          "--runtime-model", str(output / "runtime-generation-proof.json"),
-                                          "--output", str(output / "refinement-frontier.json")]))
+    frontier = [py, str(scripts / "refinement_frontier.py"),
+                "--inventory", str(output / "inventory.json"),
+                "--refinement", str(output / "refinement.json"),
+                "--runtime-model", str(output / "runtime-generation-proof.json"),
+                "--output", str(output / "refinement-frontier.json")]
+    if args.evidence:
+        frontier += ["--evidence", str(args.evidence.resolve())]
+    plans.append(("refinement-frontier", frontier))
     plans.append(("coverage", [py, str(scripts / "formal_proof_coverage.py"),
                                 "--boundaries", str(output / "semantic-boundaries.json"),
                                 "--bindings", str(output / "stage-refinement-binding.json"),
