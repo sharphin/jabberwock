@@ -48,9 +48,9 @@ def main(argv=None) -> int:
             cases = benchmark["cases"]
             suite = benchmark.get("suite")
             if (not isinstance(cases, dict) or not cases or not isinstance(suite, list)
-                    or len(suite) != len(set(suite)) or set(suite) != set(cases)
                     or any(not isinstance(n, str) or not n or n in (".", "..")
-                           or "/" in n or "\\\\" in n for n in suite)):
+                           or "/" in n or chr(92) in n for n in suite)
+                    or len(suite) != len(set(suite)) or set(suite) != set(cases)):
                 raise ValueError("missing, foreign or unsafe benchmark case identities")
             expected = {(args.ir_root / name / "jwc.ll").resolve() for name in suite}
             actual = {p.resolve() for p in files}
