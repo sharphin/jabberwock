@@ -149,7 +149,7 @@ py -m unittest discover -s scripts -p "test_*.py"
 既にユーザーが作成したレポートのみに対して34件を監査する場合:
 
 ```powershell
-py scripts/acceptance_report.py --practical target/safety-windows-report.json --formal target/formal-report.json --os windows
+py scripts/acceptance_report.py --practical target/safety-windows-report.json --formal target/formal-report.json --inventory target/whole-proof-inventory.json --os windows
 ```
 
 監査出力は `target/local-verification.json` 内の `acceptance_34`、
@@ -163,3 +163,12 @@ py scripts/acceptance_report.py --practical target/safety-windows-report.json --
 
 受入基準の拡充・ケース追加は可能。ケース数を固定値だけで照合して
 新規ケースの検査漏れを正当化してはならない。
+
+
+## 実装ソースからの証明義務と受入判定の接続
+
+`scripts/whole_compiler_proof.py` は jwc/Rust と runtime の実装ソースから、
+各ソースとG1〜G5の対応証明義務を生成する。
+`acceptance_report.py` は `--inventory` を必須とし、正規のソース一覧・フェーズ・目標・ハッシュと一致しない結果を拒否する。
+G1〜G5それぞれに未証明の実装リンクを列挙する。
+ソース一覧の一致は意味保存や型安全性の数学的証明ではないため、未解決のrefinementを正式受入済みに変更しない。
