@@ -12,7 +12,6 @@ abbrev Facts (n : Nat) := Fin n → Option Nat
 def update {n : Nat} (old incoming : Facts n) : Facts n :=
   fun key => if old key = incoming key then old key else none
 
-/-- A meet never introduces a nonempty fact not already in the old state. -/
 theorem retained_from_old {n : Nat} (old incoming : Facts n)
     (key : Fin n) (fact : Nat)
     (h : update old incoming key = some fact) :
@@ -21,7 +20,6 @@ theorem retained_from_old {n : Nat} (old incoming : Facts n)
   · simpa [update, same] using h
   · simp [update, same] at h
 
-/-- A meet also cannot introduce a fact missing on the incoming edge. -/
 theorem retained_from_incoming {n : Nat} (old incoming : Facts n)
     (key : Fin n) (fact : Nat)
     (h : update old incoming key = some fact) :
@@ -31,7 +29,6 @@ theorem retained_from_incoming {n : Nat} (old incoming : Facts n)
   · exact same.symm.trans ho
   · simp [update, same] at h
 
-/-- Repeating an identical predecessor meet does not change the result. -/
 theorem update_idempotent {n : Nat} (old incoming : Facts n) :
     update (update old incoming) incoming = update old incoming := by
   funext key
@@ -39,29 +36,51 @@ theorem update_idempotent {n : Nat} (old incoming : Facts n) :
   · simp [update, same]
   · simp [update, same]
 
-/-- If a reachable block's meet changes its state, there is a concrete
-    local whose previously known fact has been erased. -/
+/-- A missing fact remains missing after a reachable-block meet. -/
+theorem absence_persists {n : Nat} (old incoming : Facts n)
+    (key : Fin n) (absent : old key = none) :
+    update old incoming key = none := by
+  by_cases same : old key = incoming key
+  · simp [update, same, absent]
+  · simp [update, same]
+
+/-- Any change to a reachable entry erases some existing positive fact. -/
 theorem changed_update_erases_fact {n : Nat} (old incoming : Facts n)
     (changed : update old incoming ≠ old) :
     ∃ key : Fin n, ∃ fact : Nat,
       old key = some fact ∧ update old incoming key = none := by
   have differing : ∃ key : Fin n, update old incoming key ≠ old key := by
-    if h : ∀ key : Fin n, update old incoming key = old key then
-      have equal : update old incoming = old := funext h
-      exact False.elim (changed equal)
-    else
-      exact Classical.not_forall.mp h
-  obtain ⟨key, hk⟩ := differing
-  cases ho : old key with
+    apply Classical.byContradiction
+    intro noDifference
+    apply changed
+    funext key
+    by_cases equal : update old incoming key = old key
+    · exact equal
+    · exact False.elim (noDifference ⟨key, equal⟩)
+  obtain ⟨key, different⟩ := differing
+  cases oldValue : old key with
   | none =>
-      have hn : update old incoming key = none := by
-        exact absence_persists old incoming key ho
-      exact False.elim (hk (hn.trans ho.symm))
+      exact False.elim (different ((absence_persists old incoming key oldValue).trans oldValue.symm))
   | some fact =>
       have erased : update old incoming key = none := by
         by_cases same : old key = incoming key
-        · exact False.elim (hk (by simp [update, same]))
+        · exact False.elim (different (by simp [update, same]))
         · simp [update, same]
-      exact ⟨key, fact, ho, erased⟩
+      exact ⟨key, fact, oldValue, erased⟩
 
+/-- Apply any finite sequence of predecessor merges. -/
+def updateMany {n : Nat} (old : Facts n) : List (Facts n) → Facts n
+  | [] => old
+  | incoming :: rest => updateMany (update old incoming) rest
 
+/-- Repeated merges never resurrect a removed fact. -/
+theorem absent_after_updates {n : Nat} (old : Facts n)
+    (incoming : List (Facts n)) (key : Fin n)
+    (absent : old key = none) :
+    updateMany old incoming key = none := by
+  induction incoming generalizing old with
+  | nil => exact absent
+  | cons head tail ih =>
+      exact ih (update old head) (absence_persists old head key absent)
+
+end JabberwockFormal.FiniteMeetProgress
