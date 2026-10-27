@@ -161,5 +161,16 @@ class BuildGraphTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "absolute/traversal input path"):
                         audit(graph, root, {})
 
+    def test_duplicate_tracked_leaf_path_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["source-alias"] = {
+                "kind": "file", "path": "input.jw",
+                "sha256": hashlib.sha256(b"source").hexdigest()}
+            graph["nodes"]["build"]["inputs"].append("source-alias")
+            with self.assertRaisesRegex(ValueError, "duplicate tracked file/tool path"):
+                audit(graph, root, {})
+
 if __name__ == "__main__":
     unittest.main()
