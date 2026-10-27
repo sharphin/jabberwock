@@ -29,6 +29,8 @@ def main(argv=None) -> int:
     parser.add_argument("--ir-root", type=Path, required=True,
                         help="directory containing generated .ll outputs")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--benchmark-report", type=Path,
+                        help="require exact IR files for all reported benchmark cases")
     parser.add_argument("--opt", default="opt")
     args = parser.parse_args(argv)
     results = []
@@ -39,6 +41,23 @@ def main(argv=None) -> int:
     files = sorted(args.ir_root.rglob("*.ll")) if args.ir_root.is_dir() else []
     if not files:
         errors.append("no concrete LLVM IR found; emitter template matching is not sufficient")
+    if args.benchmark_report:
+        try:
+            benchmark = json.loads(args.benchmark_report.read_text(encoding="utf-8"))
+            cases = benchmark["cases"]
+            if not isinstance(cases, dict) or not cases:
+                raise ValueError("empty or malformed benchmark cases")
+            expected = {(args.ir_root / name / "jwc.ll").resolve() for name in cases}
+            actual = {p.resolve() for p in files}
+            if actual != expected:
+                errors.append("missing or unexpected generated LLVM IR: " + str({
+                    "missing": sorted(str(p) for p in expected - actual),
+                    "extra": sorted(str(p) for p in actual - expected)}))
+            if any(not isinstance(case, dict) or case.get("status") != "PASS"
+                   for case in cases.values()):
+                errors.append("benchmark compilation/execution did not pass for every case")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            errors.append("benchmark report not verifiable: " + str(exc))
     if tool:
         for path in files:
             try:
