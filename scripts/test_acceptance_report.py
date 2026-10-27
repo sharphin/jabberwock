@@ -12,13 +12,22 @@ import acceptance_requirements as req
 def fixture():
     items = []
     goals = []
+    direct_goals = []
+    probes = []
     for compiler in req.COMPILERS:
         for n in range(1, 13):
             items.append({"id": f"windows-{compiler}-{n:02}", "compiler": compiler,
                           "item": n, "target_os": "windows", "probe_names": [f"{compiler}-probe-{n}"],
                           "status": "PROBES_PASS_ONLY", "acceptance": "BLOCKED",
                           "coverage_gaps": ["whole feature verification missing"]})
+            probes.append({"name": f"{compiler}-probe-{n}", "compiler": compiler,
+                           "items": [n], "status": "PROBE_PASS"})
         for goal in req.GOALS:
+            direct_goals.append({"id": f"windows-{compiler}-{goal}",
+                                 "compiler": compiler, "status": "PROBES_PASS_ONLY",
+                                 "direct_probe_names": [f"{compiler}-goal-{goal}"]})
+            probes.append({"name": f"{compiler}-goal-{goal}", "compiler": compiler,
+                           "items": [], "status": "PROBE_PASS"})
             goals.append({"id": compiler + "-" + goal, "compiler": compiler,
                           "goal": goal, "acceptance": "NOT_PROVEN",
                           "proof_check": {"status": "KERNEL_CHECKED"},
@@ -27,7 +36,8 @@ def fixture():
                           "excluded": ["unmodelled LLVM"], "theorems": [goal]})
     practical = {"schema_version": 3, "suite": {"target_os": "windows",
                   "compilers": list(req.COMPILERS)}, "run_status": "COMPLETE",
-                  "active_probe": None, "items": items}
+                  "active_probe": None, "items": items, "goals": direct_goals,
+                  "results": probes}
     formal = {"schema_version": 3, "compilers": {c: {"source": {"sha256": c + "-sha"}}
                                                for c in req.COMPILERS},
               "goals": goals}
@@ -96,6 +106,24 @@ class AcceptanceRequirementsTests(unittest.TestCase):
                 p["source_snapshots"]["rust"]["files"] = {}
             with self.subTest(change=change), self.assertRaises(ValueError):
                 self.check(p, formal, identity)
+
+    def test_claimed_probe_success_must_match_actual_probe_records(self):
+        practical, formal, identity = fixture()
+        practical["results"][0]["status"] = "FAIL"
+        result = self.check(practical, formal, identity)
+        item = next(x for x in result["obligations"] if x["id"] == "jwc-S01")
+        self.assertTrue(any("did not pass" in b for b in item["blockers"]))
+
+    def test_omitted_practical_goal_or_probe_is_rejected(self):
+        practical, formal, identity = fixture()
+        p = copy.deepcopy(practical)
+        p["goals"].pop()
+        with self.assertRaises(ValueError):
+            self.check(p, formal, identity)
+        p = copy.deepcopy(practical)
+        p["results"].pop()
+        with self.assertRaises(ValueError):
+            self.check(p, formal, identity)
 
     def test_wrong_os_rejected(self):
         practical, formal, identities = fixture()
