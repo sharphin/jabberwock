@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import json
+import hashlib
 import unittest
 from unittest import mock
 
@@ -145,6 +146,10 @@ class FullRunnerTests(unittest.TestCase):
             self.assertEqual(stage["exit_code"], 17)
             self.assertIn("evidence", Path(stage["stdout_log"]).read_text())
             self.assertTrue(Path(stage["stderr_log"]).is_file())
+            self.assertEqual(stage["stdout_sha256"], hashlib.sha256(Path(stage["stdout_log"]).read_bytes()).hexdigest())
+            self.assertEqual(stage["stderr_sha256"], hashlib.sha256(Path(stage["stderr_log"]).read_bytes()).hexdigest())
+            self.assertEqual(stage["stdout_bytes"], Path(stage["stdout_log"]).stat().st_size)
+            self.assertEqual(stage["stderr_bytes"], Path(stage["stderr_log"]).stat().st_size)
 
 
 if __name__ == "__main__":
