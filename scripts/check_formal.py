@@ -21,7 +21,7 @@ def main():
     if "version 4.24.0," not in version:
         raise SystemExit("expected Lean 4.24.0, got: " + version.strip())
     theorems = []
-    for path in sorted((PROJECT / "JabberwockFormal").glob("*.lean")):
+    for path in sorted((PROJECT / "JabberwockFormal").rglob("*.lean")):
         source = path.read_text(encoding="utf-8")
         if re.search(r"\b(sorry|admit|axiom|unsafe|native_decide)\b", source):
             raise SystemExit("unapproved proof escape in " + str(path))
@@ -32,6 +32,8 @@ def main():
             raise SystemExit("missing explicit namespace: " + str(path))
         theorems.extend(namespace[1] + "." + name for name in
                         re.findall(r"^theorem ([A-Za-z0-9_]+)\b", source, re.MULTILINE))
+    if len(theorems) != len(set(theorems)):
+        raise SystemExit("duplicate theorem declarations in proof audit")
     if not theorems:
         raise SystemExit("no theorems found")
     subprocess.run([lake, "build"], cwd=PROJECT, check=True)
