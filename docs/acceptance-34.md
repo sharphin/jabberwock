@@ -172,3 +172,18 @@ py scripts/acceptance_report.py --practical target/safety-windows-report.json --
 `acceptance_report.py` は `--inventory` を必須とし、正規のソース一覧・フェーズ・目標・ハッシュと一致しない結果を拒否する。
 G1〜G5それぞれに未証明の実装リンクを列挙する。
 ソース一覧の一致は意味保存や型安全性の数学的証明ではないため、未解決のrefinementを正式受入済みに変更しない。
+
+## 実機での検証→報告→修正サイクル
+
+Windows PowerShellで、PRの最新headを取得後、リポジトリ直下から次を実行する。
+
+```powershell
+py scripts/verify_all_local.py
+py scripts/package_verification.py
+```
+
+`verify_all_local.py` の終了コードが1であっても、未証明の数学的義務による最終受入未達と、テストの失敗を混同しない。`target/verification-complete/summary.json` の `stages` に工程別終了コード、`evidence` に未証明項目とテスト失敗内容を記録する。証明義務の一覧生成が正常完了した場合、義務が未証明でも一覧生成ステージ自体は終了コード0とする。全体受入が成立しなければ最終終了コードは0にしない。
+
+`target/verification-evidence.zip` はレポートJSONとstdout/stderrログをまとめた再レビュー用アーカイブ。ZIP内部の `evidence-manifest.json` に各ファイルのSHA-256を記録する。テスト結果の真正性や数学的正しさの証明にはならない。**共有前にログ内のローカルパス、認証情報、秘密情報を確認すること。**
+
+この段階では全コンパイラ対応証明の検証器、ビルド依存閉包の完全検証、LLVM意味論との接続は未実装である。受入監査はその状態を`NOT_ACCEPTED`と報告し続ける。コンパイラ実装には手を加えない。
