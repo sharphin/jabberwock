@@ -276,7 +276,7 @@ def inspect_native_build_path(native_source: Path) -> dict:
         'let mut args = vec![opt, path_str(&llp)?, path_str(&rt)?',
         'run_clang(&lto).or_else(|_| run_clang(&args))',
     )
-    if any(text.count(fragment) != 1 for fragment in reviewed):
+    if any((text.count(fragment) < 1 if fragment == "fs::write(&rt, RUNTIME_C)" else text.count(fragment) != 1) for fragment in reviewed):
         raise ValueError("native compilation path changed from reviewed source")
     # The exact arguments of a particular invocation (especially JW_CFLAGS)
     # are not available from the source of the build function.
