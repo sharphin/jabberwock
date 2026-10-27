@@ -203,7 +203,8 @@ class AcceptanceRequirementsTests(unittest.TestCase):
         link = {"id": "jwc:semantics:jwc/parser.jw",
                 "compiler": "jwc", "goal": "semantics",
                 "status": "REFINEMENT_NOT_PROVEN"}
-        with mock.patch.object(audit, "validate_whole_inventory"):
+        with mock.patch.object(audit, "validate_whole_inventory"), \
+             mock.patch.object(audit, "validate_transition_report"):
             inventory = {"components": [link]}
             unproved = {"schema_version": 1, "status": "NOT_PROVEN",
                         "findings": [{"id": link["id"], "status": "REFINEMENT_NOT_PROVEN"}]}
