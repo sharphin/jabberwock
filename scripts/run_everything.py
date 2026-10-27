@@ -35,6 +35,8 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
         ("practical-safety", [*safety, "--compiler", "all", "--output", str(practical)]),
         ("whole-implementation-obligations", [py, str(ROOT / "scripts/whole_compiler_proof.py"),
                                               "--output", str(output / "whole-proof-inventory.json")]),
+        ("build-dependency-audit", [py, str(ROOT / "scripts/build_dependency_audit.py"),
+                                    "--output", str(output / "build-dependency-audit.json")]),
         ("emitter-proof-binding", [py, str(ROOT / "scripts/proof_emitter_correspondence.py"),
                                    "--output", str(output / "emitter-proof-binding.json")]),
         ("formal-proofs", [py, str(ROOT / "scripts/formal_report.py"),
@@ -80,6 +82,7 @@ def evidence_overview(output: Path) -> dict:
     """Extract actionable proof gaps regardless of nonzero stage exit codes."""
     paths = {
         "implementation_inventory": "whole-proof-inventory.json",
+        "build_dependencies": "build-dependency-audit.json",
         "formal": "formal.json",
         "acceptance": "acceptance-34.json",
         "practical": "safety.json",
@@ -97,6 +100,8 @@ def evidence_overview(output: Path) -> dict:
                             proved=value.get("proved_obligations"),
                             uncovered=[x.get("id") for x in value.get("components", [])
                                        if x.get("status") != "REFINEMENT_PROVEN"])
+            elif label == "build_dependencies":
+                data.update(checks=value.get("checks", []))
             elif label == "formal":
                 data.update(goals=value.get("summary", {}),
                             infrastructure_error=value.get("infrastructure_error"))
@@ -119,7 +124,7 @@ def evidence_overview(output: Path) -> dict:
 
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
-    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "emitter-proof-binding", "formal-proofs",
+    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
                 "acceptance-34", "benchmark-four-way", "legacy-optimization-counts"}
     verdict = "FAIL"
     reason = "one or more verification stages failed"
@@ -176,6 +181,7 @@ def main(argv=None):
         # Delete prior output: never reuse a report from a previous attempt.
         report_name = {"practical-safety": "safety.json", "formal-proofs": "formal.json",
                        "emitter-proof-binding": "emitter-proof-binding.json",
+                       "build-dependency-audit": "build-dependency-audit.json",
                        "whole-implementation-obligations": "whole-proof-inventory.json",
                        "acceptance-34": "acceptance-34.json",
                        "benchmark-four-way": "benchmark-four-way.json"}.get(label)
@@ -191,7 +197,8 @@ def main(argv=None):
         result["status"] = "FAIL"
         result["reason"] = "quick sampling cannot satisfy full acceptance"
     destination = output / "summary.json"
-    destination.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    destination.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "
+", encoding="utf-8")
     print("FINAL:", result["status"], "|", result["reason"], flush=True)
     print("Report:", destination, flush=True)
     return 0 if result["status"] == "PASS" else 1
