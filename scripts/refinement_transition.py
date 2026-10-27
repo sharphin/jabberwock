@@ -55,7 +55,8 @@ def status_for(obligation: dict, proofs: dict, verifier_registry=None) -> dict:
             return {"status": "INVALID_EVIDENCE",
                     "reason": "generation bridge requires preprocessing and Lean manifest"}
         bound = {"path": obligation["source"], "sha256": obligation["source_sha256"]}
-        if bound not in manifest.get("source_files", []):
+        manifest_sources = manifest.get("source_files")
+        if not isinstance(manifest_sources, list) or bound not in manifest_sources:
             return {"status": "INVALID_EVIDENCE",
                     "reason": "Lean manifest is not bound to runtime source"}
         if (artifact.get("schema_version") != 1 or
@@ -77,6 +78,8 @@ def status_for(obligation: dict, proofs: dict, verifier_registry=None) -> dict:
             # becoming proof; compare complete captured evidence.
             if current != artifact:
                 raise ValueError("preprocessing output differs from independently replayed invocation")
+            if current.get("active_generation_limit_branch") not in ("production", "override"):
+                raise ValueError("generation preprocessor branch was not authenticated")
             root_runtime = ROOT / "runtime" / "jw_rt.c"
             lean_model = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationBitVec.lean"
             inspect_generation_macros(root_runtime)
