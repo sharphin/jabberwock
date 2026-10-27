@@ -121,6 +121,68 @@ class Machine:
         return {"status": "OK", "outputs": self.outputs}
 
 
+    def run_cfg(self, blocks: list[dict], *, entry: int = 0,
+                max_steps: int = 100000) -> dict:
+        """Run CFG with explicit fail-closed block transitions and a fuel bound."""
+        if not isinstance(blocks, list) or not blocks:
+            raise ValueError("missing IR basic blocks")
+        if not isinstance(max_steps, int) or max_steps <= 0:
+            raise ValueError("invalid step budget")
+        pc = entry
+        steps = 0
+        while True:
+            if type(pc) is not int or not (0 <= pc < len(blocks)):
+                return {"status": "TRAP", "reason": "invalid block target", "outputs": self.outputs}
+            block = blocks[pc]
+            if not isinstance(block, dict) or not isinstance(block.get("insts"), list):
+                return {"status": "TRAP", "reason": "malformed block", "outputs": self.outputs}
+            try:
+                for instruction in block["insts"]:
+                    if steps >= max_steps:
+                        raise IRTrap("execution fuel exhausted")
+                    steps += 1
+                    self.execute(instruction)
+                if steps >= max_steps:
+                    raise IRTrap("execution fuel exhausted")
+                steps += 1
+                term = block["term"]
+                kind = term["kind"]
+                if kind == "goto":
+                    pc = term["target"]
+                elif kind == "branch":
+                    condition = self.read(term["condition"])
+                    if type(condition) is not bool:
+                        raise IRTrap("branch condition is not Boolean")
+                    pc = term["yes"] if condition else term["no"]
+                elif kind == "switch":
+                    value = self.read(term["value"])
+                    pc = term["cases"].get(str(value), term["default"])
+                elif kind == "step":
+                    counter = term["counter"]
+                    previous = self._local(counter)
+                    delta = self.read(term["amount"])
+                    if type(previous) is not int or type(delta) is not int:
+                        raise IRTrap("non-integer step")
+                    total = previous + delta
+                    if term["min"] <= total <= term["max"]:
+                        self.locals[counter] = total
+                        pc = term["next"]
+                    else:
+                        pc = term["done"]
+                elif kind == "return":
+                    value = self.read(term["value"])
+                    return {"status": "RETURN", "value": value, "outputs": self.outputs}
+                elif kind == "fail":
+                    raise IRTrap("IR fail: " + str(term.get("message", "")))
+                elif kind == "unreachable":
+                    raise IRTrap("reached unreachable block")
+                else:
+                    raise IRTrap("unsupported terminator: " + str(kind))
+            except (IRTrap, KeyError, TypeError, ValueError, IndexError) as exc:
+                return {"status": "TRAP", "block": pc, "reason": str(exc), "outputs": self.outputs}
+
+
+
 def interpret(document: dict) -> dict:
     if document.get("schema_version") != 1 or not isinstance(document.get("instructions"), list):
         raise ValueError("invalid reference IR program")
