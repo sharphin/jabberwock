@@ -477,11 +477,24 @@ def main(argv: list[str] | None = None) -> int:
     # Infrastructure readiness is distinct from the status of the program
     # being proven. An honest NOT_PROVEN result is a valid operation of the
     # verification infrastructure, not evidence that the runner is broken.
-    infrastructure_status = "INVALID" if infrastructure_errors else "OPERATIONAL"
+    # The runner's operational result is derived from actual execution. An
+    # honest NOT_PROVEN on the compiler side is not a broken infrastructure.
+    # Never claim infrastructure readiness from mere presence of scripts.
+    required_stage_names = set(known_reports) - (set() if args.lean_manifest else {"lean-evidence"})
+    reports_present = all(
+        name in by_name and isinstance(by_name[name].get("report"), dict)
+        and by_name[name]["report"].get("status") not in (None, "INVALID_REPORT")
+        for name in required_stage_names
+    )
+    infrastructure_status = (
+        "INVALID" if infrastructure_errors or not reports_present
+        else "OPERATIONAL"
+    )
     summary = {
         "schema_version": 1, "kind": "jabberwock-formal-tool-run",
         "infrastructure_status": infrastructure_status,
-        "infrastructure_complete_claim": False,
+        "infrastructure_complete_claim": infrastructure_status == "OPERATIONAL",
+        "infrastructure_scope": "existing configured formal runner stages only; not implementation proof",
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "environment": {
             "python_version": sys.version,
