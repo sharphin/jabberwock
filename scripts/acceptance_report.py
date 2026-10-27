@@ -155,6 +155,19 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
                 blockers.append("proof source snapshot differs from the current source")
             if proof_status != SUCCESS_KERNEL:
                 blockers.append("Lean kernel check: " + str(proof_status))
+            manifest_path = ROOT / "formal" / "compilers" / c / "obligations.json"
+            module = row.get("module")
+            if (not isinstance(module, str) or not module.startswith(
+                    "JabberwockFormal." + ("Jwc" if c == "jwc" else "Rust") + ".")):
+                blockers.append("missing or foreign compiler theorem module")
+            else:
+                theorem_file = ROOT / "formal" / (module.replace(".", "/") + ".lean")
+                if (not theorem_file.is_file() or
+                        row.get("proof_check", {}).get("module_sha256") != file_hash(theorem_file)):
+                    blockers.append("Lean theorem source was not audited at this hash")
+            if (not manifest_path.is_file() or
+                    formal["compilers"][c].get("manifest_sha256") != file_hash(manifest_path)):
+                blockers.append("proof obligation manifest has changed")
             if row.get("implementation_correspondence") != "KERNEL_VERIFIED_WHOLE_IMPLEMENTATION":
                 blockers.append("compiler/LLVM/runtime correspondence not kernel-verified")
             excluded = row.get("excluded", [])
