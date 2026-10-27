@@ -45,41 +45,23 @@ theorem changed_update_erases_fact {n : Nat} (old incoming : Facts n)
     (changed : update old incoming ≠ old) :
     ∃ key : Fin n, ∃ fact : Nat,
       old key = some fact ∧ update old incoming key = none := by
-  by_contra missing
-  apply changed
-  funext key
-  by_cases same : old key = incoming key
-  · simp [update, same]
-  · cases h : old key with
-    | none => simp [update, same, h]
-    | some fact =>
-        have erased : update old incoming key = none := by
-          simp [update, same]
-        have contradiction : False := missing ⟨key, fact, h, erased⟩
-        exact False.elim contradiction
+  have differing : ∃ key : Fin n, update old incoming key ≠ old key := by
+    if h : ∀ key : Fin n, update old incoming key = old key then
+      have equal : update old incoming = old := funext h
+      exact False.elim (changed equal)
+    else
+      exact Classical.not_forall.mp h
+  obtain ⟨key, hk⟩ := differing
+  cases ho : old key with
+  | none =>
+      have hn : update old incoming key = none := by
+        exact absence_persists old incoming key ho
+      exact False.elim (hk (hn.trans ho.symm))
+  | some fact =>
+      have erased : update old incoming key = none := by
+        by_cases same : old key = incoming key
+        · exact False.elim (hk (by simp [update, same]))
+        · simp [update, same]
+      exact ⟨key, fact, ho, erased⟩
 
-/-- No new positive analysis fact can appear after a reachable-block
-    update, even when an arbitrary incoming path arrives later. -/
-theorem absence_persists {n : Nat} (old incoming : Facts n)
-    (key : Fin n) (absent : old key = none) :
-    update old incoming key = none := by
-  by_cases same : old key = incoming key
-  · simp [update, same, absent]
-  · simp [update, same]
 
-/-- A finite sequence of updates cannot resurrect an erased fact.
-    The statement is for a single local and any number of incoming edges. -/
-def updateMany {n : Nat} (old : Facts n) : List (Facts n) → Facts n
-  | [] => old
-  | incoming :: rest => updateMany (update old incoming) rest
-
-theorem absent_after_updates {n : Nat} (old : Facts n)
-    (incoming : List (Facts n)) (key : Fin n)
-    (absent : old key = none) :
-    updateMany old incoming key = none := by
-  induction incoming generalizing old with
-  | nil => exact absent
-  | cons head tail ih =>
-      exact ih (update old head) (absence_persists old head key absent)
-
-end JabberwockFormal.FiniteMeetProgress
