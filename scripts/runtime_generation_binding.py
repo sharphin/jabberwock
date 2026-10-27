@@ -31,6 +31,9 @@ LEAN_TOKENS = (
     "def concreteAdvance",
     "theorem concreteAdvance_matches_abstract",
     "theorem packed_word_step_no_uint64_wrap",
+    "def capacityCheckAt",
+    "theorem capacityCheckAt_iff_sum",
+    "theorem packed_word_step_no_uint64_wrap_at_limit",
 )
 
 
