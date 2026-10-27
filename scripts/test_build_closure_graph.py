@@ -75,6 +75,41 @@ class BuildGraphTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cyclic dependency"):
                 audit(graph, root, {})
 
+    def test_duplicate_outputs_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["build"]["outputs"] = ["out.ll", "out.ll"]
+            with self.assertRaisesRegex(ValueError, "duplicate action outputs"):
+                audit(graph, root, {})
+
+    def test_output_path_traversal_blocks(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["build"]["outputs"] = ["../out.ll"]
+            with self.assertRaisesRegex(ValueError, "unsafe action output"):
+                audit(graph, root, {})
+
+    def test_output_overwrites_source_blocks(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["build"]["outputs"] = ["input.jw"]
+            with self.assertRaisesRegex(ValueError, "overwrites tracked input"):
+                audit(graph, root, {})
+
+    def test_two_producers_of_same_output_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            graph["nodes"]["other"] = {
+                "kind": "action", "inputs": ["compiler", "source"],
+                "command": ["tool.bin", "input.jw"], "outputs": ["out.ll"]}
+            graph["targets"].append("other")
+            with self.assertRaisesRegex(ValueError, "multiple producers"):
+                audit(graph, root, {})
+
 
 if __name__ == "__main__":
     unittest.main()
