@@ -269,6 +269,7 @@ class SafetyReportTests(unittest.TestCase):
                  mock.patch.object(report, "version", return_value="mock-version"), \
                  mock.patch.object(report, "run_probe", side_effect=probe), \
                  mock.patch.object(Path, "is_file", return_value=True), \
+                 mock.patch.object(report, "source_identity", return_value={"sha256": "mock", "files": {}}), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(report.main(["--output", str(output)], target_os="windows"), 1)
             data = json.loads(output.read_text(encoding="utf-8"))
