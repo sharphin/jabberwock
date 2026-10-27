@@ -173,7 +173,7 @@ theorem packed_counter_mod
     (retained : Bool) {counter : Nat}
     (bounded : counter < radix) :
     wordCounter (pack retained counter) = counter := by
-  cases retained <;> simp [wordCounter, pack, Nat.add_mod, Nat.mod_eq_of_lt bounded]
+  cases retained <;> simp [wordCounter, pack, Nat.mod_eq_of_lt bounded]
 
 /-- Addition of a step to a packed word agrees with adding to its counter
     while using unbounded natural-number arithmetic. The guard supplies the
@@ -189,8 +189,9 @@ theorem concreteGuard_matches_abstract
     (retained : Bool) {counter step : Nat}
     (bounded : counter < radix) :
     concreteGuard (pack retained counter) step ↔ hasRoom counter step := by
-  have notRetired : pack retained counter ≠ retiredWord :=
-    ne_of_lt (packed_word_is_below_retired retained bounded)
+  have notRetired : pack retained counter ≠ retiredWord := by
+    have below := packed_word_is_below_retired retained bounded
+    omega
   have modulo := packed_counter_mod retained bounded
   unfold concreteGuard
   rw [modulo]
@@ -212,11 +213,13 @@ theorem concreteAdvance_matches_abstract
     (retained : Bool) {counter step : Nat}
     (bounded : counter < radix) :
     concreteAdvance (pack retained counter) step = advance retained counter step := by
-  unfold concreteAdvance advance
-  rw [concreteGuard_matches_abstract retained bounded]
   by_cases room : hasRoom counter step
-  · simp [room, packed_word_step]
-  · simp [room]
+  · have concrete : concreteGuard (pack retained counter) step :=
+      (concreteGuard_matches_abstract retained bounded).2 room
+    simp [concreteAdvance, advance, concrete, room, packed_word_step]
+  · have concrete : ¬ concreteGuard (pack retained counter) step :=
+      fun h => room ((concreteGuard_matches_abstract retained bounded).1 h)
+    simp [concreteAdvance, advance, concrete, room]
 
 /-- Every modeled live word differs from the retired sentinel. -/
 theorem live_word_not_retired
