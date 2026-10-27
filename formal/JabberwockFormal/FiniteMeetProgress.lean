@@ -229,4 +229,50 @@ theorem exhausted_initial_facts_remain_stable {n : Nat}
   exact (absent_after_updates _ later key (allAbsent key)).trans
     (allAbsent key).symm
 
+/-- Splitting a sequence of predecessor meets does not change its result. -/
+theorem updateMany_append {n : Nat}
+    (old : Facts n) (prefix suffix : List (Facts n)) :
+    updateMany old (prefix ++ suffix) =
+      updateMany (updateMany old prefix) suffix := by
+  induction prefix generalizing old with
+  | nil =>
+      rfl
+  | cons head tail ih =>
+      exact ih (update old head)
+
+/-- A local erased at an arbitrary point in a merge history cannot be
+    the witness for any later strict change, even with intervening merges. -/
+theorem historical_strict_changes_have_distinct_keys {n : Nat}
+    (initial : Facts n) (before between : List (Facts n))
+    (firstIncoming secondIncoming : Facts n)
+    (firstStrict :
+      update (updateMany initial before) firstIncoming ≠
+        updateMany initial before)
+    (secondStrict :
+      update
+        (updateMany
+          (update (updateMany initial before) firstIncoming)
+          between)
+        secondIncoming ≠
+      updateMany
+        (update (updateMany initial before) firstIncoming)
+        between) :
+    ∃ firstKey secondKey : Fin n, firstKey ≠ secondKey := by
+  obtain ⟨firstKey, _, _, erased⟩ :=
+    changed_update_erases_fact
+      (updateMany initial before) firstIncoming firstStrict
+  obtain ⟨secondKey, _, present, _⟩ :=
+    changed_update_erases_fact
+      (updateMany
+        (update (updateMany initial before) firstIncoming)
+        between) secondIncoming secondStrict
+  refine ⟨firstKey, secondKey, ?_⟩
+  intro same
+  have absent := absent_after_updates
+    (update (updateMany initial before) firstIncoming)
+    between firstKey erased
+  rw [← same] at present
+  rw [absent] at present
+  cases present
+
 end JabberwockFormal.FiniteMeetProgress
