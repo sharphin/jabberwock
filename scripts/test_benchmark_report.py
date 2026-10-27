@@ -63,7 +63,7 @@ class BenchmarkReportTests(unittest.TestCase):
         a = {"schema_version": 2, "environment": {}, "runs": 5,
              "compiler_hashes": {"jwc": "new", "runtime": "fixed"}, "subjects": list(bench.TARGETS),
              "source_hashes": {}, "flags": {}, "cases": {}}
-        b = {**a, "compiler_hashes": {"jwc": "old"}}
+        b = {**a, "compiler_hashes": {"jwc": "old", "runtime": "fixed"}}
         self.assertEqual(bench.compare(a, b, 15)["status"], "NO_MATCHING_CASES")
 
     def test_changed_workload_is_not_comparable(self):
