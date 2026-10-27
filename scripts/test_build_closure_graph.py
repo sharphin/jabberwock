@@ -136,7 +136,10 @@ class BuildGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
             root = Path(d)
             graph = self.graph(root)
-            (root / "redirect").symlink_to(Path(outside), target_is_directory=True)
+            try:
+                (root / "redirect").symlink_to(Path(outside), target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest("directory symlinks unavailable on this host: " + str(error))
             graph["nodes"]["build"]["outputs"] = ["redirect/out.ll"]
             with self.assertRaisesRegex(ValueError, "action output escapes root"):
                 audit(graph, root, {})
