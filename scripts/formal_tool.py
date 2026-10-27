@@ -15,6 +15,8 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
+import shutil
 import time
 from pathlib import Path
 
@@ -147,9 +149,24 @@ def main(argv: list[str] | None = None) -> int:
         external_paths["evidence"] = args.evidence.absolute()
     if args.lean_manifest:
         external_paths["lean_manifest"] = args.lean_manifest.absolute()
+    # Pin the exact proof-input bytes before launching any stages. Previously
+    # each subprocess reopened the mutable user path, so a temporary swap
+    # between reads could escape the start/end fingerprint comparison.
+    frozen_dir = Path(tempfile.mkdtemp(prefix="jabberwock-formal-inputs-"))
+    frozen_paths = {}
     try:
         external_before = snapshot_external_inputs(external_paths)
+        for name, original in external_paths.items():
+            raw = original.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != external_before[name]["sha256"]:
+                raise ValueError(name + " changed while capturing proof inputs")
+            frozen = frozen_dir / (name + ".json")
+            frozen.write_bytes(raw)
+            if frozen.is_symlink() or hashlib.sha256(frozen.read_bytes()).hexdigest() != external_before[name]["sha256"]:
+                raise ValueError(name + " frozen snapshot differs from original evidence")
+            frozen_paths[name] = frozen
     except (OSError, ValueError) as exc:
+        shutil.rmtree(frozen_dir, ignore_errors=True)
         print("INVALID_EVIDENCE: " + str(exc), file=sys.stderr, flush=True)
         return 2
     py = sys.executable
@@ -180,12 +197,12 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if args.lean_manifest:
         plans.append(("lean-evidence", [py, str(scripts / "lean_evidence_engine.py"),
-                                         "--manifest", str(args.lean_manifest.resolve()),
+                                         "--manifest", str(frozen_paths["lean_manifest"]),
                                          "--output", str(output / "lean-evidence.json")]))
     refinement = [py, str(scripts / "refinement_transition.py"),
                   "--output", str(output / "refinement.json")]
     if args.evidence:
-        refinement += ["--evidence", str(args.evidence.resolve())]
+        refinement += ["--evidence", str(frozen_paths["evidence"])]
     plans.append(("refinement", refinement))
     frontier = [py, str(scripts / "refinement_frontier.py"),
                 "--inventory", str(output / "inventory.json"),
@@ -415,6 +432,20 @@ def main(argv: list[str] | None = None) -> int:
         log_faults.append("external proof input recheck failed: " + str(exc))
     if not external_unchanged:
         infrastructure_errors = True
+    # Revalidate the frozen inputs too: a changed temporary snapshot must not
+    # make an apparently successful series of stage results acceptable.
+    try:
+        frozen_after = snapshot_external_inputs(frozen_paths)
+        frozen_unchanged = all(
+            frozen_after[name]["sha256"] == before["sha256"]
+            and frozen_after[name]["bytes"] == before["bytes"]
+            for name, before in external_before.items()
+        )
+    except (OSError, ValueError) as exc:
+        frozen_unchanged = False
+        log_faults.append("frozen proof input recheck failed: " + str(exc))
+    if not frozen_unchanged:
+        infrastructure_errors = True
     if infrastructure_errors:
         overall = "TOOL_ERROR"
     elif positive and all(stage["status"] == "COMPLETED" for stage in stages):
@@ -437,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         "inputs_unchanged": inputs_unchanged,
         "external_proof_inputs": external_before,
         "external_inputs_unchanged": external_unchanged,
+        "frozen_inputs_unchanged": frozen_unchanged,
         "log_integrity": "MATCHED" if not log_faults else "INVALID_EVIDENCE",
         "log_integrity_failures": log_faults,
         "stages": stages,
@@ -447,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         ]
     }
     atomic_json(output / "summary.json", summary)
+    shutil.rmtree(frozen_dir, ignore_errors=True)
     print("FINAL:", overall, "|", output / "summary.json", flush=True)
     return 0 if overall == "PROVEN" else (2 if overall == "TOOL_ERROR" else 1)
 
