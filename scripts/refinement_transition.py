@@ -10,6 +10,7 @@ return a kernel-backed result for the exact obligation and source snapshot.
 from __future__ import annotations
 import argparse
 import json
+import subprocess
 from pathlib import Path
 import sys
 
@@ -47,7 +48,7 @@ def status_for(obligation: dict, proofs: dict, verifier_registry=None) -> dict:
             return {"status": "INVALID_EVIDENCE", "reason": "Lean evidence not bound to this source"}
         try:
             kernel = check_lean_evidence(ROOT, manifest)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
             return {"status": "INVALID_EVIDENCE", "reason": "Lean check failed: " + str(exc)}
         if kernel.get("status") != "KERNEL_CHECKED":
             return {"status": "INVALID_EVIDENCE", "reason": "Lean kernel verification rejected"}
