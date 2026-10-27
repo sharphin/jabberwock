@@ -103,9 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         stages.append(stage)
         print(name + ": " + stage["status"], flush=True)
     by_name = {stage["name"]: stage for stage in stages}
-    broken = any(s["status"] in ("TIMEOUT", "EXECUTION_ERROR") or
-                 s.get("report", {}).get("status") in ("INVALID_REPORT", "INVALID_EVIDENCE", "INVALID_INVENTORY", "FAIL")
-                 for s in stages)
+    broken = any(
+        s["status"] in ("TIMEOUT", "EXECUTION_ERROR") or
+        (s["status"] == "NONZERO_EXIT" and s["name"] != "refinement") or
+        (s["name"] == "refinement" and s.get("returncode") not in (0, 1)) or
+        s.get("report", {}).get("status") in
+        ("INVALID_REPORT", "INVALID_EVIDENCE", "INVALID_INVENTORY", "FAIL")
+        for s in stages
+    )
     refinement_status = by_name["refinement"].get("report", {}).get("status")
     if broken:
         overall = "TOOL_ERROR"
