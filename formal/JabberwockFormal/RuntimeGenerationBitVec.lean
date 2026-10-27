@@ -30,17 +30,17 @@ def guardSpec (gen step limit : Word) : Prop :=
   step ≤ limit ∧
   (gen &&& counterMask) ≤ limit - step
 
-noncomputable def guard (gen step limit : Word) : Bool := by
-  classical
-  exact decide (guardSpec gen step limit)
+def guard (gen step limit : Word) : Bool :=
+  decide (gen ≠ retiredWord) && step.ule limit &&
+    (gen &&& counterMask).ule (limit - step)
 
 theorem guard_iff_spec (gen step limit : Word) :
     guard gen step limit = true ↔ guardSpec gen step limit := by
-  simp [guard]
+  simp [guard, guardSpec, BitVec.ule_iff_le]
 
 theorem guard_rejects_retired (step limit : Word) :
     guard retiredWord step limit = false := by
-  simp [guard, guardSpec]
+  simp [guard]
 
 /-- On the accepted branch, uint64_t subtraction is ordinary natural
     subtraction: the explicit unsigned comparison prevents underflow. -/
