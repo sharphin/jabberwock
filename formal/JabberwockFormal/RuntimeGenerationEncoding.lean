@@ -114,6 +114,11 @@ theorem old_word_rejected_on_retirement
 def runtimeGuard (retired : Bool) (counter step : Nat) : Prop :=
   retired = false ∧ cCapacityCheck counter step
 
+instance (retired : Bool) (counter step : Nat) :
+    Decidable (runtimeGuard retired counter step) := by
+  unfold runtimeGuard cCapacityCheck
+  infer_instance
+
 /-- Model of gen_advance: a failed guard retires the block; a successful
     guard advances the packed generation word. -/
 def runtimeAdvance (retired retained : Bool) (counter step : Nat) : Nat :=
