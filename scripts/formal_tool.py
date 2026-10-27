@@ -84,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
                                        "--stage-timeout", str(args.stage_timeout)]),
         ("emitter-binding", [py, str(scripts / "proof_emitter_correspondence.py"),
                              "--output", str(output / "emitter-binding.json")]),
+        ("emitter-semantics", [py, str(scripts / "verify_emitter_gate_semantics.py"),
+                               "--output", str(output / "emitter-semantics.json"),
+                               "--timeout", str(args.stage_timeout)]),
     ]
     if args.lean_manifest:
         plans.append(("lean-evidence", [py, str(scripts / "lean_evidence_engine.py"),
@@ -101,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "--output", str(output / "proof-coverage.json")]))
     known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "semantic-composition": "semantic-composition.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
                      "lean-evidence": "lean-evidence.json", "refinement": "refinement.json",
-                     "coverage": "proof-coverage.json"}
+                     "coverage": "proof-coverage.json", "emitter-semantics": "emitter-semantics.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
         (output / filename).unlink(missing_ok=True)
@@ -131,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
     composition_status = by_name["semantic-composition"].get("report", {}).get("status")
     coverage_status = by_name["coverage"].get("report", {}).get("status")
     if composition_status != "NOT_PROVEN" or coverage_status != "NOT_PROVEN":
+        broken = True
+    if by_name["emitter-semantics"].get("report", {}).get("status") != "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY":
         broken = True
     if broken:
         overall = "TOOL_ERROR"
