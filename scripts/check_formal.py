@@ -13,13 +13,8 @@ PROJECT = ROOT / "formal"
 ALLOWED_AXIOMS = {"propext", "Quot.sound", "Classical.choice"}
 
 
-def main():
-    lake = shutil.which("lake")
-    if lake is None:
-        raise SystemExit("lake is required (see formal/lean-toolchain); no skip is allowed")
-    version = subprocess.check_output([lake, "env", "lean", "--version"], cwd=PROJECT, text=True)
-    if "version 4.24.0," not in version:
-        raise SystemExit("expected Lean 4.24.0, got: " + version.strip())
+def discover_theorems(project=PROJECT):
+    """Return kernel-audit names from every root and compiler-specific module."""
     theorems = []
     for path in sorted((PROJECT / "JabberwockFormal").rglob("*.lean")):
         source = path.read_text(encoding="utf-8")
@@ -36,6 +31,17 @@ def main():
         raise SystemExit("duplicate theorem declarations in proof audit")
     if not theorems:
         raise SystemExit("no theorems found")
+    return theorems
+
+
+def main():
+    lake = shutil.which("lake")
+    if lake is None:
+        raise SystemExit("lake is required (see formal/lean-toolchain); no skip is allowed")
+    version = subprocess.check_output([lake, "env", "lean", "--version"], cwd=PROJECT, text=True)
+    if "version 4.24.0," not in version:
+        raise SystemExit("expected Lean 4.24.0, got: " + version.strip())
+    theorems = discover_theorems()
     subprocess.run([lake, "build"], cwd=PROJECT, check=True)
     with tempfile.TemporaryDirectory(prefix="jabberwock-formal-") as temporary:
         audit = Path(temporary) / "Audit.lean"
