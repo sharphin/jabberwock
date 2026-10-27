@@ -28,14 +28,10 @@ type VarId = usize;
 enum Fact {
     /// ムーブされていない own を必ず持っている
     Own,
-    /// 生存しているリスト変数。構造変更やムーブで無効になる
-    Container,
     /// このフレームの own 変数を直接借りた ref。その変数が `Own` のままなら安全
     RefTo(VarId),
     /// 関数の実行中ずっと借りた先が生きている ref（安全な引数から来たもの）
     Pinned,
-    /// 配列・リストの要素を借りた ref。所有するコンテナが生き、構造が変わらなければ安全
-    RefToElement(VarId),
 }
 
 type Facts = HashMap<VarId, Fact>;
@@ -43,12 +39,7 @@ type Facts = HashMap<VarId, Fact>;
 /// 変数 `id` の中身が解放された・移動したかもしれない。それを借りた ref の事実も消す。
 fn kill_in(facts: &mut Facts, id: VarId) {
     facts.remove(&id);
-    facts.retain(|_, f| *f != Fact::RefTo(id) && *f != Fact::RefToElement(id));
-}
-
-fn is_list_binding(ty: &Option<TypeExpr>, init: &Expr) -> bool {
-    matches!(ty.as_ref().map(|t| &t.kind), Some(TypeKind::List(_)))
-        || matches!(&init.kind, ExprKind::ArrayLit(_, seq) if seq.get() == Seq::List)
+    facts.retain(|_, f| *f != Fact::RefTo(id));
 }
 
 /// 片方がまだない合流（break や continue が 1 つも出てこない場合）
@@ -223,55 +214,8 @@ impl<'a> FnAnalyzer<'a> {
     fn is_live_ref(&self, f: Option<Fact>) -> bool {
         match f {
             Some(Fact::Pinned) => true,
-            Some(Fact::RefTo(x)) => {
-                matches!(self.facts.get(&x), Some(Fact::Own | Fact::Container | Fact::Pinned))
-            }
-            Some(Fact::RefToElement(x)) => {
-                matches!(self.facts.get(&x), Some(Fact::Own | Fact::Container | Fact::Pinned))
-            }
+            Some(Fact::RefTo(x)) => self.facts.get(&x) == Some(&Fact::Own),
             _ => false,
-        }
-    }
-
-    /// コンテナ自体を指す変数・ref から、コンテナの変数 ID を得る。
-    /// 要素 ref を経由した場合は型が分からないため、ここでは推測しない。
-    fn container_owner(&self, name: &str) -> Option<VarId> {
-        let id = self.lookup(name)?;
-        match self.facts.get(&id).copied()? {
-            Fact::Own | Fact::Container | Fact::Pinned => Some(id),
-            Fact::RefTo(owner) => Some(owner),
-            _ => None,
-        }
-    }
-
-    /// コンテナの構造変更後、その要素を指していた事実をすべて破棄する。
-    fn kill_elements(&mut self, owner: VarId) {
-        self.facts.retain(|_, f| *f != Fact::RefToElement(owner));
-    }
-
-    fn kill_all_elements(&mut self) {
-        if self.facts.values().any(|f| matches!(f, Fact::RefToElement(_))) {
-            eprintln!("JWDBG kill_all_elements facts={:?}", self.facts);
-        }
-        self.facts.retain(|_, f| !matches!(f, Fact::RefToElement(_)));
-    }
-
-    /// 呼び出し先に ref を渡すと、コンテナの構造を変える可能性がある。
-    fn invalidate_element_borrows(&mut self, arg: &Expr, fact: Option<Fact>) {
-        match fact {
-            Some(Fact::RefTo(owner) | Fact::RefToElement(owner)) => self.kill_elements(owner),
-            Some(Fact::Pinned) => {
-                if let ExprKind::Var(name) = &arg.kind {
-                    if let Some(id) = self.lookup(name) {
-                        self.kill_elements(id);
-                    } else {
-                        self.kill_all_elements();
-                    }
-                } else {
-                    self.kill_all_elements();
-                }
-            }
-            _ => {}
         }
     }
 
@@ -289,9 +233,9 @@ impl<'a> FnAnalyzer<'a> {
 
     fn stmt(&mut self, s: &Stmt) {
         match s {
-            Stmt::Let { name, ty, init, .. } => {
+            Stmt::Let { name, init, .. } => {
                 let f = self.expr(init, false);
-                self.declare(name, if is_list_binding(ty, init) { Some(Fact::Container) } else { f });
+                self.declare(name, f);
             }
             Stmt::Assign { target, value, .. } => {
                 // インタプリタと同じく、右辺を先に評価する
@@ -305,16 +249,7 @@ impl<'a> FnAnalyzer<'a> {
                             }
                         }
                     }
-                    ExprKind::Deref(inner, check) => {
-                        self.deref(inner, check);
-                        // ref 経由でコンテナそのものを置き換えた場合、要素 ref は無効になる。
-                        if let ExprKind::Var(name) = &inner.kind {
-                            if let Some(owner) = self.container_owner(name) {
-                                self.kill_elements(owner);
-                            }
-                        }
-                    }
-                    ExprKind::Field(inner, _, check) => self.deref(inner, check),
+                    ExprKind::Deref(inner, check) | ExprKind::Field(inner, _, check) => self.deref(inner, check),
                     ExprKind::Index(inner, idx, check) => {
                         self.expr(idx, false);
                         self.deref(inner, check);
@@ -382,22 +317,8 @@ impl<'a> FnAnalyzer<'a> {
             ExprKind::Var(name) => {
                 let id = self.lookup(name)?;
                 match self.facts.get(&id).copied()? {
-                    Fact::Own | Fact::Container => Some(Fact::RefTo(id)),
+                    Fact::Own => Some(Fact::RefTo(id)),
                     f => Some(f), // ref の ref は同じ先を指す
-                }
-            }
-            ExprKind::Index(base, _, _) => {
-                let ExprKind::Var(name) = &base.kind else { return None };
-                let id = self.lookup(name)?;
-                let owner_fact = self.facts.get(&id).copied();
-                if matches!(name.as_str(), "xs" | "ps") {
-                    eprintln!("JWDBG ref_of index base={} id={} fact={:?} all={:?}", name, id, owner_fact, self.facts);
-                }
-                match owner_fact? {
-                    Fact::Own | Fact::Container | Fact::Pinned => Some(Fact::RefToElement(id)),
-                    Fact::RefTo(owner) => Some(Fact::RefToElement(owner)),
-                    // ネストしたコンテナ等は所有関係を確定できないので保守的に扱う
-                    _ => None,
                 }
             }
             _ => None,
@@ -430,7 +351,7 @@ impl<'a> FnAnalyzer<'a> {
                     return None;
                 };
                 let f = self.facts.get(&id).copied();
-                let is_ref = matches!(f, Some(Fact::RefTo(_) | Fact::RefToElement(_) | Fact::Pinned));
+                let is_ref = matches!(f, Some(Fact::RefTo(_) | Fact::Pinned));
                 if !borrow && !is_ref {
                     // own かもしれない値を読む = ムーブかもしれない
                     self.kill(id);
@@ -450,7 +371,7 @@ impl<'a> FnAnalyzer<'a> {
                         continue;
                     }
                     if let Some(id) = self.lookup(n) {
-                        if !matches!(self.facts.get(&id), Some(Fact::RefTo(_) | Fact::RefToElement(_) | Fact::Pinned)) {
+                        if !matches!(self.facts.get(&id), Some(Fact::RefTo(_) | Fact::Pinned)) {
                             self.kill(id);
                         }
                     }
@@ -561,16 +482,6 @@ impl<'a> FnAnalyzer<'a> {
                         // 全引数を評価し終えた時点で判定する（`f(ref a, a)` のように後でムーブされる場合を除く）
                         let safe: Vec<bool> = facts.iter().map(|f| self.is_live_ref(*f)).collect();
                         self.record_call(name, safe);
-                        for (arg, fact) in args.iter().zip(facts.iter().copied()) {
-                            self.invalidate_element_borrows(arg, fact);
-                        }
-                        // 関数値・クロージャの呼び出し先や、外へ渡したクロージャの副作用は
-                        // 静的に特定できないため、要素 ref の事実を保守的に破棄する。
-                        if !self.pinned.contains_key(name.as_str())
-                            || args.iter().any(|a| matches!(&a.kind, ExprKind::Lambda(_)))
-                        {
-                            self.kill_all_elements();
-                        }
                     }
                 }
                 None
@@ -621,13 +532,13 @@ impl<'a> FnAnalyzer<'a> {
                 let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
                 // `this` が呼び出しのあいだ生きているか。一時的な own はこの呼び出しが終わるまで解放されない
                 let this_safe = match temp {
-                    Some(f) => matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f),
+                    Some(f) => f == Some(Fact::Own) || self.is_live_ref(f),
                     None => {
                         self.expr(recv, true);
                         match &recv.kind {
                             ExprKind::Var(n) => {
                                 let f = self.fact_of(n);
-                                matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f)
+                                f == Some(Fact::Own) || self.is_live_ref(f)
                             }
                             _ => false,
                         }
@@ -639,32 +550,8 @@ impl<'a> FnAnalyzer<'a> {
                 let suffix = format!(".{}", name);
                 let cands: Vec<String> =
                     self.pinned.keys().filter(|k| k.ends_with(suffix.as_str())).map(|k| k.to_string()).collect();
-                let has_user_method = !cands.is_empty();
                 for c in cands {
                     self.record_call(&c, safe.clone());
-                }
-                // リストを伸縮・並べ替えする操作は要素の位置を変えうる。
-                // len などの読み取り専用操作では、要素 ref の事実を維持する。
-                let mutates_container = matches!(
-                    name.as_str(),
-                    "push" | "pop" | "insert" | "remove" | "clear" | "truncate" | "resize"
-                        | "reserve" | "shrink_to_fit" | "append" | "extend" | "reverse"
-                        | "sort" | "sort_by" | "sort_unstable" | "sort_unstable_by"
-                        | "retain" | "dedup" | "swap_remove"
-                );
-                if mutates_container {
-                    if let ExprKind::Var(n) = &recv.kind {
-                        if let Some(owner) = self.container_owner(n) {
-                            self.kill_elements(owner);
-                        } else {
-                            self.kill_all_elements();
-                        }
-                    } else {
-                        self.kill_all_elements();
-                    }
-                } else if has_user_method {
-                    // ユーザー定義メソッドの副作用は証明できない。
-                    self.kill_all_elements();
                 }
                 None
             }
@@ -703,11 +590,8 @@ impl<'a> FnAnalyzer<'a> {
         let safe = match &inner.kind {
             ExprKind::Var(name) => {
                 let f = self.fact_of(name);
-                let safe = matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f);
-                if matches!(name.as_str(), "p" | "ps" | "xs" | "q") {
-                    eprintln!("JWDBG deref name={} fact={:?} safe={} all={:?}", name, f, safe, self.facts);
-                }
-                safe
+                // own の先は世代チェックが要らない。ref は借りた先が生きていると言えれば安全。
+                f == Some(Fact::Own) || self.is_live_ref(f)
             }
             _ => false,
         };
