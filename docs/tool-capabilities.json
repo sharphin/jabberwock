@@ -17,7 +17,7 @@
   },
   "negative_tests_and_tamper_rejection": {
     "state": "PARTIAL",
-    "evidence": "Code audit: manifest, source hash, proof inventory, and evidence validation reject missing, stale, malformed, duplicate, or foreign inputs. The repository's tool regression test files were removed in cleanup PR #35, so the negative paths are not currently backed by the tool regression suite. No test cases are being added in this work."
+    "evidence": "Code audit: manifest, source hash, proof inventory, and evidence validation reject missing, stale, malformed, duplicate, or foreign inputs. The 26 pre-existing scripts/test_*.py regression files were restored on safety-ci-resume from its pre-integration base. They have not been executed in this environment, and coverage of the newer formal_tool/evidence pipeline remains to be verified."
   },
   "isolated_runner_and_sealed_logs": {
     "state": "PARTIAL",
@@ -37,6 +37,6 @@
   },
   "tool_regressions_and_single_entrypoint": {
     "state": "PARTIAL",
-    "evidence": "Code audit: scripts/formal_tool.py is a single entrypoint for the formal verification stages. Tool regression tests were removed in cleanup PR #35 and are intentionally not being recreated in this work, per the explicit instruction not to create test cases."
+    "evidence": "Code audit: scripts/formal_tool.py provides the single entrypoint for formal verification stages. The 26 pre-existing scripts/test_*.py regression files have been restored on safety-ci-resume; no new test cases were created. Execution status remains NOT_RUN, and direct regression coverage of all formal_tool stages is not yet established."
   }
 }
