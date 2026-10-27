@@ -10,6 +10,19 @@ from unittest import mock
 import formal_report as formal
 
 class FormalTests(unittest.TestCase):
+    def test_all_five_scoped_goal_theorems_are_registered_without_trust_escape(self):
+        path = formal.PROJECT / "JabberwockFormal" / "ScopedGoals.lean"
+        source = path.read_text(encoding="utf-8")
+        entry = (formal.PROJECT / "JabberwockFormal.lean").read_text(encoding="utf-8")
+        self.assertIn("import JabberwockFormal.ScopedGoals", entry)
+        for goal in ("g1_scoped_semantics", "g2_scoped_read_safe",
+                     "g3_scoped_type_preservation", "g4_scoped_ownership",
+                     "g5_scoped_check_correct"):
+            with self.subTest(goal=goal):
+                self.assertIn("theorem " + goal, source)
+        import re
+        self.assertIsNone(re.search(r"\\b(?:sorry|admit|axiom|unsafe|native_decide)\\b", source))
+
     def test_each_compiler_has_five_independent_unproved_obligations(self):
         with tempfile.TemporaryDirectory() as d:
             dest = Path(d) / "formal.json"
