@@ -16,6 +16,7 @@ import sys
 
 from acceptance_requirements import COMPILERS, GOALS, obligation_catalog, test_input_identity
 from formal_report import source_identity, proof_sources_identity
+from whole_compiler_proof import validate as validate_whole_inventory, inventory as canonical_whole_inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILURES = {"FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED"}
@@ -49,7 +50,7 @@ def keyed(records, key):
     return mapped
 
 
-def review(practical, formal, *, local_os, identities, inputs_identity=None):
+def review(practical, formal, *, local_os, identities, inputs_identity=None, whole_inventory=None):
     """Return precise findings without making ungrounded PASS claims."""
     if not isinstance(practical, dict) or not isinstance(formal, dict):
         raise ValueError("input reports must be JSON objects")
@@ -96,6 +97,16 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
     proof_snapshot = formal.get("proof_sources_snapshot")
     if not isinstance(proof_snapshot, dict) or proof_snapshot != proof_sources_identity():
         raise ValueError("Lean sources or imported formal dependencies differ from proof audit")
+    # A list of source files is not a formal refinement proof. Check that no
+    # entire source/goal obligations were silently omitted, and expose the
+    # open links for each mathematical goal.
+    source_obligations = {}
+    if whole_inventory is not None:
+        validate_whole_inventory(whole_inventory)
+        for link in whole_inventory["components"]:
+            source_obligations.setdefault((link["compiler"], link["goal"]), []).append(link)
+    else:
+        source_obligations = {}
     infrastructure = bool(formal.get("infrastructure_error") or formal.get("interrupted"))
     records = []
     for obligation in obligation_catalog():
@@ -191,6 +202,15 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
             if (not manifest_path.is_file() or
                     formal["compilers"][c].get("manifest_sha256") != file_hash(manifest_path)):
                 blockers.append("proof obligation manifest has changed")
+            source_links = source_obligations.get((c, goal), [])
+            if not source_links:
+                blockers.append("whole-implementation source-to-goal inventory is missing")
+            else:
+                open_links = [link["id"] for link in source_links
+                              if link["status"] != "REFINEMENT_PROVEN"]
+                if open_links:
+                    blockers.append(str(len(open_links)) +
+                                    " implementation refinement obligations remain unproved")
             if row.get("implementation_correspondence") != "KERNEL_VERIFIED_WHOLE_IMPLEMENTATION":
                 blockers.append("compiler/LLVM/runtime correspondence not kernel-verified")
             excluded = row.get("excluded", [])
@@ -201,7 +221,10 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None):
             records.append({**obligation, "proof_status": proof_status,
                             "acceptance": "NOT_PROVEN", "blockers": blockers,
                             "theorems": row.get("theorems", []),
-                            "source_sha256": identity})
+                            "source_sha256": identity,
+                            "source_obligation_count": len(source_links),
+                            "unproved_source_obligations": [x["id"] for x in source_links
+                                                           if x["status"] != "REFINEMENT_PROVEN"]})
     return {"schema_version": 1, "kind": "whole-compiler-acceptance-audit",
             "target_os": local_os, "status": "NOT_ACCEPTED",
             "summary": {"total": len(records), "accepted": 0,
@@ -217,17 +240,22 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--practical", type=Path, required=True)
     p.add_argument("--formal", type=Path, required=True)
+    p.add_argument("--inventory", type=Path, required=True,
+                   help="source-derived whole-implementation proof inventory")
     p.add_argument("--os", choices=["windows", "linux"], required=True)
     p.add_argument("--output", type=Path, default=ROOT / "target/acceptance-34.json")
     args = p.parse_args(argv)
     try:
         practical = parse_json(args.practical)
         formal = parse_json(args.formal)
+        whole_inventory = parse_json(args.inventory)
         identities = {c: source_identity(c) for c in COMPILERS}
         report = review(practical, formal, local_os=args.os, identities=identities,
-                        inputs_identity=test_input_identity())
+                        inputs_identity=test_input_identity(),
+                        whole_inventory=whole_inventory)
         report["inputs"] = {"practical_sha256": file_hash(args.practical),
-                            "formal_sha256": file_hash(args.formal)}
+                            "formal_sha256": file_hash(args.formal),
+                            "inventory_sha256": file_hash(args.inventory)}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         report = {"schema_version": 1, "kind": "whole-compiler-acceptance-audit",
                   "status": "INVALID_EVIDENCE", "reason": str(error)}
