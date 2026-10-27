@@ -17,12 +17,12 @@ class FullRunnerTests(unittest.TestCase):
         output = Path("dummy")
         tasks = full.plans(output)
         self.assertEqual([x[0] for x in tasks], [
-            "python-regressions", "practical-safety", "emitter-proof-binding", "formal-proofs",
+            "python-regressions", "practical-safety", "whole-implementation-obligations", "emitter-proof-binding", "formal-proofs",
             "acceptance-34", "benchmark-four-way", "legacy-optimization-counts"])
         self.assertIn("test_*.py", tasks[0][1])
-        self.assertIn("--require-full", tasks[2][1])
-        self.assertIn("--full", tasks[4][1])
-        self.assertNotIn("--full", full.plans(output, quick=True)[4][1])
+        self.assertIn("--require-full", dict(tasks)["formal-proofs"])
+        self.assertIn("--full", dict(tasks)["benchmark-four-way"])
+        self.assertNotIn("--full", dict(full.plans(output, quick=True))["benchmark-four-way"])
 
     def test_windows_launches_batches_and_uses_python_for_formal(self):
         with mock.patch.object(full, "WINDOWS", True):
