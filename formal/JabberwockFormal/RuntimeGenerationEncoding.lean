@@ -26,7 +26,11 @@ def pack (retained : Bool) (counter : Nat) : Nat :=
 
 /-- Exact arithmetic condition checked by gen_has_room on the masked field. -/
 def hasRoom (counter step : Nat) : Prop :=
-  step ≤ maxCounter ∧ counter ≤ maxCounter - step
+  counter + step ≤ maxCounter
+
+instance (counter step : Nat) : Decidable (hasRoom counter step) := by
+  unfold hasRoom
+  infer_instance
 
 /-- On success, gen_advance increments the packed word; otherwise it retires it. -/
 def advance (retained : Bool) (counter step : Nat) : Nat :=
