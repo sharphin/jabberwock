@@ -286,4 +286,55 @@ theorem live_word_not_retired
   have below := packed_word_is_below_retired retained bounded
   omega
 
+
+/-- Model the block_free / remember_reuse policy: reserve room for both
+    the release increment and a later reuse increment; if either transition
+    cannot be represented, retire the block instead of returning it to a
+    free list. This remains an arithmetic lifecycle model, not a proof of
+    the allocator's concrete pointer/list behavior. -/
+def freeThenReuse (retained : Bool) (counter : Nat) : Nat :=
+  if hasRoom counter 2 then
+    if hasRoom (counter + 1) 1 then pack retained (counter + 2)
+    else retiredWord
+  else retiredWord
+
+/-- Reserving two generation increments guarantees the first increment
+    leaves enough room for the reuse increment. -/
+theorem room_two_implies_room_after_first {counter : Nat}
+    (room : hasRoom counter 2) :
+    hasRoom (counter + 1) 1 := by
+  unfold hasRoom at *
+  omega
+
+/-- The concrete two-stage policy reduces to a two-step generation advance
+    when capacity is available, and otherwise selects the retired sentinel. -/
+theorem freeThenReuse_matches_two_step (retained : Bool) (counter : Nat) :
+    freeThenReuse retained counter =
+      if hasRoom counter 2 then pack retained (counter + 2) else retiredWord := by
+  unfold freeThenReuse
+  by_cases room : hasRoom counter 2
+  · have nextRoom := room_two_implies_room_after_first room
+    simp [room, nextRoom]
+  · simp [room]
+
+/-- A reference snapshot taken before free/reuse cannot be accepted after
+    the two-step policy: the generation changed, or the block was retired. -/
+theorem freeThenReuse_rejects_old_reference
+    (retained : Bool) (counter : Nat) :
+    ¬ accepts (pack retained counter) (freeThenReuse retained counter) := by
+  unfold freeThenReuse
+  by_cases room : hasRoom counter 2
+  · have nextRoom := room_two_implies_room_after_first room
+    rw [if_pos room, if_pos nextRoom]
+    intro accepted
+    have bound : counter + 2 < radix := by
+      have sumBound := hasRoom_bounds_sum room
+      unfold maxCounter radix at *
+      omega
+    have changed : pack retained (counter + 2) ≠ pack retained counter := by
+      cases retained <;> simp [pack] <;> omega
+    exact changed accepted.2.symm
+  · rw [if_neg room]
+    simp [accepts]
+
 end JabberwockFormal.RuntimeGenerationEncoding
