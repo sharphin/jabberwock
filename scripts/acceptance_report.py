@@ -68,6 +68,15 @@ def review(practical, formal, *, local_os, identities):
     expected_goals = {f"{c}-{g}" for c in COMPILERS for g in GOALS}
     if set(item_rows) != expected_items or set(goal_rows) != expected_goals:
         raise ValueError("missing, extra or duplicated safety items or mathematical goals")
+    practical_snapshots = practical.get("source_snapshots")
+    if not isinstance(practical_snapshots, dict) or set(practical_snapshots) != set(COMPILERS):
+        raise ValueError("practical compiler source snapshots missing")
+    for compiler in COMPILERS:
+        snapshot = practical_snapshots.get(compiler)
+        if not isinstance(snapshot, dict) or snapshot.get("sha256") != identities[compiler]["sha256"]:
+            raise ValueError("practical report uses stale or foreign source snapshot: " + compiler)
+        if snapshot.get("files") != identities[compiler]["files"]:
+            raise ValueError("practical per-file source snapshot mismatch: " + compiler)
     if practical.get("run_status") != "COMPLETE" or practical.get("active_probe"):
         suite_complete = False
     else:
