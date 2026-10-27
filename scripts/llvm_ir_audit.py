@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Check concrete LLVM IR using LLVM's verifier, not emitter template strings.
+
+Passing LLVM verify means syntactically/well-formed IR only. This does not
+establish observational equivalence, no UB, or refinement to Jabberwock.
+"""
+from __future__ import annotations
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+def verify_ir(path: Path, opt: str, timeout: int = 120) -> dict:
+    if not path.is_file() or path.suffix.lower() != ".ll":
+        raise ValueError("missing or non-LLVM IR file: " + str(path))
+    command = [opt, "-passes=verify", "-disable-output", str(path)]
+    result = subprocess.run(command, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace", timeout=timeout)
+    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "exit_code": result.returncode, "status": "IR_WELL_FORMED" if result.returncode == 0 else "INVALID_IR",
+            "stderr": result.stderr[-6000:],
+            "semantic_refinement_proven": False}
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ir-root", type=Path, required=True,
+                        help="directory containing generated .ll outputs")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--opt", default="opt")
+    args = parser.parse_args(argv)
+    results = []
+    errors = []
+    tool = shutil.which(args.opt)
+    if tool is None:
+        errors.append("LLVM opt unavailable: " + args.opt)
+    files = sorted(args.ir_root.rglob("*.ll")) if args.ir_root.is_dir() else []
+    if not files:
+        errors.append("no concrete LLVM IR found; emitter template matching is not sufficient")
+    if tool:
+        for path in files:
+            try:
+                results.append(verify_ir(path, tool))
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                errors.append(str(exc))
+    status = "IR_VERIFIED_ONLY" if not errors and all(x["status"] == "IR_WELL_FORMED" for x in results) else "BLOCKED"
+    report = {"schema_version": 1, "kind": "llvm-ir-audit", "status": status,
+              "results": results, "errors": errors,
+              "semantic_refinement_proven": False,
+              "limitations": ["LLVM verifier does not prove absence of undefined behavior.",
+                              "Source-to-LLVM semantics and optimization refinement remain unproved."]}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(status, "->", args.output, flush=True)
+    return 0 if status == "IR_VERIFIED_ONLY" else 1
+
+if __name__ == "__main__":
+    sys.exit(main())
