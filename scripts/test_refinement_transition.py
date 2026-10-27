@@ -34,6 +34,18 @@ class ProofTransitionTests(unittest.TestCase):
                                                {"checked": lambda *args: True})["status"],
                          "INVALID_EVIDENCE")
 
+    def test_malformed_duplicate_and_string_claims_rejected(self):
+        for claims in ("source_refinement", ["source_refinement"] * 5,
+                       [*sorted(transition.REQUIRED), "kernel_proof"], None,
+                       [["not-hashable"]]):
+            with self.subTest(claims=claims):
+                proof = self.artifact()
+                proof["required_claims"] = claims
+                self.assertEqual(
+                    transition.status_for(self.row, {self.row["id"]: proof},
+                                          {"checked": lambda *args: True})["status"],
+                    "INVALID_EVIDENCE")
+
     def test_checker_must_actually_return_true(self):
         proof = self.artifact()
         for result, expected in ((False, "REFINEMENT_NOT_PROVEN"),
