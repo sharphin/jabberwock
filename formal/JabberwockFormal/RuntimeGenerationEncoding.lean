@@ -154,6 +154,70 @@ theorem runtimeAdvance_rejects_after_retirement
   rw [if_neg noRoom]
   simp
 
+/-- Extract the low 62-bit generation counter from a packed runtime word.
+    For a valid packed word this is exactly the C expression gen & MASK. -/
+def wordCounter (word : Nat) : Nat := word % radix
+
+/-- Concrete C guard over the packed generation word. The input word is
+    modeled as a natural-number encoding; valid-word and uint64 representation
+    assumptions are stated separately rather than hidden in this predicate. -/
+def concreteGuard (word step : Nat) : Prop :=
+  word ≠ retiredWord ∧ step ≤ maxCounter ∧ wordCounter word ≤ maxCounter - step
+
+instance (word step : Nat) : Decidable (concreteGuard word step) := by
+  unfold concreteGuard wordCounter
+  infer_instance
+
+/-- The low-bit mask extraction of a packed valid word yields its counter. -/
+theorem packed_counter_mod
+    (retained : Bool) {counter : Nat}
+    (bounded : counter < radix) :
+    wordCounter (pack retained counter) = counter := by
+  cases retained <;> simp [wordCounter, pack, Nat.add_mod, Nat.mod_eq_of_lt bounded]
+
+/-- Addition of a step to a packed word agrees with adding to its counter
+    while using unbounded natural-number arithmetic. The guard supplies the
+    range condition needed to interpret this as non-wrapping uint64 addition. -/
+theorem packed_word_step
+    (retained : Bool) (counter step : Nat) :
+    pack retained counter + step = pack retained (counter + step) := by
+  cases retained <;> simp [pack] <;> omega
+
+/-- For valid packed words, the concrete masked C guard is equivalent to the
+    abstract counter-capacity predicate. -/
+theorem concreteGuard_matches_abstract
+    (retained : Bool) {counter step : Nat}
+    (bounded : counter < radix) :
+    concreteGuard (pack retained counter) step ↔ hasRoom counter step := by
+  have notRetired : pack retained counter ≠ retiredWord :=
+    ne_of_lt (packed_word_is_below_retired retained bounded)
+  have modulo := packed_counter_mod retained bounded
+  unfold concreteGuard wordCounter
+  rw [modulo]
+  constructor
+  · rintro ⟨_, stepBound, counterBound⟩
+    exact (cCapacityCheck_iff_hasRoom counter step).1 ⟨stepBound, counterBound⟩
+  · intro room
+    have capacity : cCapacityCheck counter step :=
+      (cCapacityCheck_iff_hasRoom counter step).2 room
+    exact ⟨notRetired, capacity.1, capacity.2⟩
+
+/-- Concrete packed-word update and the abstract update produce the same
+    mathematical word for a valid input word. This bridges the masked guard
+    and update expression, but not C atomics, pointers, or allocator behavior. -/
+def concreteAdvance (word step : Nat) : Nat :=
+  if concreteGuard word step then word + step else retiredWord
+
+theorem concreteAdvance_matches_abstract
+    (retained : Bool) {counter step : Nat}
+    (bounded : counter < radix) :
+    concreteAdvance (pack retained counter) step = advance retained counter step := by
+  unfold concreteAdvance advance
+  rw [concreteGuard_matches_abstract retained bounded]
+  by_cases room : hasRoom counter step
+  · simp [room, packed_word_step]
+  · simp [room]
+
 /-- Every modeled live word differs from the retired sentinel. -/
 theorem live_word_not_retired
     (retained : Bool) {counter : Nat}
