@@ -64,7 +64,7 @@ def targetEval : Instr → Except Fault Nat
 /-- G1, restricted: lowering preserves value or the dangling-reference failure. -/
 theorem g1_scoped_semantics (e : Expr .number) :
     targetEval (lower e) = sourceEval e := by
-  induction e with
+  induction e using Expr.rec with
   | literal n => rfl
   | plus a b ia ib =>
       simp [lower, targetEval, sourceEval, ia, ib]
@@ -97,7 +97,7 @@ def WellTyped : Instr → Prop
 
 theorem g3_scoped_type_preservation (e : Expr .number) :
     WellTyped (lower e) := by
-  induction e with
+  induction e using Expr.rec with
   | literal _ => trivial
   | plus a b ia ib => exact And.intro ia ib
   | read _ _ _ => trivial
