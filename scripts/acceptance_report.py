@@ -64,10 +64,14 @@ def review(practical, formal, *, local_os, identities):
         raise ValueError("formal compiler map incomplete")
     item_rows = keyed(practical.get("items"), "id")
     goal_rows = keyed(formal.get("goals"), "id")
+    practical_goal_rows = keyed(practical.get("goals"), "id")
+    probe_rows = keyed(practical.get("results"), "name")
     expected_items = {f"{local_os}-{c}-{n:02}" for c in COMPILERS for n in range(1, 13)}
     expected_goals = {f"{c}-{g}" for c in COMPILERS for g in GOALS}
-    if set(item_rows) != expected_items or set(goal_rows) != expected_goals:
-        raise ValueError("missing, extra or duplicated safety items or mathematical goals")
+    practical_goals = {f"{local_os}-{c}-{g}" for c in COMPILERS for g in GOALS}
+    if (set(item_rows) != expected_items or set(goal_rows) != expected_goals or
+            set(practical_goal_rows) != practical_goals):
+        raise ValueError("missing, extra or duplicated safety items or practical/formal goals")
     practical_snapshots = practical.get("source_snapshots")
     if not isinstance(practical_snapshots, dict) or set(practical_snapshots) != set(COMPILERS):
         raise ValueError("practical compiler source snapshots missing")
@@ -96,7 +100,19 @@ def review(practical, formal, *, local_os, identities):
                 raise ValueError("missing or malformed coverage gap declaration")
             if not isinstance(row.get("probe_names"), list) or not row["probe_names"]:
                 raise ValueError("no probe evidence referenced")
+            named = row["probe_names"]
+            if len(named) != len(set(named)):
+                raise ValueError("duplicate probe name reference")
+            if any(n not in probe_rows for n in named):
+                raise ValueError("practical item refers to unrecorded probes: " + str(n))
+            observations = [probe_rows[name] for name in named]
+            if any(x.get("compiler") != c for x in observations):
+                raise ValueError("practical probe has wrong compiler attribution")
+            if any(n not in x.get("items", []) for x in observations):
+                raise ValueError("practical probe does not actually cover declared item")
             blockers = []
+            if any(x.get("status") != "PROBE_PASS" for x in observations):
+                blockers.append("at least one referenced practical probe did not pass")
             if not suite_complete:
                 blockers.append("incomplete practical suite")
             if status != SUCCESS_PROBE:
@@ -112,10 +128,22 @@ def review(practical, formal, *, local_os, identities):
             row = goal_rows[f"{c}-{goal}"]
             if row.get("compiler") != c or row.get("goal") != goal:
                 raise ValueError("wrong mathematical evidence attribution")
+            direct = practical_goal_rows[f"{local_os}-{c}-{goal}"]
+            if direct.get("compiler") != c:
+                raise ValueError("practical goal has wrong compiler attribution")
+            direct_names = direct.get("direct_probe_names", [])
+            if not isinstance(direct_names, list) or len(direct_names) != len(set(direct_names)) or not direct_names:
+                raise ValueError("missing or duplicate direct goal probe names")
+            if any(n not in probe_rows or probe_rows[n].get("compiler") != c
+                   for n in direct_names):
+                raise ValueError("direct goal references absent or foreign probes")
             identity = identities[c]["sha256"]
             proof_status = (row.get("proof_check") or {}).get("status", "NOT_RUN")
             proof_identity = formal["compilers"][c].get("source", {}).get("sha256")
             blockers = []
+            if direct.get("status") != SUCCESS_PROBE or any(probe_rows[n].get("status") != "PROBE_PASS"
+                                                             for n in direct_names):
+                blockers.append("independent practical goal tests have not passed")
             if infrastructure:
                 blockers.append("formal infrastructure failure or interruption")
             if proof_identity != identity or row.get("source_sha256") != identity:
