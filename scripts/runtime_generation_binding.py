@@ -9,7 +9,8 @@ import argparse
 import json
 import re
 from pathlib import Path
-from runtime_guard_expression import inspect as inspect_guard, inspect_lean, inspect_symbolic_alignment
+from runtime_guard_expression import (inspect as inspect_guard, inspect_lean,
+                                      inspect_symbolic_alignment, inspect_generation_macros)
 
 ROOT = Path(__file__).resolve().parents[1]
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
@@ -77,6 +78,10 @@ def main(argv=None) -> int:
         guard = inspect_guard(C_SOURCE)
         lean_guard = inspect_lean(BITVEC_SOURCE)
         symbolic = inspect_symbolic_alignment(C_SOURCE, BITVEC_SOURCE)
+        macros = inspect_generation_macros(C_SOURCE)
+        findings.append({"id": "c:generation_macro_branches",
+                         "status": "MATCHED" if macros["status"] ==
+                         "MACRO_BRANCHES_REVIEWED_BUILD_CONFIGURATION_UNKNOWN" else "MISSING"})
         findings.append({"id": "c-bitvec:unsigned_guard_symbolic_semantics",
                          "status": "MATCHED" if symbolic["status"] == "SYMBOLIC_SUBSET_ALIGNED_NOT_PROVEN" else "MISSING"})
         findings.append({"id": "bitvec:guard_expression_body",
@@ -106,7 +111,7 @@ def main(argv=None) -> int:
                 "The BitVec model kernel-checks 64-bit arithmetic, but source matching is structural, not a verified C parser or compiler proof.",
                 "The Nat model remains an abstraction; its mask operation is not itself a proof of C bitwise-and semantics.",
                 "This check does not prove concurrent lifetime safety, allocator correctness, or memory ordering.",
-                "The parameterized BitVec theorem covers limits below 2^62; actual build configuration and static-assert execution remain separate obligations."
+                "Both generation limit macro branches are inspected, but actual compiler flags and active preprocessing branch remain unverified."
             ],
         }
         if missing:
