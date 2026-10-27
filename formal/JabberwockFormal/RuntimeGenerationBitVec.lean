@@ -61,6 +61,46 @@ theorem unsigned_subtraction_matches_nat
     (limit - step).toNat = limit.toNat - step.toNat := by
   exact BitVec.toNat_sub_of_le ordered
 
+/-- The complete BitVec guard specification agrees with the Nat
+    counter-capacity check. This connects the concrete mask and unsigned
+    subtraction to the arithmetic abstraction; it is still not a proof that
+    a C compiler or the complete runtime refines this model. -/
+theorem guardSpec_matches_nat (gen step limit : Word) :
+    guardSpec gen step limit ↔
+      gen ≠ retiredWord ∧ step.toNat ≤ limit.toNat ∧
+        gen.toNat % radix ≤ limit.toNat - step.toNat := by
+  constructor
+  · rintro ⟨notRetired, stepLe, counterLe⟩
+    have stepLeNat : step.toNat ≤ limit.toNat := by
+      rw [BitVec.le_def] at stepLe
+      exact stepLe
+    have counterLeNat :
+        (gen &&& counterMask).toNat ≤ (limit - step).toNat := by
+      rw [BitVec.le_def] at counterLe
+      exact counterLe
+    have subNat := unsigned_subtraction_matches_nat limit step stepLe
+    rw [masked_counter_matches_mod] at counterLeNat
+    rw [subNat] at counterLeNat
+    exact ⟨notRetired, stepLeNat, counterLeNat⟩
+  · rintro ⟨notRetired, stepLeNat, counterLeNat⟩
+    have stepLe : step ≤ limit := by
+      rw [BitVec.le_def]
+      exact stepLeNat
+    have subNat := unsigned_subtraction_matches_nat limit step stepLe
+    have counterLe : (gen &&& counterMask) ≤ limit - step := by
+      rw [BitVec.le_def]
+      rw [masked_counter_matches_mod, subNat]
+      exact counterLeNat
+    exact ⟨notRetired, stepLe, counterLe⟩
+
+/-- The executable BitVec guard and its Nat-level interpretation agree. -/
+theorem guard_matches_nat (gen step limit : Word) :
+    guard gen step limit = true ↔
+      gen ≠ retiredWord ∧ step.toNat ≤ limit.toNat ∧
+        gen.toNat % radix ≤ limit.toNat - step.toNat := by
+  rw [guard_iff_spec]
+  exact guardSpec_matches_nat gen step limit
+
 /-- If the packed runtime word has bit 63 clear and the configured limit is
     below 2^62, a successful guard proves that uint64_t addition does not wrap.
     This is an arithmetic theorem about the BitVec model, not a pointer-safety
