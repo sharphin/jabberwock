@@ -25,6 +25,7 @@ import safety_platforms as suites
 import safety_compilers
 import safety_goals
 from formal_report import source_identity
+from acceptance_requirements import test_input_identity
 from windows_asan_runtime import environment as runtime_environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -350,6 +351,7 @@ def main(argv=None, *, target_os=None) -> int:
         "tools": {"rustc": recorded_version(["rustc", "--version"]), "cargo": recorded_version(["cargo", "--version"]),
                   "clang": recorded_version([os.environ.get("JW_CLANG", "clang"), "--version"])},
         "scale": args.scale, "source_snapshots": {c: source_identity(c) for c in compilers} if not args.dry_run else {},
+        "test_inputs_snapshot": test_input_identity() if not args.dry_run else {},
         "preparation": [], "items": [], "results": [],
     }
     produced = {}
@@ -434,6 +436,11 @@ def main(argv=None, *, target_os=None) -> int:
     if not args.dry_run:
         try:
             after = {c: source_identity(c) for c in compilers}
+            after_inputs = test_input_identity()
+            if after_inputs != report["test_inputs_snapshot"]:
+                report["run_status"] = "TEST_INPUTS_CHANGED"
+                report["test_inputs_changed"] = True
+                report["test_inputs_end_snapshot"] = after_inputs
             if any(after[c] != report["source_snapshots"][c] for c in compilers):
                 report["run_status"] = "SOURCE_CHANGED"
                 report["source_changed"] = True
