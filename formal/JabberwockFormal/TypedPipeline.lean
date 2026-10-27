@@ -76,4 +76,51 @@ theorem lower_preserves_evaluation {t : Ty} (e : Expr t) :
   | choose condition yes no hc hy hn =>
       simp [lower, irEval, eval, hc, hy, hn]
 
+
+/-- A typed IR rewrite that folds literal addition, literal equality and
+    literal conditionals, leaving nonconstant operations intact. -/
+def fold : {t : Ty} → IR t → IR t
+  | _, .integer n => .integer n
+  | _, .boolean b => .boolean b
+  | _, .sum a b =>
+      let a' := fold a
+      let b' := fold b
+      match a', b' with
+      | .integer x, .integer y => .integer (x + y)
+      | x, y => .sum x y
+  | _, .eq a b =>
+      let a' := fold a
+      let b' := fold b
+      match a', b' with
+      | .integer x, .integer y => .boolean (decide (x = y))
+      | x, y => .eq x y
+  | _, .select c yes no =>
+      let c' := fold c
+      let yes' := fold yes
+      let no' := fold no
+      match c' with
+      | .boolean true => yes'
+      | .boolean false => no'
+      | other => .select other yes' no'
+
+/-- The optimizer cannot change the result type: its return type is IR t. -/
+theorem fold_preserves_result_type {t : Ty} (ir : IR t) :
+    ∃ optimized : IR t, optimized = fold ir := by
+  exact ⟨fold ir, rfl⟩
+
+/-- A standalone preservation obligation for each optimization category.
+    No implementation correspondence with the real jwc/Rust passes is claimed. -/
+theorem fold_constant_addition (a b : Nat) :
+    irEval (fold (IR.sum (.integer a) (.integer b))) = a + b := by
+  rfl
+
+theorem fold_constant_equality (a b : Nat) :
+    irEval (fold (IR.eq (.integer a) (.integer b))) = decide (a = b) := by
+  rfl
+
+theorem fold_constant_conditional {t : Ty} (yes no : IR t) :
+    irEval (fold (IR.select (.boolean true) yes no)) =
+      irEval (fold yes) := by
+  rfl
+
 end JabberwockFormal.TypedPipeline
