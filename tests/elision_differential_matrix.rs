@@ -88,3 +88,34 @@ fn dangling_return_and_move_cannot_be_masked_by_elision() {
         compare(label, source);
     }
 }
+
+#[test]
+fn list_element_references_after_mutation() {
+    // Reallocation, replacement and mutation through a second ref can revoke
+    // an element borrow. Compare both evaluator modes for every case.
+    const MUTATIONS: &[(&str, &str)] = &[
+        ("no-mutation", "print(xs.len());"),
+        ("push", "xs.push(3);"),
+        ("replace", "xs = [9];"),
+        ("through-ref", "let q = ref mut xs; *q = [];"),
+    ];
+    for (name, mutation) in MUTATIONS {
+        for index in [0, 1] {
+            let src = format!(
+                "fn main() {{\n    let i64[] mut xs = [1, 2];\n    let p = ref xs[{index}];\n    {mutation}\n    print(*p);\n}}"
+            );
+            compare(&format!("list:{name}:index={index}"), &src);
+        }
+    }
+}
+
+#[test]
+fn error_paths_preserve_observable_diagnostics() {
+    const SOURCES: &[(&str, &str)] = &[
+        ("divide-by-zero", "fn main() { let x = own 4; let r = ref x; print(*r); print(7 / 0); }"),
+        ("stale-after-drop", "fn main() { let x = own 4; let r = ref x; print(*r); drop(x); print(*r); }"),
+    ];
+    for (name, src) in SOURCES {
+        compare(name, src);
+    }
+}
