@@ -149,6 +149,14 @@ def main():
         report["infrastructure_error"] = str(error)
     except KeyboardInterrupt:
         report["interrupted"] = True
+    if not report.get("infrastructure_error") and not report.get("interrupted"):
+        try:
+            for compiler in selected:
+                if source_identity(compiler) != report["compilers"][compiler]["source"]:
+                    report["infrastructure_error"] = "source changed during Lean audit: " + compiler
+                    break
+        except (OSError, KeyError, ValueError) as error:
+            report["infrastructure_error"] = "cannot recheck proof source snapshot: " + str(error)
     report["summary"] = {
         "expected_goal_count": len(selected) * len(GOALS),
         "recorded_goal_count": len(report["goals"]),
