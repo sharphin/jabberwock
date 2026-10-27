@@ -131,5 +131,25 @@ class BuildGraphTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unsafe action output"):
                 audit(graph, root, {})
 
+
+    def test_output_symlink_escape_blocks(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+            root = Path(d)
+            graph = self.graph(root)
+            (root / "redirect").symlink_to(Path(outside), target_is_directory=True)
+            graph["nodes"]["build"]["outputs"] = ["redirect/out.ll"]
+            with self.assertRaisesRegex(ValueError, "action output escapes root"):
+                audit(graph, root, {})
+
+    def test_noncanonical_output_components_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            for unsafe in ("a/./out.ll", "a//out.ll", "./out.ll", "a/../out.ll"):
+                with self.subTest(unsafe=unsafe):
+                    graph["nodes"]["build"]["outputs"] = [unsafe]
+                    with self.assertRaisesRegex(ValueError, "unsafe action output"):
+                        audit(graph, root, {})
+
 if __name__ == "__main__":
     unittest.main()
