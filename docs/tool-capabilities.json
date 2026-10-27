@@ -1,0 +1,42 @@
+{
+  "proof_engine_and_axiom_audit": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "proof_obligation_inventory": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "implementation_correspondence_checker": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "practical_safety_orchestration": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "negative_tests_and_tamper_rejection": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "isolated_runner_and_sealed_logs": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "explainable_machine_readable_reports": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "evidence_packaging_and_provenance": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "windows_setup_and_local_operation": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  },
+  "tool_regressions_and_single_entrypoint": {
+    "state": "UNKNOWN",
+    "evidence": "Pending capability-by-capability code audit; do not infer completion from file presence."
+  }
+}
