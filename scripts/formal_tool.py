@@ -20,6 +20,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def snapshot_external_inputs(paths: dict[str, Path]) -> dict[str, dict]:
+    """Capture the exact original proof inputs supplied to every stage."""
+    results = {}
+    for name, path in paths.items():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(name + " must be an existing regular file")
+        raw = path.read_bytes()
+        results[name] = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
+                         "bytes": len(raw)}
+    return results
+
+
 def audit_stage_logs(stages: list[dict], output: Path) -> list[str]:
     """Re-read stage logs and reject missing, substituted, or modified bytes.
 
@@ -128,6 +140,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--stage-timeout must be positive")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    # The input files must not change between the independent proof stages.
+    # Reject the run instead of mixing reports generated from different proofs.
+    external_paths = {}
+    if args.evidence:
+        external_paths["evidence"] = args.evidence.resolve()
+    if args.lean_manifest:
+        external_paths["lean_manifest"] = args.lean_manifest.resolve()
+    try:
+        external_before = snapshot_external_inputs(external_paths)
+    except (OSError, ValueError) as exc:
+        print("INVALID_EVIDENCE: " + str(exc), file=sys.stderr, flush=True)
+        return 2
     py = sys.executable
     scripts = ROOT / "scripts"
     plans = [
@@ -383,6 +407,14 @@ def main(argv: list[str] | None = None) -> int:
         log_faults.append("source closure recheck failed: " + str(exc))
     if not inputs_unchanged:
         infrastructure_errors = True
+    try:
+        external_after = snapshot_external_inputs(external_paths)
+        external_unchanged = external_after == external_before
+    except (OSError, ValueError) as exc:
+        external_unchanged = False
+        log_faults.append("external proof input recheck failed: " + str(exc))
+    if not external_unchanged:
+        infrastructure_errors = True
     if infrastructure_errors:
         overall = "TOOL_ERROR"
     elif positive and all(stage["status"] == "COMPLETED" for stage in stages):
@@ -403,6 +435,8 @@ def main(argv: list[str] | None = None) -> int:
         "refinement_status": refinement_status or "UNKNOWN",
         "input_identity": {name: entry["sha256"] for name, entry in input_identity.items()},
         "inputs_unchanged": inputs_unchanged,
+        "external_proof_inputs": external_before,
+        "external_inputs_unchanged": external_unchanged,
         "log_integrity": "MATCHED" if not log_faults else "INVALID_EVIDENCE",
         "log_integrity_failures": log_faults,
         "stages": stages,
