@@ -152,7 +152,7 @@ def evidence_overview(output: Path) -> dict:
     return summary
 
 
-def verify_stage_log_integrity(stage: dict) -> bool:
+def verify_stage_log_integrity(stage: dict, output: Path | None = None) -> bool:
     """Fail closed if any captured log differs from its recorded SHA-256/size.
 
     Legacy/manually synthesized stage records without sealed evidence are not
@@ -168,6 +168,12 @@ def verify_stage_log_integrity(stage: dict) -> bool:
             return False
         try:
             path = Path(stored_path)
+            if path.is_symlink() or not path.is_file():
+                return False
+            if output is not None:
+                expected_path = output / (stage.get("name", "") + "." + name + ".log")
+                if path.resolve() != expected_path.resolve():
+                    return False
             digest = hashlib.sha256()
             length = 0
             with path.open("rb") as stream:
@@ -189,7 +195,7 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     reason = "one or more verification stages failed"
     if set(by_name) != expected:
         reason = "required stages missing or duplicated"
-    elif len(stages) == len(expected) and all(x.get("status") == "EXIT_ZERO" and x.get("exit_code") == 0 for x in stages) and all(verify_stage_log_integrity(x) for x in stages):
+    elif len(stages) == len(expected) and all(x.get("status") == "EXIT_ZERO" and x.get("exit_code") == 0 for x in stages) and all(verify_stage_log_integrity(x, output) for x in stages):
         try:
             acceptance = json.loads((output / "acceptance-34.json").read_text(encoding="utf-8"))
             benchmark = json.loads((output / "benchmark-four-way.json").read_text(encoding="utf-8"))
@@ -208,7 +214,7 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
             reason = "missing or malformed final reports: " + str(error)
     evidence = evidence_overview(output)
     failed_stage_names = [x["name"] for x in stages if x.get("status") != "EXIT_ZERO" or x.get("exit_code") != 0]
-    invalid_logs = [x["name"] for x in stages if not verify_stage_log_integrity(x)]
+    invalid_logs = [x["name"] for x in stages if not verify_stage_log_integrity(x, output)]
     if failed_stage_names:
         reason = "verification stages failed: " + ", ".join(failed_stage_names)
     elif invalid_logs:
