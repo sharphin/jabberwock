@@ -138,11 +138,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         frontier += ["--evidence", str(args.evidence.resolve())]
     plans.append(("refinement-frontier", frontier))
-    plans.append(("coverage", [py, str(scripts / "formal_proof_coverage.py"),
-                                "--boundaries", str(output / "semantic-boundaries.json"),
-                                "--bindings", str(output / "stage-refinement-binding.json"),
-                                "--refinement", str(output / "refinement.json"),
-                                "--output", str(output / "proof-coverage.json")]))
+    coverage = [py, str(scripts / "formal_proof_coverage.py"),
+                "--boundaries", str(output / "semantic-boundaries.json"),
+                "--bindings", str(output / "stage-refinement-binding.json"),
+                "--refinement", str(output / "refinement.json"),
+                "--inventory", str(output / "inventory.json"),
+                "--output", str(output / "proof-coverage.json")]
+    if args.evidence:
+        coverage += ["--evidence", str(args.evidence.resolve())]
+    plans.append(("coverage", coverage))
     # Bind every stage output to its declared report schema. A successful
     # process exit must not let an unrelated or malformed JSON report satisfy
     # the gate. The optional kernel manifest report has no "kind" field yet;
