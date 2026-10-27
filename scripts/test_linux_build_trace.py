@@ -15,7 +15,7 @@ class BuildTraceTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "requires Linux"):
                     trace.collect(["fake"], Path(d), Path(d) / "report.json")
             with mock.patch.object(trace.shutil, "which", return_value=None):
-                with mock.patch.object(trace.sys, "platform", "linux"):
+                with mock.patch.object(trace.sys, "platform", "linux"), mock.patch.object(trace.os, "name", "posix"):
                     with self.assertRaisesRegex(ValueError, "strace unavailable"):
                         trace.collect(["fake"], Path(d), Path(d) / "report.json")
 
@@ -28,7 +28,7 @@ class BuildTraceTests(unittest.TestCase):
                     "bad trace fragment\nopenat(AT_FDCWD, \"missing\", O_RDONLY) = -1 ENOENT\n",
                     encoding="utf-8")
                 return type("Result", (), {"returncode": 3})()
-            with mock.patch.object(trace.sys, "platform", "linux"):
+            with mock.patch.object(trace.sys, "platform", "linux"), mock.patch.object(trace.os, "name", "posix"):
                 with mock.patch.object(trace.shutil, "which", return_value="/bin/strace"):
                     with mock.patch.object(trace.subprocess, "run", side_effect=fake_run):
                         result = trace.collect(["builder"], root, output)
