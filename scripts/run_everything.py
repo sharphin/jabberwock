@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,19 @@ def execute_stage(label: str, command: list[str], output: Path, *, timeout: int)
         except OSError as error:
             record["status"] = "INFRA_ERROR"
             record["reason"] = str(error)
+    # Bind every stage result to the exact captured logs, including failures.
+    # The evidence bundle can independently verify these digests.
+    for stream, path in (("stdout", stdout), ("stderr", stderr)):
+        try:
+            digest = hashlib.sha256()
+            with path.open("rb") as evidence:
+                for chunk in iter(lambda: evidence.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            record[stream + "_sha256"] = digest.hexdigest()
+            record[stream + "_bytes"] = path.stat().st_size
+        except OSError as error:
+            record["status"] = "INFRA_ERROR"
+            record["reason"] = "unable to seal " + stream + " log: " + str(error)
     record["duration_s"] = round(time.monotonic() - begin, 3)
     print(record["status"], label, "(logs:", stdout, stderr, ")", flush=True)
     return record
