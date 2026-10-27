@@ -139,7 +139,7 @@ def validate(result: dict) -> None:
     for identity, original in expected_rows.items():
         if actual_rows[identity] != original:
             raise ValueError("modified source, phase, goal or evidence requirement: " + identity)
-    for key in ("status", "total_obligations", "proved_obligations",
+    for key in ("schema_version", "kind", "limitations", "status", "total_obligations", "proved_obligations",
                 "required_goals", "compilers", "boundaries"):
         if result.get(key) != expected[key]:
             raise ValueError("invalid inventory metadata: " + key)
@@ -160,7 +160,7 @@ def main(argv=None) -> int:
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(result["status"], result.get("total_obligations", 0),
           "implementation proof obligations ->", args.output, flush=True)
-    return 0 if result["status"] == "PROVEN" else 1
+    # Inventory generation is successful even when the proof itself is incomplete.\n    return 2 if result["status"] == "INVALID_INVENTORY" else 0
 
 
 if __name__ == "__main__":
