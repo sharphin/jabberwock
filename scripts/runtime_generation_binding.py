@@ -23,6 +23,8 @@ C_PATTERNS = {
     "test_limit_static_assert": r"_Static_assert\(JW_TEST_GENERATION_LIMIT\s*>=\s*3\s*&&\s*JW_TEST_GENERATION_LIMIT\s*<=\s*GEN_COUNTER_MASK",
     "capacity_guard": r"return\s+gen\s*!=\s*GEN_RETIRED\s*&&\s*step\s*<=\s*GEN_LIMIT\s*&&\s*\(gen\s*&\s*GEN_COUNTER_MASK\)\s*<=\s*GEN_LIMIT\s*-\s*step\s*;",
     "advance_retires_on_failure": r"if\s*\(!gen_has_room\(gen,\s*step\)\)\s*\{\s*gen_retire\(p\);\s*return\s+0;\s*\}\s*gen_set\(p,\s*gen\s*\+\s*step\);\s*return\s+1;",
+    "free_reserves_two_generation_steps": r"if\s*\(!gen_has_room\(gen_get\(p\),\s*2\)\)\s*\{\s*remember_sent\(p,\s*why\);\s*gen_retire\(p\);\s*return;\s*\}\s*\(void\)gen_advance\(p,\s*1\);",
+    "reuse_checks_remaining_generation_step": r"static int remember_reuse\(void \*p\)\s*\{\s*if\s*\(!gen_has_room\(gen_get\(p\),\s*1\)\)\s*\{\s*gen_retire\(p\);\s*return 0;\s*\}"
     "retire_sentinel_store": r"gen_set\(p,\s*GEN_RETIRED\);",
     "retire_list_release_cas": r"__atomic_compare_exchange_n\(&retired_head,\s*&head,\s*p,\s*0,\s*__ATOMIC_RELEASE,\s*__ATOMIC_RELAXED\)",
     "view_generation_gate": r"uint64_t\s+gen\s*=\s*gen_get\(c->target\);\s*if\s*\(gen\s*==\s*GEN_RETIRED\s*\|\|\s*gen\s*!=\s*c->gen\)\s*jw_fail_dangling\(use,\s*c->site,\s*c->target,\s*c->gen\);\s*return\s+c->target;",
@@ -38,6 +40,10 @@ LEAN_TOKENS = (
     "def capacityCheckAt",
     "theorem capacityCheckAt_iff_sum",
     "theorem packed_word_step_no_uint64_wrap_at_limit",
+    "def freeThenReuse",
+    "theorem room_two_implies_room_after_first",
+    "theorem freeThenReuse_matches_two_step",
+    "theorem freeThenReuse_rejects_old_reference",
 )
 BITVEC_TOKENS = (
     "abbrev Word := BitVec 64",
