@@ -28,17 +28,9 @@ PHASES = ("lex", "parse", "typecheck", "lower", "analyze",
 # These bindings define the *minimum* implementation proof boundaries.
 # They do not prove correctness. Each boundary must eventually provide an
 # artifact validated against the actual implementation and target semantics.
-BOUNDARIES = {
-    "lex": ("semantics", "types"),
-    "parse": ("semantics", "types"),
-    "typecheck": ("types", "ownership", "semantics"),
-    "lower": ("semantics", "types", "ownership", "checks"),
-    "analyze": ("semantics", "memory", "ownership", "checks"),
-    "optimize": ("semantics", "memory", "ownership", "checks"),
-    "emit_llvm": GOALS,
-    "runtime": GOALS,
-    "integration": GOALS,
-}
+# Conservatively require every goal at every source boundary. Omitting a goal
+# based only on a filename is not a sound dependency analysis.
+BOUNDARIES = {phase: GOALS for phase in PHASES}
 
 
 def phase_of(path: str) -> str:
