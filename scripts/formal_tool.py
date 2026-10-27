@@ -196,42 +196,103 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(name + ": " + stage["status"], flush=True)
     by_name = {stage["name"]: stage for stage in stages}
-    broken = any(
-        s["status"] in ("TIMEOUT", "EXECUTION_ERROR") or
-        (s["status"] == "NONZERO_EXIT" and s["name"] != "refinement") or
-        (s["name"] == "refinement" and s.get("returncode") not in (0, 1)) or
-        s.get("report", {}).get("status") in
-        ("INVALID_REPORT", "INVALID_EVIDENCE", "INVALID_INVENTORY", "FAIL")
-        for s in stages
+    # Distinguish infrastructure failures from honest unproved obligations.
+    # The gate must remain capable of accepting independently established
+    # refinements in the future, without treating model-only checks as proofs.
+    infrastructure_errors = any(
+        stage["status"] in ("TIMEOUT", "EXECUTION_ERROR")
+        or (stage["status"] == "NONZERO_EXIT" and stage["name"] != "refinement")
+        or (stage["name"] == "refinement" and stage.get("returncode") not in (0, 1))
+        or stage.get("report", {}).get("status") in (
+            "INVALID_REPORT", "INVALID_EVIDENCE", "INVALID_INVENTORY",
+            "INVALID_BASELINE", "FAIL", "NOT_CHECKED", "STRUCTURE_MISMATCH")
+        for stage in stages
     )
-    refinement_status = by_name["refinement"].get("report", {}).get("status")
-    boundaries_status = by_name["semantic-boundaries"].get("report", {}).get("status")
-    if boundaries_status != "NOT_PROVEN":
-        broken = True
-    composition_status = by_name["semantic-composition"].get("report", {}).get("status")
-    coverage_status = by_name["coverage"].get("report", {}).get("status")
-    if composition_status != "NOT_PROVEN" or coverage_status != "NOT_PROVEN":
-        broken = True
-    if by_name["emitter-semantics"].get("report", {}).get("status") != "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY":
-        broken = True
-    if by_name["worklist-structure"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
-        broken = True
-    if by_name["runtime-generation-binding"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
-        broken = True
-    if by_name["runtime-generation-proof"].get("report", {}).get("status") != "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY":
-        broken = True
-    if by_name["refinement-frontier"].get("report", {}).get("status") != "PLAN_READY_NOT_PROVEN":
-        broken = True
-    if broken:
+    reports = {name: stage.get("report", {}) for name, stage in by_name.items()}
+    expected_model_statuses = {
+        "worklist-structure": "STRUCTURE_MATCHED",
+        "emitter-semantics": "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY",
+        "runtime-generation-binding": "STRUCTURE_MATCHED",
+        "runtime-generation-proof": "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY",
+    }
+    for name, expected in expected_model_statuses.items():
+        if reports[name].get("status") != expected:
+            infrastructure_errors = True
+
+    refinement_report = reports["refinement"]
+    composition_report = reports["semantic-composition"]
+    coverage_report = reports["coverage"]
+    frontier_report = reports["refinement-frontier"]
+    boundaries_report = reports["semantic-boundaries"]
+    bindings_report = reports["stage-refinement-binding"]
+    inventory_report = reports["inventory"]
+
+    # These stages describe proof obligations and are not proof engines.
+    # Their declared inventory and model-only status must never be interpreted
+    # as completing the compiler implementation refinement.
+    if (boundaries_report.get("status") != "NOT_PROVEN"
+            or bindings_report.get("status") != "NOT_PROVEN"
+            or inventory_report.get("status") != "NOT_PROVEN"
+            or frontier_report.get("status") != "PLAN_READY_NOT_PROVEN"):
+        infrastructure_errors = True
+    if composition_report.get("status") not in ("NOT_PROVEN", "PROVEN"):
+        infrastructure_errors = True
+    if coverage_report.get("status") not in ("NOT_PROVEN", "PROVEN"):
+        infrastructure_errors = True
+    if refinement_report.get("status") not in ("NOT_PROVEN", "PROVEN"):
+        infrastructure_errors = True
+
+    # Check the producer's self-consistency. An unproved or mismatched stage
+    # cannot become a positive end-to-end verdict by changing one status.
+    required = refinement_report.get("required")
+    proved = refinement_report.get("proved")
+    findings = refinement_report.get("findings")
+    if (not isinstance(required, int) or isinstance(required, bool)
+            or not isinstance(proved, int) or isinstance(proved, bool)
+            or required <= 0 or not 0 <= proved <= required
+            or not isinstance(findings, list) or len(findings) != required
+            or inventory_report.get("total_obligations") != required):
+        infrastructure_errors = True
+    composition_required = composition_report.get("required_transitions")
+    composition_proved = composition_report.get("proven_transitions")
+    if (not isinstance(composition_required, int)
+            or not isinstance(composition_proved, int)
+            or isinstance(composition_required, bool)
+            or isinstance(composition_proved, bool)
+            or composition_required <= 0
+            or not 0 <= composition_proved <= composition_required):
+        infrastructure_errors = True
+
+    ref_proven = (refinement_report.get("status") == "PROVEN"
+                  and proved == required and not infrastructure_errors)
+    composition_proven = (
+        composition_report.get("status") == "PROVEN"
+        and composition_report.get("whole_pipeline_proven") is True
+        and composition_proved == composition_required
+    )
+    coverage_required = coverage_report.get("required")
+    coverage_proven = (
+        coverage_report.get("status") == "PROVEN"
+        and isinstance(coverage_required, int)
+        and not isinstance(coverage_required, bool)
+        and coverage_required > 0
+        and coverage_report.get("semantically_proven") == coverage_required
+    )
+    positive = ref_proven and composition_proven and coverage_proven
+    # A wholly proved refinement must be accompanied by both the composed
+    # semantics and full coverage. Partial certificates are not promoted.
+    if (refinement_report.get("status") == "PROVEN") != positive:
+        infrastructure_errors = True
+    # The current composition/coverage producers deliberately emit NOT_PROVEN.
+    # This branch becomes reachable only after those producers implement real,
+    # independently verified semantic evidence and consistently report it.
+    if infrastructure_errors:
         overall = "TOOL_ERROR"
-    elif (refinement_status == "PROVEN" and
-          by_name["semantic-composition"]["report"].get("whole_pipeline_proven") is True and
-          by_name["coverage"]["report"].get("semantically_proven") ==
-          by_name["coverage"]["report"].get("required") and
-          all(s["status"] == "COMPLETED" for s in stages)):
+    elif positive and all(stage["status"] == "COMPLETED" for stage in stages):
         overall = "PROVEN"
     else:
         overall = "NOT_PROVEN"
+    refinement_status = refinement_report.get("status")
     summary = {
         "schema_version": 1, "kind": "jabberwock-formal-tool-run",
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
