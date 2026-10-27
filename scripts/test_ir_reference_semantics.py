@@ -88,5 +88,32 @@ class IRReferenceSemanticsTests(unittest.TestCase):
 
 
 
+    def test_rvalue_arithmetic_and_division_truncates_to_zero(self):
+        machine = Machine()
+        self.assertEqual(machine.evaluate({"kind": "bin", "op": "div",
+            "left": {"kind": "const", "value": -7},
+            "right": {"kind": "const", "value": 3}}), -2)
+        self.assertEqual(machine.evaluate({"kind": "bin", "op": "mod",
+            "left": {"kind": "const", "value": -7},
+            "right": {"kind": "const", "value": 3}}), -1)
+
+    def test_index_bounds_fail_closed(self):
+        machine = Machine()
+        expr = {"kind": "index", "base": {"kind": "array",
+            "items": [{"kind": "const", "value": 1}]},
+            "index": {"kind": "const", "value": -1}}
+        with self.assertRaisesRegex(IRTrap, "out-of-bounds"):
+            machine.evaluate(expr)
+
+    def test_rvalue_struct_and_comparison(self):
+        machine = Machine()
+        item = machine.evaluate({"kind": "struct", "fields": {
+            "ok": {"kind": "bin", "op": "lt",
+                   "left": {"kind": "const", "value": 2},
+                   "right": {"kind": "const", "value": 3}}}})
+        self.assertEqual(item, {"ok": True})
+
+
+
 if __name__ == "__main__":
     unittest.main()
