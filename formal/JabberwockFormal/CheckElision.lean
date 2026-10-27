@@ -465,4 +465,55 @@ theorem overwrite_preserves_other_slot
     overwriteOwnerFacts facts owner borrower = some (.refSlot slot) := by
   simp [overwriteOwnerFacts, distinct, borrow]
 
+/-- Invalidation of all references into movable list elements, matching
+    the conservative kill_elems transfer in both IR analyzers. -/
+def killElementFacts (facts : AnalyzerFacts) : AnalyzerFacts :=
+  fun key => match facts key with
+    | some (.refElem _) => none
+    | other => other
+
+theorem kill_elements_removes_element_facts
+    (facts : AnalyzerFacts) (key list : Nat)
+    (borrow : facts key = some (.refElem list)) :
+    killElementFacts facts key = none := by
+  simp [killElementFacts, borrow]
+
+theorem kill_elements_preserves_owner_facts
+    (facts : AnalyzerFacts) (key : Nat)
+    (own : facts key = some .own) :
+    killElementFacts facts key = some .own := by
+  simp [killElementFacts, own]
+
+theorem kill_elements_preserves_direct_borrows
+    (facts : AnalyzerFacts) (key owner : Nat)
+    (borrow : facts key = some (.refTo owner)) :
+    killElementFacts facts key = some (.refTo owner) := by
+  simp [killElementFacts, borrow]
+
+/-- Eliminating element facts does not create positive liveness claims,
+    including claims contingent on the existence of an owner fact. -/
+theorem kill_elements_cannot_create_liveness
+    (facts : AnalyzerFacts) (key : Nat)
+    (live : analyzerIsLive (killElementFacts facts)
+      (killElementFacts facts key) = true) :
+    analyzerIsLive facts (facts key) = true := by
+  cases h : facts key with
+  | none => simp [killElementFacts, analyzerIsLive, h] at live
+  | some fact =>
+      cases fact with
+      | own => simp [killElementFacts, analyzerIsLive, h] at live
+      | pinned => simp [analyzerIsLive, h]
+      | refSlot slot => simp [analyzerIsLive, h]
+      | refElem list => simp [killElementFacts, analyzerIsLive, h] at live
+      | refTo owner =>
+          have present : killElementFacts facts owner = some .own := by
+            simpa [killElementFacts, analyzerIsLive, h] using live
+          have oldOwn : facts owner = some .own := by
+            cases ho : facts owner with
+            | none => simp [killElementFacts, ho] at present
+            | some ownerFact =>
+                cases ownerFact <;> simp [killElementFacts, ho] at present
+                · exact ho
+          simpa [analyzerIsLive, h, oldOwn]
+
 end JabberwockFormal.CheckElision
