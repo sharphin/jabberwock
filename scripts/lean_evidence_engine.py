@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from lean_refinement_contracts import check_contracts
 
 AXIOMS = {"propext", "Quot.sound", "Classical.choice"}
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
@@ -80,6 +81,7 @@ def check(root: Path, manifest: dict, timeout: int = 120) -> dict:
     if "version 4.24.0," not in version:
         raise EvidenceError("unexpected Lean version: " + version.strip())
     run_checked([lake, "build"], project, timeout)
+    checked_types = check_contracts(root.resolve(), lake, names, timeout)
     with tempfile.TemporaryDirectory(prefix="jw-kernel-") as directory:
         path = Path(directory) / "KernelAudit.lean"
         path.write_text("import JabberwockFormal\n" + "\n".join("#print axioms " + name for name in names) + "\n", encoding="utf-8")
@@ -93,7 +95,9 @@ def check(root: Path, manifest: dict, timeout: int = 120) -> dict:
         if observed - AXIOMS:
             raise EvidenceError("unapproved axioms in " + name)
     return {"schema_version": 1, "status": "KERNEL_CHECKED", "theorems": names,
-            "scope": "declared Lean theorems only", "compiler_refinement": "NOT_PROVEN"}
+            "contract_types_checked": checked_types,
+            "scope": "declared Lean theorems, plus checked-in expected types when present",
+            "compiler_refinement": "NOT_PROVEN"}
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
