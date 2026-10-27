@@ -262,6 +262,39 @@ def inspect_generation_macros(source: Path) -> dict:
     }
 
 
+
+def inspect_native_build_path(native_source: Path) -> dict:
+    """Identify how the shipped runtime is passed to clang, without guessing flags."""
+    if native_source.is_symlink() or not native_source.is_file():
+        raise ValueError("native compiler source unavailable")
+    text = native_source.read_text(encoding="utf-8")
+    reviewed = (
+        'pub const RUNTIME_C: &str = include_str!("../runtime/jw_rt.c");',
+        'std::env::var("JW_CFLAGS")',
+        '.args(extra_flags())',
+        'fs::write(&rt, RUNTIME_C)',
+        'let mut args = vec![opt, path_str(&llp)?, path_str(&rt)?',
+        'run_clang(&lto).or_else(|_| run_clang(&args))',
+    )
+    if any(text.count(fragment) != 1 for fragment in reviewed):
+        raise ValueError("native compilation path changed from reviewed source")
+    # The exact arguments of a particular invocation (especially JW_CFLAGS)
+    # are not available from the source of the build function.
+    return {
+        "status": "BUILD_SOURCE_PATH_MATCHED_FLAGS_UNVERIFIED",
+        "runtime_source": "runtime/jw_rt.c",
+        "compiler": "JW_CLANG or clang",
+        "injected_environment": "JW_CFLAGS",
+        "active_preprocessor_branch": "UNDETERMINED",
+        "implementation_refinement": "NOT_PROVEN",
+        "limitations": [
+            "No actual clang invocation or preprocessed runtime was authenticated.",
+            "JW_CFLAGS may define JW_TEST_GENERATION_LIMIT or other macros.",
+            "A source-level build-path check cannot establish actual compiler flags.",
+        ],
+    }
+
+
 def inspect_symbolic_alignment(c_source: Path, lean_source: Path) -> dict:
     # Both source inspections are mandatory; the evaluator alone must not
     # discharge this source-bound obligation.
