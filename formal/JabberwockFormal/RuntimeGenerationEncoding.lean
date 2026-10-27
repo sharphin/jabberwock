@@ -192,7 +192,7 @@ theorem concreteGuard_matches_abstract
   have notRetired : pack retained counter ≠ retiredWord :=
     ne_of_lt (packed_word_is_below_retired retained bounded)
   have modulo := packed_counter_mod retained bounded
-  unfold concreteGuard wordCounter
+  unfold concreteGuard
   rw [modulo]
   constructor
   · rintro ⟨_, stepBound, counterBound⟩
