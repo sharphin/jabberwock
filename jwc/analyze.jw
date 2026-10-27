@@ -281,7 +281,10 @@ struct Cx {
     /// 場所をたどる。先頭の `*` の検査を決める（ほかの `*` は実行時に検査する）
     fn mut place(ref mut ir.Place p, ref mut Facts facts) {
         let f = get(facts, p.local);
-        let safe = f == OWN || is_ref_elem(f) || is_live(facts, f);
+        // RefElem is safe to dereference within this function while its fact survives.
+        // Operations that may move list elements remove RefElem facts via kill_elems.
+        // Keep it out of is_live: passing an element ref to a callee is not pinned.
+        let safe = f == OWN || is_live(facts, f) || is_ref_elem(f);
         for i in range(p.proj.len()) {
             let mut is_deref = false;
             let mut sp = 0;
@@ -339,10 +342,12 @@ struct Cx {
         }
         // `f(ref a, a)` のように後の引数でムーブされるものは、前の命令で事実が消えている
         let bool[] mut safe = [];
-        for f in fs { safe.push(is_live(facts, f)); }
         for j in range(os.len()) {
             operand(ref mut os[j], ref mut facts);
         }
+        // A later argument can move an owner borrowed by an earlier one.
+        // Never certify a parameter from facts that have since been killed.
+        for f in fs { safe.push(is_live(facts, f)); }
         safe
     }
 

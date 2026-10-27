@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,8 @@ import platform
 import subprocess
 import sys
 import time
+
+from formal_report import source_identity, proof_sources_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = platform.system() == "Windows"
@@ -32,6 +35,9 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
     formal = output / "formal.json"
     result = [
         ("python-regressions", [py, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"]),
+        ("cargo-tests", ["cargo", "test", "--offline", "--all-targets"]),
+        ("cargo-doctests", ["cargo", "test", "--offline", "--doc"]),
+        ("cargo-clippy", ["cargo", "clippy", "--offline", "--all-targets", "--", "-D", "warnings"]),
         ("practical-safety", [*safety, "--compiler", "all", "--output", str(practical)]),
         ("whole-implementation-obligations", [py, str(ROOT / "scripts/whole_compiler_proof.py"),
                                               "--output", str(output / "whole-proof-inventory.json")]),
@@ -47,6 +53,7 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
         ("acceptance-34", [py, str(ROOT / "scripts/acceptance_report.py"),
                             "--os", target_os, "--practical", str(practical), "--formal", str(formal),
                             "--inventory", str(output / "whole-proof-inventory.json"),
+                            "--transition", str(output / "refinement-transition.json"),
                             "--output", str(output / "acceptance-34.json")]),
         ("benchmark-four-way", [*benchmark, *(["--full"] if not quick else []),
                                 "--output", str(output / "benchmark-four-way.json")]),
@@ -79,6 +86,19 @@ def execute_stage(label: str, command: list[str], output: Path, *, timeout: int)
         except OSError as error:
             record["status"] = "INFRA_ERROR"
             record["reason"] = str(error)
+    # Bind every stage result to the exact captured logs, including failures.
+    # The evidence bundle can independently verify these digests.
+    for stream, path in (("stdout", stdout), ("stderr", stderr)):
+        try:
+            digest = hashlib.sha256()
+            with path.open("rb") as evidence:
+                for chunk in iter(lambda: evidence.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            record[stream + "_sha256"] = digest.hexdigest()
+            record[stream + "_bytes"] = path.stat().st_size
+        except OSError as error:
+            record["status"] = "INFRA_ERROR"
+            record["reason"] = "unable to seal " + stream + " log: " + str(error)
     record["duration_s"] = round(time.monotonic() - begin, 3)
     print(record["status"], label, "(logs:", stdout, stderr, ")", flush=True)
     return record
@@ -135,15 +155,50 @@ def evidence_overview(output: Path) -> dict:
     return summary
 
 
+def verify_stage_log_integrity(stage: dict, output: Path | None = None) -> bool:
+    """Fail closed if any captured log differs from its recorded SHA-256/size.
+
+    Legacy/manually synthesized stage records without sealed evidence are not
+    accepted as having verified log integrity.
+    """
+    for name in ("stdout", "stderr"):
+        stored_path = stage.get(name + "_log")
+        expected = stage.get(name + "_sha256")
+        expected_size = stage.get(name + "_bytes")
+        if not isinstance(stored_path, str) or not isinstance(expected, str):
+            return False
+        if len(expected) != 64 or not isinstance(expected_size, int) or expected_size < 0:
+            return False
+        try:
+            path = Path(stored_path)
+            if path.is_symlink() or not path.is_file():
+                return False
+            if output is not None:
+                expected_path = output / (stage.get("name", "") + "." + name + ".log")
+                if path.resolve() != expected_path.resolve():
+                    return False
+            digest = hashlib.sha256()
+            length = 0
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    length += len(chunk)
+            if digest.hexdigest() != expected or length != expected_size:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
-    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
+    expected = {"python-regressions", "cargo-tests", "cargo-doctests", "cargo-clippy", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
                 "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"}
     verdict = "FAIL"
     reason = "one or more verification stages failed"
     if set(by_name) != expected:
         reason = "required stages missing or duplicated"
-    elif len(stages) == len(expected) and all(x["status"] == "EXIT_ZERO" for x in stages):
+    elif len(stages) == len(expected) and all(x.get("status") == "EXIT_ZERO" and x.get("exit_code") == 0 for x in stages) and all(verify_stage_log_integrity(x, output) for x in stages):
         try:
             acceptance = json.loads((output / "acceptance-34.json").read_text(encoding="utf-8"))
             benchmark = json.loads((output / "benchmark-four-way.json").read_text(encoding="utf-8"))
@@ -161,19 +216,31 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
         except (OSError, ValueError, TypeError, AttributeError) as error:
             reason = "missing or malformed final reports: " + str(error)
     evidence = evidence_overview(output)
-    failed_stage_names = [x["name"] for x in stages if x["status"] != "EXIT_ZERO"]
+    failed_stage_names = [x["name"] for x in stages if x.get("status") != "EXIT_ZERO" or x.get("exit_code") != 0]
+    invalid_logs = [x["name"] for x in stages if not verify_stage_log_integrity(x, output)]
     if failed_stage_names:
         reason = "verification stages failed: " + ", ".join(failed_stage_names)
+    elif invalid_logs:
+        reason = "stage logs are missing or differ from recorded hashes: " + ", ".join(invalid_logs)
     elif verdict != "PASS" and evidence["implementation_inventory"]["status"] == "NOT_PROVEN":
         reason = "compiler-wide refinement obligations remain unproved; inspect evidence.implementation_inventory.uncovered"
     return {"schema_version": 2, "kind": "local-full-verification",
             "status": verdict, "reason": reason, "mode": "quick" if quick else "full",
             "host_os": platform.system(), "stages": stages,
             "failed_stages": failed_stage_names,
+            "invalid_stage_logs": invalid_logs,
             "evidence": evidence,
             "passed_stages": sum(x["status"] == "EXIT_ZERO" for x in stages),
             "required_stages": len(expected),
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat()}
+
+
+def source_snapshots() -> dict:
+    """Pin both compilers and all formal dependencies to exact file contents."""
+    return {
+        "compilers": {name: source_identity(name) for name in ("jwc", "rust")},
+        "formal": proof_sources_identity(),
+    }
 
 
 def main(argv=None):
@@ -189,6 +256,12 @@ def main(argv=None):
         parser.error("stage timeout must be positive")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    try:
+        initial_snapshots = source_snapshots()
+        snapshot_error = None
+    except (OSError, ValueError, KeyError) as exc:
+        initial_snapshots = None
+        snapshot_error = "unable to snapshot starting sources: " + str(exc)
     stages = []
     for label, command in plans(output, quick=args.quick):
         # Delete prior output: never reuse a report from a previous attempt.
@@ -208,6 +281,16 @@ def main(argv=None):
                 continue
         stages.append(execute_stage(label, command, output, timeout=args.stage_timeout))
     result = summarize(stages, output, quick=args.quick)
+    try:
+        final_snapshots = source_snapshots()
+        if initial_snapshots != final_snapshots:
+            snapshot_error = "compiler or formal sources changed during verification"
+    except (OSError, ValueError, KeyError) as exc:
+        snapshot_error = "unable to snapshot final sources: " + str(exc)
+    result["source_snapshot_consistent"] = snapshot_error is None
+    if snapshot_error:
+        result["status"] = "FAIL"
+        result["reason"] = snapshot_error
     if args.quick:
         result["status"] = "FAIL"
         result["reason"] = "quick sampling cannot satisfy full acceptance"

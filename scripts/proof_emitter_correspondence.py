@@ -77,6 +77,50 @@ def validate(compiler: str) -> dict:
         )
     if any(fragment not in body for fragment in required):
         raise ValueError("generation comparison/rejection wiring changed: " + compiler)
+    # The Rust emitter has an explicit unchecked early return when o.gen is
+    # disabled. Reject drift in this bypass: the Lean continuation theorem
+    # applies only to the checked path, never unconditionally.
+    if compiler == "rust":
+        bypass = (
+            '    let addr = b.val(format!("extractvalue {} {}, 0", rt, r));',
+            '    if !o.gen {',
+            '        return addr;',
+            '    }',
+            '    count(b, o, "gen");',
+        )
+        if body.count("\n".join(bypass)) != 1:
+            raise ValueError("Rust generation-check bypass differs from the formal option model")
+    else:
+        if "if !o.gen" in body:
+            raise ValueError("jwc unexpectedly bypasses the modeled check")
+    # Check the complete contiguous decision path, not merely the presence of
+    # isolated instruction fragments. This prevents an injected assignment or
+    # branch between the comparison and the rejecting trap from passing the
+    # source/model structural binding check.
+    if compiler == "jwc":
+        decision = (
+            '    let different = b.val("icmp ne i64 " + cur + ", " + g);',
+            '    let retired = b.val("icmp eq i64 " + cur + ", -1");',
+            '    let bad = b.val("or i1 " + different + ", " + retired);',
+            '    let ok = b.if_true(bad);',
+            '    b.op("call void @jw_fail_dangling(ptr " + use_site + ", ptr " + st + ", ptr " + blk + ", i64 " + g + ")");',
+            '    b.op("unreachable");',
+            '    b.label(ok);',
+            '    addr',
+        )
+    else:
+        decision = (
+            '    let bad = b.val(format!("icmp ne i64 {}, {}", g, gen));',
+            '    let retired = b.val(format!("icmp eq i64 {}, -1", g));',
+            '    let bad = b.val(format!("or i1 {}, {}", bad, retired));',
+            '    let (_, ok) = b.if_true(&bad);',
+            '    b.op(format!("call void @jw_fail_dangling(ptr {}, ptr {}, ptr {}, i64 {})", use_site, site, blk, gen));',
+            '    b.op("unreachable");',
+            '    b.label(&ok);',
+            '    addr',
+        )
+    if body.count("\n".join(decision)) != 1:
+        raise ValueError("emitted guard is not a contiguous, modeled reject path: " + compiler)
     # The guard emitted on the rejecting branch must trap rather than return.
     if body.find("call void @jw_fail_dangling(") > body.find("unreachable"):
         raise ValueError("dangling trap order invalid")

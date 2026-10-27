@@ -263,6 +263,10 @@ impl<'a> Cx<'a> {
     fn place(&mut self, p: &mut Place, facts: &mut Facts) {
         let safe = {
             let f = facts.get(&p.local).copied();
+            // RefElem is valid for direct dereferences while its fact survives.
+            // Any operation that can move list elements removes RefElem facts.
+            // Do not use is_live here: call arguments intentionally treat RefElem as unsafe,
+            // because the callee may mutate the backing list.
             f == Some(Fact::Own) || matches!(f, Some(Fact::RefElem(_))) || is_live(facts, f)
         };
         if self.set {
@@ -307,11 +311,12 @@ impl<'a> Cx<'a> {
             });
         }
         // `f(ref a, a)` のように後の引数でムーブされるものは、前の命令で事実が消えている
-        let safe = fs.iter().map(|f| is_live(facts, *f)).collect();
         for o in os.iter_mut() {
             self.operand(o, facts);
         }
-        safe
+        // Evaluate argument liveness only after every argument has been consumed.
+        // A later Move may invalidate the owner borrowed by an earlier argument.
+        fs.iter().map(|f| is_live(facts, *f)).collect()
     }
 
     fn record(&mut self, fi: usize, safe: Vec<bool>) {
