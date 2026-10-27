@@ -375,13 +375,14 @@ theorem meet_live_implies_left
       simp [meetFacts, h]
     rw [hk] at live
     cases f : left key with
-    | none => simp [analyzerIsLive] at live
+    | none =>
+        simp [analyzerIsLive, f] at live
     | some fact =>
         cases fact with
-        | own => simp [analyzerIsLive] at live
+        | own => simp [analyzerIsLive, f] at live
         | pinned => simp [analyzerIsLive]
         | refSlot slot => simp [analyzerIsLive]
-        | refElem slot => simp [analyzerIsLive] at live
+        | refElem slot => simp [analyzerIsLive, f] at live
         | refTo owner =>
             have joinedOwn : meetFacts left right owner = some .own := by
               simpa [analyzerIsLive, f] using live
