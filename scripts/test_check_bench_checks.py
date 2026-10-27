@@ -25,9 +25,10 @@ class PortableCheckCountTests(unittest.TestCase):
                 checks.parse_statistics(invalid)
 
     def test_runtime_count_does_not_accept_missing_counters(self):
-        self.assertEqual(checks.parse_runtime_counts("[checks] gen 1 opt 2 idx 3"),
+        self.assertEqual(checks.parse_runtime_counts("[checks] gen 1 elided 2 bounds 3"),
                          (1, 2, 3))
-        for invalid in ("", "[checks] gen 1 opt 2", "[checks] gen a opt 2 idx 3"):
+        for invalid in ("", "[checks] gen 1 elided 2", "[checks] gen a elided 2 bounds 3",
+                        "[checks] gen 1 opt 2 idx 3", "[checks] gen 1 bounds 2 elided 3"):
             with self.assertRaises(ValueError):
                 checks.parse_runtime_counts(invalid)
 
