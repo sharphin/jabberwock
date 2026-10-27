@@ -103,7 +103,7 @@ def validate(compiler: str) -> dict:
             '    b.label(&ok);',
             '    addr',
         )
-    if body.count("\\n".join(decision)) != 1:
+    if body.count("\n".join(decision)) != 1:
         raise ValueError("emitted guard is not a contiguous, modeled reject path: " + compiler)
     # The guard emitted on the rejecting branch must trap rather than return.
     if body.find("call void @jw_fail_dangling(") > body.find("unreachable"):
