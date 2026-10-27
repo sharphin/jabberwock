@@ -17,7 +17,6 @@ import sys
 from acceptance_requirements import COMPILERS, GOALS, obligation_catalog, test_input_identity
 from formal_report import source_identity, proof_sources_identity
 from whole_compiler_proof import validate as validate_whole_inventory, inventory as canonical_whole_inventory
-from refinement_transition import evaluate as evaluate_refinement
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILURES = {"FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED"}
@@ -115,7 +114,6 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None, who
     if refinement is not None:
         if whole_inventory is None:
             raise ValueError("refinement report requires source inventory")
-        canonical = evaluate_refinement(whole_inventory, {"schema_version": 1, "proofs": []})
         expected = {row["id"] for row in whole_inventory["components"]}
         if not isinstance(refinement, dict) or refinement.get("schema_version") != 1:
             raise ValueError("invalid refinement report envelope")
