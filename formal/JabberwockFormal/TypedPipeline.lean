@@ -103,6 +103,59 @@ def fold : {t : Ty} → IR t → IR t
       | .boolean false => no'
       | other => .select other yes' no'
 
+/-- Evaluation of the literal-add rewrite, including the fallback case. -/
+private theorem sum_step_sound (a b : IR .nat) :
+    irEval (match a, b with
+      | .integer x, .integer y => IR.integer (x + y)
+      | x, y => IR.sum x y) = irEval a + irEval b := by
+  cases a <;> cases b <;> rfl
+
+/-- Evaluation of the literal-equality rewrite, including the fallback case. -/
+private theorem eq_step_sound (a b : IR .nat) :
+    irEval (match a, b with
+      | .integer x, .integer y => IR.boolean (decide (x = y))
+      | x, y => IR.eq x y) = decide (irEval a = irEval b) := by
+  cases a <;> cases b <;> rfl
+
+/-- Evaluation of constant branch selection for any target result type. -/
+private theorem select_step_sound {t : Ty} (c : IR .bool) (yes no : IR t) :
+    irEval (match c with
+      | .boolean true => yes
+      | .boolean false => no
+      | other => IR.select other yes no) =
+    (if irEval c then irEval yes else irEval no) := by
+  cases c with
+  | boolean b => cases b <;> rfl
+  | eq a b => rfl
+  | select c a b => rfl
+
+/-- General semantic preservation for every well-typed term in the modeled IR.
+    Unlike the earlier literal-only lemmas, this covers arbitrary nesting of
+    arithmetic, equality and conditional rewrites. It still does not certify
+    the Rust or jwc optimizer implementations. -/
+theorem fold_preserves_evaluation {t : Ty} (ir : IR t) :
+    irEval (fold ir) = irEval ir := by
+  induction ir with
+  | integer _ => rfl
+  | boolean _ => rfl
+  | sum a b ha hb =>
+      change irEval (match fold a, fold b with
+        | .integer x, .integer y => IR.integer (x + y)
+        | x, y => IR.sum x y) = irEval a + irEval b
+      rw [sum_step_sound, ha, hb]
+  | eq a b ha hb =>
+      change irEval (match fold a, fold b with
+        | .integer x, .integer y => IR.boolean (decide (x = y))
+        | x, y => IR.eq x y) = decide (irEval a = irEval b)
+      rw [eq_step_sound, ha, hb]
+  | select c yes no hc hy hn =>
+      change irEval (match fold c with
+        | .boolean true => fold yes
+        | .boolean false => fold no
+        | other => IR.select other (fold yes) (fold no)) =
+        (if irEval c then irEval yes else irEval no)
+      rw [select_step_sound, hc, hy, hn]
+
 /-- The optimizer cannot change the result type: its return type is IR t. -/
 theorem fold_preserves_result_type {t : Ty} (ir : IR t) :
     ∃ optimized : IR t, optimized = fold ir := by
@@ -165,6 +218,12 @@ theorem emit_preserves_evaluation {t : Ty} (ir : IR t) :
 theorem source_to_target_preserves_evaluation {t : Ty} (e : Expr t) :
     targetEval (emit (lower e)) = eval e := by
   rw [emit_preserves_evaluation, lower_preserves_evaluation]
+
+/-- Composition including recursive optimization for every modeled expression. -/
+theorem optimized_source_to_target_preserves_evaluation {t : Ty} (e : Expr t) :
+    targetEval (emit (fold (lower e))) = eval e := by
+  rw [emit_preserves_evaluation, fold_preserves_evaluation,
+      lower_preserves_evaluation]
 
 /-- Optimization stage output always remains a well-typed target term. -/
 theorem folded_ir_emits_well_typed_target {t : Ty} (ir : IR t) :
