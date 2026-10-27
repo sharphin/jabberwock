@@ -24,6 +24,10 @@ STAGES = {
 }
 # Independently assert that both CLI implementations advertise these modes.
 IMPLEMENTATIONS = {"rust": "src/main.rs", "jwc": "jwc/main.jw"}
+# Parsing is composed of lexing and AST construction; verify both observable
+# production interfaces rather than treating an AST dump as a lexer proof.
+PROBES = {stage: (("--tokens", "--ast") if stage == "parse" else (flags[0] if flags else "",))
+          for stage, flags in STAGES.items()}
 
 
 def check_cli_sources(root: Path) -> dict:
@@ -31,15 +35,15 @@ def check_cli_sources(root: Path) -> dict:
     for name, filename in IMPLEMENTATIONS.items():
         file = root / filename
         source = file.read_text(encoding="utf-8")
-        for flag in ("--ast", "--typed", "--ir-raw", "--ir"):
+        for flag in ("--tokens", "--ast", "--typed", "--ir-raw", "--ir"):
             if flag not in source:
                 raise ValueError(name + " lacks required CLI boundary: " + flag)
         result[name] = {"path": filename, "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
     return result
 
 
-def run_boundary(binary: Path, stage: str, source: Path, *, root: Path, timeout: float):
-    flags = STAGES[stage]
+def run_boundary(binary: Path, stage: str, source: Path, *, root: Path, timeout: float, probe: str | None = None):
+    flags = (probe,) if probe else STAGES[stage]
     args = [str(binary), *flags, str(source)]
     try:
         proc = subprocess.run(args, cwd=root, input="", capture_output=True,
@@ -70,8 +74,9 @@ def verify(root: Path, binaries: dict[str, Path], sources: list[Path],
         if not full.is_file():
             raise ValueError("missing test input: " + str(source))
         for stage in STAGES:
+          for probe in PROBES[stage]:
             observed = {name: run_boundary(binaries[name].resolve(), stage, full,
-                                            root=root, timeout=timeout)
+                                            root=root, timeout=timeout, probe=probe)
                         for name in IMPLEMENTATIONS}
             left, right = observed["rust"], observed["jwc"]
             if any(x["status"] != "EXECUTED" for x in observed.values()):
@@ -97,7 +102,7 @@ def verify(root: Path, binaries: dict[str, Path], sources: list[Path],
                     left["stdout"].splitlines(True), right["stdout"].splitlines(True),
                     fromfile="rust", tofile="jwc"))[:8000]
             records.append({"source": str(full), "source_sha256": hashlib.sha256(
-                full.read_bytes()).hexdigest(), "stage": stage,
+                full.read_bytes()).hexdigest(), "stage": stage, "probe": probe,
                 "status": status, "observations": observed, "stdout_diff": diff})
     return {"schema_version": 1, "kind": "real-compiler-five-boundary-comparison",
             "status": "MATCH" if all(x["status"] == "MATCH" for x in records) else "FAIL",
