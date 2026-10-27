@@ -48,6 +48,9 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
                             "--output", str(output / "acceptance-34.json")]),
         ("benchmark-four-way", [*benchmark, *(["--full"] if not quick else []),
                                 "--output", str(output / "benchmark-four-way.json")]),
+        ("llvm-concrete-ir-audit", [py, str(ROOT / "scripts/llvm_ir_audit.py"),
+                                   "--ir-root", str(output / "benchmark-four-way-work"),
+                                   "--output", str(output / "llvm-ir-audit.json")]),
         ("legacy-optimization-counts", [py, str(ROOT / "scripts/check_bench_checks.py")]),
     ]
     return result
@@ -83,6 +86,7 @@ def evidence_overview(output: Path) -> dict:
     paths = {
         "implementation_inventory": "whole-proof-inventory.json",
         "build_dependencies": "build-dependency-audit.json",
+        "llvm_ir": "llvm-ir-audit.json",
         "formal": "formal.json",
         "acceptance": "acceptance-34.json",
         "practical": "safety.json",
@@ -102,6 +106,8 @@ def evidence_overview(output: Path) -> dict:
                                        if x.get("status") != "REFINEMENT_PROVEN"])
             elif label == "build_dependencies":
                 data.update(checks=value.get("checks", []))
+            elif label == "llvm_ir":
+                data.update(results=value.get("results", []), errors=value.get("errors", []))
             elif label == "formal":
                 data.update(goals=value.get("summary", {}),
                             infrastructure_error=value.get("infrastructure_error"))
@@ -125,7 +131,7 @@ def evidence_overview(output: Path) -> dict:
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
     expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
-                "acceptance-34", "benchmark-four-way", "legacy-optimization-counts"}
+                "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"}
     verdict = "FAIL"
     reason = "one or more verification stages failed"
     if set(by_name) != expected:
@@ -184,7 +190,8 @@ def main(argv=None):
                        "build-dependency-audit": "build-dependency-audit.json",
                        "whole-implementation-obligations": "whole-proof-inventory.json",
                        "acceptance-34": "acceptance-34.json",
-                       "benchmark-four-way": "benchmark-four-way.json"}.get(label)
+                       "benchmark-four-way": "benchmark-four-way.json",
+                       "llvm-concrete-ir-audit": "llvm-ir-audit.json"}.get(label)
         if report_name:
             try:
                 (output / report_name).unlink(missing_ok=True)
