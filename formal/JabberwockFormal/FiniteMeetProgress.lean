@@ -199,7 +199,7 @@ theorem exhausted_initial_facts_stable {n : Nat}
   funext key
   cases oldValue : updateMany initial history key with
   | none =>
-      exact (absence_persists _ incoming key oldValue).trans oldValue.symm
+      exact absence_persists _ incoming key oldValue
   | some fact =>
       have initialPresent :=
         updateMany_retained_from_initial initial history key fact oldValue
