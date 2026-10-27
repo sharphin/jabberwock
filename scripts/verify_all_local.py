@@ -111,6 +111,11 @@ def formal_environment_for(os_name: str) -> dict[str, str]:
 
 
 def main() -> int:
+    # No-argument entry is the complete test battery. Explicit legacy evidence
+    # arguments remain available for read-only re-auditing.
+    if len(sys.argv) == 1:
+        from run_everything import main as run_complete
+        return run_complete([])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "target/local-verification.json")
     parser.add_argument("--practical", type=Path, help="existing local safety report (otherwise execute suite)")
