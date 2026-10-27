@@ -24,17 +24,17 @@ inductive Expr : Ty → Type where
   | equal (a b : Expr .nat) : Expr .bool
   | choose {t : Ty} (condition : Expr .bool) (yes no : Expr t) : Expr t
 
-def Value : Ty → Type
+abbrev Value : Ty → Type
   | .nat => Nat
   | .bool => Bool
 
 def eval : {t : Ty} → Expr t → Value t
   | _, .number n => n
   | _, .truth b => b
-  | _, .add a b => eval a + eval b
-  | _, .equal a b => decide (eval a = eval b)
+  | _, .add a b => eval (t := .nat) a + eval (t := .nat) b
+  | _, .equal a b => decide (eval (t := .nat) a = eval (t := .nat) b)
   | _, .choose condition yes no =>
-      if eval condition then eval yes else eval no
+      if eval (t := .bool) condition then eval yes else eval no
 
 /-- A separate IR representation retains its result type in the constructor. -/
 inductive IR : Ty → Type where
@@ -47,10 +47,10 @@ inductive IR : Ty → Type where
 def irEval : {t : Ty} → IR t → Value t
   | _, .integer n => n
   | _, .boolean b => b
-  | _, .sum a b => irEval a + irEval b
-  | _, .eq a b => decide (irEval a = irEval b)
+  | _, .sum a b => irEval (t := .nat) a + irEval (t := .nat) b
+  | _, .eq a b => decide (irEval (t := .nat) a = irEval (t := .nat) b)
   | _, .select condition yes no =>
-      if irEval condition then irEval yes else irEval no
+      if irEval (t := .bool) condition then irEval yes else irEval no
 
 def lower : {t : Ty} → Expr t → IR t
   | _, .number n => .integer n
@@ -107,14 +107,14 @@ def fold : {t : Ty} → IR t → IR t
 private theorem sum_step_sound (a b : IR .nat) :
     irEval (match a, b with
       | .integer x, .integer y => IR.integer (x + y)
-      | x, y => IR.sum x y) = irEval a + irEval b := by
+      | x, y => IR.sum x y) = irEval (t := .nat) a + irEval (t := .nat) b := by
   cases a <;> cases b <;> rfl
 
 /-- Evaluation of the literal-equality rewrite, including the fallback case. -/
 private theorem eq_step_sound (a b : IR .nat) :
     irEval (match a, b with
       | .integer x, .integer y => IR.boolean (decide (x = y))
-      | x, y => IR.eq x y) = decide (irEval a = irEval b) := by
+      | x, y => IR.eq x y) = decide (irEval (t := .nat) a = irEval (t := .nat) b) := by
   cases a <;> cases b <;> rfl
 
 /-- Evaluation of constant branch selection for any target result type. -/
@@ -123,7 +123,7 @@ private theorem select_step_sound {t : Ty} (c : IR .bool) (yes no : IR t) :
       | .boolean true => yes
       | .boolean false => no
       | other => IR.select other yes no) =
-    (if irEval c then irEval yes else irEval no) := by
+    (if irEval (t := .bool) c then irEval yes else irEval no) := by
   cases c with
   | boolean b => cases b <;> rfl
   | eq a b => rfl
@@ -141,19 +141,19 @@ theorem fold_preserves_evaluation {t : Ty} (ir : IR t) :
   | sum a b ha hb =>
       change irEval (match fold a, fold b with
         | .integer x, .integer y => IR.integer (x + y)
-        | x, y => IR.sum x y) = irEval a + irEval b
+        | x, y => IR.sum x y) = irEval (t := .nat) a + irEval (t := .nat) b
       rw [sum_step_sound, ha, hb]
   | eq a b ha hb =>
       change irEval (match fold a, fold b with
         | .integer x, .integer y => IR.boolean (decide (x = y))
-        | x, y => IR.eq x y) = decide (irEval a = irEval b)
+        | x, y => IR.eq x y) = decide (irEval (t := .nat) a = irEval (t := .nat) b)
       rw [eq_step_sound, ha, hb]
   | select c yes no hc hy hn =>
       change irEval (match fold c with
         | .boolean true => fold yes
         | .boolean false => fold no
         | other => IR.select other (fold yes) (fold no)) =
-        (if irEval c then irEval yes else irEval no)
+        (if irEval (t := .bool) c then irEval yes else irEval no)
       rw [select_step_sound, hc, hy, hn]
 
 /-- The optimizer cannot change the result type: its return type is IR t. -/
@@ -189,10 +189,10 @@ inductive Target : Ty → Type where
 def targetEval : {t : Ty} → Target t → Value t
   | _, .constantNat n => n
   | _, .constantBool b => b
-  | _, .plus a b => targetEval a + targetEval b
-  | _, .compare a b => decide (targetEval a = targetEval b)
+  | _, .plus a b => targetEval (t := .nat) a + targetEval (t := .nat) b
+  | _, .compare a b => decide (targetEval (t := .nat) a = targetEval (t := .nat) b)
   | _, .branch c yes no =>
-      if targetEval c then targetEval yes else targetEval no
+      if targetEval (t := .bool) c then targetEval yes else targetEval no
 
 /-- The modeled backend preserves its result type by construction. -/
 def emit : {t : Ty} → IR t → Target t
