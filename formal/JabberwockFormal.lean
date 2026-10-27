@@ -10,6 +10,7 @@ import JabberwockFormal.CfgMeetElision
 import JabberwockFormal.LoopConvergence
 import JabberwockFormal.FiniteMeetProgress
 import JabberwockFormal.ChangeBudget
+import JabberwockFormal.ErasureHistory
 import JabberwockFormal.WorklistExecution
 import JabberwockFormal.WorklistScheduling
 import JabberwockFormal.SafetyComposition
