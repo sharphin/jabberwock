@@ -92,7 +92,7 @@ def main():
                 diagnostic_ok = ("dangling reference" in observed["stderr"] if exit_code else
                                  observed["stderr"] == ("[live] 0\n" if native else ""))
                 passed = observed["exit"] == exit_code and observed["stdout"] == "" and effect == "x" and diagnostic_ok
-                results.append({"case": filename, "configuration": name, "status": "pass" if passed else "fail",
+                results.append({"compiler": "jwc" if name.startswith("jwc") else "rust", "case": filename, "configuration": name, "status": "pass" if passed else "fail",
                                 "expected_exit": exit_code, "expected_file": "x", "observed_file": effect,
                                 "observed": observed})
     report = {

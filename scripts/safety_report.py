@@ -24,6 +24,8 @@ import local_safety as safety
 import safety_platforms as suites
 import safety_compilers
 import safety_goals
+from formal_report import source_identity
+from acceptance_requirements import test_input_identity
 from windows_asan_runtime import environment as runtime_environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,8 +251,34 @@ def run_probe(probe: dict, report_dir: Path, dry_run: bool) -> dict:
             cases = details["results"]
             if probe.get("expected_subject") and details.get("subject") != probe["expected_subject"]:
                 raise ValueError("case report belongs to a different compiler")
-            if any(r.get("compiler", probe.get("compiler")) != probe.get("compiler") for r in cases if isinstance(r, dict)):
+            if probe.get("compiler") and any(r.get("compiler") != probe["compiler"] for r in cases if isinstance(r, dict)):
                 raise ValueError("mixed compiler cases")
+            # Every nested report must identify individual executed cases.
+            # Some legacy probes use (case, configuration) rather than id.
+            identities = []
+            for item in cases:
+                if not isinstance(item, dict):
+                    raise ValueError("non-object executed case")
+                identity = item.get("id")
+                if identity is None and isinstance(item.get("case"), str):
+                    configuration = item.get("configuration")
+                    identity = item["case"] + (":" + configuration if isinstance(configuration, str) else "")
+                if not isinstance(identity, str) or not identity:
+                    raise ValueError("executed case without identity")
+                identities.append(identity)
+            if len(identities) != len(set(identities)):
+                raise ValueError("duplicate executed case identity")
+            # Dynamic case inventories may grow, but the runner must execute
+            # exactly the complete inventory emitted by the case generator.
+            declared = details.get("expected_case_ids")
+            if declared is not None:
+                if (not isinstance(declared, list) or not declared or
+                        any(not isinstance(x, str) or not x for x in declared) or
+                        len(declared) != len(set(declared))):
+                    raise ValueError("invalid or duplicate declared case IDs")
+                executed = [r.get("id") for r in cases if isinstance(r, dict)]
+                if len(executed) != len(set(executed)) or set(executed) != set(declared):
+                    raise ValueError("executed case IDs differ from dynamic declared inventory")
             if probe.get("required_case_ids"):
                 ids = [r.get("id") for r in cases if isinstance(r, dict)]
                 if len(ids) != len(set(ids)) or set(ids) != set(probe["required_case_ids"]):
@@ -322,7 +350,13 @@ def main(argv=None, *, target_os=None) -> int:
                      "machine": platform.machine(), "python": sys.version},
         "tools": {"rustc": recorded_version(["rustc", "--version"]), "cargo": recorded_version(["cargo", "--version"]),
                   "clang": recorded_version([os.environ.get("JW_CLANG", "clang"), "--version"])},
-        "scale": args.scale, "preparation": [], "items": [], "results": [],
+        "scale": args.scale, "source_snapshots": {c: source_identity(c) for c in compilers} if not args.dry_run else {},
+        "planned_probes": [{"name": p["name"], "compiler": p.get("compiler"),
+                            "items": list(p["items"]), "goal": p.get("goal"),
+                            "required_case_ids": p.get("required_case_ids", []),
+                            "expected_cases": p.get("expected_cases")} for p in ordered],
+        "test_inputs_snapshot": test_input_identity() if not args.dry_run else {},
+        "preparation": [], "items": [], "results": [],
     }
     produced = {}
     report.update(run_status="RUNNING", active_probe=None)
@@ -341,6 +375,7 @@ def main(argv=None, *, target_os=None) -> int:
                             ("FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED")]
                 unavailable = [x["name"] for x in results if x["status"] in ("NOT_RUN", "PLANNED")]
                 status = ("FAIL" if problems else "NOT_RUN" if pending or unavailable or not results
+                          or any(x["status"] != "PROBE_PASS" for x in results)
                           else "PROBES_PASS_ONLY")
                 report["items"].append({"item": n, "name": safety.NAMES[n],
                                         "status": "PLANNED" if args.dry_run else status,
@@ -402,6 +437,21 @@ def main(argv=None, *, target_os=None) -> int:
         print("INFRA_ERROR: " + str(error), file=sys.stderr, flush=True)
         print("Stopped; last saved report (if present): " + str(writer.path), file=sys.stderr, flush=True)
         return 2
+    if not args.dry_run:
+        try:
+            after = {c: source_identity(c) for c in compilers}
+            after_inputs = test_input_identity()
+            if after_inputs != report["test_inputs_snapshot"]:
+                report["run_status"] = "TEST_INPUTS_CHANGED"
+                report["test_inputs_changed"] = True
+                report["test_inputs_end_snapshot"] = after_inputs
+            if any(after[c] != report["source_snapshots"][c] for c in compilers):
+                report["run_status"] = "SOURCE_CHANGED"
+                report["source_changed"] = True
+                report["source_end_snapshots"] = after
+        except (OSError, ValueError, KeyError) as exc:
+            report["run_status"] = "SOURCE_IDENTITY_ERROR"
+            report["source_identity_error"] = str(exc)
     report["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     try:
         checkpoint()
@@ -417,7 +467,11 @@ def main(argv=None, *, target_os=None) -> int:
         print("Report: " + str(writer.path), flush=True)
     else:
         print("Dry run; no report written", flush=True)
-    return 130 if report["run_status"] == "INTERRUPTED" else int(any(i["status"] in ("FAIL", "NOT_RUN") for i in report["items"] + report["goals"]))
+    return (130 if report["run_status"] == "INTERRUPTED" else
+            int(report["run_status"] != "COMPLETE" or
+                len(report["items"]) != 12 * len(compilers) or
+                len(report["goals"]) != 5 * len(compilers) or
+                any(i["status"] != "PROBES_PASS_ONLY" for i in report["items"] + report["goals"])))
 
 
 if __name__ == "__main__":

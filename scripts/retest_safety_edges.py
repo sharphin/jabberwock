@@ -63,11 +63,11 @@ def main():
                 diagnostic = record["stdout"] if dump_mode else record["stderr"]
                 passed = record["exit"] == (0 if dump_mode else 1) and "配列が大きすぎます" in diagnostic
                 passed = passed and not any(marker in record["stdout"] for marker in ("define void @jw_main(", "bb0:", "structty Buffer"))
-                results.append({"item": 9, "case": name + mode, "case_status": "pass" if passed else "fail",
+                results.append({"compiler": name, "item": 9, "case": name + mode, "case_status": "pass" if passed else "fail",
                                 "expected": "reject expanded array above 1 MiB", "observed": record})
                 record = run([engine, mode, boundary])
                 passed = record["exit"] == 0 and bool(record["stdout"].strip())
-                results.append({"item": 9, "case": name + mode + "-within-limit", "case_status": "pass" if passed else "fail",
+                results.append({"compiler": name, "item": 9, "case": name + mode + "-within-limit", "case_status": "pass" if passed else "fail",
                                 "expected": "accept expanded array exactly at 1 MiB", "observed": record})
     if 8 in selected:
         source = ROOT / "tests/safety/resource-exhaustion.jw"
@@ -99,7 +99,7 @@ def main():
             for name, command in commands:
                 record = run(command, limited=True)
                 passed = record["exit"] == 1 and record["stderr"].startswith("error: メモリが足りません")
-                results.append({"item": 8, "case": name + "-allocation-failure", "case_status": "pass" if passed else "fail",
+                results.append({"compiler": "jwc" if name.startswith("jwc") else "rust", "item": 8, "case": name + "-allocation-failure", "case_status": "pass" if passed else "fail",
                                 "expected": "specified memory error, not an internal error or panic", "observed": record})
     report = {
         "scope": "Reproduction cases for existing items 8/9; passing cases alone do not complete either whole item",

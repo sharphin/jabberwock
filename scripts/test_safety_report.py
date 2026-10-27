@@ -95,7 +95,7 @@ class SafetyReportTests(unittest.TestCase):
             location = Path(d)
             def produce(*args, **kwargs):
                 (location / "edges-8-9.json").write_text(json.dumps(
-                    {"results": [{"item": 8, "case_status": "fail",
+                    {"results": [{"item": 8, "case": "resource-allocation", "case_status": "fail",
                                   "observed": {"exit": 2, "stderr": "internal error"}}]}), encoding="utf-8")
                 return subprocess.CompletedProcess(args[0], 0, "", "")
             p = report.safety.probe("edges-8-9", [8, 9], [sys.executable, "-c", "pass"])
@@ -168,7 +168,7 @@ class SafetyReportTests(unittest.TestCase):
             destination = location / "array-limits.json"
             p = report.suites.detailed("array-limits", [9], [sys.executable, "-c", "pass"], destination, 16)
             def produce(*args, **kwargs):
-                destination.write_text(json.dumps({"results": [{"item": 9, "case_status": "pass"}]}))
+                destination.write_text(json.dumps({"results": [{"item": 9, "case": "array-limit", "case_status": "pass"}]}))
                 return subprocess.CompletedProcess(args[0], 0, "", "")
             with mock.patch.object(report, "execute_probe", side_effect=produce):
                 result = report.run_probe(p, location, False)

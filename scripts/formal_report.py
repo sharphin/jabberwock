@@ -26,6 +26,18 @@ def source_identity(compiler):
     return {"sha256": digest, "files": files}
 
 
+def proof_sources_identity():
+    """Hash every Lean source and proof manifest, including transitive imports."""
+    files = sorted(p for p in PROJECT.rglob("*")
+                   if p.is_file() and ".lake" not in p.parts
+                   and (p.suffix in (".lean", ".json", ".toml")
+                        or p.name in ("lean-toolchain", "lakefile.lean")))
+    manifest = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in files}
+    return {"sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
+            "files": manifest}
+
+
 def audit_module(module, theorems):
     if not IDENTIFIER.fullmatch(module) or not theorems or any(not IDENTIFIER.fullmatch(t) for t in theorems):
         raise ValueError("invalid module or empty/invalid theorem list")
@@ -101,7 +113,8 @@ def main():
     args = parser.parse_args()
     selected = ("jwc", "rust") if args.compiler == "all" else (args.compiler,)
     report = {"schema_version": 3, "kind": "formal-proof", "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "compilers": {}, "goals": [], "abstract_model": {"status": "NOT_RUN"}}
+              "compilers": {}, "goals": [], "abstract_model": {"status": "NOT_RUN"},
+              "proof_sources_snapshot": proof_sources_identity()}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     def save():
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -149,6 +162,16 @@ def main():
         report["infrastructure_error"] = str(error)
     except KeyboardInterrupt:
         report["interrupted"] = True
+    if not report.get("infrastructure_error") and not report.get("interrupted"):
+        try:
+            if proof_sources_identity() != report["proof_sources_snapshot"]:
+                report["infrastructure_error"] = "Lean sources/manifests changed during proof audit"
+            for compiler in selected:
+                if source_identity(compiler) != report["compilers"][compiler]["source"]:
+                    report["infrastructure_error"] = "source changed during Lean audit: " + compiler
+                    break
+        except (OSError, KeyError, ValueError) as error:
+            report["infrastructure_error"] = "cannot recheck proof source snapshot: " + str(error)
     report["summary"] = {
         "expected_goal_count": len(selected) * len(GOALS),
         "recorded_goal_count": len(report["goals"]),

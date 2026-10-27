@@ -27,6 +27,41 @@ python3 scripts/safety_linux.py --compiler jwc
 jwc検査が終わってからRust版を検査する。各プローブの開始・経過時間・ログパスを表示する。
 実行するテストは利用者側で行う。この変更時にエージェントによるテスト実行はしていない。
 
+34件の正式受入条件・証拠の対応表・実際のLean証明の残課題は [34件の正式受入基準](acceptance-34.md) を参照。\n\n## ローカル一括監査（GitHub Actionsは使用しない）
+
+Windows（PowerShell / リポジトリ直下）:
+
+```powershell
+py scripts/verify_all_local.py
+py -m unittest discover -s scripts -p "test_*.py"
+# Rust製コンパイラの最適化チェック数をWindows上で監査する場合（セルフホストjwcとは別）
+py scripts/check_bench_checks.py
+```
+
+Linux / WSL2:
+
+```sh
+python3 scripts/verify_all_local.py
+python3 -m unittest discover -s scripts -p "test_*.py"
+```
+
+既存のJSONだけを集約する場合は `--practical` と `--formal` にそれぞれのファイルを指定する。
+Windowsの新規実証試験は `scripts/safety_windows.cmd` 経由で実行し、
+その中でVisual Studio/Clang x64の環境初期化とツールチェーン検査を行う。
+Lean監査は独立したPythonプロセスとして実行し、Windowsではユーザーの
+`.elan\\bin`、`.cargo\\bin` もコマンド検索経路に加える。
+**既存の結果ファイルを誤って新規実行結果と誤認しないよう、実行前に前回のJSONを消去する。**
+
+`target/local-verification.json` にOS別の12項目×2コンパイラと
+G1〜G5×2コンパイラを別々に記録する。最終安全性認定は
+局所的なLean定理と実コンパイラ・LLVM・ランタイム全体の数学的対応が未完成のため
+**`NOT_PROVEN`** のままとする。欠落・重複・別コンパイラの混入は
+`INVALID_EVIDENCE`、実証試験の失敗は `PROBE_FAILURE`、
+必要なテスト未実行は `NOT_RUN`、Lean監査失敗は `PROOF_CHECK_FAILURE`、
+古い証明は `PROOF_STALE` と区別する。
+JSON中の `PASS`/`PROVEN` という文字列を安全性認定の証拠として信頼しない。
+将来の完全証明と正式な実証受入条件が機械的に検証されるまで合格判定を緩めない。
+
 ## 12項目の検査対象
 
 以下は各コンパイラに適用する。ケース・構成・実行対象を混在集計しない。
