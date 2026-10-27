@@ -40,6 +40,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
     active = set()
     dependencies = {}
     leaf_hashes = {}
+    produced_outputs = {}
     root = root.resolve()
 
     def require_file(label: str, description: dict) -> None:
@@ -99,6 +100,16 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
                 raise ValueError("malformed build action: " + identifier)
             if not any(nodes.get(child, {}).get("kind") == "tool" for child in children if isinstance(nodes.get(child), dict)):
                 raise ValueError("action missing executable dependency: " + identifier)
+            # Reject ambiguous build outputs and path traversal.
+            if len(node["outputs"]) != len(set(node["outputs"])):
+                raise ValueError("duplicate action outputs: " + identifier)
+            for output in node["outputs"]:
+                output_path = Path(output)
+                if output_path.is_absolute() or ".." in output_path.parts or output in ("", "."):
+                    raise ValueError("unsafe action output: " + identifier)
+                if output in produced_outputs:
+                    raise ValueError("multiple producers for output: " + output)
+                produced_outputs[output] = identifier
             for child in children:
                 visit(child)
         else:
@@ -109,6 +120,11 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
 
     for target in targets:
         visit(target)
+    tracked_paths = {nodes[k]["path"] for k in leaf_hashes
+                     if nodes[k]["kind"] in ("file", "tool")}
+    collisions = set(produced_outputs) & tracked_paths
+    if collisions:
+        raise ValueError("build action overwrites tracked input: " + repr(sorted(collisions)))
     if visited != set(nodes):
         raise ValueError("unreachable/unaccounted manifest nodes: " +
                          repr(sorted(set(nodes) - visited)))
@@ -133,6 +149,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         "visited_nodes": len(visited),
         "dependencies": dependencies,
         "leaf_hashes": leaf_hashes,
+        "output_producers": produced_outputs,
         "source_coverage": source_coverage,
         "observed_inputs_complete": False,
         "external_toolchain_semantics_proven": False,
