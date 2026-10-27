@@ -20,6 +20,7 @@ SUPPORTED = {"open", "openat", "execve", "chdir", "clone", "fork", "vfork"}
 def normalize(lines: list[str], cwd: Path) -> dict:
     root = cwd.resolve(strict=True)
     cwd_by_pid: dict[str, Path] = {"0": root}
+    initial_pid = None
     events = [{"type": "begin"}]
     for count, line in enumerate(lines, 1):
         if not line.strip():
@@ -31,6 +32,9 @@ def normalize(lines: list[str], cwd: Path) -> dict:
         if kind not in SUPPORTED:
             raise ValueError("unsupported syscall: " + kind)
         pid = match["pid1"] or match["pid2"] or "0"
+        if initial_pid is None:
+            initial_pid = pid
+            cwd_by_pid[pid] = root
         if pid not in cwd_by_pid:
             raise ValueError("untracked process: " + pid)
         arguments = match["args"]
@@ -70,6 +74,8 @@ def normalize(lines: list[str], cwd: Path) -> dict:
             # as pure reads, so treat mixed accesses conservatively as inputs.
             if not returned.startswith("-1") and "O_WRONLY" not in arguments:
                 events.append({"type": "read", "path": str(resolved)})
+    if initial_pid is None:
+        raise ValueError("empty syscall stream")
     events.append({"type": "end"})
     return {"schema_version": 1, "kind": "build-access-events",
             "events": events, "monitor_completeness_proven": False}
