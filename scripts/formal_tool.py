@@ -75,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         ("inventory", [py, str(scripts / "whole_compiler_proof.py"),
                        "--output", str(output / "inventory.json")]),
         ("lean-axioms", [py, str(scripts / "check_formal.py")]),
+        ("semantic-boundaries", [py, str(scripts / "semantic_refinement_boundaries.py"),
+                                 "--output", str(output / "semantic-boundaries.json")]),
         ("emitter-binding", [py, str(scripts / "proof_emitter_correspondence.py"),
                              "--output", str(output / "emitter-binding.json")]),
     ]
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         refinement += ["--evidence", str(args.evidence.resolve())]
     plans.append(("refinement", refinement))
-    known_reports = {"inventory": "inventory.json", "emitter-binding": "emitter-binding.json",
+    known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "emitter-binding": "emitter-binding.json",
                      "lean-evidence": "lean-evidence.json", "refinement": "refinement.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
@@ -112,6 +114,9 @@ def main(argv: list[str] | None = None) -> int:
         for s in stages
     )
     refinement_status = by_name["refinement"].get("report", {}).get("status")
+    boundaries_status = by_name["semantic-boundaries"].get("report", {}).get("status")
+    if boundaries_status != "NOT_PROVEN":
+        broken = True
     if broken:
         overall = "TOOL_ERROR"
     elif refinement_status == "PROVEN" and all(s["status"] == "COMPLETED" for s in stages):
