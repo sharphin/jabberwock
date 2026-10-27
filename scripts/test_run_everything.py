@@ -107,6 +107,19 @@ class FullRunnerTests(unittest.TestCase):
             self.assertEqual(result["failed_stages"], ["python-regressions"])
             self.assertIn("python-regressions", result["reason"])
 
+    def test_cargo_failure_blocks_full_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                      for name, _ in full.plans(output)]
+            cargo = next(stage for stage in stages if stage["name"] == "cargo-tests")
+            cargo["status"] = "EXIT_NONZERO"
+            cargo["exit_code"] = 101
+            report = full.summarize(stages, output, quick=False)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertIn("cargo-tests", report["failed_stages"])
+            self.assertIn("cargo-tests", report["reason"])
+
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)
