@@ -82,10 +82,75 @@ class Machine:
             return self.dereference(self.read(operand["ref"]))
         raise IRTrap("unsupported operand: " + str(kind))
 
+    def evaluate(self, value: dict) -> Any:
+        """Evaluate a bounded set of IR rvalues in explicit left-to-right order."""
+        kind = value.get("kind")
+        if kind in ("const", "copy", "move", "read", "deref"):
+            return self.read(value)
+        if kind == "bin":
+            left = self.evaluate(value["left"])
+            right = self.evaluate(value["right"])
+            op = value["op"]
+            if op in ("add", "sub", "mul", "div", "mod"):
+                if type(left) is not int or type(right) is not int:
+                    raise IRTrap("arithmetic on non-integers")
+                if op in ("div", "mod") and right == 0:
+                    raise IRTrap("division by zero")
+                if op == "add":
+                    return left + right
+                if op == "sub":
+                    return left - right
+                if op == "mul":
+                    return left * right
+                if op == "div":
+                    return (abs(left) // abs(right)) * (-1 if (left < 0) != (right < 0) else 1)
+                quotient = (abs(left) // abs(right)) * (-1 if (left < 0) != (right < 0) else 1)
+                return left - quotient * right
+            if op in ("eq", "ne", "lt", "le", "gt", "ge"):
+                if type(left) is not type(right):
+                    raise IRTrap("comparison of different types")
+                if op == "eq":
+                    return left == right
+                if op == "ne":
+                    return left != right
+                if op == "lt":
+                    return left < right
+                if op == "le":
+                    return left <= right
+                if op == "gt":
+                    return left > right
+                return left >= right
+            if op in ("and", "or") and type(left) is bool and type(right) is bool:
+                return left and right if op == "and" else left or right
+            raise IRTrap("unsupported binary operator: " + str(op))
+        if kind == "un":
+            operand = self.evaluate(value["operand"])
+            if value["op"] == "neg" and type(operand) is int:
+                return -operand
+            if value["op"] == "not" and type(operand) is bool:
+                return not operand
+            raise IRTrap("unsupported unary operation")
+        if kind == "array":
+            return [self.evaluate(item) for item in value["items"]]
+        if kind == "struct":
+            names = value["fields"]
+            if not isinstance(names, dict):
+                raise IRTrap("malformed struct fields")
+            return {name: self.evaluate(item) for name, item in names.items()}
+        if kind == "index":
+            container = self.evaluate(value["base"])
+            index = self.evaluate(value["index"])
+            if type(index) is not int or not isinstance(container, (list, tuple)):
+                raise IRTrap("invalid indexed access")
+            if index < 0 or index >= len(container):
+                raise IRTrap("out-of-bounds access")
+            return container[index]
+        raise IRTrap("unsupported rvalue: " + str(kind))
+
     def execute(self, instruction: dict) -> Any:
         kind = instruction.get("kind")
         if kind == "assign":
-            value = self.read(instruction["value"])
+            value = self.evaluate(instruction["value"])
             number = instruction["local"]
             if number in self.locals and isinstance(self.locals[number], Ref):
                 self.retire(self.locals[number])
