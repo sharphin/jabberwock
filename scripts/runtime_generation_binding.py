@@ -28,6 +28,7 @@ C_PATTERNS = {
     "retire_sentinel_store": r"gen_set\(p,\s*GEN_RETIRED\);",
     "retire_list_release_cas": r"__atomic_compare_exchange_n\(&retired_head,\s*&head,\s*p,\s*0,\s*__ATOMIC_RELEASE,\s*__ATOMIC_RELAXED\)",
     "view_generation_gate": r"uint64_t\s+gen\s*=\s*gen_get\(c->target\);\s*if\s*\(gen\s*==\s*GEN_RETIRED\s*\|\|\s*gen\s*!=\s*c->gen\)\s*jw_fail_dangling\(use,\s*c->site,\s*c->target,\s*c->gen\);\s*return\s+c->target;",
+    "slab_init_before_pointer_subtraction": r"static void \*slab_take\(size_t n\)\s*\{\s*const size_t slab_size\s*=\s*256\s*\*\s*1024;[\s\S]*?if\s*\(!slab_cur\s*\|\|\s*!slab_end\s*\|\|\s*\(size_t\)\(slab_end\s*-\s*slab_cur\)\s*<\s*n\)",
 }
 LEAN_TOKENS = (
     "def wordCounter",
