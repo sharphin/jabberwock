@@ -50,6 +50,33 @@
 - `formal/compilers/{jwc,rust}/obligations.json`: 各Gの定理名、
   仮定・除外・コンパイラソースとのハッシュ対応。
 
+### LLVM世代チェックの部分的な実装対応（今回追加）
+
+`formal/JabberwockFormal/EmittedGate.lean` は、次の3命令からなる
+Boolean判定部分をLeanで形式化する。
+
+```llvm
+%different = icmp ne i64 %current, %saved
+%retired = icmp eq i64 %current, -1
+%bad = or i1 %different, %retired
+```
+
+この条件の否定が「参照の世代が一致し、退役マーカーではない」と
+同値であること、および両処理系の既存の局所モデルが同じ条件に対応することを
+定理として記述した。
+
+`scripts/proof_emitter_correspondence.py` は実際の
+`jwc/llvm.jw` と `src/ir/llvm.rs` の該当エミッタ関数を読み、
+原子的load、分岐、退役検査、失敗時のtrapの命令テンプレートを照合する。
+条件式の変化や分岐反転などに対する負例テストも用意した。
+ローカル一括コマンドからこの検査も起動する。
+
+ただしこの照合は**ソーステンプレートの構造チェック**であり、
+LLVMの正式な意味論に基づいた実行コードとの対応証明ではない。
+分岐生成ヘルパー、ポインタの生存期間、失敗関数の終了性、
+LLVM poison/undef、最適化、全実行経路の健全性はまだ対象外。
+G1〜G5の全体証明には昇格させない。
+
 **未完成**なのは、これらの抽象定理が実際のJabberwockの型検査、
 コンパイラ中間表現、LLVM生成、最適化・リンク、Cランタイム、FFI、実機動作に
 どのように対応するかを証明する部分である。
@@ -74,8 +101,8 @@
 py scripts/verify_all_local.py
 ```
 
-この引数なしの入口は `scripts/run_everything.py` に接続されており、次の6工程をすべて実行する。
-**Python回帰テスト、Windows安全性プローブ全件、Leanの抽象モデルと両コンパイラの全証明監査、
+この引数なしの入口は `scripts/run_everything.py` に接続されており、次の7工程をすべて実行する。
+**Python回帰テスト、Windows安全性プローブ全件、実装LLVMエミッタとの局所対応照合、Leanの抽象モデルと両コンパイラの全証明監査、
 34件の証拠監査、21ケース×4者のベンチマーク、旧Rust製コンパイラの検査数監視**。
 後続の工程は先行工程が失敗しても可能な限り実行される。
 ログと終了コードを `target/verification-complete/` に保存し、
