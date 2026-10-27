@@ -24,7 +24,7 @@ PATH = re.compile(r'\"((?:\\.|[^\"\\])*)\"')
 
 
 def collect(command: list[str], cwd: Path, output: Path, timeout: int = 3600) -> dict:
-    if os.name == "nt" or sys.platform != "linux":
+    if sys.platform != "linux":
         raise ValueError("strace adapter requires Linux")
     if not command:
         raise ValueError("missing build command")
