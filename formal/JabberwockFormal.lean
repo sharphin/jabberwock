@@ -6,5 +6,6 @@ import JabberwockFormal.ScopedGoals
 import JabberwockFormal.CheckElision
 import JabberwockFormal.ElisionDecision
 import JabberwockFormal.OwnershipInvalidation
+import JabberwockFormal.CfgMeetElision
 import JabberwockFormal.SafetyComposition
 import JabberwockFormal.TypedPipeline
