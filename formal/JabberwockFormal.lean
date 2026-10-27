@@ -4,5 +4,6 @@ import JabberwockFormal.EmittedGate
 import JabberwockFormal.EmittedGateOptions
 import JabberwockFormal.ScopedGoals
 import JabberwockFormal.CheckElision
+import JabberwockFormal.ElisionDecision
 import JabberwockFormal.SafetyComposition
 import JabberwockFormal.TypedPipeline
