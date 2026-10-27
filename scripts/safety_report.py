@@ -24,6 +24,7 @@ import local_safety as safety
 import safety_platforms as suites
 import safety_compilers
 import safety_goals
+from formal_report import source_identity
 from windows_asan_runtime import environment as runtime_environment
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -348,7 +349,8 @@ def main(argv=None, *, target_os=None) -> int:
                      "machine": platform.machine(), "python": sys.version},
         "tools": {"rustc": recorded_version(["rustc", "--version"]), "cargo": recorded_version(["cargo", "--version"]),
                   "clang": recorded_version([os.environ.get("JW_CLANG", "clang"), "--version"])},
-        "scale": args.scale, "preparation": [], "items": [], "results": [],
+        "scale": args.scale, "source_snapshots": {c: source_identity(c) for c in compilers} if not args.dry_run else {},
+        "preparation": [], "items": [], "results": [],
     }
     produced = {}
     report.update(run_status="RUNNING", active_probe=None)
