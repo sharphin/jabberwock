@@ -210,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     reports = {name: stage.get("report", {}) for name, stage in by_name.items()}
     expected_model_statuses = {
+        "emitter-binding": "STRUCTURE_MATCHED",
         "worklist-structure": "STRUCTURE_MATCHED",
         "emitter-semantics": "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY",
         "runtime-generation-binding": "STRUCTURE_MATCHED",
@@ -218,6 +219,25 @@ def main(argv: list[str] | None = None) -> int:
     for name, expected in expected_model_statuses.items():
         if reports[name].get("status") != expected:
             infrastructure_errors = True
+    if "lean-evidence" in reports:
+        lean_evidence = reports["lean-evidence"]
+        if (lean_evidence.get("status") != "KERNEL_CHECKED"
+                or lean_evidence.get("compiler_refinement") != "NOT_PROVEN"):
+            infrastructure_errors = True
+    # Reject a reported successful stage with a missing or contradictory log
+    # fingerprint. Hashing does not seal logs, but a missing digest must not
+    # silently pass the formal-tool aggregation boundary.
+    for stage in stages:
+        logs = stage.get("log_evidence", {})
+        for channel in ("stdout", "stderr"):
+            record = logs.get(channel, {})
+            if (record.get("status") != "AVAILABLE"
+                    or not isinstance(record.get("bytes"), int)
+                    or record["bytes"] < 0
+                    or not isinstance(record.get("sha256"), str)
+                    or len(record["sha256"]) != 64):
+                infrastructure_errors = True
+
 
     refinement_report = reports["refinement"]
     composition_report = reports["semantic-composition"]
