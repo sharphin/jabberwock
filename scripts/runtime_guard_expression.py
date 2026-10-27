@@ -75,6 +75,51 @@ def parse_expression(tokens: list[str]):
     return result
 
 
+
+# Whitelisted Lean AST surface for the already kernel-audited BitVec guard.
+# The matching is exact modulo whitespace. An arbitrary change to the Lean
+# executable guard must not be accepted merely because old theorem names remain.
+LEAN_GUARD = (
+    "decide (gen ≠ retiredWord) && step.ule limit && "
+    "(gen &&& counterMask).ule (limit - step)"
+)
+LEAN_SPEC = (
+    "gen ≠ retiredWord ∧ step ≤ limit ∧ "
+    "(gen &&& counterMask) ≤ limit - step"
+)
+
+
+def lean_definition(source: str, declaration: str, arguments: str, result: str) -> str:
+    # Exclude the next top-level declaration: do not search for a familiar
+    # snippet elsewhere in the file or inside a later theorem.
+    pattern = (
+        r"(?m)^def\\s+" + re.escape(declaration) +
+        r"\\s*" + arguments + r"\\s*:\\s*" + result +
+        r"\\s*:=\\s*(.*?)(?=^(?:def|theorem|abbrev|end)\\b|\\Z)"
+    )
+    matches = re.findall(pattern, source, re.DOTALL | re.MULTILINE)
+    if len(matches) != 1:
+        raise ValueError("missing or ambiguous Lean declaration: " + declaration)
+    # Ignore Lean comments only if absent, to keep this subset auditable.
+    body = matches[0].strip()
+    if "--" in body or "/-" in body:
+        raise ValueError("comments within reviewed Lean guard are unsupported")
+    return " ".join(body.split())
+
+
+def inspect_lean(lean: Path) -> dict:
+    if lean.is_symlink() or not lean.is_file():
+        raise ValueError("Lean BitVec source missing or symlinked")
+    contents = lean.read_text(encoding="utf-8")
+    parameters = r"\\(\\s*gen\\s+step\\s+limit\\s*:\\s*Word\\s*\\)"
+    actual_guard = lean_definition(contents, "guard", parameters, "Bool")
+    actual_spec = lean_definition(contents, "guardSpec", parameters, "Prop")
+    if actual_guard != LEAN_GUARD or actual_spec != LEAN_SPEC:
+        raise ValueError("Lean executable guard or specification changed from reviewed expression")
+    return {"status": "LEAN_EXPRESSION_ALIGNED_MODEL_ONLY",
+            "scope": "exact BitVec guard and guardSpec expression bodies",
+            "implementation_refinement": "NOT_PROVEN"}
+
 def inspect(source: Path) -> dict:
     if source.is_symlink() or not source.is_file():
         raise ValueError("runtime guard source unavailable or symlinked")
