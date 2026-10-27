@@ -24,8 +24,14 @@ python3 scripts/benchmark_report.py --full --baseline path/to/previous-benchmark
 Windows（PowerShell、構築済みjwcを指定する場合）:
 
 ```powershell
+.\scripts\benchmark_windows.cmd --full --jwc .\target\release\jwc-local.exe
+# Visual Studio/Clang x64環境が初期化済みの場合は直接でも可
 py scripts/benchmark_report.py --full --jwc .\target\release\jwc-local.exe
 ```
+
+`benchmark_windows.cmd` はWindows x64のVisual Studio環境を初期化し、
+Clang、Rust、Go、Pythonの存在を確認してから `py -3` でベンチマークを起動する。
+GitHub Actionsは使用しない。
 
 Windowsでは実行時間を`perf_counter`、メモリをWindows APIの`PeakWorkingSetSize`で計測する。
 Linuxの`wait4`最大RSSとWindowsのピークワーキングセットは厳密に同じ指標ではない。
