@@ -1,3 +1,5 @@
+> **PR運用の厳守事項:** ドラフトPR（Draft pull request）を作成しない。PRを作る場合は必ず通常のPR（`draft: false`）で作成する。既存のドラフトPRがあれば通常PRへ変更する。CIの自動起動設定は変更しない限り、手動実行のみを維持する。
+
 > **最優先の開発指示（2026-10-27）:** 現在の依頼は「形式証明テストを行うツールの完成」であり「Jabberwock全体の形式証明を成立させること」ではない。ツールの実装完了、ツールのテスト実施状況、検証対象の証明結果は独立して報告する。未証明の項目数・全命令/全IRの未証明数をツールの実装進捗率に用いない。未証明は正しく NOT_PROVEN と返し、証明成功を偽装しない。詳しくは `docs/formal-tool-completion.md`。ツールの進捗報告は `python scripts/tool_implementation_progress.py` を用い、`docs/tool-capabilities.json` の各項目をコード監査で根拠付き更新する。実機テストの未実施は実装未完成と混同しない。
 
 # CLAUDE.md
