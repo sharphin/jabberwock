@@ -16,7 +16,7 @@ NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 class ContractError(ValueError):
     pass
 
-def load_contracts(root: Path, requested: list[str]) -> list[dict]:
+def load_contracts(root: Path, requested: list[str] | None) -> list[dict]:
     path = root / "formal" / "refinement-contracts.json"
     if not path.is_file() or path.is_symlink():
         return []
@@ -41,7 +41,7 @@ def load_contracts(root: Path, requested: list[str]) -> list[dict]:
             "--" in expected or "/-" in expected or "-/" in expected or
             "#" in expected):
             raise ContractError("unsafe refinement proposition")
-        if name in requested:
+        if requested is None or name in requested:
             selected.append(item)
     return selected
 
