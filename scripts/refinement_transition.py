@@ -9,7 +9,6 @@ return a kernel-backed result for the exact obligation and source snapshot.
 """
 from __future__ import annotations
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -32,8 +31,10 @@ def status_for(obligation: dict, proofs: dict, verifier_registry=None) -> dict:
         return {"status": "INVALID_EVIDENCE", "reason": "wrong proof identity"}
     if record.get("source_sha256") != obligation["source_sha256"]:
         return {"status": "INVALID_EVIDENCE", "reason": "stale source fingerprint"}
-    if set(record.get("required_claims", [])) != REQUIRED:
-        return {"status": "INVALID_EVIDENCE", "reason": "incomplete semantic proof claims"}
+    claims = record.get("required_claims")
+    if (not isinstance(claims, list) or any(not isinstance(x, str) for x in claims)
+            or len(claims) != len(REQUIRED) or set(claims) != REQUIRED):
+        return {"status": "INVALID_EVIDENCE", "reason": "missing, malformed or duplicate semantic claims"}
     checker = record.get("verifier")
     callback = registry.get(checker) if isinstance(checker, str) else None
     if callback is None:
