@@ -1,6 +1,7 @@
 import JabberwockFormal.Generation
 import JabberwockFormal.RuntimeGenerationRefinement
 import JabberwockFormal.RuntimeGenerationEncoding
+import JabberwockFormal.RuntimeGenerationBitVec
 import JabberwockFormal.Ownership
 import JabberwockFormal.EmittedGate
 import JabberwockFormal.EmittedGateOptions
