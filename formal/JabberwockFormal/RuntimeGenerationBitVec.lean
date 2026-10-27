@@ -139,4 +139,32 @@ theorem accepted_increment_changes_word
   rw [accepted_increment_no_wrap gen step limit validGen validLimit accepted] at natSame
   omega
 
+/-- Executable model of the check in jw_view_target: the target is returned
+    only when its current generation is not retired and equals the snapshot
+    saved in the view cell. This models the guard, not the C pointer access. -/
+def viewGate (saved current : Word) : Bool :=
+  current != retiredWord && current == saved
+
+theorem viewGate_matches_spec (saved current : Word) :
+    viewGate saved current = true ↔
+      current ≠ retiredWord ∧ current = saved := by
+  simp [viewGate]
+
+/-- A retired target is rejected independently of the saved generation. -/
+theorem viewGate_rejects_retired (saved : Word) :
+    viewGate saved retiredWord = false := by
+  simp [viewGate]
+
+/-- If a positive, accepted generation advance occurs, a view holding the old
+    generation cannot pass the equality gate on the updated generation. -/
+theorem viewGate_rejects_after_advance
+    (gen step limit : Word)
+    (validGen : gen.toNat < 2 ^ 63)
+    (validLimit : limit.toNat < radix)
+    (accepted : guard gen step limit = true)
+    (positive : 0 < step.toNat) :
+    viewGate gen (gen + step) = false := by
+  simp [viewGate, accepted_increment_changes_word
+    gen step limit validGen validLimit accepted positive]
+
 end JabberwockFormal.RuntimeGenerationBitVec
