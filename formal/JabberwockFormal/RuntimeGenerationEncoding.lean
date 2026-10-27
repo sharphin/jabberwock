@@ -57,9 +57,12 @@ theorem hasRoom_prevents_counter_wrap {counter step : Nat}
   have radixPositive : 0 < radix := by
     unfold radix
     decide
+  have radixOne : 1 ≤ radix := by
+    unfold radix
+    decide
   have successorBound : maxCounter + 1 = radix := by
     unfold maxCounter
-    exact Nat.sub_add_cancel (Nat.le_of_lt radixPositive)
+    exact Nat.sub_add_cancel radixOne
   omega
 
 theorem packed_word_is_below_retired
