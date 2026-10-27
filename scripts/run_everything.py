@@ -143,11 +143,15 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
         except (OSError, ValueError, TypeError, AttributeError) as error:
             reason = "missing or malformed final reports: " + str(error)
     evidence = evidence_overview(output)
-    if verdict != "PASS" and evidence["implementation_inventory"]["status"] == "NOT_PROVEN":
+    failed_stage_names = [x["name"] for x in stages if x["status"] != "EXIT_ZERO"]
+    if failed_stage_names:
+        reason = "verification stages failed: " + ", ".join(failed_stage_names)
+    elif verdict != "PASS" and evidence["implementation_inventory"]["status"] == "NOT_PROVEN":
         reason = "compiler-wide refinement obligations remain unproved; inspect evidence.implementation_inventory.uncovered"
     return {"schema_version": 2, "kind": "local-full-verification",
             "status": verdict, "reason": reason, "mode": "quick" if quick else "full",
             "host_os": platform.system(), "stages": stages,
+            "failed_stages": failed_stage_names,
             "evidence": evidence,
             "passed_stages": sum(x["status"] == "EXIT_ZERO" for x in stages),
             "required_stages": len(expected),
