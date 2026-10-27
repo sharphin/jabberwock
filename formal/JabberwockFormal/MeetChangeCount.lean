@@ -68,4 +68,45 @@ theorem strict_change_count {n : Nat}
   classical
   simp [changeCount, strict, Nat.add_comm]
 
+/-- Counting changes over concatenated predecessor histories agrees with
+    counting the first history and continuing from its resulting entry. -/
+theorem changeCount_append {n : Nat}
+    (initial : Facts n) (before after : List (Facts n)) :
+    changeCount initial (before ++ after) =
+      changeCount initial before +
+        changeCount (updateMany initial before) after := by
+  classical
+  induction before generalizing initial with
+  | nil =>
+      rfl
+  | cons incoming rest ih =>
+      simp only [List.cons_append, changeCount, updateMany]
+      rw [ih]
+      exact Nat.add_assoc _ _ _
+
+/-- With exactly one local, the *actual* number of strict updates in any
+    finite predecessor history is at most one, not merely in two steps. -/
+theorem one_local_changeCount_le_one
+    (initial : Facts 1) (history : List (Facts 1)) :
+    changeCount initial history ≤ 1 := by
+  classical
+  induction history generalizing initial with
+  | nil =>
+      exact Nat.zero_le 1
+  | cons incoming rest ih =>
+      by_cases stable : update initial incoming = initial
+      · simpa [changeCount, stable] using ih (update initial incoming)
+      · obtain ⟨erasedKey, _, _, erased⟩ :=
+          changed_update_erases_fact initial incoming stable
+        have allAbsent : ∀ key : Fin 1,
+            update initial incoming key = none := by
+          intro key
+          have same : key = erasedKey := Subsingleton.elim key erasedKey
+          rw [same]
+          exact erased
+        have noFurtherChanges :=
+          absent_entry_has_zero_changes
+            (update initial incoming) rest allAbsent
+        simp [changeCount, stable, noFurtherChanges]
+
 end JabberwockFormal.MeetChangeCount
