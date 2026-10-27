@@ -82,7 +82,7 @@ theorem changeCount_append {n : Nat}
   | cons incoming rest ih =>
       simp only [List.cons_append, changeCount, updateMany]
       rw [ih]
-      exact Nat.add_assoc _ _ _
+      exact (Nat.add_assoc _ _ _).symm
 
 /-- With exactly one local, the *actual* number of strict updates in any
     finite predecessor history is at most one, not merely in two steps. -/
