@@ -48,6 +48,8 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         if (not isinstance(name, str) or not name or
                 not isinstance(sha, str) or not HEX.fullmatch(sha)):
             raise ValueError("invalid artifact description: " + label)
+        if Path(name).is_absolute() or ".." in Path(name).parts:
+            raise ValueError("absolute/traversal input path: " + label)
         path = (root / name).resolve(strict=True)
         if not path.is_relative_to(root) or not path.is_file():
             raise ValueError("artifact escapes root or is not a file: " + label)
@@ -93,7 +95,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
                     not isinstance(node["command"], list) or not node["command"] or
                     any(not isinstance(x, str) for x in node["command"]) or
                     not isinstance(node["outputs"], list) or not node["outputs"] or
-                    any(not isinstance(x, str) for x in node["outputs"])):
+                    any(not isinstance(x, str) or not x for x in node["outputs"])):
                 raise ValueError("malformed build action: " + identifier)
             if not any(nodes.get(child, {}).get("kind") == "tool" for child in children if isinstance(nodes.get(child), dict)):
                 raise ValueError("action missing executable dependency: " + identifier)
