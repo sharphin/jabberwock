@@ -57,6 +57,26 @@ class LLVMAuditTests(unittest.TestCase):
             result = json.loads((root / "report.json").read_text(encoding="utf-8"))
             self.assertTrue(any("unsafe benchmark" in e for e in result["errors"]))
 
+    def test_alive2_rejects_failed_refinement(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ("before.ll", "after.ll"):
+                (root / name).write_text("define i32 @main() { ret i32 0 }",
+                                         encoding="utf-8")
+            pairs = root / "pairs.json"
+            pairs.write_text(json.dumps({"pairs": [
+                {"before": "before.ll", "after": "after.ll"}]}), encoding="utf-8")
+            with mock.patch.object(audit.shutil, "which", side_effect=lambda x: "/fake/" + x):
+                with mock.patch.object(audit.subprocess, "run") as process:
+                    process.return_value.returncode = 1
+                    process.return_value.stdout = "ERROR: Transformation doesn't verify!"
+                    process.return_value.stderr = ""
+                    self.assertEqual(audit.main([
+                        "--ir-root", str(root), "--semantic-pairs", str(pairs),
+                        "--output", str(root / "result.json")]), 1)
+            result = json.loads((root / "result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["semantic_results"][0]["status"], "BLOCKED")
+
     def test_failed_llvm_verifier_blocks_ir(self):
         with tempfile.TemporaryDirectory() as d:
             file = Path(d) / "bad.ll"
