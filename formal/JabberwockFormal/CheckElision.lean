@@ -340,7 +340,7 @@ theorem kill_owner_cannot_create_liveness
         cases fact with
         | own => simp [killOwnerFacts, same, h, analyzerIsLive] at live
         | pinned => simp [analyzerIsLive]
-        | refSlot slot => simp [analyzerIsLive, h]
+        | refSlot slot => simp [analyzerIsLive]
         | refElem slot => simp [killOwnerFacts, same, h, analyzerIsLive] at live
         | refTo target =>
             by_cases affected : target = owner
@@ -355,7 +355,7 @@ theorem kill_owner_cannot_create_liveness
                   | some kind =>
                       cases kind <;> simp [killOwnerFacts, targetOwner, ht] at newOwn
                       exact ht
-              simp [analyzerIsLive, h, oldOwn]
+              simp [analyzerIsLive, oldOwn]
 
 /-- The fact join used at a CFG merge: retain a fact only if both
     incoming paths agree. -/
@@ -375,13 +375,13 @@ theorem meet_live_implies_left
       simp [meetFacts, h]
     rw [hk] at live
     cases f : left key with
-    | none => simp [analyzerIsLive, f] at live
+    | none => simp [analyzerIsLive] at live
     | some fact =>
         cases fact with
-        | own => simp [analyzerIsLive, f] at live
-        | pinned => simp [analyzerIsLive, f]
-        | refSlot slot => simp [analyzerIsLive, f]
-        | refElem slot => simp [analyzerIsLive, f] at live
+        | own => simp [analyzerIsLive] at live
+        | pinned => simp [analyzerIsLive]
+        | refSlot slot => simp [analyzerIsLive]
+        | refElem slot => simp [analyzerIsLive] at live
         | refTo owner =>
             have joinedOwn : meetFacts left right owner = some .own := by
               simpa [analyzerIsLive, f] using live
@@ -389,7 +389,7 @@ theorem meet_live_implies_left
               by_cases ho : left owner = right owner
               · simpa [meetFacts, ho] using joinedOwn
               · simp [meetFacts, ho] at joinedOwn
-            simp [analyzerIsLive, f, oldOwn]
+            simp [analyzerIsLive, oldOwn]
   · simp [meetFacts, h, analyzerIsLive] at live
 
 theorem meet_live_implies_right
@@ -508,8 +508,8 @@ theorem kill_elements_cannot_create_liveness
   | some fact =>
       cases fact with
       | own => simp [killElementFacts, analyzerIsLive, h] at live
-      | pinned => simp [analyzerIsLive, h]
-      | refSlot slot => simp [analyzerIsLive, h]
+      | pinned => simp [analyzerIsLive]
+      | refSlot slot => simp [analyzerIsLive]
       | refElem list => simp [killElementFacts, analyzerIsLive, h] at live
       | refTo owner =>
           have present : killElementFacts facts owner = some .own := by
