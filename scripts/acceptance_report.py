@@ -17,6 +17,7 @@ import sys
 from acceptance_requirements import COMPILERS, GOALS, obligation_catalog, test_input_identity
 from formal_report import source_identity, proof_sources_identity
 from whole_compiler_proof import validate as validate_whole_inventory, inventory as canonical_whole_inventory
+from refinement_transition import evaluate as evaluate_refinement
 
 ROOT = Path(__file__).resolve().parents[1]
 FAILURES = {"FAIL", "CRASH", "TIMEOUT", "INFRA_ERROR", "INTERRUPTED"}
@@ -50,7 +51,7 @@ def keyed(records, key):
     return mapped
 
 
-def review(practical, formal, *, local_os, identities, inputs_identity=None, whole_inventory=None):
+def review(practical, formal, *, local_os, identities, inputs_identity=None, whole_inventory=None, refinement=None):
     """Return precise findings without making ungrounded PASS claims."""
     if not isinstance(practical, dict) or not isinstance(formal, dict):
         raise ValueError("input reports must be JSON objects")
@@ -107,6 +108,32 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None, who
             source_obligations.setdefault((link["compiler"], link["goal"]), []).append(link)
     else:
         source_obligations = {}
+    # A source inventory cannot certify itself. Check every transition result
+    # against the independent transition gate rather than accepting injected
+    # REFINEMENT_PROVEN flags in an inventory or report.
+    transition_findings = {}
+    if refinement is not None:
+        if whole_inventory is None:
+            raise ValueError("refinement report requires source inventory")
+        canonical = evaluate_refinement(whole_inventory, {"schema_version": 1, "proofs": []})
+        expected = {row["id"] for row in whole_inventory["components"]}
+        if not isinstance(refinement, dict) or refinement.get("schema_version") != 1:
+            raise ValueError("invalid refinement report envelope")
+        findings = keyed(refinement.get("findings"), "id")
+        if set(findings) != expected:
+            raise ValueError("refinement report missing or foreign obligations")
+        # Without a registered independent proof checker, the output cannot
+        # truthfully claim a proven source-to-model correspondence.
+        if refinement.get("status") == "PROVEN" or any(
+                row.get("status") == "REFINEMENT_PROVEN" for row in findings.values()):
+            raise ValueError("unverified refinement success is not acceptable evidence")
+        for identity, row in findings.items():
+            if row.get("status") not in ("REFINEMENT_NOT_PROVEN", "INVALID_EVIDENCE"):
+                raise ValueError("unrecognized refinement transition status: " + identity)
+        transition_findings = findings
+    else:
+        # The absence of a transition report is a distinct coverage gap.
+        transition_findings = {}
     infrastructure = bool(formal.get("infrastructure_error") or formal.get("interrupted"))
     records = []
     for obligation in obligation_catalog():
@@ -205,6 +232,10 @@ def review(practical, formal, *, local_os, identities, inputs_identity=None, who
             source_links = source_obligations.get((c, goal), [])
             if not source_links:
                 blockers.append("whole-implementation source-to-goal inventory is missing")
+            if refinement is None:
+                blockers.append("independent refinement transition report is missing")
+            elif any(link["id"] not in transition_findings or transition_findings[link["id"]]["status"] != "REFINEMENT_PROVEN" for link in source_links):
+                blockers.append("independent source-to-implementation transitions not proved")
             else:
                 open_links = [link["id"] for link in source_links
                               if link["status"] != "REFINEMENT_PROVEN"]
@@ -243,19 +274,23 @@ def main(argv=None):
     p.add_argument("--inventory", type=Path, required=True,
                    help="source-derived whole-implementation proof inventory")
     p.add_argument("--os", choices=["windows", "linux"], required=True)
+    p.add_argument("--transition", type=Path, required=True,
+                   help="independent per-source refinement transition findings")
     p.add_argument("--output", type=Path, default=ROOT / "target/acceptance-34.json")
     args = p.parse_args(argv)
     try:
         practical = parse_json(args.practical)
         formal = parse_json(args.formal)
         whole_inventory = parse_json(args.inventory)
+        refinement = parse_json(args.transition)
         identities = {c: source_identity(c) for c in COMPILERS}
         report = review(practical, formal, local_os=args.os, identities=identities,
                         inputs_identity=test_input_identity(),
-                        whole_inventory=whole_inventory)
+                        whole_inventory=whole_inventory, refinement=refinement)
         report["inputs"] = {"practical_sha256": file_hash(args.practical),
                             "formal_sha256": file_hash(args.formal),
-                            "inventory_sha256": file_hash(args.inventory)}
+                            "inventory_sha256": file_hash(args.inventory),
+                            "transition_sha256": file_hash(args.transition)}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         report = {"schema_version": 1, "kind": "whole-compiler-acceptance-audit",
                   "status": "INVALID_EVIDENCE", "reason": str(error)}
