@@ -86,6 +86,11 @@ def main(argv=None) -> int:
             for pair in pairs:
                 if not isinstance(pair, dict) or set(pair) != {"before", "after"}:
                     raise ValueError("semantic pair must contain only before/after paths")
+                if (not isinstance(pair["before"], str) or
+                        not isinstance(pair["after"], str) or
+                        Path(pair["before"]).is_absolute() or
+                        Path(pair["after"]).is_absolute()):
+                    raise ValueError("invalid LLVM refinement pair paths")
                 before = (args.ir_root / pair["before"]).resolve()
                 after = (args.ir_root / pair["after"]).resolve()
                 if (not before.is_relative_to(args.ir_root.resolve()) or
