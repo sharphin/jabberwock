@@ -431,6 +431,16 @@ def main(argv=None, *, target_os=None) -> int:
         print("INFRA_ERROR: " + str(error), file=sys.stderr, flush=True)
         print("Stopped; last saved report (if present): " + str(writer.path), file=sys.stderr, flush=True)
         return 2
+    if not args.dry_run:
+        try:
+            after = {c: source_identity(c) for c in compilers}
+            if any(after[c] != report["source_snapshots"][c] for c in compilers):
+                report["run_status"] = "SOURCE_CHANGED"
+                report["source_changed"] = True
+                report["source_end_snapshots"] = after
+        except (OSError, ValueError, KeyError) as exc:
+            report["run_status"] = "SOURCE_IDENTITY_ERROR"
+            report["source_identity_error"] = str(exc)
     report["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     try:
         checkpoint()
