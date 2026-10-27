@@ -56,7 +56,7 @@ theorem hasRoom_prevents_counter_wrap {counter step : Nat}
   have bound := hasRoom_bounds_sum room
   have radixPositive : 0 < radix := by
     unfold radix
-    exact Nat.zero_lt_pow 2 (by decide)
+    decide
   have successorBound : maxCounter + 1 = radix := by
     unfold maxCounter
     exact Nat.sub_add_cancel (Nat.le_of_lt radixPositive)
