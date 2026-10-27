@@ -77,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         ("lean-axioms", [py, str(scripts / "check_formal.py")]),
         ("semantic-boundaries", [py, str(scripts / "semantic_refinement_boundaries.py"),
                                  "--output", str(output / "semantic-boundaries.json")]),
+        ("stage-refinement-binding", [py, str(scripts / "stage_refinement_binding.py"),
+                                       "--output", str(output / "stage-refinement-binding.json")]),
         ("emitter-binding", [py, str(scripts / "proof_emitter_correspondence.py"),
                              "--output", str(output / "emitter-binding.json")]),
     ]
@@ -89,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.evidence:
         refinement += ["--evidence", str(args.evidence.resolve())]
     plans.append(("refinement", refinement))
-    known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "emitter-binding": "emitter-binding.json",
+    known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
                      "lean-evidence": "lean-evidence.json", "refinement": "refinement.json"}
     # Remove stale reports even for optional stages.
     for filename in known_reports.values():
