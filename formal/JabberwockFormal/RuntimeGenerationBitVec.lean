@@ -27,8 +27,8 @@ def counterMask : Word := BitVec.ofNat 64 limitMaximum
     on every accepted path. The masked expression remains a BitVec operation. -/
 def guardSpec (gen step limit : Word) : Prop :=
   gen ≠ retiredWord ∧
-  step.toNat ≤ limit.toNat ∧
-  (gen &&& counterMask).toNat ≤ limit.toNat - step.toNat
+  step ≤ limit ∧
+  (gen &&& counterMask) ≤ limit - step
 
 def guard (gen step limit : Word) : Bool :=
   decide (guardSpec gen step limit)
@@ -52,6 +52,10 @@ theorem accepted_increment_no_wrap
     (accepted : guard gen step limit = true) :
     (gen + step).toNat = gen.toNat + step.toNat := by
   have spec := (guard_iff_spec gen step limit).1 accepted
+  have stepLe := spec.2.1
+  have stepLeNat : step.toNat ≤ limit.toNat := by
+    rw [BitVec.le_def] at stepLe
+    exact stepLe
   have stepBound : step.toNat < radix := by
     unfold radix
     omega
