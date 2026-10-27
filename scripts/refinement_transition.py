@@ -98,7 +98,9 @@ def main(argv=None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(result["status"], "->", args.output, flush=True)
-    return 2 if result["status"] == "INVALID_EVIDENCE" else 0
+    # A successful audit execution is not the same as a discharged proof.
+    # Exit zero is reserved for a fully proven implementation.
+    return 0 if result["status"] == "PROVEN" else (2 if result["status"] == "INVALID_EVIDENCE" else 1)
 
 
 if __name__ == "__main__":
