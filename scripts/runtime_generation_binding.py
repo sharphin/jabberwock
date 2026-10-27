@@ -10,12 +10,14 @@ import json
 import re
 from pathlib import Path
 from runtime_guard_expression import (inspect as inspect_guard, inspect_lean,
-                                      inspect_symbolic_alignment, inspect_generation_macros)
+                                      inspect_symbolic_alignment, inspect_generation_macros,
+                                      inspect_native_build_path)
 
 ROOT = Path(__file__).resolve().parents[1]
 C_SOURCE = ROOT / "runtime" / "jw_rt.c"
 LEAN_SOURCE = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationEncoding.lean"
 BITVEC_SOURCE = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationBitVec.lean"
+NATIVE_SOURCE = ROOT / "src" / "native.rs"
 
 C_PATTERNS = {
     "retired_sentinel": r"#define\s+GEN_RETIRED\s+UINT64_MAX",
@@ -79,6 +81,10 @@ def main(argv=None) -> int:
         lean_guard = inspect_lean(BITVEC_SOURCE)
         symbolic = inspect_symbolic_alignment(C_SOURCE, BITVEC_SOURCE)
         macros = inspect_generation_macros(C_SOURCE)
+        native_path = inspect_native_build_path(NATIVE_SOURCE)
+        findings.append({"id": "native:clang_runtime_build_path",
+                         "status": "MATCHED" if native_path["status"] ==
+                         "BUILD_SOURCE_PATH_MATCHED_FLAGS_UNVERIFIED" else "MISSING"})
         findings.append({"id": "c:generation_macro_branches",
                          "status": "MATCHED" if macros["status"] ==
                          "MACRO_BRANCHES_REVIEWED_BUILD_CONFIGURATION_UNKNOWN" else "MISSING"})
