@@ -149,4 +149,38 @@ theorem one_local_no_two_strict_updates
   subst other
   exact (absence_persists (update old first) second key erased).trans erased.symm
 
+/-- Every fact that remains after any finite history of reachable-block
+    joins was already present in the initial entry. No incoming edge
+    can invent a new justification for check elision. -/
+theorem updateMany_retained_from_initial {n : Nat}
+    (initial : Facts n) (history : List (Facts n))
+    (key : Fin n) (fact : Nat)
+    (retained : updateMany initial history key = some fact) :
+    initial key = some fact := by
+  induction history generalizing initial with
+  | nil =>
+      exact retained
+  | cons head tail ih =>
+      exact retained_from_old initial head key fact
+        (ih (update initial head) retained)
+
+/-- If a strict change happens after a finite history, the erased fact
+    must have existed at the start of that history. It is absent after
+    the change and stays absent through every future meet. -/
+theorem historical_change_consumes_initial_fact {n : Nat}
+    (initial : Facts n) (before after : List (Facts n))
+    (incoming : Facts n)
+    (strict : update (updateMany initial before) incoming ≠
+      updateMany initial before) :
+    ∃ key : Fin n, ∃ fact : Nat,
+      initial key = some fact ∧
+      update (updateMany initial before) incoming key = none ∧
+      updateMany (update (updateMany initial before) incoming) after key = none := by
+  obtain ⟨key, fact, present, erased⟩ :=
+    changed_update_erases_fact (updateMany initial before) incoming strict
+  exact ⟨key, fact,
+    updateMany_retained_from_initial initial before key fact present,
+    erased,
+    absent_after_updates _ after key erased⟩
+
 end JabberwockFormal.FiniteMeetProgress
