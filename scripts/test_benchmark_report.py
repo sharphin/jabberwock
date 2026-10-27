@@ -19,7 +19,7 @@ class BenchmarkReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "run.stdout"
             result = bench.run_windows_measure([sys.executable, "-c", "pass"], output, timeout=30)
-            # The interpreter without flags may print nothing, but process data
+            # The controlled Python command prints nothing, but process data
             # must remain measurable and the OS peak working set must be positive.
             self.assertEqual(result["exit"], 0)
             metrics = bench.parse_measure(result["stdout"])
