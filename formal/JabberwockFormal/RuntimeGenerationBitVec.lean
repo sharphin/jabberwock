@@ -36,7 +36,7 @@ def guard (gen step limit : Word) : Bool :=
 
 theorem guard_iff_spec (gen step limit : Word) :
     guard gen step limit = true ↔ guardSpec gen step limit := by
-  simp [guard, guardSpec, BitVec.ule_iff_le]
+  simp [guard, guardSpec, BitVec.ule_eq_decide_le]
 
 theorem guard_rejects_retired (step limit : Word) :
     guard retiredWord step limit = false := by
