@@ -56,5 +56,24 @@ class EmittedGateTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         bind.validate(compiler)
 
+
+    def test_interposed_instruction_or_fallthrough_fails(self):
+        for compiler in ("jwc", "rust"):
+            path, code = bind.emitter_segment(compiler)
+            line = ('    let ok = b.if_true(bad);' if compiler == "jwc"
+                    else '    let (_, ok) = b.if_true(&bad);')
+            self.assertIn(line, code)
+            for injected in (
+                line + "\n    b.op(\"ret void\");",
+                line + "\n    b.op(\"br label %bypass\");",
+            ):
+                modified = code.replace(line, injected, 1)
+                with self.subTest(compiler=compiler, injected=injected):
+                    with mock.patch.object(bind, "emitter_segment",
+                                           return_value=(path, modified)):
+                        with self.assertRaisesRegex(ValueError, "contiguous"):
+                            bind.validate(compiler)
+
+
 if __name__ == "__main__":
     unittest.main()
