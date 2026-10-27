@@ -71,7 +71,7 @@ theorem joined_elision_from_both (left right : AnalyzerFacts)
     justify elision, joining cannot justify it either. -/
 theorem unsafe_edge_blocks_join (left right : AnalyzerFacts)
     (key index : Nat)
-    (unsafe : elideFirst left (left key) index = false ∨
+    (blocked : elideFirst left (left key) index = false ∨
       elideFirst right (right key) index = false) :
     elideFirst (meetFacts left right)
       (meetFacts left right key) index = false := by
@@ -80,7 +80,7 @@ theorem unsafe_edge_blocks_join (left right : AnalyzerFacts)
   | false => rfl
   | true =>
       obtain ⟨hl, hr⟩ := joined_elision_from_both left right key index h
-      cases unsafe with
+      cases blocked with
       | inl bad => simp [bad] at hl
       | inr bad => simp [bad] at hr
 
