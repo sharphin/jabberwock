@@ -37,6 +37,8 @@ class FullRunnerTests(unittest.TestCase):
             "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"])
         self.assertIn("test_*.py", tasks[0][1])
         self.assertIn("--require-full", dict(tasks)["formal-proofs"])
+        self.assertIn("--benchmark-report", dict(tasks)["llvm-concrete-ir-audit"])
+        self.assertIn("refinement-transition", dict(tasks))
         self.assertIn("--full", dict(tasks)["benchmark-four-way"])
         self.assertNotIn("--full", dict(full.plans(output, quick=True))["benchmark-four-way"])
 
