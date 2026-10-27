@@ -24,6 +24,14 @@ fn compare_outcomes(label: &str, source: &str, checked: &Outcome, elided: &Outco
         checked.live_objects, elided.live_objects,
         "heap live-object count changed: {context}"
     );
+    let checked_error = checked.error.as_ref().map(|d| d.render("test.jw", source));
+    let elided_error = elided.error.as_ref().map(|d| d.render("test.jw", source));
+    assert_eq!(checked_error, elided_error, "diagnostic details changed: {context}");
+    let checked_warnings: Vec<_> =
+        checked.warnings.iter().map(|d| d.render("test.jw", source)).collect();
+    let elided_warnings: Vec<_> =
+        elided.warnings.iter().map(|d| d.render("test.jw", source)).collect();
+    assert_eq!(checked_warnings, elided_warnings, "warnings changed: {context}");
     assert_eq!(checked.ref_checks_elided, 0, "disabled mode elided a check: {context}");
 }
 
