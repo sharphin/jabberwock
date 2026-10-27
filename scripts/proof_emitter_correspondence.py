@@ -88,7 +88,7 @@ def validate(compiler: str) -> dict:
             '    }',
             '    count(b, o, "gen");',
         )
-        if body.count("\\n".join(bypass)) != 1:
+        if body.count("\n".join(bypass)) != 1:
             raise ValueError("Rust generation-check bypass differs from the formal option model")
     else:
         if "if !o.gen" in body:
