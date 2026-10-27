@@ -30,8 +30,9 @@ theorem changeCount_le_history_length {n : Nat}
       by_cases stable : update initial incoming = initial
       · simpa [changeCount, stable] using
           Nat.le_trans (ih (update initial incoming)) (Nat.le_succ rest.length)
-      · simpa [changeCount, stable] using
-          Nat.succ_le_succ (ih (update initial incoming))
+      · have bound := Nat.succ_le_succ (ih (update initial incoming))
+        simpa only [changeCount, if_neg stable, List.length_cons,
+          Nat.succ_eq_add_one, Nat.add_comm] using bound
 
 /-- An empty reachable entry has no changes, no matter how many incoming
     predecessor edges it processes. -/
