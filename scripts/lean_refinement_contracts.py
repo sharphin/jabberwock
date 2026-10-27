@@ -51,16 +51,22 @@ def load_contracts(root: Path, requested: list[str] | None) -> list[dict]:
                 any(not isinstance(name, str) for name in requested) or
                 len(requested) != len(set(requested))):
             raise ContractError("invalid requested theorem names")
-        unknown = set(requested) - seen
-        if unknown:
-            raise ContractError("missing reviewed proposition contracts: " + repr(sorted(unknown)))
+        # A general Lean audit may include theorems without reviewed contracts.
+        # Stage bindings enforce their own required contract membership.
     return selected
 
-def check_contracts(root: Path, lake: str, names: list[str], timeout: int) -> list[str]:
+def check_contracts(root: Path, lake: str, names: list[str], timeout: int,
+                    *, require_all: bool = False) -> list[str]:
+    """Kernel-check available contracts; require_all only for strict bindings."""
     registry = root / "formal" / "refinement-contracts.json"
     before = (hashlib.sha256(registry.read_bytes()).hexdigest()
               if registry.is_file() and not registry.is_symlink() else None)
     contracts = load_contracts(root, names)
+    if require_all:
+        present = {item["theorem"] for item in contracts}
+        missing = set(names) - present
+        if missing:
+            raise ContractError("missing reviewed proposition contracts: " + repr(sorted(missing)))
     if not contracts:
         return []
     if before is None or registry.is_symlink() or hashlib.sha256(registry.read_bytes()).hexdigest() != before:
