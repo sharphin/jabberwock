@@ -351,6 +351,10 @@ def main(argv=None, *, target_os=None) -> int:
         "tools": {"rustc": recorded_version(["rustc", "--version"]), "cargo": recorded_version(["cargo", "--version"]),
                   "clang": recorded_version([os.environ.get("JW_CLANG", "clang"), "--version"])},
         "scale": args.scale, "source_snapshots": {c: source_identity(c) for c in compilers} if not args.dry_run else {},
+        "planned_probes": [{"name": p["name"], "compiler": p.get("compiler"),
+                            "items": list(p["items"]), "goal": p.get("goal"),
+                            "required_case_ids": p.get("required_case_ids", []),
+                            "expected_cases": p.get("expected_cases")} for p in ordered],
         "test_inputs_snapshot": test_input_identity() if not args.dry_run else {},
         "preparation": [], "items": [], "results": [],
     }
