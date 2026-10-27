@@ -56,4 +56,26 @@ theorem retired_read_must_keep_check (saved : Word) (payload : Nat) :
     checkedRead saved JabberwockFormal.EmittedGate.retired payload = none := by
   simp [checkedRead, JabberwockFormal.EmittedGate.no_retired_gate]
 
+
+/-- A valid generation is exactly the condition under which this one-read
+    optimization agrees with the checked program. This is deliberately
+    an iff, preventing unsound promotion based on only one direction. -/
+theorem elision_equivalent_iff_valid (saved current : Word) (payload : Nat) :
+    checkedRead saved current payload = uncheckedRead saved current payload ↔
+      JabberwockFormal.EmittedGate.valid saved current := by
+  constructor
+  · intro equal
+    by_cases good : JabberwockFormal.EmittedGate.valid saved current
+    · exact good
+    · exact False.elim
+        ((elision_changes_invalid_read saved current payload good) equal)
+  · intro good
+    exact elision_preserves_valid_read saved current payload good
+
+/-- Even a matching saved marker must not turn retired storage into a value. -/
+theorem retired_equal_generation_rejected (payload : Nat) :
+    checkedRead JabberwockFormal.EmittedGate.retired
+      JabberwockFormal.EmittedGate.retired payload = none :=
+  retired_read_must_keep_check _ payload
+
 end JabberwockFormal.CheckElision
