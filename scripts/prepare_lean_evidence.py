@@ -38,8 +38,7 @@ def prepare(root: Path, stage_id: str, theorem: str) -> dict:
             "project": "formal", "theorems": [theorem],
             "proof_files": proof_files,
             "source_files": [{"path": path, "sha256": digest(root / path)}
-                             for path in sorted(sources)],
-            "stage_id": stage_id}
+                             for path in sorted(sources)]}
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
