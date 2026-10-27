@@ -35,6 +35,8 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
         ("practical-safety", [*safety, "--compiler", "all", "--output", str(practical)]),
         ("whole-implementation-obligations", [py, str(ROOT / "scripts/whole_compiler_proof.py"),
                                               "--output", str(output / "whole-proof-inventory.json")]),
+        ("refinement-transition", [py, str(ROOT / "scripts/refinement_transition.py"),
+                                   "--output", str(output / "refinement-transition.json")]),
         ("build-dependency-audit", [py, str(ROOT / "scripts/build_dependency_audit.py"),
                                     "--output", str(output / "build-dependency-audit.json")]),
         ("emitter-proof-binding", [py, str(ROOT / "scripts/proof_emitter_correspondence.py"),
@@ -86,6 +88,7 @@ def evidence_overview(output: Path) -> dict:
     paths = {
         "implementation_inventory": "whole-proof-inventory.json",
         "build_dependencies": "build-dependency-audit.json",
+        "refinement_transition": "refinement-transition.json",
         "llvm_ir": "llvm-ir-audit.json",
         "formal": "formal.json",
         "acceptance": "acceptance-34.json",
@@ -104,6 +107,9 @@ def evidence_overview(output: Path) -> dict:
                             proved=value.get("proved_obligations"),
                             uncovered=[x.get("id") for x in value.get("components", [])
                                        if x.get("status") != "REFINEMENT_PROVEN"])
+            elif label == "refinement_transition":
+                data.update(required=value.get("required"), proved=value.get("proved"),
+                            invalid=value.get("invalid"))
             elif label == "build_dependencies":
                 data.update(checks=value.get("checks", []))
             elif label == "llvm_ir":
@@ -130,7 +136,7 @@ def evidence_overview(output: Path) -> dict:
 
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
-    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
+    expected = {"python-regressions", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
                 "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"}
     verdict = "FAIL"
     reason = "one or more verification stages failed"
@@ -188,6 +194,7 @@ def main(argv=None):
         report_name = {"practical-safety": "safety.json", "formal-proofs": "formal.json",
                        "emitter-proof-binding": "emitter-proof-binding.json",
                        "build-dependency-audit": "build-dependency-audit.json",
+                       "refinement-transition": "refinement-transition.json",
                        "whole-implementation-obligations": "whole-proof-inventory.json",
                        "acceptance-34": "acceptance-34.json",
                        "benchmark-four-way": "benchmark-four-way.json",
