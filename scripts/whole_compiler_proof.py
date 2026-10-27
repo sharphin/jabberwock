@@ -14,13 +14,16 @@ import json
 from pathlib import Path
 import sys
 
+from formal_report import source_identity
+
 ROOT = Path(__file__).resolve().parents[1]
 GOALS = ("semantics", "memory", "types", "ownership", "checks")
 # Every supported production source file must belong to exactly one
 # implementation phase. New sources are discovered automatically.
 ROOTS = {"jwc": (("jwc", ".jw"), ("runtime", ".c"), ("runtime", ".h")),
          "rust": (("src", ".rs"), ("runtime", ".c"), ("runtime", ".h"))}
-CONFIG_FILES = {"jwc": (), "rust": ("Cargo.toml", "Cargo.lock")}\nPHASES = ("lex", "parse", "typecheck", "lower", "analyze",
+CONFIG_FILES = {"jwc": (), "rust": ("Cargo.toml", "Cargo.lock")}
+PHASES = ("lex", "parse", "typecheck", "lower", "analyze",
           "optimize", "emit_llvm", "runtime", "integration")
 # These bindings define the *minimum* implementation proof boundaries.
 # They do not prove correctness. Each boundary must eventually provide an
@@ -75,7 +78,19 @@ def production_files(compiler: str) -> dict[str, str]:
                 if rel in results:
                     raise ValueError("duplicate source: " + rel)
                 results[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
-    for relative in CONFIG_FILES[compiler]:\n        configuration = ROOT / relative\n        if not configuration.is_file():\n            raise ValueError("missing build input: " + relative)\n        results[relative] = hashlib.sha256(configuration.read_bytes()).hexdigest()\n    # Include every file that the independent formal-report source snapshot\n    # fingerprints, including build inputs and non-source compiler resources.\n    # It is still not a proof that all external build dependencies are covered.\n    for relative, digest in source_identity(compiler)["files"].items():\n        if relative in results and results[relative] != digest:\n            raise ValueError("inconsistent compiler source fingerprint: " + relative)\n        results[relative] = digest\n    if not results or not any(p.startswith("runtime/") for p in results):
+    for relative in CONFIG_FILES[compiler]:
+        configuration = ROOT / relative
+        if not configuration.is_file():
+            raise ValueError("missing build input: " + relative)
+        results[relative] = hashlib.sha256(configuration.read_bytes()).hexdigest()
+    # Include every file that the independent formal-report source snapshot
+    # fingerprints, including build inputs and non-source compiler resources.
+    # It is still not a proof that all external build dependencies are covered.
+    for relative, digest in source_identity(compiler)["files"].items():
+        if relative in results and results[relative] != digest:
+            raise ValueError("inconsistent compiler source fingerprint: " + relative)
+        results[relative] = digest
+    if not results or not any(p.startswith("runtime/") for p in results):
         raise ValueError("missing compiler or runtime sources")
     return dict(sorted(results.items()))
 
@@ -106,7 +121,8 @@ def inventory() -> dict:
             "components": components,
             "limitations": [
                 "Source inventory is not a correctness proof.",
-                "A file hash is not a semantic refinement proof.",\n                "This source inventory does not establish build dependency closure, generated inputs or external toolchain semantics.",
+                "A file hash is not a semantic refinement proof.",
+                "This source inventory does not establish build dependency closure, generated inputs or external toolchain semantics.",
                 "LLVM poison, pointer provenance, concurrency, FFI and OS effects remain proof obligations.",
                 "This report deliberately provides no user-settable accepted switch."]}
 
@@ -160,7 +176,8 @@ def main(argv=None) -> int:
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(result["status"], result.get("total_obligations", 0),
           "implementation proof obligations ->", args.output, flush=True)
-    # Inventory generation is successful even when the proof itself is incomplete.\n    return 2 if result["status"] == "INVALID_INVENTORY" else 0
+    # Inventory generation is successful even when the proof itself is incomplete.
+    return 2 if result["status"] == "INVALID_INVENTORY" else 0
 
 
 if __name__ == "__main__":
