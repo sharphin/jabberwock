@@ -54,23 +54,23 @@ def inspect(name: str) -> dict:
     # Never accept a worklist that calls a drifted or widening 'meet'.
     if name == "rust":
         meet_source = (
-            'fn meet(a: &Facts, b: &Facts) -> Facts {\\n'
-            '    a.iter().filter(|(k, v)| b.get(k) == Some(v)).map(|(k, v)| (*k, *v)).collect()\\n'
+            'fn meet(a: &Facts, b: &Facts) -> Facts {\n'
+            '    a.iter().filter(|(k, v)| b.get(k) == Some(v)).map(|(k, v)| (*k, *v)).collect()\n'
             '}'
         )
     else:
         meet_source = (
-            'fn Facts meet(ref Facts a, ref Facts b) {\\n'
-            '    let mut out = no_facts();\\n'
-            '    let mut j = 0;\\n'
-            '    for (i, k) in a.ks {\\n'
-            '        while j < b.ks.len() && b.ks[j] < k { j += 1; }\\n'
-            '        if j < b.ks.len() && b.ks[j] == k && b.vs[j] == a.vs[i] {\\n'
-            '            out.ks.push(k);\\n'
-            '            out.vs.push(a.vs[i]);\\n'
-            '        }\\n'
-            '    }\\n'
-            '    out\\n'
+            'fn Facts meet(ref Facts a, ref Facts b) {\n'
+            '    let mut out = no_facts();\n'
+            '    let mut j = 0;\n'
+            '    for (i, k) in a.ks {\n'
+            '        while j < b.ks.len() && b.ks[j] < k { j += 1; }\n'
+            '        if j < b.ks.len() && b.ks[j] == k && b.vs[j] == a.vs[i] {\n'
+            '            out.ks.push(k);\n'
+            '            out.vs.push(a.vs[i]);\n'
+            '        }\n'
+            '    }\n'
+            '    out\n'
             '}'
         )
     if source.count(meet_source) != 1:
