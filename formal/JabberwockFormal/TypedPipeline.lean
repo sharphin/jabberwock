@@ -123,4 +123,52 @@ theorem fold_constant_conditional {t : Ty} (yes no : IR t) :
       irEval (fold yes) := by
   rfl
 
+
+/-- A third, independent typed expression representation for the modeled
+    backend. This is not LLVM IR and does not claim LLVM refinement. -/
+inductive Target : Ty → Type where
+  | constantNat (n : Nat) : Target .nat
+  | constantBool (b : Bool) : Target .bool
+  | plus (a b : Target .nat) : Target .nat
+  | compare (a b : Target .nat) : Target .bool
+  | branch {t : Ty} (c : Target .bool) (yes no : Target t) : Target t
+
+def targetEval : {t : Ty} → Target t → Value t
+  | _, .constantNat n => n
+  | _, .constantBool b => b
+  | _, .plus a b => targetEval a + targetEval b
+  | _, .compare a b => decide (targetEval a = targetEval b)
+  | _, .branch c yes no =>
+      if targetEval c then targetEval yes else targetEval no
+
+/-- The modeled backend preserves its result type by construction. -/
+def emit : {t : Ty} → IR t → Target t
+  | _, .integer n => .constantNat n
+  | _, .boolean b => .constantBool b
+  | _, .sum a b => .plus (emit a) (emit b)
+  | _, .eq a b => .compare (emit a) (emit b)
+  | _, .select c yes no => .branch (emit c) (emit yes) (emit no)
+
+/-- Each modeled IR constructor has the same observation in target form. -/
+theorem emit_preserves_evaluation {t : Ty} (ir : IR t) :
+    targetEval (emit ir) = irEval ir := by
+  induction ir with
+  | integer _ => rfl
+  | boolean _ => rfl
+  | sum a b ha hb => simp [emit, targetEval, irEval, ha, hb]
+  | eq a b ha hb => simp [emit, targetEval, irEval, ha, hb]
+  | select c yes no hc hy hn =>
+      simp [emit, targetEval, irEval, hc, hy, hn]
+
+/-- Composition from typed source to a third target representation.
+    This theorem is limited to the modeled Nat/Bool expression language. -/
+theorem source_to_target_preserves_evaluation {t : Ty} (e : Expr t) :
+    targetEval (emit (lower e)) = eval e := by
+  rw [emit_preserves_evaluation, lower_preserves_evaluation]
+
+/-- Optimization stage output always remains a well-typed target term. -/
+theorem folded_ir_emits_well_typed_target {t : Ty} (ir : IR t) :
+    ∃ result : Target t, result = emit (fold ir) := by
+  exact ⟨emit (fold ir), rfl⟩
+
 end JabberwockFormal.TypedPipeline
