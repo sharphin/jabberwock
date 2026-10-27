@@ -55,10 +55,30 @@ example (gen step limit : Word)
     gen + step ≠ gen :=
   accepted_increment_changes_word gen step limit validGen validLimit accepted positive
 
+example (saved current : Word) :
+    viewGate saved current = true ↔
+      current ≠ retiredWord ∧ current = saved :=
+  viewGate_matches_spec saved current
+
+example (saved : Word) :
+    viewGate saved retiredWord = false :=
+  viewGate_rejects_retired saved
+
+example (gen step limit : Word)
+    (validGen : gen.toNat < 2 ^ 63)
+    (validLimit : limit.toNat < radix)
+    (accepted : guard gen step limit = true)
+    (positive : 0 < step.toNat) :
+    viewGate gen (gen + step) = false :=
+  viewGate_rejects_after_advance gen step limit validGen validLimit accepted positive
+
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.masked_counter_matches_mod
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.guard_matches_nat
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_no_wrap
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_changes_word
+#print axioms JabberwockFormal.RuntimeGenerationBitVec.viewGate_matches_spec
+#print axioms JabberwockFormal.RuntimeGenerationBitVec.viewGate_rejects_retired
+#print axioms JabberwockFormal.RuntimeGenerationBitVec.viewGate_rejects_after_advance
 
 example (limit counter step : Nat) :
     JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt limit counter step ↔ counter + step ≤ limit :=
@@ -106,6 +126,9 @@ THEOREMS = (
     "JabberwockFormal.RuntimeGenerationBitVec.guard_matches_nat",
     "JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_no_wrap",
     "JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_changes_word",
+    "JabberwockFormal.RuntimeGenerationBitVec.viewGate_matches_spec",
+    "JabberwockFormal.RuntimeGenerationBitVec.viewGate_rejects_retired",
+    "JabberwockFormal.RuntimeGenerationBitVec.viewGate_rejects_after_advance",
     "JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt_iff_sum",
     "JabberwockFormal.RuntimeGenerationEncoding.concreteGuard_matches_abstract",
     "JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance_matches_abstract",
