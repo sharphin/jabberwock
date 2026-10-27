@@ -353,4 +353,52 @@ theorem kill_owner_cannot_create_liveness
                 · simpa [killOwnerFacts, targetOwner] using newOwn
               simpa [analyzerIsLive, h, oldOwn]
 
+/-- The fact join used at a CFG merge: retain a fact only if both
+    incoming paths agree. -/
+def meetFacts (left right : AnalyzerFacts) : AnalyzerFacts :=
+  fun key => if left key = right key then left key else none
+
+/-- A joined liveness claim is supported by both predecessor analyses.
+    Consequently an intersection cannot introduce a previously absent proof
+    that an owner is live. -/
+theorem meet_live_implies_left
+    (left right : AnalyzerFacts) (key : Nat)
+    (live : analyzerIsLive (meetFacts left right)
+      ((meetFacts left right) key) = true) :
+    analyzerIsLive left (left key) = true := by
+  unfold meetFacts at live
+  by_cases h : left key = right key
+  · cases f : left key with
+    | none => simp [analyzerIsLive, h, f] at live
+    | some fact =>
+        cases fact with
+        | own => simp [analyzerIsLive, h, f] at live
+        | pinned => simp [analyzerIsLive, f]
+        | refSlot slot => simp [analyzerIsLive, f]
+        | refElem slot => simp [analyzerIsLive, h, f] at live
+        | refTo owner =>
+            have joinedOwn : meetFacts left right owner = some .own := by
+              simpa [meetFacts, h, f, analyzerIsLive] using live
+            have oldOwn : left owner = some .own := by
+              by_cases ho : left owner = right owner
+              · simpa [meetFacts, ho] using joinedOwn
+              · simp [meetFacts, ho] at joinedOwn
+            simpa [analyzerIsLive, f, oldOwn]
+  · simp [h, analyzerIsLive] at live
+
+theorem meet_live_implies_right
+    (left right : AnalyzerFacts) (key : Nat)
+    (live : analyzerIsLive (meetFacts left right)
+      ((meetFacts left right) key) = true) :
+    analyzerIsLive right (right key) = true := by
+  have comm : meetFacts left right = meetFacts right left := by
+    funext k
+    simp only [meetFacts]
+    by_cases h : left k = right k
+    · simp [h]
+    · have hr : right k ≠ left k := Ne.symm h
+      simp [h, hr]
+  rw [comm] at live
+  exact meet_live_implies_left right left key live
+
 end JabberwockFormal.CheckElision
