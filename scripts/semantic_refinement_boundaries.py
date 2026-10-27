@@ -26,7 +26,7 @@ PHASE_SOURCES = {
         "parse": ("jwc/lexer.jw", "jwc/parser.jw"),
         "typecheck": ("jwc/typeck.jw",),
         "lower": ("jwc/lower.jw",),
-        "ir_semantics": ("jwc/ir.jw", "jwc/exec.jw"),
+        "ir_semantics": ("jwc/ir.jw", "jwc/main.jw"),
     },
     "rust": {
         "source_semantics": ("src/interp.rs",),
