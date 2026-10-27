@@ -474,8 +474,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         overall = "NOT_PROVEN"
     refinement_status = refinement_report.get("status")
+    # Infrastructure readiness is distinct from the status of the program
+    # being proven. An honest NOT_PROVEN result is a valid operation of the
+    # verification infrastructure, not evidence that the runner is broken.
+    infrastructure_status = "INVALID" if infrastructure_errors else "OPERATIONAL"
     summary = {
         "schema_version": 1, "kind": "jabberwock-formal-tool-run",
+        "infrastructure_status": infrastructure_status,
+        "infrastructure_complete_claim": False,
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "environment": {
             "python_version": sys.version,
