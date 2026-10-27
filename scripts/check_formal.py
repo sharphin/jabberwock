@@ -16,7 +16,7 @@ ALLOWED_AXIOMS = {"propext", "Quot.sound", "Classical.choice"}
 def discover_theorems(project=PROJECT):
     """Return kernel-audit names from every root and compiler-specific module."""
     theorems = []
-    for path in sorted((PROJECT / "JabberwockFormal").rglob("*.lean")):
+    for path in sorted((project / "JabberwockFormal").rglob("*.lean")):
         source = path.read_text(encoding="utf-8")
         if re.search(r"\b(sorry|admit|axiom|unsafe|native_decide)\b", source):
             raise SystemExit("unapproved proof escape in " + str(path))
