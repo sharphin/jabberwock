@@ -1,5 +1,5 @@
 # 安全の確かめ（docs/safety-testing.md の「まだ確かめていないこと」を機械で流す）。
-# push と PR では短く、毎晩は数を増やして流す。手で動かすときは scale で倍率を決める
+# 自動起動はしない。GitHub Actionsから手動で起動した場合だけ scale を適用する。
 name: safety
 
 on:
@@ -12,7 +12,7 @@ on:
 
 env:
   JW_REQUIRE_RETIREMENT_TESTS: "1"
-  SCALE: ${{ github.event_name == 'schedule' && '20' || inputs.scale || '1' }}
+  SCALE: ${{ inputs.scale || '1' }}
   ASAN_FLAGS: "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 
 jobs:
