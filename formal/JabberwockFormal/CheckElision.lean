@@ -78,4 +78,44 @@ theorem retired_equal_generation_rejected (payload : Nat) :
       JabberwockFormal.EmittedGate.retired payload = none :=
   retired_read_must_keep_check _ payload
 
+
+/-- One abstract access records its saved/current generation and payload.
+    The real compiler-to-model correspondence is an additional obligation. -/
+structure Access where
+  saved : Word
+  current : Word
+  payload : Nat
+
+/-- Observable results of a sequence of checked accesses. -/
+def checkedTrace (accesses : List Access) : List (Option Nat) :=
+  accesses.map (fun a => checkedRead a.saved a.current a.payload)
+
+/-- Observable results of the same sequence with every check omitted. -/
+def uncheckedTrace (accesses : List Access) : List (Option Nat) :=
+  accesses.map (fun a => uncheckedRead a.saved a.current a.payload)
+
+/-- Check elimination over a trace is correct if *every* eliminated check
+    has its own valid-generation witness. A single successful read is not
+    sufficient evidence for all subsequent accesses. -/
+theorem valid_trace_elision_preserves_results
+    (accesses : List Access)
+    (validEverywhere : ∀ a ∈ accesses,
+      JabberwockFormal.EmittedGate.valid a.saved a.current) :
+    checkedTrace accesses = uncheckedTrace accesses := by
+  induction accesses with
+  | nil => rfl
+  | cons a rest ih =>
+      have headValid : JabberwockFormal.EmittedGate.valid a.saved a.current :=
+        validEverywhere a (by simp)
+      have tailValid : ∀ b ∈ rest,
+          JabberwockFormal.EmittedGate.valid b.saved b.current := by
+        intro b member
+        exact validEverywhere b (by simp [member])
+      have headEqual := elision_preserves_valid_read
+        a.saved a.current a.payload headValid
+      have tailEqual := ih tailValid
+      simpa [checkedTrace, uncheckedTrace, headEqual] using
+        congrArg (fun t => checkedRead a.saved a.current a.payload :: t) tailEqual
+
+
 end JabberwockFormal.CheckElision
