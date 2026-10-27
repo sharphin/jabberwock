@@ -119,6 +119,23 @@ example (retained : Bool) {counter step : Nat}
 #print axioms JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance_matches_abstract
 #print axioms JabberwockFormal.RuntimeGenerationEncoding.packed_word_step_no_uint64_wrap_at_limit
 #print axioms JabberwockFormal.RuntimeGenerationEncoding.runtimeAdvance_rejects_old_word
+
+example (retained : Bool) (counter : Nat) :
+    JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse retained counter =
+      if JabberwockFormal.RuntimeGenerationEncoding.hasRoom counter 2
+      then JabberwockFormal.RuntimeGenerationEncoding.pack retained (counter + 2)
+      else JabberwockFormal.RuntimeGenerationEncoding.retiredWord :=
+  JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse_matches_two_step retained counter
+
+example (retained : Bool) (counter : Nat) :
+    ¬ JabberwockFormal.RuntimeGenerationEncoding.accepts
+      (JabberwockFormal.RuntimeGenerationEncoding.pack retained counter)
+      (JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse retained counter) :=
+  JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse_rejects_old_reference retained counter
+
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.room_two_implies_room_after_first
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse_matches_two_step
+#print axioms JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse_rejects_old_reference
 """
 
 THEOREMS = (
@@ -134,6 +151,9 @@ THEOREMS = (
     "JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance_matches_abstract",
     "JabberwockFormal.RuntimeGenerationEncoding.packed_word_step_no_uint64_wrap_at_limit",
     "JabberwockFormal.RuntimeGenerationEncoding.runtimeAdvance_rejects_old_word",
+    "JabberwockFormal.RuntimeGenerationEncoding.room_two_implies_room_after_first",
+    "JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse_matches_two_step",
+    "JabberwockFormal.RuntimeGenerationEncoding.freeThenReuse_rejects_old_reference",
 )
 
 
