@@ -40,9 +40,7 @@ theorem update_idempotent {n : Nat} (old incoming : Facts n) :
 theorem absence_persists {n : Nat} (old incoming : Facts n)
     (key : Fin n) (absent : old key = none) :
     update old incoming key = none := by
-  by_cases same : old key = incoming key
-  · simp [update, same, absent]
-  · simp [update, same]
+  simp [update, absent]
 
 /-- Any change to a reachable entry erases some existing positive fact. -/
 theorem changed_update_erases_fact {n : Nat} (old incoming : Facts n)
