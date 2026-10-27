@@ -43,5 +43,45 @@ class RealCompilerStagesTest(unittest.TestCase):
             self.assertEqual(report["matched"], 0)
 
 
+    def test_identical_compiler_failures_do_not_count_as_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for filename in ("src/main.rs", "jwc/main.jw"):
+                path = root / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("--ast --typed --ir-raw --ir", encoding="utf-8")
+            sample = root / "sample.jw"
+            sample.write_text("invalid", encoding="utf-8")
+            a, b = root / "a", root / "b"
+            a.touch()
+            b.touch()
+            with patch.object(tool, "run_boundary", return_value={
+                "status": "EXECUTED", "exit": 1, "stdout": "", "stderr": "error"}):
+                report = tool.verify(root, {"rust": a, "jwc": b}, [sample])
+            self.assertEqual(report["status"], "FAIL")
+            self.assertEqual(report["matched"], 0)
+
+    def test_expected_negative_cases_can_match(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for filename in ("src/main.rs", "jwc/main.jw"):
+                path = root / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("--ast --typed --ir-raw --ir", encoding="utf-8")
+            sample = root / "sample.jw"
+            sample.write_text("invalid", encoding="utf-8")
+            a, b = root / "a", root / "b"
+            a.touch()
+            b.touch()
+            expectations = {str(sample.resolve()): {
+                stage: {"exit": 1, "stdout": ""} for stage in tool.STAGES}}
+            with patch.object(tool, "run_boundary", return_value={
+                "status": "EXECUTED", "exit": 1, "stdout": "", "stderr": "error"}):
+                report = tool.verify(root, {"rust": a, "jwc": b}, [sample],
+                                     expectations=expectations)
+            self.assertEqual(report["status"], "MATCH")
+            self.assertEqual(report["matched"], 5)
+
+
 if __name__ == "__main__":
     unittest.main()
