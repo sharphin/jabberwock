@@ -1,6 +1,7 @@
 import JabberwockFormal.Generation
 import JabberwockFormal.Ownership
 import JabberwockFormal.EmittedGate
+import JabberwockFormal.EmittedGateOptions
 import JabberwockFormal.ScopedGoals
 import JabberwockFormal.CheckElision
 import JabberwockFormal.SafetyComposition
