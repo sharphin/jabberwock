@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_closure_graph import audit
@@ -30,6 +31,16 @@ class BuildGraphTests(unittest.TestCase):
             self.assertEqual(result["visited_nodes"], 3)
             self.assertEqual(result["status"], "DECLARED_CLOSURE_VERIFIED")
             self.assertFalse(result["observed_inputs_complete"])
+
+    def test_source_identity_missing_from_graph_blocks(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            graph = self.graph(root)
+            required = {"src/lib.rs": hashlib.sha256(b"library").hexdigest()}
+            with mock.patch("build_closure_graph.source_identity",
+                            return_value={"files": required}):
+                with self.assertRaisesRegex(ValueError, "missing compiler source leaves"):
+                    audit(graph, root, {}, compiler="rust")
 
     def test_missing_input_blocks(self):
         with tempfile.TemporaryDirectory() as d:
