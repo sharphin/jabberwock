@@ -263,7 +263,7 @@ impl<'a> Cx<'a> {
     fn place(&mut self, p: &mut Place, facts: &mut Facts) {
         let safe = {
             let f = facts.get(&p.local).copied();
-            f == Some(Fact::Own) || matches!(f, Some(Fact::RefElem(_))) || is_live(facts, f)
+            f == Some(Fact::Own) || is_live(facts, f)
         };
         if self.set {
             for (i, pr) in p.proj.iter_mut().enumerate() {
