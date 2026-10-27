@@ -13,6 +13,11 @@ py -3 scripts/formal_report.py --compiler rust --output target/formal-rust-repor
 
 ## 共有抽象モデル
 
+固定幅整数9型の値域、丸め、変換、算術・ビット演算、除算・シフトの意味論を
+`JabberwockFormal/MachineIntegers.lean` に追加。
+[定義・実装との未証明の対応・確認状況](../docs/machine-integer-semantics.md) を参照。
+Leanでの確認は未実施であり、コンパイラ全体の証明や4機構の完成には数えない。
+
 # 形式仕様の検査
 
 [形式仕様の範囲と退役規則](../docs/formal-semantics.md) の機械検査部分。

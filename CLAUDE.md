@@ -328,6 +328,12 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 
 ## 安全性検査の作業メモ
 
+PR #30 の未完了4機構は `docs/pr30-remaining-work-and-acceptance.md` が受入基準。
+2026-10-27：第1機構に着手し、固定幅整数9型の値の意味論を `formal/JabberwockFormal/MachineIntegers.lean` に追加。
+`docs/machine-integer-semantics.md` に実装との未証明の対応をjwc/Rust別に記録。
+共有仕様の追加であり、Lean未実行・全実装対応未証明。4機構の完成数は0/4。
+4機構が完成するまで利用者へ実機テストを依頼しない。部分実装を完成報告に数えない。
+
 jwcを最優先に12項目×コンパイラ＋5目標の実用検査を分離。形式証明は `scripts/formal_report.py`。仕様と未検証範囲は `docs/compiler-safety-matrix.md`。テスト実行は利用者が担当し、結果から修正・PRを行う。今回の改修は未実行。
 
 ### 項目3・4・6の検出器（暫定）

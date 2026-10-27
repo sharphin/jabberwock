@@ -52,7 +52,7 @@ def main():
             raise SystemExit("unapproved axioms for " + name + ": " + repr(dependencies))
     print(version.strip())
     print(str(len(theorems)) + " theorems checked; only approved standard Lean axioms; no skipped proofs")
-    print("Scope: abstract generation/retirement and owner moves, not the full language or implementation")
+    print("Scope: shared generation/ownership/integer value specifications and limited lowering models; not whole-compiler implementation proofs")
 
 
 if __name__ == "__main__":
