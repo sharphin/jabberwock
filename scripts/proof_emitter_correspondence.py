@@ -77,6 +77,22 @@ def validate(compiler: str) -> dict:
         )
     if any(fragment not in body for fragment in required):
         raise ValueError("generation comparison/rejection wiring changed: " + compiler)
+    # The Rust emitter has an explicit unchecked early return when o.gen is
+    # disabled. Reject drift in this bypass: the Lean continuation theorem
+    # applies only to the checked path, never unconditionally.
+    if compiler == "rust":
+        bypass = (
+            '    let addr = b.val(format!("extractvalue {} {}, 0", rt, r));',
+            '    if !o.gen {',
+            '        return addr;',
+            '    }',
+            '    count(b, o, "gen");',
+        )
+        if body.count("\\n".join(bypass)) != 1:
+            raise ValueError("Rust generation-check bypass differs from the formal option model")
+    else:
+        if "if !o.gen" in body:
+            raise ValueError("jwc unexpectedly bypasses the modeled check")
     # Check the complete contiguous decision path, not merely the presence of
     # isolated instruction fragments. This prevents an injected assignment or
     # branch between the comparison and the rejecting trap from passing the
