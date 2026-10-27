@@ -187,3 +187,11 @@ py scripts/package_verification.py
 `target/verification-evidence.zip` はレポートJSONとstdout/stderrログをまとめた再レビュー用アーカイブ。ZIP内部の `evidence-manifest.json` に各ファイルのSHA-256を記録する。テスト結果の真正性や数学的正しさの証明にはならない。**共有前にログ内のローカルパス、認証情報、秘密情報を確認すること。**
 
 この段階では全コンパイラ対応証明の検証器、ビルド依存閉包の完全検証、LLVM意味論との接続は未実装である。受入監査はその状態を`NOT_ACCEPTED`と報告し続ける。コンパイラ実装には手を加えない。
+
+## 追加した独立監査工程（未証明を明確化）
+
+- `scripts/build_dependency_audit.py`: jwcの静的`use`依存、Rustの宣言的`mod`・リテラル`include!`とCargoの明示的依存宣言を監査し、欠落・解決不能を`BLOCKED`として報告する。結果の`DECLARED_CLOSURE_CHECKED`はビルド全入力の閉包証明を意味しない。
+- `scripts/llvm_ir_audit.py`: ベンチマークのコンパイル工程で実際に生成した`.ll`をLLVM `opt -passes=verify`へ渡す。`IR_WELL_FORMED`はLLVM IRとしての妥当性の一部であり、未定義動作の不在や意味保存の数学的証明ではない。
+- `scripts/run_everything.py`: 上記工程の独立終了コードとレポートを保存。単なるソーステンプレート一致を形式証明完了として扱わない。
+
+**未完了の本質的課題:** 動的・生成済みビルド入力とツールチェーンの完全な実行依存閉包、LLVMの正式な意味論に対するプログラム全体のrefinement、Leanの実装対応定理によって正当化された証明状態遷移。これらが残る限り正式受入は成立しない。
