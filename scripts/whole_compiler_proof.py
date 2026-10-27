@@ -12,7 +12,6 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,21 +112,37 @@ def inventory() -> dict:
 
 
 def validate(result: dict) -> None:
-    components = result["components"]
-    if not components or len({o["id"] for o in components}) != len(components):
-        raise ValueError("empty or repeated proof obligations")
-    if {o["compiler"] for o in components} != set(ROOTS):
-        raise ValueError("missing compiler")
-    if {o["goal"] for o in components} != set(GOALS):
-        raise ValueError("missing proof goal")
-    for compiler in ROOTS:
-        files = production_files(compiler)
-        found = {x["source"] for x in components if x["compiler"] == compiler}
-        if found != set(files):
-            raise ValueError("untracked implementation source: " + compiler)
-        for row in (x for x in components if x["compiler"] == compiler):
-            if row["source_sha256"] != files[row["source"]]:
-                raise ValueError("source modified after inventory: " + row["source"])
+    """Reject omission or tampering of any source/phase/goal relation.
+
+    Recompute the canonical inventory directly from the working tree: simply
+    keeping one row per file is insufficient, because one proof goal could be
+    silently removed while its sibling rows remain.
+    """
+    if not isinstance(result, dict) or result.get("schema_version") != 1:
+        raise ValueError("invalid inventory envelope")
+    components = result.get("components")
+    if not isinstance(components, list) or not components:
+        raise ValueError("empty or malformed proof obligations")
+    if any(not isinstance(o, dict) for o in components):
+        raise ValueError("malformed proof obligation")
+    ids = [o.get("id") for o in components]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate proof obligation")
+    expected = inventory()
+    expected_rows = {o["id"]: o for o in expected["components"]}
+    actual_rows = {o["id"]: o for o in components}
+    if set(actual_rows) != set(expected_rows):
+        missing = sorted(set(expected_rows) - set(actual_rows))
+        extra = sorted(set(actual_rows) - set(expected_rows))
+        raise ValueError("missing/foreign proof obligations: " +
+                         repr({"missing": missing[:10], "extra": extra[:10]}))
+    for identity, original in expected_rows.items():
+        if actual_rows[identity] != original:
+            raise ValueError("modified source, phase, goal or evidence requirement: " + identity)
+    for key in ("status", "total_obligations", "proved_obligations",
+                "required_goals", "compilers", "boundaries"):
+        if result.get(key) != expected[key]:
+            raise ValueError("invalid inventory metadata: " + key)
 
 
 def main(argv=None) -> int:
