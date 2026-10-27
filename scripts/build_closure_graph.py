@@ -22,7 +22,7 @@ HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 def safe_relative_path(name: str) -> bool:
     """Reject cross-platform absolute paths, aliases, and traversal."""
-    if not isinstance(name, str) or not name or "\\x00" in name or "\\\\" in name:
+    if not isinstance(name, str) or not name or chr(0) in name or chr(92) in name:
         return False
     windows = PureWindowsPath(name)
     return (not Path(name).is_absolute() and not windows.is_absolute()
