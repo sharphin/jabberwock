@@ -21,7 +21,7 @@ def source_identity(compiler):
     roots = ("jwc", "runtime") if compiler == "jwc" else ("src", "runtime")
     paths = sorted(p for root in roots for p in (ROOT / root).rglob("*") if p.is_file())
     paths += [ROOT / "Cargo.toml", ROOT / "Cargo.lock"] if compiler == "rust" else []
-    files = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    files = {p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
     return {"sha256": digest, "files": files}
 
@@ -32,7 +32,7 @@ def proof_sources_identity():
                    if p.is_file() and ".lake" not in p.parts
                    and (p.suffix in (".lean", ".json", ".toml")
                         or p.name in ("lean-toolchain", "lakefile.lean")))
-    manifest = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+    manifest = {p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in files}
     return {"sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest(),
             "files": manifest}
