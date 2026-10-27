@@ -2,7 +2,7 @@
 """Run *actual* Rust and self-hosted jwc compiler binaries at five boundaries.
 
 Uses existing public CLI modes, never an invented IR interpreter.
-Stages: execution, tokens/AST, typed AST, pre-analysis IR, post-analysis IR.
+Stages: tokens, AST, typed AST, pre-analysis IR, post-analysis IR.\nSelf-hosted jwc has no direct program-execution CLI; do not mislabel compilation\nas semantic execution.
 Passing finite differential cases does not prove universal semantic correctness.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 STAGES = {
-    "source_semantics": (),
+    "lex": ("--tokens",),
     "parse": ("--ast",),
     "typecheck": ("--typed",),
     "lower": ("--ir-raw",),
@@ -24,10 +24,6 @@ STAGES = {
 }
 # Independently assert that both CLI implementations advertise these modes.
 IMPLEMENTATIONS = {"rust": "src/main.rs", "jwc": "jwc/main.jw"}
-# Parsing is composed of lexing and AST construction; verify both observable
-# production interfaces rather than treating an AST dump as a lexer proof.
-PROBES = {stage: (("--tokens", "--ast") if stage == "parse" else (flags[0] if flags else "",))
-          for stage, flags in STAGES.items()}
 
 
 def check_cli_sources(root: Path) -> dict:
@@ -74,7 +70,7 @@ def verify(root: Path, binaries: dict[str, Path], sources: list[Path],
         if not full.is_file():
             raise ValueError("missing test input: " + str(source))
         for stage in STAGES:
-          for probe in PROBES[stage]:
+          for probe in STAGES[stage]:
             observed = {name: run_boundary(binaries[name].resolve(), stage, full,
                                             root=root, timeout=timeout, probe=probe)
                         for name in IMPLEMENTATIONS}
