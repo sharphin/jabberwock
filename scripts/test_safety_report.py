@@ -265,10 +265,16 @@ class SafetyReportTests(unittest.TestCase):
             return {"name": p["name"], "status": "FAIL" if p["name"] == "jwc-build" else "PROBE_PASS"}
         with tempfile.TemporaryDirectory() as d:
             output = Path(d) / "report.json"
+            real_is_file = Path.is_file
+            def is_file_with_stale_binary(path):
+                if path.name.lower() in {"jwc", "jwc.exe", "jwc-local", "jwc-local.exe",
+                                         "jwc-benchmark", "jwc-benchmark.exe", "jwc-bin", "jwc-bin.exe"}:
+                    return True
+                return real_is_file(path)
             with mock.patch.object(report.suites, "host_os", return_value="windows"), \
                  mock.patch.object(report, "version", return_value="mock-version"), \
                  mock.patch.object(report, "run_probe", side_effect=probe), \
-                 mock.patch.object(Path, "is_file", return_value=True), \
+                 mock.patch.object(Path, "is_file", new=is_file_with_stale_binary), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(report.main(["--output", str(output)], target_os="windows"), 1)
             data = json.loads(output.read_text(encoding="utf-8"))
