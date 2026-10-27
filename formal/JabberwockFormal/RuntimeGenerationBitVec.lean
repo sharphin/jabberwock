@@ -30,8 +30,9 @@ def guardSpec (gen step limit : Word) : Prop :=
   step ≤ limit ∧
   (gen &&& counterMask) ≤ limit - step
 
-def guard (gen step limit : Word) : Bool :=
-  decide (guardSpec gen step limit)
+noncomputable def guard (gen step limit : Word) : Bool := by
+  classical
+  exact decide (guardSpec gen step limit)
 
 theorem guard_iff_spec (gen step limit : Word) :
     guard gen step limit = true ↔ guardSpec gen step limit := by
@@ -68,9 +69,10 @@ theorem accepted_increment_no_wrap
     omega
   have numericBound : 2 ^ 63 + 2 ^ 62 < 2 ^ 64 := by
     decide
+  have sumBelow : gen.toNat + step.toNat < 2 ^ 63 + 2 ^ 62 := by
+    exact Nat.add_lt_add validGen (by simpa [radix] using stepBound)
   have sumBound : gen.toNat + step.toNat < 2 ^ 64 := by
-    unfold radix at stepBound
-    omega
+    exact lt_trans sumBelow numericBound
   exact BitVec.toNat_add_of_lt sumBound
 
 /-- A positive accepted increment changes the concrete 64-bit word. -/
