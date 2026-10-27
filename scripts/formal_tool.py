@@ -114,22 +114,35 @@ def main(argv: list[str] | None = None) -> int:
                                 "--bindings", str(output / "stage-refinement-binding.json"),
                                 "--refinement", str(output / "refinement.json"),
                                 "--output", str(output / "proof-coverage.json")]))
-    known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "semantic-composition": "semantic-composition.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
-                     "lean-evidence": "lean-evidence.json", "refinement": "refinement.json",
-                     "coverage": "proof-coverage.json", "emitter-semantics": "emitter-semantics.json",
-                     "worklist-structure": "worklist-structure.json",
-                     "runtime-generation-binding": "runtime-generation-binding.json",
-                     "runtime-generation-proof": "runtime-generation-proof.json",
-                     "refinement-frontier": "refinement-frontier.json"}
+    # Bind every stage output to its declared report schema. A successful
+    # process exit must not let an unrelated or malformed JSON report satisfy
+    # the gate. The optional kernel manifest report has no "kind" field yet;
+    # its status and compiler_refinement fields remain independently inspected.
+    known_reports = {
+        "inventory": ("inventory.json", "whole-implementation-proof-inventory"),
+        "semantic-boundaries": ("semantic-boundaries.json", "first-five-semantic-refinement-boundaries"),
+        "semantic-composition": ("semantic-composition.json", "compiler-semantic-composition"),
+        "stage-refinement-binding": ("stage-refinement-binding.json", "stage-refinement-bindings"),
+        "worklist-structure": ("worklist-structure.json", "worklist-structure-audit"),
+        "emitter-binding": ("emitter-binding.json", "emitter-correspondence"),
+        "emitter-semantics": ("emitter-semantics.json", "emitter-template-semantics"),
+        "runtime-generation-binding": ("runtime-generation-binding.json", "runtime-generation-structural-binding"),
+        "runtime-generation-proof": ("runtime-generation-proof.json", "runtime-generation-arithmetic-proof"),
+        "lean-evidence": ("lean-evidence.json", None),
+        "refinement": ("refinement.json", "refinement-transition-audit"),
+        "refinement-frontier": ("refinement-frontier.json", "refinement-work-frontier"),
+        "coverage": ("proof-coverage.json", "formal-proof-coverage"),
+    }
     # Remove stale reports even for optional stages.
-    for filename in known_reports.values():
+    for filename, _expected_kind in known_reports.values():
         (output / filename).unlink(missing_ok=True)
     stages = []
     for name, command in plans:
         stage = run_stage(name, command, output, args.stage_timeout)
-        filename = known_reports.get(name)
-        if filename:
-            report = read_report(output / filename)
+        report_spec = known_reports.get(name)
+        if report_spec:
+            filename, expected_kind = report_spec
+            report = read_report(output / filename, expected_kind)
             stage["report"] = report
             # A nonzero proof-obligation exit is not necessarily a tool crash.
         stages.append(stage)
