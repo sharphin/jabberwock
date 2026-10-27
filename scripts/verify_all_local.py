@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 from acceptance_report import review as review_acceptance
+from acceptance_requirements import test_input_identity
 from formal_report import source_identity
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,7 +137,8 @@ def main() -> int:
     try:
         acceptance = review_acceptance(
             practical, formal, local_os=os_name,
-            identities={compiler: source_identity(compiler) for compiler in COMPILERS})
+            identities={compiler: source_identity(compiler) for compiler in COMPILERS},
+            inputs_identity=test_input_identity())
     except (OSError, ValueError, KeyError, TypeError) as exc:
         acceptance = {"status": "INVALID_EVIDENCE", "reason": str(exc)}
     errors = [r for r in executed if "error" in r or r.get("exit_code") not in (0, 1)]
