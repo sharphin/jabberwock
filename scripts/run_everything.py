@@ -42,6 +42,7 @@ def plans(output: Path, *, quick: bool = False) -> list[tuple[str, list[str]]]:
                            "--output", str(formal)]),
         ("acceptance-34", [py, str(ROOT / "scripts/acceptance_report.py"),
                             "--os", target_os, "--practical", str(practical), "--formal", str(formal),
+                            "--inventory", str(output / "whole-proof-inventory.json"),
                             "--output", str(output / "acceptance-34.json")]),
         ("benchmark-four-way", [*benchmark, *(["--full"] if not quick else []),
                                 "--output", str(output / "benchmark-four-way.json")]),
@@ -83,7 +84,7 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     reason = "one or more verification stages failed"
     if set(by_name) != expected:
         reason = "required stages missing or duplicated"
-    elif all(x["status"] == "EXIT_ZERO" for x in stages):
+    elif len(stages) == len(expected) and all(x["status"] == "EXIT_ZERO" for x in stages):
         try:
             acceptance = json.loads((output / "acceptance-34.json").read_text(encoding="utf-8"))
             benchmark = json.loads((output / "benchmark-four-way.json").read_text(encoding="utf-8"))
