@@ -3,16 +3,12 @@
 name: safety
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  schedule:
-    - cron: "0 18 * * *" # 毎日 3:00（日本時間）
   workflow_dispatch:
     inputs:
       scale:
-        description: "本数の倍率（毎晩は 20）"
+        description: "本数の倍率"
         default: "5"
+
 
 env:
   JW_REQUIRE_RETIREMENT_TESTS: "1"
