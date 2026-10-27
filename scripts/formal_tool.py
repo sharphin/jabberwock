@@ -260,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     if (boundaries_report.get("status") != "NOT_PROVEN"
             or bindings_report.get("status") != "NOT_PROVEN"
             or inventory_report.get("status") != "NOT_PROVEN"
-            or frontier_report.get("status") != "PLAN_READY_NOT_PROVEN"):
+            or frontier_report.get("status") not in ("PLAN_READY_NOT_PROVEN", "PLAN_COMPLETE_VERIFIED")):
         infrastructure_errors = True
     if composition_report.get("status") not in ("NOT_PROVEN", "PROVEN"):
         infrastructure_errors = True
@@ -279,6 +279,17 @@ def main(argv: list[str] | None = None) -> int:
             or required <= 0 or not 0 <= proved <= required
             or not isinstance(findings, list) or len(findings) != required
             or inventory_report.get("total_obligations") != required):
+        infrastructure_errors = True
+    # The frontier is derived by replaying the independent refinement gate.
+    # Its completion state must agree exactly with the proved obligation count.
+    frontier_complete = frontier_report.get("status") == "PLAN_COMPLETE_VERIFIED"
+    if (frontier_report.get("underlying_obligations") != required
+            or frontier_report.get("underlying_proven") != proved
+            or frontier_report.get("underlying_remaining") != (
+                required - proved if isinstance(required, int) and
+                isinstance(proved, int) else None)
+            or frontier_complete != (required == proved and
+                                    isinstance(required, int) and required > 0)):
         infrastructure_errors = True
     composition_required = composition_report.get("required_transitions")
     composition_proved = composition_report.get("proven_transitions")
