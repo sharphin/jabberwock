@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -22,6 +24,27 @@ def atomic_json(path: Path, value: dict) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+def log_fingerprint(path: Path) -> dict:
+    """Record log bytes and a digest so copied evidence can be checked later.
+
+    This is an integrity fingerprint, not a digital signature or immutable seal.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return {"path": str(path), "status": "UNAVAILABLE", "reason": str(exc)}
+    return {"path": str(path), "status": "AVAILABLE", "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def attach_log_fingerprints(record: dict, stdout: Path, stderr: Path) -> dict:
+    record["log_evidence"] = {
+        "stdout": log_fingerprint(stdout),
+        "stderr": log_fingerprint(stderr),
+    }
+    return record
+
 
 def run_stage(name: str, argv: list[str], output: Path, timeout: int) -> dict:
     start = time.monotonic()
@@ -35,17 +58,20 @@ def run_stage(name: str, argv: list[str], output: Path, timeout: int) -> dict:
             completed = subprocess.run(argv, cwd=ROOT, stdin=subprocess.DEVNULL,
                                        stdout=out, stderr=err, timeout=timeout,
                                        check=False)
-        return {"name": name, "status": "COMPLETED" if completed.returncode == 0 else "NONZERO_EXIT",
-                "returncode": completed.returncode,
-                "seconds": round(time.monotonic() - start, 3),
-                "stdout": str(stdout), "stderr": str(stderr)}
+        return attach_log_fingerprints(
+            {"name": name, "status": "COMPLETED" if completed.returncode == 0 else "NONZERO_EXIT",
+             "returncode": completed.returncode,
+             "seconds": round(time.monotonic() - start, 3),
+             "stdout": str(stdout), "stderr": str(stderr)}, stdout, stderr)
     except subprocess.TimeoutExpired:
-        return {"name": name, "status": "TIMEOUT", "seconds": round(time.monotonic() - start, 3),
-                "stdout": str(stdout), "stderr": str(stderr)}
+        return attach_log_fingerprints(
+            {"name": name, "status": "TIMEOUT", "seconds": round(time.monotonic() - start, 3),
+             "stdout": str(stdout), "stderr": str(stderr)}, stdout, stderr)
     except OSError as exc:
-        return {"name": name, "status": "EXECUTION_ERROR", "reason": str(exc),
-                "seconds": round(time.monotonic() - start, 3),
-                "stdout": str(stdout), "stderr": str(stderr)}
+        return attach_log_fingerprints(
+            {"name": name, "status": "EXECUTION_ERROR", "reason": str(exc),
+             "seconds": round(time.monotonic() - start, 3),
+             "stdout": str(stdout), "stderr": str(stderr)}, stdout, stderr)
 
 def read_report(path: Path, expected_kind: str | None = None) -> dict:
     try:
@@ -209,6 +235,12 @@ def main(argv: list[str] | None = None) -> int:
     summary = {
         "schema_version": 1, "kind": "jabberwock-formal-tool-run",
         "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "environment": {
+            "python_version": sys.version,
+            "python_executable": sys.executable,
+            "platform": platform.platform(),
+            "working_tree": str(ROOT),
+        },
         "status": overall,
         "refinement_status": refinement_status or "UNKNOWN",
         "stages": stages,
