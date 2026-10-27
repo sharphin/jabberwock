@@ -614,7 +614,7 @@ impl<'a> FnAnalyzer<'a> {
                 let facts: Vec<Option<Fact>> = args.iter().map(|a| self.expr(a, false)).collect();
                 // `this` が呼び出しのあいだ生きているか。一時的な own はこの呼び出しが終わるまで解放されない
                 let this_safe = match temp {
-                    Some(f) => matches!(f, Fact::Own | Fact::Container) || self.is_live_ref(f),
+                    Some(f) => matches!(f, Some(Fact::Own | Fact::Container)) || self.is_live_ref(f),
                     None => {
                         self.expr(recv, true);
                         match &recv.kind {
