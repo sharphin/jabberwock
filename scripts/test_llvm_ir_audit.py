@@ -21,6 +21,42 @@ class LLVMAuditTests(unittest.TestCase):
             self.assertEqual(report["status"], "BLOCKED")
             self.assertFalse(report["semantic_refinement_proven"])
 
+    def test_foreign_or_missing_case_ir_is_blocked(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            ir_root = root / "cases"
+            (ir_root / "real").mkdir(parents=True)
+            (ir_root / "real" / "jwc.ll").write_text(
+                "define i32 @main() { ret i32 0 }", encoding="utf-8")
+            benchmark = root / "benchmark.json"
+            benchmark.write_text(json.dumps({"suite": ["expected"],
+                                             "cases": {"expected": {"status": "PASS"}}}),
+                                 encoding="utf-8")
+            with mock.patch.object(audit.shutil, "which", return_value=None):
+                self.assertEqual(audit.main([
+                    "--ir-root", str(ir_root),
+                    "--benchmark-report", str(benchmark),
+                    "--output", str(root / "report.json")]), 1)
+            result = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            self.assertTrue(any("missing or unexpected" in e for e in result["errors"]))
+
+    def test_invalid_case_identity_never_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "case").mkdir()
+            (root / "case" / "jwc.ll").write_text("x", encoding="utf-8")
+            benchmark = root / "benchmark.json"
+            benchmark.write_text(json.dumps({"suite": [["invalid"]],
+                                             "cases": {"invalid": {"status": "PASS"}}}),
+                                 encoding="utf-8")
+            with mock.patch.object(audit.shutil, "which", return_value=None):
+                self.assertEqual(audit.main([
+                    "--ir-root", str(root),
+                    "--benchmark-report", str(benchmark),
+                    "--output", str(root / "report.json")]), 1)
+            result = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            self.assertTrue(any("unsafe benchmark" in e for e in result["errors"]))
+
     def test_failed_llvm_verifier_blocks_ir(self):
         with tempfile.TemporaryDirectory() as d:
             file = Path(d) / "bad.ll"
