@@ -281,7 +281,7 @@ struct Cx {
     /// 場所をたどる。先頭の `*` の検査を決める（ほかの `*` は実行時に検査する）
     fn mut place(ref mut ir.Place p, ref mut Facts facts) {
         let f = get(facts, p.local);
-        let safe = f == OWN || is_ref_elem(f) || is_live(facts, f);
+        let safe = f == OWN || is_live(facts, f);
         for i in range(p.proj.len()) {
             let mut is_deref = false;
             let mut sp = 0;
