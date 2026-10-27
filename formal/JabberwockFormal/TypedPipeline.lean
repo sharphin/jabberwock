@@ -171,4 +171,29 @@ theorem folded_ir_emits_well_typed_target {t : Ty} (ir : IR t) :
     ∃ result : Target t, result = emit (fold ir) := by
   exact ⟨emit (fold ir), rfl⟩
 
+/-- The modeled constant-addition optimization survives the whole pipeline,
+    including the separate target representation. -/
+theorem constant_addition_pipeline (a b : Nat) :
+    targetEval (emit (fold (lower (Expr.add (.number a) (.number b))))) =
+      a + b := by
+  rfl
+
+/-- Constant comparisons retain the Boolean result through all three stages. -/
+theorem constant_equality_pipeline (a b : Nat) :
+    targetEval (emit (fold (lower (Expr.equal (.number a) (.number b))))) =
+      decide (a = b) := by
+  rfl
+
+/-- A constant branch can be eliminated without changing the modeled output,
+    including when the selected branch itself requires optimization. -/
+theorem constant_true_branch_pipeline {t : Ty} (yes no : Expr t) :
+    targetEval (emit (fold (lower (Expr.choose (.truth true) yes no)))) =
+      targetEval (emit (fold (lower yes))) := by
+  rfl
+
+theorem constant_false_branch_pipeline {t : Ty} (yes no : Expr t) :
+    targetEval (emit (fold (lower (Expr.choose (.truth false) yes no)))) =
+      targetEval (emit (fold (lower no))) := by
+  rfl
+
 end JabberwockFormal.TypedPipeline
