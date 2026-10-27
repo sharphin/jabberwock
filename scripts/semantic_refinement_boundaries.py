@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import argparse
 from pathlib import Path
 
 BOUNDARIES = (
@@ -82,9 +83,22 @@ def report(root: Path | None = None) -> dict:
     }
 
 
-def main() -> int:
-    print(json.dumps(report(), indent=2, ensure_ascii=False))
-    return 1  # No false-green success while proof artifacts are absent.
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        result = report()
+    except (OSError, ValueError) as exc:
+        result = {"schema_version": 1, "kind": "first-five-semantic-refinement-boundaries",
+                  "status": "INVALID_INVENTORY", "reason": str(exc)}
+    data = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(data, encoding="utf-8")
+    else:
+        print(data, end="")
+    return 2 if result["status"] == "INVALID_INVENTORY" else 0
 
 
 if __name__ == "__main__":

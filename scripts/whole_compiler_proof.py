@@ -33,7 +33,22 @@ PHASES = ("lex", "parse", "typecheck", "lower", "analyze",
 BOUNDARIES = {phase: GOALS for phase in PHASES}
 
 
+def canonical_source_path(path: str) -> str:
+    """Use one repository-relative spelling regardless of host OS."""
+    return path.replace("\\", "/")
+
+
+def merge_source(results: dict[str, str], path: str, digest: str) -> None:
+    """Merge a source fingerprint without counting slash aliases twice."""
+    canonical = canonical_source_path(path)
+    previous = results.get(canonical)
+    if previous is not None and previous != digest:
+        raise ValueError("inconsistent compiler source fingerprint: " + canonical)
+    results[canonical] = digest
+
+
 def phase_of(path: str) -> str:
+    path = canonical_source_path(path)
     if path.startswith("runtime/"):
         return "runtime"
     name = Path(path).stem.lower()
@@ -77,11 +92,12 @@ def production_files(compiler: str) -> dict[str, str]:
         results[relative] = hashlib.sha256(configuration.read_bytes()).hexdigest()
     # Include every file that the independent formal-report source snapshot
     # fingerprints, including build inputs and non-source compiler resources.
-    # It is still not a proof that all external build dependencies are covered.
+    # Normalize Windows separators before merging: the source snapshot uses
+    # str(Path), while this inventory uses as_posix(). Without normalization,
+    # one physical source is counted twice on Windows.
+    # This still does not prove that all external build dependencies are covered.
     for relative, digest in source_identity(compiler)["files"].items():
-        if relative in results and results[relative] != digest:
-            raise ValueError("inconsistent compiler source fingerprint: " + relative)
-        results[relative] = digest
+        merge_source(results, relative, digest)
     if not results or not any(p.startswith("runtime/") for p in results):
         raise ValueError("missing compiler or runtime sources")
     return dict(sorted(results.items()))

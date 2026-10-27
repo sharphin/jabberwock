@@ -158,7 +158,7 @@ private theorem optimized_read_eq_iff (p : PlannedAccess) :
           p.access.saved p.access.current p.access.payload).mp equal
       · intro valid
         exact (elision_equivalent_iff_valid
-          p.access.saved p.access.current p.access.payload).mpr (valid rfl)
+          p.access.saved p.access.current p.access.payload).mpr (valid trivial)
 
 /-- Exact characterization of selective check elimination over a whole trace,
     not just the sufficient condition for eliding every check. -/
@@ -339,8 +339,8 @@ theorem kill_owner_cannot_create_liveness
     | some fact =>
         cases fact with
         | own => simp [killOwnerFacts, same, h, analyzerIsLive] at live
-        | pinned => simp [analyzerIsLive, h]
-        | refSlot slot => simp [analyzerIsLive, h]
+        | pinned => simp [analyzerIsLive]
+        | refSlot slot => simp [analyzerIsLive]
         | refElem slot => simp [killOwnerFacts, same, h, analyzerIsLive] at live
         | refTo target =>
             by_cases affected : target = owner
@@ -350,8 +350,12 @@ theorem kill_owner_cannot_create_liveness
                   simpa [killOwnerFacts, same, h, affected, analyzerIsLive] using live
                 by_cases targetOwner : target = owner
                 · exact False.elim (affected targetOwner)
-                · simpa [killOwnerFacts, targetOwner] using newOwn
-              simpa [analyzerIsLive, h, oldOwn]
+                · cases ht : facts target with
+                  | none => simp [killOwnerFacts, targetOwner, ht] at newOwn
+                  | some kind =>
+                      cases kind <;> simp [killOwnerFacts, targetOwner, ht] at newOwn
+                      exact Eq.refl _
+              simp [analyzerIsLive, oldOwn]
 
 /-- The fact join used at a CFG merge: retain a fact only if both
     incoming paths agree. -/
@@ -366,25 +370,28 @@ theorem meet_live_implies_left
     (live : analyzerIsLive (meetFacts left right)
       ((meetFacts left right) key) = true) :
     analyzerIsLive left (left key) = true := by
-  unfold meetFacts at live
   by_cases h : left key = right key
-  · cases f : left key with
-    | none => simp [analyzerIsLive, h, f] at live
+  · have hk : meetFacts left right key = left key := by
+      simp [meetFacts, h]
+    rw [hk] at live
+    cases f : left key with
+    | none =>
+        simp [analyzerIsLive, f] at live
     | some fact =>
         cases fact with
-        | own => simp [analyzerIsLive, h, f] at live
-        | pinned => simp [analyzerIsLive, f]
-        | refSlot slot => simp [analyzerIsLive, f]
-        | refElem slot => simp [analyzerIsLive, h, f] at live
+        | own => simp [analyzerIsLive, f] at live
+        | pinned => simp [analyzerIsLive]
+        | refSlot slot => simp [analyzerIsLive]
+        | refElem slot => simp [analyzerIsLive, f] at live
         | refTo owner =>
             have joinedOwn : meetFacts left right owner = some .own := by
-              simpa [meetFacts, h, f, analyzerIsLive] using live
+              simpa [analyzerIsLive, f] using live
             have oldOwn : left owner = some .own := by
               by_cases ho : left owner = right owner
               · simpa [meetFacts, ho] using joinedOwn
               · simp [meetFacts, ho] at joinedOwn
-            simpa [analyzerIsLive, f, oldOwn]
-  · simp [h, analyzerIsLive] at live
+            simp [analyzerIsLive, oldOwn]
+  · simp [meetFacts, h, analyzerIsLive] at live
 
 theorem meet_live_implies_right
     (left right : AnalyzerFacts) (key : Nat)
@@ -502,8 +509,8 @@ theorem kill_elements_cannot_create_liveness
   | some fact =>
       cases fact with
       | own => simp [killElementFacts, analyzerIsLive, h] at live
-      | pinned => simp [analyzerIsLive, h]
-      | refSlot slot => simp [analyzerIsLive, h]
+      | pinned => simp [analyzerIsLive]
+      | refSlot slot => simp [analyzerIsLive]
       | refElem list => simp [killElementFacts, analyzerIsLive, h] at live
       | refTo owner =>
           have present : killElementFacts facts owner = some .own := by
@@ -513,7 +520,7 @@ theorem kill_elements_cannot_create_liveness
             | none => simp [killElementFacts, ho] at present
             | some ownerFact =>
                 cases ownerFact <;> simp [killElementFacts, ho] at present
-                · exact ho
-          simpa [analyzerIsLive, h, oldOwn]
+                · exact Eq.refl _
+          simp [analyzerIsLive, oldOwn]
 
 end JabberwockFormal.CheckElision

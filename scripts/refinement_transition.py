@@ -10,10 +10,12 @@ return a kernel-backed result for the exact obligation and source snapshot.
 from __future__ import annotations
 import argparse
 import json
+import subprocess
 from pathlib import Path
 import sys
 
 from whole_compiler_proof import inventory, validate
+from lean_evidence_engine import check as check_lean_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = frozenset(("source_refinement", "target_semantics", "external_assumptions",
@@ -36,6 +38,23 @@ def status_for(obligation: dict, proofs: dict, verifier_registry=None) -> dict:
             or len(claims) != len(REQUIRED) or set(claims) != REQUIRED):
         return {"status": "INVALID_EVIDENCE", "reason": "missing, malformed or duplicate semantic claims"}
     checker = record.get("verifier")
+    if checker == "lean-kernel-v1" and verifier_registry is None:
+        manifest = record.get("lean_manifest")
+        if not isinstance(manifest, dict):
+            return {"status": "INVALID_EVIDENCE", "reason": "missing Lean manifest"}
+        source_files = manifest.get("source_files")
+        binding = {"path": obligation["source"], "sha256": obligation["source_sha256"]}
+        if not isinstance(source_files, list) or binding not in source_files:
+            return {"status": "INVALID_EVIDENCE", "reason": "Lean evidence not bound to this source"}
+        try:
+            kernel = check_lean_evidence(ROOT, manifest)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            return {"status": "INVALID_EVIDENCE", "reason": "Lean check failed: " + str(exc)}
+        if kernel.get("status") != "KERNEL_CHECKED":
+            return {"status": "INVALID_EVIDENCE", "reason": "Lean kernel verification rejected"}
+        return {"status": "REFINEMENT_NOT_PROVEN",
+                "reason": "Lean theorem checked but implementation refinement bridge is not proven",
+                "lean_kernel": "KERNEL_CHECKED", "theorems": kernel["theorems"]}
     callback = registry.get(checker) if isinstance(checker, str) else None
     if callback is None:
         return {"status": "REFINEMENT_NOT_PROVEN", "reason": "no trusted independent verifier registered"}
@@ -77,7 +96,7 @@ def evaluate(base: dict, evidence: dict, verifier_registry=None) -> dict:
               "status": "INVALID_EVIDENCE" if invalid else ("PROVEN" if total and proved == total else "NOT_PROVEN"),
               "required": total, "proved": proved, "invalid": invalid,
               "findings": findings,
-              "limitations": ["Production has no registered whole-implementation proof checker.",
+              "limitations": ["Lean kernel evidence is supported, but whole-implementation refinement is not proven.",
                               "A hash or successful Lean local model alone is not implementation refinement."]}
     return result
 

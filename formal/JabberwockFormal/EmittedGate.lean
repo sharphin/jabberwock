@@ -95,13 +95,13 @@ theorem branch_continues_iff_valid (saved current : Word) :
   | false =>
       have good : valid saved current :=
         (llvm_continues_iff saved current).mp (by simp [llvmContinues, h])
-      simp [h, good]
+      simp [good]
   | true =>
       have invalid : ¬ valid saved current := by
         intro good
         have continues := (llvm_continues_iff saved current).mpr good
         simp [llvmContinues, h] at continues
-      simp [h, invalid]
+      simp [invalid]
 
 /-- Bind the jwc local gate model to the instruction-level branch. -/
 theorem jwc_gate_matches_instruction_branch (saved current : Word) :

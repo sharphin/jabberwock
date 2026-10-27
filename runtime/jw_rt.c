@@ -580,11 +580,18 @@ static size_t round8(int64_t n) { return n <= 16 ? 16 : ((size_t)n + 7) & ~(size
 
 // 塊から n バイト（8 の倍数）を切り出す
 static void *slab_take(size_t n) {
-    if ((size_t)(slab_end - slab_cur) < n) {
-        size_t sz = 256 * 1024;
-        slab_cur = jw_checked_malloc(sz);
+    const size_t slab_size = 256 * 1024;
+    // Large requests get their own process-lifetime allocation. Keep the
+    // arena subtraction below restricted to initialized pointers from one slab.
+    if (n > slab_size) {
+        void *r = jw_checked_malloc(n);
+        if (!r) jw_oom();
+        return r;
+    }
+    if (!slab_cur || !slab_end || (size_t)(slab_end - slab_cur) < n) {
+        slab_cur = jw_checked_malloc(slab_size);
         if (!slab_cur) jw_oom();
-        slab_end = slab_cur + sz;
+        slab_end = slab_cur + slab_size;
     }
     void *r = slab_cur;
     slab_cur += n;
