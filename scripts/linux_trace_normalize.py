@@ -76,6 +76,8 @@ def normalize(lines: list[str], cwd: Path) -> dict:
                 events.append({"type": "read", "path": str(resolved)})
     if initial_pid is None:
         raise ValueError("empty syscall stream")
+    if len(events) == 1:
+        raise ValueError("no observable build input accesses")
     events.append({"type": "end"})
     return {"schema_version": 1, "kind": "build-access-events",
             "events": events, "monitor_completeness_proven": False}
