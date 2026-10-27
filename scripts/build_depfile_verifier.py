@@ -44,7 +44,7 @@ def parse_depfile(path: Path) -> set[str]:
     return paths
 
 
-def verify(manifest: dict, depdir: Path, repository: Path = ROOT) -> dict:
+def verify(manifest: dict, depdir: Path, repository: Path = ROOT, build_cwd: Path | None = None) -> dict:
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
         raise ValueError("invalid build manifest")
     compiler = manifest.get("compiler")
@@ -59,6 +59,9 @@ def verify(manifest: dict, depdir: Path, repository: Path = ROOT) -> dict:
     if len(depfiles) != len(set(depfiles)):
         raise ValueError("duplicate depfile")
     required = source_identity(compiler)["files"]
+    cwd = (build_cwd or depdir).resolve()
+    if not cwd.is_dir():
+        raise ValueError("build working directory missing")
     checked = {}
     for name, digest in files.items():
         if not isinstance(name, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -78,7 +81,7 @@ def verify(manifest: dict, depdir: Path, repository: Path = ROOT) -> dict:
         if not dep.is_relative_to(depdir.resolve()) or not dep.is_file():
             raise ValueError("missing/outside depfile: " + name)
         for raw in parse_depfile(dep):
-            dependency = (dep.parent / raw).resolve()
+            dependency = (cwd / raw).resolve()
             if str(dependency) not in checked:
                 raise ValueError("unhashed observed dependency: " + str(dependency))
             observed.add(checked[str(dependency)])
@@ -93,9 +96,12 @@ def main(argv=None):
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--depdir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--build-cwd", type=Path,
+                        help="working directory used by compiler when depfiles were produced")
     args = parser.parse_args(argv)
     try:
-        result = verify(json.loads(args.manifest.read_text(encoding="utf-8")), args.depdir)
+        result = verify(json.loads(args.manifest.read_text(encoding="utf-8")),
+                        args.depdir, build_cwd=args.build_cwd)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result = {"status": "BLOCKED", "reason": str(exc),
                   "complete_build_closure_proven": False}
