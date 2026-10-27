@@ -42,6 +42,18 @@ theorem guard_rejects_retired (step limit : Word) :
     guard retiredWord step limit = false := by
   simp [guard]
 
+/-- The C expression `gen & GEN_COUNTER_MASK` is exactly the
+    low-62-bit counter extraction, represented as a natural-number modulus.
+    This is the bridge from the concrete 64-bit word to the Nat arithmetic
+    model used by RuntimeGenerationEncoding. -/
+theorem masked_counter_matches_mod (gen : Word) :
+    (gen &&& counterMask).toNat = gen.toNat % radix := by
+  rw [BitVec.toNat_and]
+  have maskNat : counterMask.toNat = 2 ^ 62 - 1 := by
+    simp [counterMask]
+  rw [maskNat]
+  exact Nat.and_two_pow_sub_one_eq_mod gen.toNat 62
+
 /-- On the accepted branch, uint64_t subtraction is ordinary natural
     subtraction: the explicit unsigned comparison prevents underflow. -/
 theorem unsigned_subtraction_matches_nat
