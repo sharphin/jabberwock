@@ -120,6 +120,52 @@ def inspect_lean(lean: Path) -> dict:
             "scope": "exact BitVec guard and guardSpec expression bodies",
             "implementation_refinement": "NOT_PROVEN"}
 
+# An executable reference semantics for the *restricted* C expression tree.
+# This is not a substitute for a validated C frontend or a kernel proof.
+UINT64_MASK = (1 << 64) - 1
+COUNTER_MASK = (1 << 62) - 1
+
+
+def eval_unsigned_guard(ast, gen: int, step: int, limit: int) -> bool:
+    """Interpret reviewed operators with uint64_t arithmetic and C && semantics."""
+    if any(type(word) is not int or not 0 <= word <= UINT64_MASK
+           for word in (gen, step, limit)):
+        raise ValueError("generation words must be unsigned 64-bit integers")
+    symbols = {
+        "gen": gen, "step": step, "GEN_RETIRED": UINT64_MASK,
+        "GEN_COUNTER_MASK": COUNTER_MASK, "GEN_LIMIT": limit
+    }
+
+    def evaluate(node):
+        if isinstance(node, str):
+            return symbols[node]
+        operator, lhs, rhs = node
+        if operator == "&&":
+            # C short circuits the subtraction when step > limit.
+            return int(bool(evaluate(lhs)) and bool(evaluate(rhs)))
+        left, right = evaluate(lhs), evaluate(rhs)
+        if operator == "!=":
+            return int(left != right)
+        if operator == "<=":
+            return int(left <= right)
+        if operator == "&":
+            return left & right
+        if operator == "-":
+            return (left - right) & UINT64_MASK
+        raise ValueError("unsupported C guard operator")
+
+    return bool(evaluate(ast))
+
+
+def bitvec_guard_spec(gen: int, step: int, limit: int) -> bool:
+    """Direct 64-bit interpretation of the reviewed Lean guardSpec formula."""
+    if any(type(word) is not int or not 0 <= word <= UINT64_MASK
+           for word in (gen, step, limit)):
+        raise ValueError("generation words must be unsigned 64-bit integers")
+    return (gen != UINT64_MASK and step <= limit
+            and (gen & COUNTER_MASK) <= ((limit - step) & UINT64_MASK))
+
+
 def inspect(source: Path) -> dict:
     if source.is_symlink() or not source.is_file():
         raise ValueError("runtime guard source unavailable or symlinked")
@@ -140,6 +186,8 @@ def inspect(source: Path) -> dict:
     parsed = parse_expression(expression_tokens(returns.group(1)))
     if parsed != EXPECTED:
         raise ValueError("generation guard differs from the reviewed BitVec guard expression")
+    # The two interpreters remain separate representations; expression AST
+    # alignment is necessary, not sufficient, for universal semantic proof.
     return {
         "status": "EXPRESSION_ALIGNED_MODEL_ONLY",
         "source": source.as_posix(),
