@@ -221,6 +221,36 @@ theorem concreteAdvance_matches_abstract
       fun h => room ((concreteGuard_matches_abstract retained bounded).1 h)
     simp [concreteAdvance, advance, concrete, room]
 
+/-- The modulus of a C uint64_t value. We use Nat as a representation
+    domain and reduce addition modulo 2^64 to model unsigned-word addition. -/
+def uint64Modulus : Nat := 2 ^ 64
+
+/-- Mathematical model of unsigned 64-bit addition, including wraparound. -/
+def uint64Add (left right : Nat) : Nat :=
+  (left + right) % uint64Modulus
+
+/-- When the runtime capacity guard accepts an increment, the packed word
+    addition is strictly below 2^64. Therefore C uint64_t addition cannot
+    wrap on this successful path and agrees with the unbounded Nat model.
+    This theorem covers arithmetic only; it does not establish that the C
+    compiler implements the source expression or prove pointer/atomic safety. -/
+theorem packed_word_step_no_uint64_wrap
+    (retained : Bool) {counter step : Nat}
+    (room : hasRoom counter step) :
+    uint64Add (pack retained counter) step =
+      pack retained (counter + step) := by
+  have sumBound : counter + step < radix :=
+    hasRoom_prevents_counter_wrap room
+  have packedBound : pack retained (counter + step) < uint64Modulus := by
+    have below := packed_word_is_below_retired retained sumBound
+    have sentinelPlus : retiredWord + 1 = uint64Modulus := by
+      unfold retiredWord uint64Modulus radix
+      decide
+    omega
+  unfold uint64Add
+  rw [packed_word_step]
+  exact Nat.mod_eq_of_lt packedBound
+
 /-- Every modeled live word differs from the retired sentinel. -/
 theorem live_word_not_retired
     (retained : Bool) {counter : Nat}
