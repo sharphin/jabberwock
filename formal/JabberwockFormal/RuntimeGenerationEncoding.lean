@@ -32,6 +32,16 @@ instance (counter step : Nat) : Decidable (hasRoom counter step) := by
   unfold hasRoom
   infer_instance
 
+/-- The normalized sum bound is equivalent to the subtraction check used by
+    gen_has_room, provided the counter and step are natural numbers. -/
+def cCapacityCheck (counter step : Nat) : Prop :=
+  step ≤ maxCounter ∧ counter ≤ maxCounter - step
+
+theorem cCapacityCheck_iff_hasRoom (counter step : Nat) :
+    cCapacityCheck counter step ↔ hasRoom counter step := by
+  unfold cCapacityCheck hasRoom
+  omega
+
 /-- On success, gen_advance increments the packed word; otherwise it retires it. -/
 def advance (retained : Bool) (counter step : Nat) : Nat :=
   if hasRoom counter step then pack retained (counter + step) else retiredWord
