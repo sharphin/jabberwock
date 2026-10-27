@@ -15,8 +15,9 @@ noncomputable def enqueueIfChanged {blocks locals : Nat}
     (old incoming : Facts locals)
     (item : Incoming blocks locals)
     (pending : List (Incoming blocks locals)) :
-    List (Incoming blocks locals) :=
-  if update old incoming = old then pending else item :: pending
+    List (Incoming blocks locals) := by
+  classical
+  exact if update old incoming = old then pending else item :: pending
 
 theorem stable_entry_does_not_enqueue {blocks locals : Nat}
     (old incoming : Facts locals)
