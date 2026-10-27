@@ -35,6 +35,8 @@ def inspect(root: Path, *, timeout: int = 600) -> dict:
     contracts = root / "formal" / "refinement-contracts.json"
     # Missing registries are an honest unproved state, but a partial
     # registry must never silently lose its reviewed theorem contracts.
+    if registry.is_symlink():
+        raise ValueError("symlinked stage binding registry")
     if not registry.exists():
         return {"schema_version": 1, "kind": "stage-refinement-bindings",
                 "status": "NOT_PROVEN", "required": len(boundaries), "covered": 0,
