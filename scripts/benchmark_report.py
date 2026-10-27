@@ -93,8 +93,9 @@ def compare(current, baseline, threshold):
         prev = baseline_cases[name]
         old = prev["metrics"]["jwc"]["median_s"]
         new = case["metrics"]["jwc"]["median_s"]
-        if old <= 0:
-            continue
+        if (not isinstance(old, (float, int)) or not isinstance(new, (float, int))
+                or not math.isfinite(old) or not math.isfinite(new) or old <= 0 or new <= 0):
+            return {"status": "INVALID_BASELINE", "reason": "nonfinite or nonpositive time for " + name}
         percent = (new / old - 1) * 100
         rows.append({"case": name, "old_s": old, "new_s": new,
                      "change_percent": round(percent, 2), "regression": percent > threshold})
@@ -182,8 +183,8 @@ def main():
     p.add_argument("--threshold", type=float, default=15)
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
-    if a.runs < 1 or a.threshold < 0:
-        p.error("runs must be >=1, threshold >=0")
+    if a.runs < 1 or not math.isfinite(a.threshold) or a.threshold < 0:
+        p.error("runs must be >=1, threshold must be finite and >=0")
     all_names = sorted(x.stem for x in (BENCH / "jabberwock").glob("*.jw"))
     selected = a.cases if a.cases else all_names if a.full else list(QUICK)
     if not selected or len(selected) != len(set(selected)) or set(selected) - set(all_names):
