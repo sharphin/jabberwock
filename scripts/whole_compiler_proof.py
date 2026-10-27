@@ -20,7 +20,7 @@ GOALS = ("semantics", "memory", "types", "ownership", "checks")
 # implementation phase. New sources are discovered automatically.
 ROOTS = {"jwc": (("jwc", ".jw"), ("runtime", ".c"), ("runtime", ".h")),
          "rust": (("src", ".rs"), ("runtime", ".c"), ("runtime", ".h"))}
-PHASES = ("lex", "parse", "typecheck", "lower", "analyze",
+CONFIG_FILES = {"jwc": (), "rust": ("Cargo.toml", "Cargo.lock")}\nPHASES = ("lex", "parse", "typecheck", "lower", "analyze",
           "optimize", "emit_llvm", "runtime", "integration")
 # These bindings define the *minimum* implementation proof boundaries.
 # They do not prove correctness. Each boundary must eventually provide an
@@ -75,7 +75,7 @@ def production_files(compiler: str) -> dict[str, str]:
                 if rel in results:
                     raise ValueError("duplicate source: " + rel)
                 results[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
-    if not results or not any(p.startswith("runtime/") for p in results):
+    for relative in CONFIG_FILES[compiler]:\n        configuration = ROOT / relative\n        if not configuration.is_file():\n            raise ValueError("missing build input: " + relative)\n        results[relative] = hashlib.sha256(configuration.read_bytes()).hexdigest()\n    if not results or not any(p.startswith("runtime/") for p in results):
         raise ValueError("missing compiler or runtime sources")
     return dict(sorted(results.items()))
 
@@ -106,7 +106,7 @@ def inventory() -> dict:
             "components": components,
             "limitations": [
                 "Source inventory is not a correctness proof.",
-                "A file hash is not a semantic refinement proof.",
+                "A file hash is not a semantic refinement proof.",\n                "This source inventory does not establish build dependency closure, generated inputs or external toolchain semantics.",
                 "LLVM poison, pointer provenance, concurrency, FFI and OS effects remain proof obligations.",
                 "This report deliberately provides no user-settable accepted switch."]}
 
@@ -126,7 +126,7 @@ def validate(result: dict) -> None:
     if any(not isinstance(o, dict) for o in components):
         raise ValueError("malformed proof obligation")
     ids = [o.get("id") for o in components]
-    if len(ids) != len(set(ids)):
+    if any(not isinstance(identity, str) for identity in ids) or len(ids) != len(set(ids)):
         raise ValueError("duplicate proof obligation")
     expected = inventory()
     expected_rows = {o["id"]: o for o in expected["components"]}
