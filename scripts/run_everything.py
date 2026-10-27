@@ -197,8 +197,7 @@ def main(argv=None):
         result["status"] = "FAIL"
         result["reason"] = "quick sampling cannot satisfy full acceptance"
     destination = output / "summary.json"
-    destination.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "
-", encoding="utf-8")
+    destination.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print("FINAL:", result["status"], "|", result["reason"], flush=True)
     print("Report:", destination, flush=True)
     return 0 if result["status"] == "PASS" else 1
