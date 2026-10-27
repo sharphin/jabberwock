@@ -29,7 +29,6 @@ CONTRACTS = r"""
 import JabberwockFormal.RuntimeGenerationBitVec
 import JabberwockFormal.RuntimeGenerationEncoding
 open JabberwockFormal.RuntimeGenerationBitVec
-open JabberwockFormal.RuntimeGenerationEncoding
 
 example (gen : Word) :
     (gen &&& counterMask).toNat = gen.toNat % radix :=
@@ -62,29 +61,38 @@ example (gen step limit : Word)
 #print axioms JabberwockFormal.RuntimeGenerationBitVec.accepted_increment_changes_word
 
 example (limit counter step : Nat) :
-    capacityCheckAt limit counter step ↔ counter + step ≤ limit :=
-  capacityCheckAt_iff_sum limit counter step
+    JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt limit counter step ↔ counter + step ≤ limit :=
+  JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt_iff_sum limit counter step
 
 example (retained : Bool) {counter step : Nat}
-    (bounded : counter < radix) :
-    concreteGuard (pack retained counter) step ↔ hasRoom counter step :=
-  concreteGuard_matches_abstract retained bounded
+    (bounded : counter < JabberwockFormal.RuntimeGenerationEncoding.radix) :
+    JabberwockFormal.RuntimeGenerationEncoding.concreteGuard
+      (JabberwockFormal.RuntimeGenerationEncoding.pack retained counter) step ↔
+      JabberwockFormal.RuntimeGenerationEncoding.hasRoom counter step :=
+  JabberwockFormal.RuntimeGenerationEncoding.concreteGuard_matches_abstract retained bounded
 
 example (retained : Bool) {counter step : Nat}
-    (bounded : counter < radix) :
-    concreteAdvance (pack retained counter) step = advance retained (counter + 0) step :=
-  by simpa using concreteAdvance_matches_abstract retained bounded
+    (bounded : counter < JabberwockFormal.RuntimeGenerationEncoding.radix) :
+    JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance
+      (JabberwockFormal.RuntimeGenerationEncoding.pack retained counter) step =
+      JabberwockFormal.RuntimeGenerationEncoding.advance retained counter step :=
+  JabberwockFormal.RuntimeGenerationEncoding.concreteAdvance_matches_abstract retained bounded
 
 example (retained : Bool) {counter step limit : Nat}
-    (limitBound : limit ≤ maxCounter)
-    (room : capacityCheckAt limit counter step) :
-    uint64Add (pack retained counter) step = pack retained (counter + step) :=
-  packed_word_step_no_uint64_wrap_at_limit retained limitBound room
+    (limitBound : limit ≤ JabberwockFormal.RuntimeGenerationEncoding.maxCounter)
+    (room : JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt limit counter step) :
+    JabberwockFormal.RuntimeGenerationEncoding.uint64Add
+      (JabberwockFormal.RuntimeGenerationEncoding.pack retained counter) step =
+      JabberwockFormal.RuntimeGenerationEncoding.pack retained (counter + step) :=
+  JabberwockFormal.RuntimeGenerationEncoding.packed_word_step_no_uint64_wrap_at_limit retained limitBound room
 
 example (retained : Bool) {counter step : Nat}
-    (room : runtimeGuard false counter step) (positive : 0 < step) :
-    ¬ accepts (pack retained counter) (runtimeAdvance false retained counter step) :=
-  runtimeAdvance_rejects_old_word retained room positive
+    (room : JabberwockFormal.RuntimeGenerationEncoding.runtimeGuard false counter step)
+    (positive : 0 < step) :
+    ¬ JabberwockFormal.RuntimeGenerationEncoding.accepts
+      (JabberwockFormal.RuntimeGenerationEncoding.pack retained counter)
+      (JabberwockFormal.RuntimeGenerationEncoding.runtimeAdvance false retained counter step) :=
+  JabberwockFormal.RuntimeGenerationEncoding.runtimeAdvance_rejects_old_word retained room positive
 
 #print axioms JabberwockFormal.RuntimeGenerationEncoding.capacityCheckAt_iff_sum
 #print axioms JabberwockFormal.RuntimeGenerationEncoding.concreteGuard_matches_abstract
