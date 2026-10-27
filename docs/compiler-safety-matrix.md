@@ -27,7 +27,7 @@ python3 scripts/safety_linux.py --compiler jwc
 jwc検査が終わってからRust版を検査する。各プローブの開始・経過時間・ログパスを表示する。
 実行するテストは利用者側で行う。この変更時にエージェントによるテスト実行はしていない。
 
-## ローカル一括監査（GitHub Actionsは使用しない）
+34件の正式受入条件・証拠の対応表・実際のLean証明の残課題は [34件の正式受入基準](acceptance-34.md) を参照。\n\n## ローカル一括監査（GitHub Actionsは使用しない）
 
 Windows（PowerShell / リポジトリ直下）:
 
