@@ -52,6 +52,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
     leaf_hashes = {}
     produced_outputs = {}
     declared_leaf_paths = {}
+    portable_names = set()
     root = root.resolve()
 
     def require_file(label: str, description: dict) -> None:
@@ -68,8 +69,9 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         actual = digest(path)
         if actual != sha:
             raise ValueError("artifact hash mismatch: " + label)
-        if name in declared_leaf_paths:
+        if name.casefold() in portable_names:
             raise ValueError("duplicate tracked file/tool path: " + name)
+        portable_names.add(name.casefold())
         declared_leaf_paths[name] = label
         leaf_hashes[label] = actual
 
@@ -123,7 +125,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
                     raise ValueError("unsafe action output: " + identifier)
                 if not (root / output).resolve().is_relative_to(root):
                     raise ValueError("action output escapes root: " + output)
-                if output in produced_outputs:
+                if output.casefold() in (p.casefold() for p in produced_outputs):
                     raise ValueError("multiple producers for output: " + output)
                 produced_outputs[output] = identifier
             for child in children:
@@ -138,7 +140,7 @@ def audit(manifest: dict, root: Path, environment: dict[str, str],
         visit(target)
     tracked_paths = {nodes[k]["path"] for k in leaf_hashes
                      if nodes[k]["kind"] in ("file", "tool")}
-    collisions = set(produced_outputs) & tracked_paths
+    collisions = {p for p in produced_outputs if p.casefold() in {t.casefold() for t in tracked_paths}}
     if collisions:
         raise ValueError("build action overwrites tracked input: " + repr(sorted(collisions)))
     if visited != set(nodes):
