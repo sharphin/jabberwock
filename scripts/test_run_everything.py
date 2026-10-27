@@ -192,6 +192,16 @@ class FullRunnerTests(unittest.TestCase):
             forged["stdout_log"] = str(output / "missing.log")
             self.assertFalse(full.verify_stage_log_integrity(forged, output))
 
+    def test_source_snapshots_capture_two_compilers_and_formal_inputs(self):
+        with mock.patch.object(full, "source_identity",
+                               side_effect=lambda name: {"sha256": name}), \
+             mock.patch.object(full, "proof_sources_identity",
+                               return_value={"sha256": "lean"}):
+            snapshot = full.source_snapshots()
+        self.assertEqual(snapshot["compilers"]["jwc"]["sha256"], "jwc")
+        self.assertEqual(snapshot["compilers"]["rust"]["sha256"], "rust")
+        self.assertEqual(snapshot["formal"]["sha256"], "lean")
+
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)
