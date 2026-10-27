@@ -308,4 +308,49 @@ theorem analyzed_plan_preserves_evaluation (accesses : List AnalyzedAccess) :
       optimizedPlan (analyzedPlan accesses) := by
   exact (plan_semantics_iff_valid _).mpr (analyzed_plan_valid accesses)
 
+/-- A pointwise representation of the real analyzers' kill_all: removing
+    an owner also invalidates every RefTo, RefSlot and RefElem fact
+    depending on it. Other facts are unchanged. -/
+def killOwnerFacts (facts : AnalyzerFacts) (owner : Nat) : AnalyzerFacts :=
+  fun key =>
+    if key = owner then none
+    else match facts key with
+      | some (.refTo target) =>
+          if target = owner then none else facts key
+      | some (.refSlot target) =>
+          if target = owner then none else facts key
+      | some (.refElem target) =>
+          if target = owner then none else facts key
+      | other => other
+
+/-- Removing an owner cannot create a new positive liveness result for
+    any fact that was already present in the old analysis. -/
+theorem kill_owner_cannot_create_liveness
+    (facts : AnalyzerFacts) (owner key : Nat) :
+    analyzerIsLive (killOwnerFacts facts owner) ((killOwnerFacts facts owner) key) = true →
+      analyzerIsLive facts (facts key) = true := by
+  intro live
+  by_cases same : key = owner
+  · subst key
+    simp [killOwnerFacts, analyzerIsLive] at live
+  · cases h : facts key with
+    | none =>
+        simp [killOwnerFacts, same, h, analyzerIsLive] at live
+    | some fact =>
+        cases fact with
+        | own => simp [killOwnerFacts, same, h, analyzerIsLive] at live
+        | pinned => simp [analyzerIsLive, h]
+        | refSlot slot => simp [analyzerIsLive, h]
+        | refElem slot => simp [killOwnerFacts, same, h, analyzerIsLive] at live
+        | refTo target =>
+            by_cases affected : target = owner
+            · simp [killOwnerFacts, same, h, affected, analyzerIsLive] at live
+            · have oldOwn : facts target = some .own := by
+                have newOwn : killOwnerFacts facts owner target = some .own := by
+                  simpa [killOwnerFacts, same, h, affected, analyzerIsLive] using live
+                by_cases targetOwner : target = owner
+                · exact False.elim (affected targetOwner)
+                · simpa [killOwnerFacts, targetOwner] using newOwn
+              simpa [analyzerIsLive, h, oldOwn]
+
 end JabberwockFormal.CheckElision
