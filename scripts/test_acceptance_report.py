@@ -14,6 +14,7 @@ def fixture():
     goals = []
     direct_goals = []
     probes = []
+    plan = []
     for compiler in req.COMPILERS:
         for n in range(1, 13):
             items.append({"id": f"windows-{compiler}-{n:02}", "compiler": compiler,
@@ -21,13 +22,15 @@ def fixture():
                           "status": "PROBES_PASS_ONLY", "acceptance": "BLOCKED",
                           "coverage_gaps": ["whole feature verification missing"]})
             probes.append({"name": f"{compiler}-probe-{n}", "compiler": compiler,
-                           "items": [n], "status": "PROBE_PASS"})
+                           "items": [n], "status": "PROBE_PASS", "actual": {"exit_code": 0}})
+            plan.append({"name": f"{compiler}-probe-{n}", "compiler": compiler, "items": [n], "goal": None})
         for goal in req.GOALS:
             direct_goals.append({"id": f"windows-{compiler}-{goal}",
                                  "compiler": compiler, "status": "PROBES_PASS_ONLY",
                                  "direct_probe_names": [f"{compiler}-goal-{goal}"]})
             probes.append({"name": f"{compiler}-goal-{goal}", "compiler": compiler,
-                           "items": [], "status": "PROBE_PASS"})
+                           "items": [], "status": "PROBE_PASS", "actual": {"exit_code": 0}})
+            plan.append({"name": f"{compiler}-goal-{goal}", "compiler": compiler, "items": [], "goal": goal})
             goals.append({"id": compiler + "-" + goal, "compiler": compiler,
                           "goal": goal, "acceptance": "NOT_PROVEN",
                           "proof_check": {"status": "KERNEL_CHECKED"},
@@ -37,7 +40,7 @@ def fixture():
     practical = {"schema_version": 3, "suite": {"target_os": "windows",
                   "compilers": list(req.COMPILERS)}, "run_status": "COMPLETE",
                   "active_probe": None, "items": items, "goals": direct_goals,
-                  "results": probes}
+                  "results": probes, "planned_probes": plan}
     formal = {"schema_version": 3, "compilers": {c: {"source": {"sha256": c + "-sha"}}
                                                for c in req.COMPILERS},
               "goals": goals}
@@ -135,6 +138,24 @@ class AcceptanceRequirementsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             audit.review(practical, formal, local_os="windows", identities=identity,
                          inputs_identity={"sha256": "different", "files": {}})
+
+    def test_missing_planned_probe_cannot_be_masked(self):
+        practical, formal, identities = fixture()
+        p = copy.deepcopy(practical)
+        p["planned_probes"].pop(0)
+        with self.assertRaises(ValueError):
+            self.check(p, formal, identities)
+        p = copy.deepcopy(practical)
+        p["items"][0]["probe_names"] = [p["items"][1]["probe_names"][0]]
+        with self.assertRaises(ValueError):
+            self.check(p, formal, identities)
+
+    def test_claimed_probe_success_requires_exit_zero(self):
+        practical, formal, identities = fixture()
+        practical["results"][0]["actual"]["exit_code"] = 17
+        result = self.check(practical, formal, identities)
+        row = next(x for x in result["obligations"] if x["id"] == "jwc-S01")
+        self.assertTrue(any("without a successful process exit" in b for b in row["blockers"]))
 
     def test_wrong_os_rejected(self):
         practical, formal, identities = fixture()
