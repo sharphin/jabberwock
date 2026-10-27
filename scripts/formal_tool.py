@@ -77,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         ("lean-axioms", [py, str(scripts / "check_formal.py")]),
         ("semantic-boundaries", [py, str(scripts / "semantic_refinement_boundaries.py"),
                                  "--output", str(output / "semantic-boundaries.json")]),
+        ("semantic-composition", [py, str(scripts / "semantic_composition.py"),
+                                  "--output", str(output / "semantic-composition.json")]),
         ("stage-refinement-binding", [py, str(scripts / "stage_refinement_binding.py"),
                                        "--output", str(output / "stage-refinement-binding.json"),
                                        "--stage-timeout", str(args.stage_timeout)]),
@@ -97,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "--bindings", str(output / "stage-refinement-binding.json"),
                                 "--refinement", str(output / "refinement.json"),
                                 "--output", str(output / "proof-coverage.json")]))
-    known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
+    known_reports = {"inventory": "inventory.json", "semantic-boundaries": "semantic-boundaries.json", "semantic-composition": "semantic-composition.json", "stage-refinement-binding": "stage-refinement-binding.json", "emitter-binding": "emitter-binding.json",
                      "lean-evidence": "lean-evidence.json", "refinement": "refinement.json",
                      "coverage": "proof-coverage.json"}
     # Remove stale reports even for optional stages.
@@ -126,9 +128,17 @@ def main(argv: list[str] | None = None) -> int:
     boundaries_status = by_name["semantic-boundaries"].get("report", {}).get("status")
     if boundaries_status != "NOT_PROVEN":
         broken = True
+    composition_status = by_name["semantic-composition"].get("report", {}).get("status")
+    coverage_status = by_name["coverage"].get("report", {}).get("status")
+    if composition_status != "NOT_PROVEN" or coverage_status != "NOT_PROVEN":
+        broken = True
     if broken:
         overall = "TOOL_ERROR"
-    elif refinement_status == "PROVEN" and all(s["status"] == "COMPLETED" for s in stages):
+    elif (refinement_status == "PROVEN" and
+          by_name["semantic-composition"]["report"].get("whole_pipeline_proven") is True and
+          by_name["coverage"]["report"].get("semantically_proven") ==
+          by_name["coverage"]["report"].get("required") and
+          all(s["status"] == "COMPLETED" for s in stages)):
         overall = "PROVEN"
     else:
         overall = "NOT_PROVEN"
