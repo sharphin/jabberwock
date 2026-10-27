@@ -82,6 +82,20 @@ class BenchmarkReportTests(unittest.TestCase):
         self.assertEqual(bench.compare(common, old, 15)["status"], "NOT_COMPARABLE")
         self.assertEqual(bench.compare(old, common, 15)["status"], "NOT_COMPARABLE")
 
+    def test_incomplete_baseline_never_silently_skips_cases(self):
+        metadata = {"schema_version": 2, "environment": {}, "runs": 8,
+                    "subjects": list(bench.TARGETS),
+                    "compiler_hashes": {"runtime": "same"}, "source_hashes": {},
+                    "flags": {}}
+        ok = {"status": "PASS", "metrics": {"jwc": {"median_s": 1.0}}}
+        current = {**metadata, "cases": {"fib": ok, "sort": ok}}
+        baseline = {**metadata, "cases": {"fib": ok}}
+        result = bench.compare(current, baseline, 15)
+        self.assertEqual(result["status"], "INCOMPLETE_BASELINE")
+        self.assertEqual(result["missing_from_baseline"], ["sort"])
+        baseline["cases"]["sort"] = {"status": "FAIL"}
+        self.assertEqual(bench.compare(current, baseline, 15)["status"], "INCOMPLETE_BASELINE")
+
     def test_old_format_is_not_comparable(self):
         a = {"schema_version": 2}
         b = {"schema_version": 1}
