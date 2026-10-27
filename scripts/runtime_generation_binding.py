@@ -18,6 +18,9 @@ BITVEC_SOURCE = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationBitVec.
 C_PATTERNS = {
     "retired_sentinel": r"#define\s+GEN_RETIRED\s+UINT64_MAX",
     "counter_mask": r"#define\s+GEN_COUNTER_MASK\s+\(\(UINT64_C\(1\)\s*<<\s*62\)\s*-\s*1\)",
+    "production_limit": r"#define\s+GEN_LIMIT\s+GEN_COUNTER_MASK",
+    "test_limit_override": r"#ifdef\s+JW_TEST_GENERATION_LIMIT[\s\S]*?#define\s+GEN_LIMIT\s+\(\(uint64_t\)JW_TEST_GENERATION_LIMIT\)[\s\S]*?#else\s*#define\s+GEN_LIMIT\s+GEN_COUNTER_MASK\s*#endif",
+    "test_limit_static_assert": r"_Static_assert\(JW_TEST_GENERATION_LIMIT\s*>=\s*3\s*&&\s*JW_TEST_GENERATION_LIMIT\s*<=\s*GEN_COUNTER_MASK",
     "capacity_guard": r"return\s+gen\s*!=\s*GEN_RETIRED\s*&&\s*step\s*<=\s*GEN_LIMIT\s*&&\s*\(gen\s*&\s*GEN_COUNTER_MASK\)\s*<=\s*GEN_LIMIT\s*-\s*step\s*;",
     "advance_retires_on_failure": r"if\s*\(!gen_has_room\(gen,\s*step\)\)\s*\{\s*gen_retire\(p\);\s*return\s+0;\s*\}\s*gen_set\(p,\s*gen\s*\+\s*step\);\s*return\s+1;",
     "retire_sentinel_store": r"gen_set\(p,\s*GEN_RETIRED\);",
