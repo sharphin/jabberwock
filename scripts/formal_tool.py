@@ -173,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         broken = True
     if by_name["runtime-generation-binding"].get("report", {}).get("status") != "STRUCTURE_MATCHED":
         broken = True
-    if by_name["runtime-generation-proof"].get("report", {}).get("status") != "KERNEL_CHECKED_RUNTIME_ARITHMETIC_ONLY":
+    if by_name["runtime-generation-proof"].get("report", {}).get("status") != "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY":
         broken = True
     if broken:
         overall = "TOOL_ERROR"
