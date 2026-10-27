@@ -89,6 +89,18 @@ def capture(clang: str, flags: list[str], timeout: int) -> dict:
     processed = outputs["preprocessed"]["content"]
     if len(re.findall(r"\\bgen_has_room\\s*\\(\\s*uint64_t\\s+gen\\s*,\\s*uint64_t\\s+step\\s*\\)\\s*\\{", processed)) != 1:
         raise ValueError("generation guard missing or ambiguous after preprocessing")
+    # Do not claim that preprocessing preserved the expression merely
+    # because the function name survived. Record the expanded body and leave
+    # semantic authentication outstanding until a C frontend parses it.
+    expanded_guard_bodies = re.findall(
+        r"static\\s+int\\s+gen_has_room\\s*\\(\\s*uint64_t\\s+gen\\s*,\\s*"
+        r"uint64_t\\s+step\\s*\\)\\s*\\{([^{}]*)\\}", processed
+    )
+    if len(expanded_guard_bodies) != 1:
+        raise ValueError("preprocessed guard body missing or ambiguous")
+    expanded_guard_body = expanded_guard_bodies[0].strip()
+    if not re.fullmatch(r"return\\s+[^;{}]+;", expanded_guard_body, re.DOTALL):
+        raise ValueError("unsupported expanded guard body")
     return {
         "schema_version": 1,
         "kind": "runtime-generation-clang-preprocessing",
@@ -104,6 +116,7 @@ def capture(clang: str, flags: list[str], timeout: int) -> dict:
         "macro_output_bytes": outputs["macros"]["bytes"],
         "preprocessed_output_bytes": outputs["preprocessed"]["bytes"],
         "preprocessed_text": outputs["preprocessed"]["content"],
+        "expanded_guard_body": expanded_guard_body,
         "compiler_refinement": "NOT_PROVEN",
         "limitations": [
             "Flags are supplied by the caller, not authenticated against an existing binary.",
