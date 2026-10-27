@@ -1,5 +1,6 @@
 """Proof status changes require a trusted verifier, never self-attestation."""
 import copy
+import tempfile
 import sys
 from pathlib import Path
 import unittest
@@ -73,6 +74,23 @@ class ProofTransitionTests(unittest.TestCase):
             foreign["obligation_id"] = "foreign"
             with self.assertRaises(ValueError):
                 transition.evaluate(base, {"schema_version": 1, "proofs": [foreign]})
+
+
+    def test_cli_unproved_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "audit.json"
+            with mock.patch.object(transition, "inventory", return_value={"components": []}), \
+                 mock.patch.object(transition, "evaluate", return_value={
+                     "schema_version": 1, "status": "NOT_PROVEN", "required": 1,
+                     "proved": 0, "invalid": 0, "findings": []}):
+                self.assertEqual(transition.main(["--output", str(dest)]), 1)
+                self.assertEqual(__import__("json").loads(dest.read_text())["status"], "NOT_PROVEN")
+
+    def test_cli_invalid_evidence_exits_two(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "audit.json"
+            with mock.patch.object(transition, "inventory", side_effect=ValueError("bad inventory")):
+                self.assertEqual(transition.main(["--output", str(dest)]), 2)
 
 
 if __name__ == "__main__":
