@@ -41,8 +41,14 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
     if (len(item_keys) != len(expected_items) or set(item_keys) != expected_items or
             len(goal_keys) != len(expected_goals) or set(goal_keys) != expected_goals):
         return {"status": "INVALID_EVIDENCE", "reason": "missing, duplicate or alien goal/item"}
-    if practical.get("run_status") != "COMPLETE" or formal.get("infrastructure_error") or formal.get("interrupted"):
-        return {"status": "NOT_PROVEN", "reason": "incomplete run or proof infrastructure problem"}
+    if formal.get("infrastructure_error") or formal.get("interrupted"):
+        return {"status": "INFRA_ERROR", "reason": "formal audit failed or was interrupted"}
+    if practical.get("run_status") in ("SOURCE_IDENTITY_ERROR", "TEST_INPUTS_CHANGED", "SOURCE_CHANGED"):
+        return {"status": "INVALID_EVIDENCE", "reason": "test/source snapshot changed during audit"}
+    if practical.get("run_status") == "INTERRUPTED":
+        return {"status": "INTERRUPTED", "reason": "practical audit interrupted"}
+    if practical.get("run_status") != "COMPLETE":
+        return {"status": "NOT_RUN", "reason": "practical run not complete"}
     if not isinstance(practical.get("suite"), dict) or practical["suite"].get("compilers") not in (list(compilers), tuple(compilers)):
         return {"status": "INVALID_EVIDENCE", "reason": "compiler provenance mismatch"}
     if not isinstance(formal.get("compilers"), dict) or set(formal["compilers"]) != expected:
@@ -51,10 +57,19 @@ def judge(practical: dict, formal: dict, compilers=COMPILERS) -> dict:
     # audit does not establish correspondence to compiled programs.
     practical_states = [x.get("status", "NOT_RUN") for x in items]
     proof_states = [x.get("proof_check", {}).get("status", "NOT_IMPLEMENTED") for x in proofs]
-    if any(x == "FAIL" for x in practical_states):
-        return {"status": "PROBE_FAILURE", "reason": "at least one practical item failed"}
+    if any(x == "INFRA_ERROR" for x in practical_states):
+        return {"status": "INFRA_ERROR", "reason": "practical probe infrastructure error"}
+    if any(x == "INTERRUPTED" for x in practical_states):
+        return {"status": "INTERRUPTED", "reason": "practical item was interrupted"}
+    if any(x in ("FAIL", "CRASH", "TIMEOUT") for x in practical_states):
+        return {"status": "PROBE_FAILURE", "reason": "practical item failed, crashed or timed out"}
     if any(x == "FAIL" for x in proof_states):
         return {"status": "PROOF_CHECK_FAILURE", "reason": "Lean proof check failed"}
+    if any(x not in ("PROBES_PASS_ONLY", "NOT_RUN", "PLANNED") for x in practical_states):
+        return {"status": "INVALID_EVIDENCE", "reason": "unknown practical item state"}
+    if any(x not in ("KERNEL_CHECKED", "FAIL", "STALE", "NOT_IMPLEMENTED", "NOT_RUN")
+           for x in proof_states):
+        return {"status": "INVALID_EVIDENCE", "reason": "unknown formal proof state"}
     if any(x in ("NOT_RUN", "PLANNED") for x in practical_states):
         return {"status": "NOT_RUN", "reason": "practical probes are missing"}
     if any(x == "STALE" for x in proof_states):
