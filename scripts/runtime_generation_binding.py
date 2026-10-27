@@ -50,6 +50,10 @@ BITVEC_TOKENS = (
     "theorem unsigned_subtraction_matches_nat",
     "theorem accepted_increment_no_wrap",
     "theorem accepted_increment_changes_word",
+    "def viewGate",
+    "theorem viewGate_matches_spec",
+    "theorem viewGate_rejects_retired",
+    "theorem viewGate_rejects_after_advance",
 )
 
 
