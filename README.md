@@ -44,6 +44,7 @@ python3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-repor
 python3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
 ```
 
+言語機能として保証を目指す安全性と、アプリケーション側の責任範囲は [言語安全性契約](docs/language-safety-contract.md) に定義する。
 形式検証は実装済みの局所定理を検査する。全コンパイラの安全性を証明済みとはしない。
 必要環境・一括実行・終了コードは [形式検証コマンド](docs/formal-commands.md)、
 実用12項目×コンパイラ＋5目標は [検査構成](docs/compiler-safety-matrix.md) を参照。
