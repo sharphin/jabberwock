@@ -152,6 +152,35 @@ def evidence_overview(output: Path) -> dict:
     return summary
 
 
+def verify_stage_log_integrity(stage: dict) -> bool:
+    """Fail closed if any captured log differs from its recorded SHA-256/size.
+
+    Legacy/manually synthesized stage records without sealed evidence are not
+    accepted as having verified log integrity.
+    """
+    for name in ("stdout", "stderr"):
+        stored_path = stage.get(name + "_log")
+        expected = stage.get(name + "_sha256")
+        expected_size = stage.get(name + "_bytes")
+        if not isinstance(stored_path, str) or not isinstance(expected, str):
+            return False
+        if len(expected) != 64 or not isinstance(expected_size, int) or expected_size < 0:
+            return False
+        try:
+            path = Path(stored_path)
+            digest = hashlib.sha256()
+            length = 0
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    length += len(chunk)
+            if digest.hexdigest() != expected or length != expected_size:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     by_name = {x["name"]: x for x in stages}
     expected = {"python-regressions", "cargo-tests", "cargo-doctests", "cargo-clippy", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
@@ -160,7 +189,7 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
     reason = "one or more verification stages failed"
     if set(by_name) != expected:
         reason = "required stages missing or duplicated"
-    elif len(stages) == len(expected) and all(x["status"] == "EXIT_ZERO" for x in stages):
+    elif len(stages) == len(expected) and all(x["status"] == "EXIT_ZERO" for x in stages) and all(verify_stage_log_integrity(x) for x in stages):
         try:
             acceptance = json.loads((output / "acceptance-34.json").read_text(encoding="utf-8"))
             benchmark = json.loads((output / "benchmark-four-way.json").read_text(encoding="utf-8"))
@@ -179,14 +208,18 @@ def summarize(stages: list[dict], output: Path, *, quick: bool) -> dict:
             reason = "missing or malformed final reports: " + str(error)
     evidence = evidence_overview(output)
     failed_stage_names = [x["name"] for x in stages if x["status"] != "EXIT_ZERO"]
+    invalid_logs = [x["name"] for x in stages if not verify_stage_log_integrity(x)]
     if failed_stage_names:
         reason = "verification stages failed: " + ", ".join(failed_stage_names)
+    elif invalid_logs:
+        reason = "stage logs are missing or differ from recorded hashes: " + ", ".join(invalid_logs)
     elif verdict != "PASS" and evidence["implementation_inventory"]["status"] == "NOT_PROVEN":
         reason = "compiler-wide refinement obligations remain unproved; inspect evidence.implementation_inventory.uncovered"
     return {"schema_version": 2, "kind": "local-full-verification",
             "status": verdict, "reason": reason, "mode": "quick" if quick else "full",
             "host_os": platform.system(), "stages": stages,
             "failed_stages": failed_stage_names,
+            "invalid_stage_logs": invalid_logs,
             "evidence": evidence,
             "passed_stages": sum(x["status"] == "EXIT_ZERO" for x in stages),
             "required_stages": len(expected),
