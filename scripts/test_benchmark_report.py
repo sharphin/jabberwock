@@ -18,7 +18,7 @@ class BenchmarkReportTests(unittest.TestCase):
     def test_windows_measurement_records_time_output_and_memory(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "run.stdout"
-            result = bench.run_windows_measure(Path(sys.executable), output, timeout=30)
+            result = bench.run_windows_measure([sys.executable, "-c", "pass"], output, timeout=30)
             # The interpreter without flags may print nothing, but process data
             # must remain measurable and the OS peak working set must be positive.
             self.assertEqual(result["exit"], 0)
@@ -63,7 +63,7 @@ class BenchmarkReportTests(unittest.TestCase):
         a = {"schema_version": 2, "environment": {}, "runs": 5,
              "compiler_hashes": {"jwc": "new", "runtime": "fixed"}, "subjects": list(bench.TARGETS),
              "source_hashes": {}, "flags": {}, "cases": {}}
-        b = {**a, "compiler_hashes": {"jwc": "old"}}
+        b = {**a, "compiler_hashes": {"jwc": "old", "runtime": "fixed"}}
         self.assertEqual(bench.compare(a, b, 15)["status"], "NO_MATCHING_CASES")
 
     def test_changed_workload_is_not_comparable(self):
