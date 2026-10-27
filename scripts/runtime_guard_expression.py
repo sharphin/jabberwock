@@ -157,6 +157,79 @@ def eval_unsigned_guard(ast, gen: int, step: int, limit: int) -> bool:
     return bool(evaluate(ast))
 
 
+# Symbolic compiler for the reviewed unsigned expression subset. Unlike
+# example-based evaluation, this preserves the operator tree for all inputs.
+# This establishes agreement of *defined subset semantics*, not C compiler
+# correctness or source-to-Lean refinement.
+def symbolic_unsigned(node):
+    symbols = {
+        "gen": ("word64", "gen"),
+        "step": ("word64", "step"),
+        "GEN_RETIRED": ("word64", "retiredWord"),
+        "GEN_COUNTER_MASK": ("word64", "counterMask"),
+        "GEN_LIMIT": ("word64", "limit"),
+    }
+    if isinstance(node, str):
+        if node not in symbols:
+            raise ValueError("unknown generation symbol")
+        return symbols[node]
+    if not isinstance(node, tuple) or len(node) != 3:
+        raise ValueError("invalid generation expression")
+    op, lhs, rhs = node
+    left = symbolic_unsigned(lhs)
+    right = symbolic_unsigned(rhs)
+    if op == "&&":
+        if left[0] != "bool" or right[0] != "bool":
+            raise ValueError("C logical AND requires boolean operands in reviewed subset")
+        return ("bool", "and", left, right)
+    if op in ("!=", "<="):
+        if left[0] != "word64" or right[0] != "word64":
+            raise ValueError("unsigned comparison type mismatch")
+        return ("bool", "ne" if op == "!=" else "ule", left, right)
+    if op in ("&", "-"):
+        if left[0] != "word64" or right[0] != "word64":
+            raise ValueError("unsigned arithmetic type mismatch")
+        return ("word64", "band" if op == "&" else "sub64", left, right)
+    raise ValueError("unsupported operator")
+
+
+# Trusted specification of the restricted Lean guard's BitVec operations,
+# checked against the actual Lean definition body by inspect_lean().
+LEAN_SYMBOLIC_GUARD = (
+    "bool", "and",
+    ("bool", "and",
+     ("bool", "ne", ("word64", "gen"), ("word64", "retiredWord")),
+     ("bool", "ule", ("word64", "step"), ("word64", "limit"))),
+    ("bool", "ule",
+     ("word64", "band", ("word64", "gen"), ("word64", "counterMask")),
+     ("word64", "sub64", ("word64", "limit"), ("word64", "step"))),
+)
+
+
+def inspect_symbolic_alignment(c_source: Path, lean_source: Path) -> dict:
+    # Both source inspections are mandatory; the evaluator alone must not
+    # discharge this source-bound obligation.
+    c_result = inspect(c_source)
+    lean_result = inspect_lean(lean_source)
+    if (c_result["status"] != "EXPRESSION_ALIGNED_MODEL_ONLY"
+            or lean_result["status"] != "LEAN_EXPRESSION_ALIGNED_MODEL_ONLY"
+            or symbolic_unsigned(EXPECTED) != LEAN_SYMBOLIC_GUARD):
+        raise ValueError("restricted C and Lean symbolic operator trees differ")
+    return {
+        "status": "SYMBOLIC_SUBSET_ALIGNED_NOT_PROVEN",
+        "operators": ["short_circuit_and", "unsigned_ne", "unsigned_le",
+                      "unsigned_and", "unsigned_sub_mod_2_64"],
+        "scope": "reviewed gen_has_room guard and Lean BitVec guard expressions",
+        "implementation_refinement": "NOT_PROVEN",
+        "assumptions": [
+            "uint64_t has exactly 64 value bits",
+            "GEN_RETIRED, GEN_COUNTER_MASK and GEN_LIMIT expand to reviewed values",
+            "C frontend and preprocessing correctly implement the reviewed expression",
+            "Lean BitVec operators have the expected 64-bit interpretations",
+        ],
+    }
+
+
 def bitvec_guard_spec(gen: int, step: int, limit: int) -> bool:
     """Direct 64-bit interpretation of the reviewed Lean guardSpec formula."""
     if any(type(word) is not int or not 0 <= word <= UINT64_MASK
