@@ -33,10 +33,12 @@ class FullRunnerTests(unittest.TestCase):
         output = Path("dummy")
         tasks = full.plans(output)
         self.assertEqual([x[0] for x in tasks], [
-            "python-regressions", "cargo-tests", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
+            "python-regressions", "cargo-tests", "cargo-doctests", "cargo-clippy", "practical-safety", "whole-implementation-obligations", "refinement-transition", "build-dependency-audit", "emitter-proof-binding", "formal-proofs",
             "acceptance-34", "benchmark-four-way", "llvm-concrete-ir-audit", "legacy-optimization-counts"])
         self.assertIn("test_*.py", tasks[0][1])
         self.assertEqual(dict(tasks)["cargo-tests"], ["cargo", "test", "--offline", "--all-targets"])
+        self.assertEqual(dict(tasks)["cargo-doctests"], ["cargo", "test", "--offline", "--doc"])
+        self.assertEqual(dict(tasks)["cargo-clippy"], ["cargo", "clippy", "--offline", "--all-targets", "--", "-D", "warnings"])
         self.assertIn("--require-full", dict(tasks)["formal-proofs"])
         self.assertIn("--benchmark-report", dict(tasks)["llvm-concrete-ir-audit"])
         self.assertIn("refinement-transition", dict(tasks))
@@ -119,6 +121,20 @@ class FullRunnerTests(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             self.assertIn("cargo-tests", report["failed_stages"])
             self.assertIn("cargo-tests", report["reason"])
+
+    def test_every_cargo_stage_failure_is_blocking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            for target in ("cargo-tests", "cargo-doctests", "cargo-clippy"):
+                stages = [{"name": name, "status": "EXIT_ZERO", "exit_code": 0}
+                          for name, _ in full.plans(output)]
+                broken = next(stage for stage in stages if stage["name"] == target)
+                broken["status"] = "EXIT_NONZERO"
+                broken["exit_code"] = 101
+                with self.subTest(stage=target):
+                    result = full.summarize(stages, output, quick=False)
+                    self.assertEqual(result["status"], "FAIL")
+                    self.assertIn(target, result["failed_stages"])
 
     def test_runtime_stage_failure_is_retained_with_logs(self):
         with tempfile.TemporaryDirectory() as d:
