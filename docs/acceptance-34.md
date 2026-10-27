@@ -41,7 +41,7 @@
 ## 現在のLean証明の範囲
 
 - `formal/JabberwockFormal/Generation.lean`: 世代の単調性、
-  退役後の非復活、抽象アクセスゲートなど。
+  退役後の非復活、抽象アクセスゲート、無効化後の有限状態遷移を経た\n  読み出し・書き込み成功の否定など。
 - `formal/JabberwockFormal/Ownership.lean`: 所有位置の抽象モデル、
   `checkedMove`の一意性保存など。
 - `formal/JabberwockFormal/Jwc/ReferenceAccess.lean` および
@@ -84,7 +84,7 @@ py scripts/acceptance_report.py --practical target/safety-windows-report.json --
 
 監査出力は `target/local-verification.json` 内の `acceptance_34`、
 あるいは単独実行時の `target/acceptance-34.json`。
-ソース・テスト入力・Lean定理・マニフェストの識別情報、個別プローブ、
+ソース・テスト入力・Lean定理とその依存先・マニフェストの識別情報、\n実行予定と実行済みのプローブ一覧、個別プローブの終了コード、
 5件ずつの実証目標、数・コンパイラ帰属が一致しない場合は証拠を拒否する。
 
 **現時点では34件を受入済みと報告できない**ため、監査結果は
