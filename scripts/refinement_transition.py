@@ -16,6 +16,10 @@ import sys
 
 from whole_compiler_proof import inventory, validate
 from lean_evidence_engine import check as check_lean_evidence
+from runtime_preprocessing_evidence import capture as capture_preprocessing
+from runtime_guard_expression import (inspect_symbolic_alignment,
+                                      inspect_generation_macros)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = frozenset(("source_refinement", "target_semantics", "external_assumptions",
@@ -38,6 +42,60 @@ def status_for(obligation: dict, proofs: dict, verifier_registry=None) -> dict:
             or len(claims) != len(REQUIRED) or set(claims) != REQUIRED):
         return {"status": "INVALID_EVIDENCE", "reason": "missing, malformed or duplicate semantic claims"}
     checker = record.get("verifier")
+    if checker == "runtime-generation-bridge-v1" and verifier_registry is None:
+        # This is a genuine, independently replayed *subset* audit. The
+        # whole-runtime obligation MUST remain unproved: one guard cannot
+        # discharge ownership, concurrency, allocation and external effects.
+        if obligation.get("source") != "runtime/jw_rt.c" or obligation.get("goal") != "semantics":
+            return {"status": "INVALID_EVIDENCE",
+                    "reason": "generation bridge attached to unrelated obligation"}
+        artifact = record.get("preprocessing")
+        manifest = record.get("lean_manifest")
+        if not isinstance(artifact, dict) or not isinstance(manifest, dict):
+            return {"status": "INVALID_EVIDENCE",
+                    "reason": "generation bridge requires preprocessing and Lean manifest"}
+        bound = {"path": obligation["source"], "sha256": obligation["source_sha256"]}
+        if bound not in manifest.get("source_files", []):
+            return {"status": "INVALID_EVIDENCE",
+                    "reason": "Lean manifest is not bound to runtime source"}
+        if (artifact.get("schema_version") != 1 or
+                artifact.get("kind") != "runtime-generation-clang-preprocessing" or
+                artifact.get("status") != "PREPROCESSING_CAPTURED_REFINEMENT_NOT_PROVEN" or
+                artifact.get("source_sha256") != obligation["source_sha256"] or
+                artifact.get("source") != obligation["source"] or
+                artifact.get("compiler_refinement") != "NOT_PROVEN"):
+            return {"status": "INVALID_EVIDENCE",
+                    "reason": "invalid or stale preprocessing artifact"}
+        clang, flags = artifact.get("clang"), artifact.get("caller_supplied_flags")
+        if (not isinstance(clang, str) or not clang or
+                not isinstance(flags, list) or
+                not all(isinstance(flag, str) for flag in flags)):
+            return {"status": "INVALID_EVIDENCE", "reason": "invalid clang invocation"}
+        try:
+            current = capture_preprocessing(clang, flags, timeout=120)
+            # Re-running preprocessing prevents unauthenticated JSON from
+            # becoming proof; compare complete captured evidence.
+            if current != artifact:
+                raise ValueError("preprocessing output differs from independently replayed invocation")
+            root_runtime = ROOT / "runtime" / "jw_rt.c"
+            lean_model = ROOT / "formal" / "JabberwockFormal" / "RuntimeGenerationBitVec.lean"
+            inspect_generation_macros(root_runtime)
+            inspect_symbolic_alignment(root_runtime, lean_model)
+            kernel = check_lean_evidence(ROOT, manifest)
+            required_theorem = "JabberwockFormal.RuntimeGenerationBitVec.guard_iff_spec"
+            if (kernel.get("status") != "KERNEL_CHECKED" or
+                    required_theorem not in kernel.get("theorems", [])):
+                raise ValueError("Lean guard equivalence theorem not kernel checked")
+        except (OSError, ValueError, subprocess.TimeoutExpired, TypeError, KeyError) as exc:
+            return {"status": "INVALID_EVIDENCE",
+                    "reason": "generation bridge rejected: " + str(exc)}
+        return {
+            "status": "REFINEMENT_NOT_PROVEN",
+            "reason": "kernel-backed generation guard subset checked; whole-runtime refinement is outstanding",
+            "verified_subset": "runtime.gen_has_room:uint64_guard",
+            "lean_kernel": "KERNEL_CHECKED",
+            "preprocessing_sha256": current["preprocessed_output_sha256"],
+        }
     if checker == "lean-kernel-v1" and verifier_registry is None:
         manifest = record.get("lean_manifest")
         if not isinstance(manifest, dict):
