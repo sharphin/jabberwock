@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 import sys
 
-from acceptance_requirements import COMPILERS, GOALS, obligation_catalog
+from acceptance_requirements import COMPILERS, GOALS, obligation_catalog, test_input_identity
 from formal_report import source_identity
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,7 +49,7 @@ def keyed(records, key):
     return mapped
 
 
-def review(practical, formal, *, local_os, identities):
+def review(practical, formal, *, local_os, identities, inputs_identity=None):
     """Return precise findings without making ungrounded PASS claims."""
     if not isinstance(practical, dict) or not isinstance(formal, dict):
         raise ValueError("input reports must be JSON objects")
@@ -81,6 +81,11 @@ def review(practical, formal, *, local_os, identities):
             raise ValueError("practical report uses stale or foreign source snapshot: " + compiler)
         if snapshot.get("files") != identities[compiler]["files"]:
             raise ValueError("practical per-file source snapshot mismatch: " + compiler)
+    input_snapshot = practical.get("test_inputs_snapshot")
+    if not isinstance(input_snapshot, dict) or "sha256" not in input_snapshot or "files" not in input_snapshot:
+        raise ValueError("test harness and case input source snapshot missing")
+    if inputs_identity is not None and input_snapshot != inputs_identity:
+        raise ValueError("test harness/case inputs differ from practical run")
     if practical.get("run_status") != "COMPLETE" or practical.get("active_probe"):
         suite_complete = False
     else:
@@ -183,7 +188,8 @@ def main(argv=None):
         practical = parse_json(args.practical)
         formal = parse_json(args.formal)
         identities = {c: source_identity(c) for c in COMPILERS}
-        report = review(practical, formal, local_os=args.os, identities=identities)
+        report = review(practical, formal, local_os=args.os, identities=identities,
+                        inputs_identity=test_input_identity())
         report["inputs"] = {"practical_sha256": file_hash(args.practical),
                             "formal_sha256": file_hash(args.formal)}
     except (OSError, ValueError, KeyError, TypeError) as error:
