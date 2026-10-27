@@ -105,7 +105,13 @@ def main(argv=None) -> int:
         proof = {"schema_version": 1, "proofs": []}
         if args.evidence:
             proof = json.loads(args.evidence.read_text(encoding="utf-8"))
-        result = evaluate(inventory(), proof)
+        before = inventory()
+        result = evaluate(before, proof)
+        # Re-inventory the production inputs after verification. Reject any
+        # source/build file changed while proof evidence was being evaluated.
+        after = inventory()
+        if before != after:
+            raise ValueError("production source changed during refinement audit")
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result = {"schema_version": 1, "kind": "refinement-transition-audit",
                   "status": "INVALID_EVIDENCE", "reason": str(exc)}
