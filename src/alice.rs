@@ -121,7 +121,7 @@ fn project_exe(p: &jabberwock::project::Project, release: bool) -> std::path::Pa
     if let Some(d) = exe.parent() {
         let _ = fs::create_dir_all(d);
     }
-    match jabberwock::native::build(&ll, &exe, "-O2") {
+    match jabberwock::native::build(&ll, &exe, if release { "-O2" } else { "-O0" }) {
         Ok(e) => {
             eprintln!("作りました: {}", shown(p, &e));
             e
