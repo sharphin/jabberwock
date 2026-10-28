@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Review the 34 acceptance obligations against two independent local reports.
 
-This is a *read-only* evidence review, not a source of mathematical proof.
+By default this is a read-only evidence review. The optional --source-contract
+argument replays a scoped source proof locally; it does not run safety tests.
 The user executes the test suites separately. Missing, stale, unverified or
 inapplicable evidence remains BLOCKED; no self-attestation can produce ACCEPTED.
 """
@@ -11,6 +12,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 import sys
 
@@ -280,7 +282,12 @@ def main(argv=None):
     p.add_argument("--transition", type=Path, required=True,
                    help="independent per-source refinement transition findings")
     p.add_argument("--output", type=Path, default=ROOT / "target/acceptance-34.json")
+    p.add_argument("--source-contract", type=Path,
+                   help="optional source-contract evidence to independently re-prove")
+    p.add_argument("--source-contract-timeout", type=int, default=600)
     args = p.parse_args(argv)
+    if args.source_contract_timeout < 1:
+        p.error("source-contract-timeout must be positive")
     try:
         practical = parse_json(args.practical)
         formal = parse_json(args.formal)
@@ -294,7 +301,18 @@ def main(argv=None):
                             "formal_sha256": file_hash(args.formal),
                             "inventory_sha256": file_hash(args.inventory),
                             "transition_sha256": file_hash(args.transition)}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        report["accepted_source_contracts"] = []
+        if args.source_contract:
+            from source_contract_acceptance import accept_file
+            accepted = accept_file(args.source_contract, args.source_contract_timeout)
+            report["accepted_source_contracts"].append(accepted)
+            report["inputs"]["source_contract_sha256"] = accepted["evidence_sha256"]
+            report["limitations"][0] = (
+                "The source contract was re-proved with Lean; user-run safety tests were not executed.")
+            # Scoped acceptance does not change any of the 34 whole-compiler
+            # obligations, compiler attribution, blockers or accepted counts.
+    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+            RecursionError, subprocess.TimeoutExpired) as error:
         report = {"schema_version": 1, "kind": "whole-compiler-acceptance-audit",
                   "status": "INVALID_EVIDENCE", "reason": str(error)}
     report["checked_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()

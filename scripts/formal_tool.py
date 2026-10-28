@@ -196,6 +196,13 @@ def main(argv: list[str] | None = None) -> int:
         ("runtime-generation-proof", [py, str(scripts / "runtime_generation_proof.py"),
                                        "--output", str(output / "runtime-generation-proof.json"),
                                        "--timeout", str(args.stage_timeout)]),
+        ("runtime-source-contract", [py, str(scripts / "runtime_source_contract.py"),
+                                     "--output", str(output / "runtime-source-contract.json"),
+                                     "--timeout", str(args.stage_timeout)]),
+        ("source-contract-acceptance", [py, str(scripts / "source_contract_acceptance.py"),
+                                        "--report", str(output / "runtime-source-contract.json"),
+                                        "--output", str(output / "source-contract-acceptance.json"),
+                                        "--timeout", str(args.stage_timeout)]),
     ]
     if args.lean_manifest:
         plans.append(("lean-evidence", [py, str(scripts / "lean_evidence_engine.py"),
@@ -237,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         "emitter-semantics": ("emitter-semantics.json", "emitter-template-semantics"),
         "runtime-generation-binding": ("runtime-generation-binding.json", "runtime-generation-structural-binding"),
         "runtime-generation-proof": ("runtime-generation-proof.json", "runtime-generation-arithmetic-proof"),
+        "runtime-source-contract": ("runtime-source-contract.json", "runtime-source-contract"),
+        "source-contract-acceptance": ("source-contract-acceptance.json", "source-contract-acceptance"),
         "lean-evidence": ("lean-evidence.json", None),
         "refinement": ("refinement.json", "refinement-transition-audit"),
         "refinement-frontier": ("refinement-frontier.json", "refinement-work-frontier"),
@@ -307,10 +316,28 @@ def main(argv: list[str] | None = None) -> int:
         "emitter-semantics": "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY",
         "runtime-generation-binding": "STRUCTURE_MATCHED",
         "runtime-generation-proof": "KERNEL_CHECKED_RUNTIME_GENERATION_MODELS_ONLY",
+        "runtime-source-contract": "CONTRACT_ACCEPTED_ASSUMING_FRONTEND",
+        "source-contract-acceptance": "CONTRACT_ACCEPTED_ASSUMING_FRONTEND",
     }
     for name, expected in expected_model_statuses.items():
         if reports[name].get("status") != expected:
             infrastructure_errors = True
+    # A local function contract has a real acceptance path, but it is not a
+    # proof of the file, compiler stage, or any of the five global goals.
+    source_contract = reports["runtime-source-contract"]
+    contract_acceptance = reports["source-contract-acceptance"]
+    from runtime_source_contract import CONTRACT
+    for record in (source_contract, contract_acceptance):
+        if (record.get("compiler") != "jwc" or record.get("contract_id") != CONTRACT
+                or record.get("whole_implementation") != "NOT_PROVEN"):
+            infrastructure_errors = True
+    if (contract_acceptance.get("source_snapshot") != source_contract.get("source_snapshot")
+            or contract_acceptance.get("generated_proof_sha256") != source_contract.get("generated_proof_sha256")
+            or contract_acceptance.get("verification") != "INDEPENDENT_LOCAL_REPLAY"
+            or contract_acceptance.get("discharged_whole_compiler_obligations") != []
+            or contract_acceptance.get("evidence_sha256") !=
+                by_name["runtime-source-contract"].get("report_evidence", {}).get("sha256")):
+        infrastructure_errors = True
     if "lean-evidence" in reports:
         lean_evidence = reports["lean-evidence"]
         if (lean_evidence.get("status") != "KERNEL_CHECKED"
@@ -504,6 +531,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "status": overall,
         "refinement_status": refinement_status or "UNKNOWN",
+        "accepted_source_contracts": [contract_acceptance] if not infrastructure_errors else [],
         "input_identity": {name: entry["sha256"] for name, entry in input_identity.items()},
         "inputs_unchanged": inputs_unchanged,
         "external_proof_inputs": external_before,

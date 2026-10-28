@@ -43,6 +43,8 @@ bench/checks.sh
 - ベンチマーク手順・環境・限界: **`docs/benchmark-operations.md`**。
 - ケース一覧・旧方式の結果: `bench/README.md`。
 - 形式検証基盤の完成基準: `docs/formal-tool-completion.md`。
+- 実ソース契約の証明生成・再検証・受入: `docs/source-contract-acceptance.md`。
+  現在はjwcの `gen_has_room` の条件付き契約のみ。実行未確認、全体証明は未完了。
 - 実装進捗を報告する場合は `scripts/tool_implementation_progress.py` と `docs/tool-capabilities.json` を参照。
 
 ## ディレクトリの地図
