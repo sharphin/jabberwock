@@ -9,8 +9,8 @@
 | 段階 | 担当する判定 | 今回の状態 |
 |---|---|---|
 | ① 仕様に基づく対象の絞り込み | 何を違反とし、どの保護条件を確認すべきか | 実装追加。実行未確認 |
-| ② 実装との対応検証 | 実際の型検査・停止処理・不変条件・省略条件が成立するか | 次回の実装対象 |
-| ③ 網羅性・合成・受入 | 到達可能な対象経路に抜けがなく、5目標が成立するか | ②の後に実装 |
+| ② 実装との対応検証 | 実際の型検査・停止処理・不変条件・省略条件が成立するか | 登録済み契約の検証・条件への適用・独立再実行を追加。実行未確認 |
+| ③ 網羅性・合成・受入 | 到達可能な対象経路に抜けがなく、5目標が成立するか | 次回の実装対象 |
 
 ①の終了値0は対象整理ができたという意味で、言語の安全性合格ではない。
 今回、既存の受入基準や実用テストは緩めていない。新しいテストケースも作っていない。
@@ -38,7 +38,7 @@
 
 5目標の根の命題は既存の `acceptance_requirements.GOAL_CRITERIA` をそのまま使う。
 条件の一覧だけでは全言語の網羅性を証明したことにならないため、各目標に
-`REQUIRES_COVERAGE_AND_COMPOSITION` を残す。全体の判定は②③に接続するまで `NOT_PROVEN`。
+`REQUIRES_COVERAGE_AND_COMPOSITION` を残す。全体の判定は必要な実装対応・前提・網羅性・合成が確認されるまで `NOT_PROVEN`。
 
 ## 変更・不正な除外の扱い
 
@@ -79,4 +79,57 @@ WindowsでPythonランチャーを使う場合は `python` を `py` に置き換
 
 実装時にはPythonの構文、JSON、仕様引用の対応、差分の整合性を確認する。
 新しい判定器・Lean・既存テスト・CIの実行結果は別に記録する。
-今回の実装追加をもって、②③や言語全体の証明が完了したとはしない。
+判定機構の追加と、そこで扱う実装対応証明の成立・言語全体の証明完了は区別する。
+
+## ② 実装との対応検証
+
+`scripts/safety_correspondence.py` は①のレポートを現在の仕様・ソースから再生成して照合し、
+固定したローカルの検証器を実行する。入力レポートのコマンド、定理名、許可する公理、
+前提の解除指定を実行・採用することはない。
+
+| 接続した契約 | 実行する検証 | 結論の範囲 |
+|---|---|---|
+| 世代ガードの容量条件 | 実C関数の型付きClang ASTから全64ビット入力のLean命題を生成・検査 | Cフロントエンドと抽出器を信頼する条件付きの関数契約 |
+| 参照ゲート | コンパイラ別のエミッタ構造照合＋既存Lean命題の型・公理検査 | 認識したテンプレートとモデルの判定条件。ポインタ生存・全アクセス経路は別 |
+| チェック省略 | 既存の `sound_elision_preserves_read` の命題・公理検査 | `FactSoundAtAccess` を前提とするモデル。実データフローでの成立は別 |
+| 書込み権限 | 各コンパイラの既存モデル定理の命題・公理検査 | モデル上の許可条件。実型検査全体との接続は別 |
+| 所有者の移動 | 各コンパイラの既存モデル定理の命題・公理検査 | 移動前の一意所有と成功を前提にしたモデルの保存。実move/drop全体は別 |
+
+既存の `lean_evidence_engine.py` と `lean_refinement_contracts.py` を利用し、
+`formal/refinement-contracts.json` に今回使う既存7定理の期待する命題を登録した。
+定理名だけが一致しても、期待する命題の検査が欠けた場合は拒否する。
+共有定理のカーネル検査はまとめて行い、コンパイラ固有の適用先は分離する。
+
+容量条件はPR #39の実ソース証明生成処理を再利用し、Rustにも独立した対象IDを付けた。
+共通C関数について同じ性質を検査するが、jwcの結果をRustへ転記しない。
+jwcの埋め込み文字列は同期元と照合する。Rustの埋め込み・生成処理まで証明したとは扱わない。
+Leanの当該ソースは一時プロジェクトでビルドする。
+
+検証器、仕様、ソース、Lean入力の変化、別コンパイラの結果、欠けた条件、
+未承認の公理、期待する命題との不一致、タイムアウトは成功にしない。
+Clang用CヘッダーとLean 4.24.0/lakeが必要。Windowsでは既存のx64開発者環境を使う。
+
+```sh
+# ①と②。②はClang/Leanを実行するが、実用テストケースは実行しない。
+python scripts/safety_scope.py --output target/safety-scope.json
+python scripts/safety_correspondence.py --scope target/safety-scope.json --output target/safety-correspondence.json
+
+# レポートの文字列を信用せず、現在のローカル環境で検証を再実行して完全比較する。
+python scripts/safety_correspondence.py --scope target/safety-scope.json --replay target/safety-correspondence.json --output target/safety-correspondence-replayed.json
+```
+
+jwcだけなら両コマンドで `--compiler jwc` を指定する。
+`formal_tool.py` にも②を接続した。出力は `target/formal-tool/safety-correspondence.json`。
+
+`CHECKED_WITH_OPEN_CONDITIONS`（終了値0）は登録済みの局所契約の検査が完了したという意味。
+各条件に、確認できた契約・証拠水準・前提・未確認部分を出力する。
+未対応の条件は `OPEN_NO_IMPLEMENTATION_PROOF`、部分的証拠がある条件は
+`OPEN_WITH_CHECKED_PARTS`。全条件や言語全体の合格とはしない。
+検証失敗は `INVALID_EVIDENCE`（終了値2）。
+
+`validate_report_binding()` は同じ実行器が生成したレポートの構造・帰属確認。
+アップロードされたレポートを証明として認証する場合は必ず `replay()` を使う。
+③もこの再検証経路を利用し、残る前提を文字列だけで解除しない。
+
+②の追加時点では、実際のClang抽出・Lean検証・Windows/Linux実行は未確認。
+既存テストやCIは再開していない。

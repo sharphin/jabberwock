@@ -198,6 +198,10 @@ def main(argv: list[str] | None = None) -> int:
         ("runtime-generation-proof", [py, str(scripts / "runtime_generation_proof.py"),
                                        "--output", str(output / "runtime-generation-proof.json"),
                                        "--timeout", str(args.stage_timeout)]),
+        ("safety-correspondence", [py, str(scripts / "safety_correspondence.py"),
+                                   "--scope", str(output / "safety-scope.json"),
+                                   "--output", str(output / "safety-correspondence.json"),
+                                   "--timeout", str(args.stage_timeout)]),
     ]
     if args.lean_manifest:
         plans.append(("lean-evidence", [py, str(scripts / "lean_evidence_engine.py"),
@@ -231,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     # its status and compiler_refinement fields remain independently inspected.
     known_reports = {
         "safety-scope": ("safety-scope.json", "specification-safety-scope"),
+        "safety-correspondence": ("safety-correspondence.json", "safety-implementation-correspondence"),
         "inventory": ("inventory.json", "whole-implementation-proof-inventory"),
         "semantic-boundaries": ("semantic-boundaries.json", "first-five-semantic-refinement-boundaries"),
         "semantic-composition": ("semantic-composition.json", "compiler-semantic-composition"),
@@ -306,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     reports = {name: stage.get("report", {}) for name, stage in by_name.items()}
     expected_model_statuses = {
         "safety-scope": "SCOPE_READY",
+        "safety-correspondence": "CHECKED_WITH_OPEN_CONDITIONS",
         "emitter-binding": "STRUCTURE_MATCHED",
         "worklist-structure": "STRUCTURE_MATCHED",
         "emitter-semantics": "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY",
@@ -480,6 +486,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
         infrastructure_errors = True
         log_faults.append("specification safety scope changed or invalid: " + str(exc))
+    try:
+        # Structural authentication of our freshly executed stage output. This
+        # is not a replacement for independent replay when accepting uploads.
+        from safety_correspondence import validate_report_binding
+        validate_report_binding(reports["safety-correspondence"], reports["safety-scope"])
+    except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        infrastructure_errors = True
+        log_faults.append("safety correspondence report binding invalid: " + str(exc))
     if infrastructure_errors:
         overall = "TOOL_ERROR"
     elif positive and all(stage["status"] == "COMPLETED" for stage in stages):
@@ -518,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": overall,
         "refinement_status": refinement_status or "UNKNOWN",
         "safety_scope": reports["safety-scope"],
+        "safety_correspondence": reports["safety-correspondence"],
         "input_identity": {name: entry["sha256"] for name, entry in input_identity.items()},
         "inputs_unchanged": inputs_unchanged,
         "external_proof_inputs": external_before,
