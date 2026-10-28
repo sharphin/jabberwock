@@ -106,7 +106,7 @@ fn compile_to(ll: &str, dir: &Path, name: &str, exe: &Path, opt: &str) -> Result
     // まず LTO（リンクのときに 2 つをまとめて最適化する）で作る。lld がない環境では LTO なしで作り直す
     let mut lto = args.clone();
     lto.extend(["-flto", "-fuse-ld=lld"]);
-    run_clang(&lto).or_else(|_| run_clang(&args))
+    if opt == "-O0" { run_clang(&args) } else { run_clang(&lto).or_else(|_| run_clang(&args)) }
 }
 
 /// Windows では引数を読むのに shell32 が要る。ほかは数学の関数（libm）
