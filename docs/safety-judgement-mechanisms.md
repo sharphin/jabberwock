@@ -10,7 +10,7 @@
 |---|---|---|
 | ① 仕様に基づく対象の絞り込み | 何を違反とし、どの保護条件を確認すべきか | 実装追加。実行未確認 |
 | ② 実装との対応検証 | 実際の型検査・停止処理・不変条件・省略条件が成立するか | 登録済み契約の検証・条件への適用・独立再実行を追加。実行未確認 |
-| ③ 網羅性・合成・受入 | 到達可能な対象経路に抜けがなく、5目標が成立するか | 次回の実装対象 |
+| ③ 網羅性・合成・受入 | 到達可能な対象経路に抜けがなく、5目標が成立するか | 独立再検証・条件の網羅性・合成契約・5目標別受入を追加。公開Actionsで実行確認 |
 
 ①の終了値0は対象整理ができたという意味で、言語の安全性合格ではない。
 今回、既存の受入基準や実用テストは緩めていない。新しいテストケースも作っていない。
@@ -133,3 +133,39 @@ jwcだけなら両コマンドで `--compiler jwc` を指定する。
 
 ②の追加時点では、実際のClang抽出・Lean検証・Windows/Linux実行は未確認。
 既存テストやCIは再開していない。
+
+## ③ 網羅性・合成・受入判定
+
+`scripts/safety_acceptance.py` が②を独立再実行し、①の各目標へ対応付ける。
+jwcとRustの各5目標を分離し、必要な条件、確認した局所契約、未解決の前提、
+網羅性・合成の証拠、受入結果を一つのJSONに出力する。
+目標数・受入数は実際の判定から計算する。片方の証拠による他方の合格は認めない。
+
+- 到達不能や仕様上の非違反という文字列だけでは条件を解除しない。
+- 全条件が成立しても、到達可能な実行の網羅性・合成契約が欠ければ `NOT_PROVEN`。
+- 合成の接続はリポジトリ内の `formal/safety-composition-contracts.json` で管理する。
+  未登録は未証明として扱う。登録には目標ID、同一context、全条件の一覧、対象命題、
+  既存 `refinement-contracts.json` でレビューした期待命題の定理、前提を指定する。
+  定理の期待する型と公理をLeanで検査する。未解決の前提は受入を阻止する。
+  自然言語の対象と形式命題の意味対応はレビュー対象であり、自動翻訳ではない。
+- 現在の②は局所契約の検証であり、条件全体の成立を出力しない。
+  合成証明も未登録なので、現段階の言語全体の結果は `NOT_PROVEN`。
+
+```sh
+# ①→②→③（両コンパイラ）。③は②の検証を再実行する。
+python scripts/safety_scope.py --output target/safety-scope.json
+python scripts/safety_correspondence.py --scope target/safety-scope.json --output target/safety-correspondence.json
+python scripts/safety_acceptance.py --scope target/safety-scope.json --correspondence target/safety-correspondence.json --output target/safety-acceptance.json
+
+# 既存の形式検証工程も含む一括実行
+python scripts/formal_tool.py --output target/formal-tool
+```
+
+③の終了値は0=`ACCEPTED`、1=`NOT_PROVEN`、2=`INVALID_EVIDENCE`。
+`formal_tool.py` は③の終了値1を正常な未証明判定として扱い、工程障害と区別する。
+一括出力の `safety_acceptance` に同じ10目標の結果を収録する。
+実用12項目のテスト・既存34項目監査とは別の形式判定経路であり、既存監査を緩めない。
+
+公開 `jabberwock_test` のActionsでは、既存Rust/Python/Lean検査、コンパイラ別Linux安全性検査に加え、
+この一括実行を行いJSONとログを保存する。形式判定工程の正常完走と
+`ACCEPTED` / `PROVEN` は区別する。Windowsでの実行結果には代用しない。

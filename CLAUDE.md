@@ -44,7 +44,9 @@ bench/checks.sh
 - ケース一覧・旧方式の結果: `bench/README.md`。
 - 形式検証基盤の完成基準: `docs/formal-tool-completion.md`。
 - 仕様に基づく3段階の判定機構: `docs/safety-judgement-mechanisms.md`。
-  ①対象整理と②登録契約の対応検証を追加。③合成・受入は後続。
+  ①対象整理・②登録契約の対応検証・③独立再検証と合成受入を追加。
+  `scripts/safety_acceptance.py` / `scripts/formal_tool.py` でコンパイラ別5目標を判定。
+  工程の正常終了と全目標の証明成立を区別する。公開Actionsで実行確認する。
   SCOPE_READY / CHECKED_WITH_OPEN_CONDITIONS は言語全体の安全性合格ではない。
 - 実装進捗を報告する場合は `scripts/tool_implementation_progress.py` と `docs/tool-capabilities.json` を参照。
 
