@@ -43,6 +43,8 @@ bench/checks.sh
 - ベンチマーク手順・環境・限界: **`docs/benchmark-operations.md`**。
 - ケース一覧・旧方式の結果: `bench/README.md`。
 - 形式検証基盤の完成基準: `docs/formal-tool-completion.md`。
+- 仕様に基づく3段階の判定機構: `docs/safety-judgement-mechanisms.md`。
+  ①対象整理を追加。②実装対応、③合成・受入は後続。①のSCOPE_READYは安全性合格ではない。
 - 実装進捗を報告する場合は `scripts/tool_implementation_progress.py` と `docs/tool-capabilities.json` を参照。
 
 ## ディレクトリの地図

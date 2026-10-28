@@ -174,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     py = sys.executable
     scripts = ROOT / "scripts"
     plans = [
+        ("safety-scope", [py, str(scripts / "safety_scope.py"),
+                          "--compiler", "all", "--output", str(output / "safety-scope.json")]),
         ("inventory", [py, str(scripts / "whole_compiler_proof.py"),
                        "--output", str(output / "inventory.json")]),
         ("lean-axioms", [py, str(scripts / "check_formal.py")]),
@@ -228,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     # the gate. The optional kernel manifest report has no "kind" field yet;
     # its status and compiler_refinement fields remain independently inspected.
     known_reports = {
+        "safety-scope": ("safety-scope.json", "specification-safety-scope"),
         "inventory": ("inventory.json", "whole-implementation-proof-inventory"),
         "semantic-boundaries": ("semantic-boundaries.json", "first-five-semantic-refinement-boundaries"),
         "semantic-composition": ("semantic-composition.json", "compiler-semantic-composition"),
@@ -302,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     reports = {name: stage.get("report", {}) for name, stage in by_name.items()}
     expected_model_statuses = {
+        "safety-scope": "SCOPE_READY",
         "emitter-binding": "STRUCTURE_MATCHED",
         "worklist-structure": "STRUCTURE_MATCHED",
         "emitter-semantics": "KERNEL_CHECKED_TEMPLATE_MODEL_ONLY",
@@ -467,6 +471,15 @@ def main(argv: list[str] | None = None) -> int:
         log_faults.append("frozen proof input recheck failed: " + str(exc))
     if not frozen_unchanged:
         infrastructure_errors = True
+    # Reconstruct the scope from the current reviewed policy/specification.
+    # Its classification is not implementation evidence and never changes
+    # the proof counters below. Stages 2/3 will discharge those conditions.
+    try:
+        from safety_scope import validate_scope
+        validate_scope(reports["safety-scope"])
+    except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+        infrastructure_errors = True
+        log_faults.append("specification safety scope changed or invalid: " + str(exc))
     if infrastructure_errors:
         overall = "TOOL_ERROR"
     elif positive and all(stage["status"] == "COMPLETED" for stage in stages):
@@ -504,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "status": overall,
         "refinement_status": refinement_status or "UNKNOWN",
+        "safety_scope": reports["safety-scope"],
         "input_identity": {name: entry["sha256"] for name, entry in input_identity.items()},
         "inputs_unchanged": inputs_unchanged,
         "external_proof_inputs": external_before,
