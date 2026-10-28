@@ -6,6 +6,7 @@ import JabberwockFormal.Ownership
 import JabberwockFormal.EmittedGate
 import JabberwockFormal.EmittedGateOptions
 import JabberwockFormal.ScopedGoals
+import JabberwockFormal.UnsignedGuardSource
 import JabberwockFormal.CheckElision
 import JabberwockFormal.ElisionDecision
 import JabberwockFormal.OwnershipInvalidation

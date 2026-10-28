@@ -9,7 +9,7 @@
   },
   "implementation_correspondence_checker": {
     "state": "PARTIAL",
-    "evidence": "Code audit: scripts/semantic_refinement_boundaries.py, scripts/stage_refinement_binding.py, scripts/proof_emitter_correspondence.py, and scripts/runtime_generation_binding.py check source/theorem bindings and structural correspondence. scripts/refinement_transition.py deliberately has an empty whole-implementation verifier registry; hashes and structural matches do not prove semantic refinement."
+    "evidence": "Code audit: scripts/runtime_source_contract.py translates the actual typed Clang gen_has_room AST into a universally quantified Lean proposition; scripts/source_contract_acceptance.py independently replays that proof under explicit frontend/extractor trust premises. Both stages are connected to formal_tool.py; acceptance_report.py can opt into replay without crediting whole-compiler obligations. Execution and Lean elaboration remain NOT_RUN. Existing structural bindings remain separate; refinement_transition.py still has no whole-implementation verifier. This is a partial, jwc-specific function contract, not whole-runtime/compiler refinement."
   },
   "practical_safety_orchestration": {
     "state": "IMPLEMENTED",

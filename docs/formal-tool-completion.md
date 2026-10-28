@@ -1,5 +1,10 @@
 # Formal verification tool: completion contract
 
+Current implementation-correspondence work and commands:
+[実ソースの契約証明と受入経路](source-contract-acceptance.md).
+The first source-derived contract is conditional, jwc-specific and not yet run.
+It does not complete the whole-compiler correspondence checker or G1–G5.
+
 ## Scope and controlling distinction
 The current engineering deliverable is the **tool that checks, runs, audits and reports formal verification**, not a theorem establishing correctness of the entire Jabberwock compiler.
 
