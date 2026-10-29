@@ -8,6 +8,7 @@
 
 - オーナーとは日本語・平易な言葉で、短く報告する。実行していない検証を「成功」と言わない（成功・失敗・未実行を分ける）。
 - 作業ブランチは `safety-ci-resume`。許可なく `main` へマージしない。ドラフト PR は作らない。
+- GitHub Actions は公開リポジトリ `jabberwock_test` で回す（公開なら時間の上限がないため）。
 - push 前に `cargo test --no-fail-fast` と `cargo clippy --all-targets`。IR・llvm.rs・jw_rt.c を変えたら `JW_NATIVE=1 cargo test --no-fail-fast` も。
 - 外部クレートは使わない。Rust 1.65 で動くこと（`is_some_and`・`div_ceil`・`is_multiple_of` などは使わない）。`cargo fmt` は全体にかけない。周りの書き方（日本語のコメント）に合わせる。
 - テストケースや形式証明のケースを頼まれずに量産しない。既存テストの実行・検証器の実行・新しいケースの作成は別のこととして扱う。
