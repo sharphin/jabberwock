@@ -329,24 +329,22 @@ struct Cx {
         }
     }
 
-    /// 値を順に読む。呼び出しの引数として安全か（読む前の事実で決める）も返す
+    /// 値を順に読む。呼び出しの引数として安全か（すべて読み終えたあとの事実で決める）も返す
     fn mut bool[] operands(ref mut ir.Operand[] os, ref mut Facts facts) {
-        let i64[] mut fs = [];
-        for o in os {
-            fs.push(match ref o {
-                case Copy(p) -> if p.proj.len() == 0 { get(facts, p.local) } else { 0 };
-                case Move(l, s) -> get(facts, l);
-                case Read(l, s) -> get(facts, l);
-                default -> 0;
-            });
-        }
-        // `f(ref a, a)` のように後の引数でムーブされるものは、前の命令で事実が消えている
-        let bool[] mut safe = [];
+        // 読んだ値は、関数へ渡るまで名前のない変数（ここでは変数の数より後の番号）に置いたものとして扱う。
+        // `f(ref a, a)` のように後の引数で a がムーブされると、kill_all が先の引数の事実（RefTo(a)・RefSlot(a)）も消す
+        // （読む前の事実を取っておいて is_live で見るだけだと、RefSlot は消えたことに気づけない）
+        let base = l_own.len();
         for j in range(os.len()) {
-            operand(ref mut os[j], ref mut facts);
+            let f = operand(ref mut os[j], ref mut facts);
+            if f != 0 { put(ref mut facts, base + j, f); }
         }
-        // A later argument can move an owner borrowed by an earlier one.
-        // Never certify a parameter from facts that have since been killed.
+        let i64[] mut fs = [];
+        for j in range(os.len()) {
+            fs.push(get(facts, base + j));
+            remove(ref mut facts, base + j);
+        }
+        let bool[] mut safe = [];
         for f in fs { safe.push(is_live(facts, f)); }
         safe
     }

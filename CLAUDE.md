@@ -38,5 +38,5 @@
 | 形式検証・ベンチマークの運用、検証スクリプトの役割、レビューの注意 | `docs/agent-guide.md` |
 | 言語仕様 / 設計の決めごと / IR の設計 | `docs/spec.md` / `docs/design-decisions.md` / `docs/ir-design.md` |
 | 安全性の確かめ方と残り / 合格の判定の仕組み | `docs/safety-testing.md` / `docs/safety-judgement-mechanisms.md` |
-| 世代の退役 / 形式化の範囲 | `docs/generation-retirement.md` / `docs/formal-semantics.md` |
+| 世代の退役 / 形式化の範囲 / 検査を消す判断の証明 | `docs/generation-retirement.md` / `docs/formal-semantics.md` / `docs/elision-proof.md` |
 | ベンチマークの手順 | `docs/benchmark-operations.md` |
