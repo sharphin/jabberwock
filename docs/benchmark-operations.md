@@ -69,3 +69,7 @@ bench/checks.sh
 形式検証基盤は別の `python scripts/formal_tool.py` が入口で、ベンチマークのPASSを形式証明のPROVENへ変換しない。形式検証の実装完了と実装の安全性証明も別に判断する。
 
 詳しいケース一覧と既存の測定記録は [bench/README.md](../bench/README.md)、形式検証ツールの完成基準は [formal-tool-completion.md](formal-tool-completion.md) を参照。
+
+## 保存した測定記録
+
+- [2026-10-29：Linux・全21ケース、各8回、全件PASS](benchmarks/2026-10-29.md)。測定条件・結果JSON・ソース識別情報を保存。
