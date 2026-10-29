@@ -79,6 +79,7 @@ bench/checks.sh
 | `src/native.rs` | Clang呼び出しとネイティブビルド |
 | `runtime/jw_rt.c` | 世代管理・所有権に関わるランタイム |
 | `jwc/` | セルフホストコンパイラ |
+| `jwc/packages.jw` | alice package-mapの版付きローカル依存情報を読む。modules.jwが空間・直接依存・pub・循環を検査する |
 | `formal/` | Lean 4.24.0の形式化 |
 | `scripts/` | 検証・計測・監査・運用コマンド |
 | `bench/` | ベンチマーク入力・旧方式・履歴資料 |
