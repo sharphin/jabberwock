@@ -4151,7 +4151,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
 }
 
 // u64::div_ceil は Rust 1.73 から（1.65 で動かすため自前）
-#[allow(clippy::manual_div_ceil)]
+#[allow(clippy::manual_div_ceil, clippy::manual_is_multiple_of)]
 fn ceil_div(a: u64, b: u64) -> u64 {
     a / b + u64::from(a % b != 0)
 }
