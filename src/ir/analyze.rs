@@ -64,6 +64,22 @@ fn scalar_call(f: &Func) -> bool {
     f.captures == 0 && scalar(&f.ret) && f.locals[..f.params].iter().all(|l| scalar(&l.ty))
 }
 
+/// リストの中身を動かさない組み込み（数と文字列の計算・表示）。名前を 1 つずつ書く。
+/// ここにない組み込みは要素を動かしうるものとして扱う（新しく足した組み込みは、ここに足すまで安全側）。
+/// 足すときは、引数が数・真偽・文字列だけで、呼び出し元のリストに届かないことを確かめる（docs/elision-proof.md の前提 3）。
+/// jwc/analyze.jw の pure_builtin と同じ一覧にする
+fn pure_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "print" | "eprint" | "concat" | "append" | "assert"
+            | "int.abs" | "int.max" | "int.min"
+            | "f64.abs" | "f64.max" | "f64.min" | "f64.sqrt" | "f64.to_bits"
+            | "str.len" | "str.byte_len" | "str.chars" | "str.bytes" | "str.code" | "str.lines" | "str.split"
+            | "str.trim" | "str.to_upper" | "str.to_lower" | "str.contains" | "str.starts_with" | "str.ends_with"
+            | "str.find" | "str.slice" | "str.replace" | "str.repeat" | "str.to_int" | "str.to_float"
+    )
+}
+
 /// 変数 `x` に入れ直した。古い own は解放されるが、変数の場所はそのまま
 fn kill_value(facts: &mut Facts, x: Local) {
     facts.remove(&x);
@@ -397,9 +413,7 @@ impl<'a> Cx<'a> {
             }
             Rvalue::Builtin(name, ops, _) => {
                 self.operands(ops, facts);
-                // 数と文字列の計算・表示のほかは、何が起きるか個別に見ない（スレッド・入出力など）
-                let pure = matches!(name.as_str(), "print" | "eprint" | "concat" | "append" | "assert");
-                if !(pure || name.starts_with("f64.") || name.starts_with("int.") || name.starts_with("str.")) {
+                if !pure_builtin(name) {
                     kill_elems(facts);
                 }
                 None
