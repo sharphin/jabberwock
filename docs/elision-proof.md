@@ -15,6 +15,7 @@
 | `path_sound` / `elided_access_in_function` | 関数の入口で事実が正しく、解析が止まっていれば、どのブロックのどこで消した `*r` も必ず通る |
 | `live_arg_is_valid` | 呼び出しの直前に `is_live` が真の引数は生きた ref で、リストの要素でもない（呼ばれた関数が Pinned と見なしてよい） |
 | `old_argument_check_is_unsound` | 以前の引数の判定（読む前の事実を取っておく）の反例 |
+| `verify_elided` / `verify_live` / `verifyFast_sound`（ElisionCheck・ElisionCheckFast） | 検査器が通した関数では、消した検査は必ず通り、Pinned の引数には生きた ref が渡る |
 | `callee_preserves_caller`（OwnershipFrame） | 呼ばれた関数は、呼び出し元の変数の場所と own の変数の先の世代を変えない（前提 1・2） |
 
 ## 模型の考え方
@@ -52,7 +53,7 @@
 
 ## 前提
 
-前提 1・2 は `formal/JabberwockFormal/OwnershipFrame.lean` で、持ち主の木の模型と下の「型の決まり」から証明した。3〜6 は証明の外。
+前提 1・2 は `formal/JabberwockFormal/OwnershipFrame.lean` で、持ち主の木の模型と下の「型の決まり」から証明した。3 は一覧を安全側の形にした。4・5 は検査器が 1 本ずつ確かめる。6 は範囲外。
 
 1. **唯一の持ち主**（証明済み・`root_freed_only_by_its_slot`）: own の先を解放・使い回しできるのは、その own を持つ変数の場所そのもの
    （`(slot x, [])`）への操作だけ。ムーブした own の先は受け渡し中（`nested`）になる。
@@ -70,9 +71,39 @@
    - リストの操作（`SeqOp`）: len・contains・get・keys だけが動かさない。
    - 呼び出し: 引数・戻り値・取り込みが数・真偽・文字列だけの直接呼び出し（`scalar_call`。型で決まる）だけが動かさない。関数の値・interface の呼び出しは動かしうる。
    - 上書き・解放: 型で決まる（`may_hold_list` / `value_may_hold`。数・真偽・文字列・ref 以外は持ちうる）。
-4. **型の決まり**: own の型の変数は `copy` されない（`Pre`）。ref の `x = move x` は作られない。
-5. **関数の入口**: Pinned の引数は呼び出し元から生きた ref で渡される（関数をまたぐ繰り返しの正しさは範囲外。`live_arg_is_valid` が呼び出し元の側を与える）。
-6. **範囲外**: 値・型の中身、スレッド、2 段目以降の `*`（いつも実行時に検査する）、`LIST_SHARED` の印（何度付けても同じなので省いた）。
+4. **型の決まり**（1 本ずつ確かめる。下の「検査器」）: own の型の変数は `copy` されない（表示・計算のために読むだけのものを除く）、
+   ref の `x = move x` は作られない、own の変数そのものを指す ref は作られない。検査器が IR の上で確かめ、破れていれば通さない。
+5. **関数の入口**（1 本ずつ確かめる）: Pinned の引数には、すべての呼び出しで生きた ref が渡る。検査器が Pinned の表を自分で計算し、
+   すべての呼び出し（直接・interface）で確かめる。関数を値として使う・スレッドの入口にする・main は、Pinned の引数を持てない。
+6. **範囲外**:
+   - スレッド: ref をほかのスレッドへ渡せないこと（型検査の `sendable`）は型の決まりとして証明の外。検査器はスレッドの入口に Pinned がないことだけを確かめる。
+   - 2 段目以降の `*` は、いつも実行時に検査する（検査器は、2 段目以降が消されていれば通さない）。
+   - 値・型の中身、`LIST_SHARED` の印（何度付けても同じなので省いた）。
+
+## 検査器（1 本ずつ確かめる。2026-10-29）
+
+コンパイラそのもの（型検査・関数をまたぐ解析）を証明する代わりに、コンパイルした結果を 1 本ずつ、証明済みの検査器で確かめる。
+
+- jwc が解析のあとの IR を JSON で書き出す（`jwc --ir-cert`、`jwc/ircert.jw`）。
+- 検査器（`formal/JabberwockFormal/CheckerMain.lean`、`lake build elision-check`）が読み、IR を模型の操作に読み替え、
+  ブロックの入口の事実と Pinned の表を自分で計算し直してから、`verifyFast` で確かめる。
+- 証明: `verifyFast` が通れば `verifyFunc` も通り（`ElisionCheckFast.verifyFast_sound`）、`verifyFunc` が通った関数では、
+  関数の始まりで事実が正しければ、どの実行でも、消した検査は必ず通り（`ElisionCheck.verify_elided`）、
+  Pinned の引数には生きた ref が渡る（`verify_live`）。関数の始まりの事実は `start_sound` で、呼ぶ側の `verify_live` と
+  OwnershipFrame の `callee_preserves_caller` から言える。
+- 証明の外に残るのは、**読み替え表**（`CheckerMain.lean` の `Map` の節。IR の命令を模型のどの操作と読むか）と、
+  模型の操作の動き（`Exec`。実装がそのとおり動くこと）だけ。読み替え表は analyze.rs の場合分けと 1 対 1 に書いてあり、
+  分からない形は通さない。
+- 実行: `python3 scripts/elision_check.py --jwc <jwc>`（結果は `target/elision-check/summary.json`。VERIFIED / NOT_VERIFIED / TOOL_ERROR）。
+
+2026-10-29 の結果（Linux・jwc 版）: examples・tests/jwc_cases.txt・tests/safety・bench/jabberwock・jwc 自身の 346 本がすべて VERIFIED
+（jwc 自身は 691 関数・消した検査 5837 か所）。IR まで行かない 292 本（型のエラーを確かめるテストなど）は数えただけ。
+わざと IR の検査を全部消したもの（dangling_scope など 3 本）は NOT_VERIFIED になることを確かめた。
+
+読み替えで analyze.rs より慎重にしたところ（検査器が通さなければ分かる。今は全部通っている）:
+- `x = ref (*x)[i]` のように、自分を指す RefElem を入れない。
+- `take` で変数そのものから取り出したら、その変数の事実を消す。
+- own の変数に、新しい持ち主と言えない値（たどり着かない枝の `()` など）を入れたら、事実を付けない。
 
 ## 標準ライブラリに組み込みを足すとき
 

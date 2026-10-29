@@ -3,6 +3,7 @@
 //         jwc --ast <file.jw>      構文木を出す（Rust 版の `jabberwock --ast` と同じ形）
 //         jwc --typed <file.jw>    型検査の結果つきの構文木を出す（Rust 版の `jabberwock --typed` と同じ形）
 //         jwc --ir-raw / --ir <file.jw>  IR を出す（解析の前 / 後）
+//         jwc --ir-cert <file.jw>  解析のあとの IR を Lean の検査器が読む JSON で出す（jwc/ircert.jw）
 //         jwc --ll <file.jw>       LLVM のテキストを出す（Rust 版の `jabberwock --ll` と同じ形）
 //         jwc build [--release] [-o 出力] [--clang clang] <file.jw>   実行ファイルを作る（Rust 版の `jabberwock build` と同じ）
 use analyze;
@@ -10,6 +11,7 @@ use ast;
 use astdump;
 use diag;
 use ir;
+use ircert;
 use lexer;
 use llvmfn;
 use lower;
@@ -289,8 +291,8 @@ fn main() {
         build(a, package);
         return;
     }
-    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw" && a[0] != "--ir" && a[0] != "--ll" && a[0] != "--ll-checked") {
-        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw> / jwc --ir <file.jw> / jwc --ll <file.jw> / jwc --ll-checked <file.jw>");
+    if a.len() != 2 || (a[0] != "--tokens" && a[0] != "--ast" && a[0] != "--typed" && a[0] != "--ir-raw" && a[0] != "--ir" && a[0] != "--ir-cert" && a[0] != "--ll" && a[0] != "--ll-checked") {
+        eprint("使い方: jwc --tokens <file.jw> / jwc --ast <file.jw> / jwc --typed <file.jw> / jwc --ir-raw <file.jw> / jwc --ir <file.jw> / jwc --ir-cert <file.jw> / jwc --ll <file.jw> / jwc --ll-checked <file.jw>");
         exit(2);
     }
     let path = a[1];
@@ -333,6 +335,17 @@ fn main() {
                             }
                             return;
                         }
+                        if a[0] == "--ir-cert" {
+                            match lower.lower(q, c) {
+                                case Ok(ip) -> {
+                                    let mut prog = ip;
+                                    analyze.analyze(ref mut prog);
+                                    print(ircert.program(prog));
+                                }
+                                case Err(why) -> fail_ll("まだ IR に書き出せない書き方があります: " + why + "\n");
+                            }
+                            return;
+                        }
                         if a[0] == "--ir-raw" || a[0] == "--ir" {
                             match lower.lower(q, c) {
                                 case Ok(ip) -> {
@@ -350,13 +363,13 @@ fn main() {
                         print(out + astdump.dump_typed(q, c));
                     }
                     case Err(d) -> {
-                        if a[0] == "--ll" || a[0] == "--ll-checked" { fail_ll(diag.render(d, ns, l.srcs)); }
+                        if a[0] == "--ll" || a[0] == "--ll-checked" || a[0] == "--ir-cert" { fail_ll(diag.render(d, ns, l.srcs)); }
                         print(err_text(a[0], diag.render(d, ns, l.srcs)));
                     }
                 }
             }
             case Err(d) -> {
-                if a[0] == "--ll" || a[0] == "--ll-checked" { fail_ll(diag.render(d, ns, l.srcs)); }
+                if a[0] == "--ll" || a[0] == "--ll-checked" || a[0] == "--ir-cert" { fail_ll(diag.render(d, ns, l.srcs)); }
                 print(err_text(a[0], diag.render(d, ns, l.srcs)));
             }
         }
