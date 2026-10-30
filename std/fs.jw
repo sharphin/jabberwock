@@ -21,3 +21,15 @@ pub fn Result<File, str> append(str path) { __fs_open(path, 2) }
 
 /// 閉じる。失敗しても File はもう使えない（Err は書いた内容が残っていないかもしれないという知らせ）
 pub fn Result<(), str> close(File f) { __res_close(f) }
+
+/// ファイルかディレクトリがあるか
+pub fn bool exists(str path) { __fs_exists(path) }
+
+/// ディレクトリの中の名前（`.` と `..` は除く。名前の順）
+pub fn Result<str[], str> list_dir(str path) { __fs_list(path) }
+
+/// ディレクトリを作る（親はあること。もうあれば Err）
+pub fn Result<(), str> make_dir(str path) { __fs_make_dir(path) }
+
+/// ファイルか、空のディレクトリを消す
+pub fn Result<(), str> remove(str path) { __fs_remove(path) }

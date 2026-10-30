@@ -4,6 +4,7 @@ pub fn str[] names() {
     let str[] mut out = [];
     out.push("fs");
     out.push("math");
+    out.push("net");
     out.push("text");
     out
 }
@@ -34,6 +35,18 @@ pub fn Result<File, str> append(str path) {{ __fs_open(path, 2) }}
 
 /// 閉じる。失敗しても File はもう使えない（Err は書いた内容が残っていないかもしれないという知らせ）
 pub fn Result<(), str> close(File f) {{ __res_close(f) }}
+
+/// ファイルかディレクトリがあるか
+pub fn bool exists(str path) {{ __fs_exists(path) }}
+
+/// ディレクトリの中の名前（`.` と `..` は除く。名前の順）
+pub fn Result<str[], str> list_dir(str path) {{ __fs_list(path) }}
+
+/// ディレクトリを作る（親はあること。もうあれば Err）
+pub fn Result<(), str> make_dir(str path) {{ __fs_make_dir(path) }}
+
+/// ファイルか、空のディレクトリを消す
+pub fn Result<(), str> remove(str path) {{ __fs_remove(path) }}
 """);
     }
     if name == "math" {
@@ -105,6 +118,34 @@ pub fn f64 round(f64 x) {{
     if (x - t).abs() < 0.5 {{ return t; }}
     if x < 0.0 {{ t - 1.0 }} else {{ t + 1.0 }}
 }}
+""");
+    }
+    if name == "net" {
+        return Some("""
+// 標準ライブラリ std.net: TCP（同期だけ）。`use std.net;` と書いて使う。今は Linux・macOS だけ（Windows はまだ）
+//
+// TcpStream と TcpListener は資源（ムーブだけできる。ほかのスレッドへは渡せない）。持ち主がいなくなると黙って閉じる。
+//   let mut c = net.connect("localhost", 8080)?;
+//   c.write_text("hello\\n")?;
+//   let got = c.read(4096)?;      // 最大 4096 バイト。相手が閉じたら空のリスト
+//   net.close(c)?;
+// TcpStream のメソッド: `read(n)`・`write(bytes)`・`write_text(s)`・`set_timeout(ms)`（受け取り・送りの待ち時間。0 なら待ち続ける。
+// 時間切れは Err("時間切れです")）。TcpListener のメソッド: `accept()`・`port()`。
+
+pub resource TcpStream;
+pub resource TcpListener;
+
+/// host（名前か番号）の port につなぐ
+pub fn Result<TcpStream, str> connect(str host, i64 port) {{ __net_connect(host, port) }}
+
+/// host の port で待ち受ける（port が 0 なら OS が空いている番号を選ぶ。番号は `port()`）
+pub fn Result<TcpListener, str> listen(str host, i64 port) {{ __net_listen(host, port) }}
+
+/// 閉じる。失敗してももう使えない
+pub fn Result<(), str> close(TcpStream s) {{ __res_close(s) }}
+
+/// 待ち受けをやめる
+pub fn Result<(), str> stop(TcpListener l) {{ __res_close(l) }}
 """);
     }
     if name == "text" {

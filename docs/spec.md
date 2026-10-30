@@ -85,7 +85,8 @@ fn main() {
 |---|---|
 | `std.math` | `gcd(a, b)`・`lcm(a, b)`・`pow(base, exp)`（exp は 0 以上）・`clamp(x, lo, hi)`（どれも i64）、`pi()`・`floor(x)`・`ceil(x)`・`round(x)`（f64。round はちょうど半分なら 0 から遠い方） |
 | `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9） |
-| `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`（[1.3](#13-資源と-stdfsjwc-だけ)） |
+| `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
+| `std.net` | `connect(host, port)`・`listen(host, port)`・`close(s)`・`stop(l)` と資源の型 `TcpStream`・`TcpListener`（[1.4](#14-stdnetjwc-だけ)） |
 
 - 詳しい動き（一周・実行時エラーになる条件）は `std/*.jw` の各関数の説明に書いてある。
 
@@ -114,9 +115,30 @@ fn Result<(), str> save() {
   `write(bytes)`（`u8[]` をムーブして全部書く）・`write_text(s)`。
 - 開く: `fs.open(path)`（読む）・`fs.create(path)`（書く。なければ作り、あれば空にする）・`fs.append(path)`（後ろに足す）。パスに NUL 文字があれば Err。
 - 書いた内容は、close するか持ち主がいなくなるまで、ほかの開き方からは見えないことがある（まとめて書くため）。
+- ディレクトリ: `fs.exists(path)`（`bool`。ファイルでもディレクトリでも）・`fs.list_dir(path)`（`Result<str[], str>`。`.` と `..` を除き、名前の順。UTF-8 でない名前があれば Err）・
+  `fs.make_dir(path)`（親はあること。もうあれば Err）・`fs.remove(path)`（ファイルか空のディレクトリ）。
 - 実行時ライブラリは資源を表で持ち、値は「札」（場所の番号と世代）。閉じた札を使うと実行時エラー（型検査を通ったプログラムでは起きないはずの、念のための検査）。
   場所を使い回すときは世代を進め、世代が上限に達した場所は退役させる。
-- テスト用: 環境変数 `JW_RES_FAIL=open` / `read` / `write` / `close` で、その操作をわざと失敗させる（`--release` で作った実行ファイルでは効かない）。
+- テスト用: 環境変数 `JW_RES_FAIL=open` / `read` / `write` / `close` / `list` / `make_dir` / `remove`（std.net は `connect` / `listen` / `accept` も）で、
+  その操作をわざと失敗させる（`--release` で作った実行ファイルでは効かない）。
+
+### 1.4 std.net（jwc だけ）
+
+```
+use std.net;
+let mut l = net.listen("127.0.0.1", 0)?;   // 0 なら OS が番号を選ぶ（l.port()）
+let mut c = l.accept()?;                   // TcpStream
+c.set_timeout(2000)?;                      // ミリ秒（0 なら待ち続ける）
+let got = c.read(4096)?;                   // 最大 4096 バイト。相手が閉じたら []
+c.write_text("ok\n")?;
+net.close(c)?;
+```
+
+- TCP だけ（同期。HTTP・TLS・UDP はまだ）。`TcpStream`・`TcpListener` は資源で、規則は 1.3 と同じ（ムーブだけ・送れない・持ち主がいなくなると閉じる）。
+- `net.connect(host, port)`・`net.listen(host, port)`（`Result`）。host は名前か番号。port が 0〜65535 の外なら Err。
+- TcpStream: `read(n)`（`u8[]`）・`write(bytes)`・`write_text(s)`・`set_timeout(ms)`。時間切れは `Err("時間切れです")`。相手が閉じた接続へ書くと Err（プログラムは止まらない）。
+- TcpListener: `accept()`（`Result<TcpStream, str>`）・`port()`（`i64`）。やめるのは `net.stop(l)`。
+- **今は Linux・macOS だけ。** Windows では connect / listen が `Err("std.net はまだ Windows で使えません: ...")` を返す。
 
 ## 2. 字句
 

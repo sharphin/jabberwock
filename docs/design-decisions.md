@@ -726,3 +726,7 @@ let x = pick(true, 1, 2);
     close が失敗しても場所は空ける（fclose は失敗しても FILE を手放すため）。
   - 失敗の経路は環境変数 `JW_RES_FAIL` でわざと失敗させて確かめる（`JW_MAX_THREADS` と同じく、--release では効かない）。
   - 外部の副作用を持つが、jwc にはインタプリタとの自動照合がないので、照合の抑止はまだ要らない（Rust 版は対応しない）。
+- std.fs のディレクトリ操作と std.net の TCP（2026-10-30、オーナーの了承のうえ）: ディレクトリは資源にせず関数だけ（開いたままにしないので）。
+  list_dir は名前の順に並べる（OS の返す順は決まっていないので、出力を同じにするため）。TCP は TcpStream・TcpListener を資源に足し、表は File と共用（種類で閉じ方を分ける）。
+  Windows の std.net は Winsock の初期化を含めて後で足す（今は Err を返すだけ。ここでは Windows のビルドも実行も確かめていない）。
+  SIGPIPE で止まらないよう、送るときは MSG_NOSIGNAL（macOS は SO_NOSIGPIPE）を使う。

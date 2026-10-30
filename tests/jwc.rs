@@ -551,14 +551,16 @@ fn jwc_std_fs() {
             let mut f = fs.create(\"t.txt\")?;\n    f.write_text(\"日本\\n\")?;\n    f.write([65, 66])?;\n    fs.close(f)?;\n    \
             let mut a = fs.append(\"t.txt\")?;\n    a.write_text(\"!\")?;\n    fs.close(a)?;\n    \
             let mut r = fs.open(\"t.txt\")?;\n    print(r.read(3)?);\n    print(r.read_text()?, r.read(8)?.len(), r);\n    \
-            match fs.open(\"nai.txt\") { case Ok(x) -> print(\"?\"); case Err(e) -> print(e); }\n    Ok(())\n}\n\
+            match fs.open(\"nai.txt\") { case Ok(x) -> print(\"?\"); case Err(e) -> print(e); }\n    \
+            fs.make_dir(\"d\")?;\n    fs.create(\"d/b\")?;\n    fs.create(\"d/a\")?;\n    print(fs.list_dir(\"d\")?, fs.exists(\"d/a\"));\n    \
+            for n in fs.list_dir(\"d\")? { fs.remove(\"d/\" + n)?; }\n    fs.remove(\"d\")?;\n    print(fs.exists(\"d\"));\n    Ok(())\n}\n\
         fn main() { match run() { case Ok(u) -> print(\"ok\"); case Err(e) -> print(\"err\", e); } }\n");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let run = |fail: &str| {
         let got = Command::new(&exe).current_dir(&dir).env("JW_RES_FAIL", fail).output().unwrap();
         String::from_utf8_lossy(&got.stdout).to_string()
     };
-    assert_eq!(run(""), "[230, 151, 165]\n本\nAB! 0 <fs.File>\nファイルを開けません: nai.txt\nok\n");
+    assert_eq!(run(""), "[230, 151, 165]\n本\nAB! 0 <fs.File>\nファイルを開けません: nai.txt\n[a, b] true\nfalse\nok\n");
     assert_eq!(run("write"), "err ファイルに書けません\n");
     assert_eq!(run("close"), "err ファイルを閉じられません（書いた内容が残っていないかもしれません）\n");
     for (name, src, want) in [
@@ -572,6 +574,32 @@ fn jwc_std_fs() {
         assert!(!out.status.success(), "{}", name);
         assert!(String::from_utf8_lossy(&out.stderr).contains(want), "{}: {}", name, String::from_utf8_lossy(&out.stderr));
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// std.net の TCP（Windows はまだ）。待ち受け・接続・送受信・時間切れ
+#[cfg(unix)]
+#[test]
+fn jwc_std_net() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-net-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "use std.net;\n\
+        fn Result<str, str> client(i64 port) {\n    let mut c = net.connect(\"127.0.0.1\", port)?;\n    c.write_text(\"ping\")?;\n    \
+            let mut s = \"\";\n    for b in c.read(100)? { s += chr(b as i64); }\n    net.close(c)?;\n    Ok(s)\n}\n\
+        fn Result<(), str> run() {\n    let mut l = net.listen(\"127.0.0.1\", 0)?;\n    let port = l.port();\n    \
+            let t = spawn(() -> client(port));\n    let mut c = l.accept()?;\n    print(c.read(100)?.len());\n    c.write([112, 111, 110, 103])?;\n    \
+            print(c.read(10)?.len(), t.join());\n    let q = net.connect(\"127.0.0.1\", port)?;\n    let mut d = l.accept()?;\n    d.set_timeout(100)?;\n    \
+            match d.read(1) { case Ok(x) -> print(\"?\", x); case Err(e) -> print(e); }\n    net.stop(l)?;\n    Ok(())\n}\n\
+        fn main() { match run() { case Ok(u) -> print(\"ok\"); case Err(e) -> print(\"err\", e); } }\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "4\n0 Ok(pong)\n時間切れです\nok\n");
+    let got = Command::new(&exe).env("JW_RES_FAIL", "listen").output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "err 待ち受けられません: 127.0.0.1\n");
     let _ = std::fs::remove_dir_all(dir);
 }
 
