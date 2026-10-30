@@ -1,6 +1,7 @@
 # 軽量ブラウザの試作: 実現可能性と構成案
 
 状態: 方針を決めるための案（2026-10-30）。まだ何も実装していない。
+標準ライブラリの状況は 2026-10-30 時点（jwc のみ、ブランチ safety-ci-resume）。
 
 ## 結論
 
@@ -60,17 +61,17 @@ jabberwock のプログラム（browser.jw）
 |---|---|---|
 | 言語・ビルド | C の部品をつなぐ手段（`webview` 能力として登録・リンク） | 設計の alice-native「能力」の仕組みに乗せる。未実装 |
 | イベント | `poll_events` / `wait_events(期限)` の形 | GUI 設計に同じ形がある。未実装 |
-| 時刻 | 今の時刻（履歴の日時）・待つ | ない |
-| ファイル | フォルダを作る・あるか調べる・一覧・消す・安全な上書き | `read_file` / `write_file` だけ。File 設計で予定 |
-| 環境 | 環境変数（`LOCALAPPDATA`）・アプリ用フォルダの場所 | ない |
+| 時刻 | 今の時刻（履歴の日時）・待つ | std.time（単調時計・Duration・Deadline）で入れる予定。履歴には壁時計の時刻も要る |
+| ファイル | 安全な上書き（一時ファイル → rename） | std.fs に exists・list_dir・make_dir・remove は実装済み（jwc、safety-ci-resume）。安全な上書きはまだ |
+| 環境 | 環境変数（`LOCALAPPDATA`）・アプリ用フォルダの場所 | ない。設計になく、入れるか未定 |
 | データ形式 | JSON の読み書き（外枠の HTML とのやりとり・保存ファイル） | ない。設計にもない（推測: 追加が要る） |
-| 文字列 | URL の分解・%エンコード、検索語か URL かの判定 | `split` / `find` / `replace` などはある。URL 専用はない |
+| 文字列 | URL の分解・%エンコード、検索語か URL かの判定 | URL の分解は std.http の中にあるが非公開。%エンコードはない |
 
 書き直し（自前エンジン）の段階で必要:
 
 | 種類 | 足りないもの | 設計との関係 |
 |---|---|---|
-| 通信 | HTTP/1.1 クライアント（chunked・リダイレクト・gzip） | TCP/TLS は設計済み、**HTTP は初期版の外** |
+| 通信 | HTTPS・リダイレクト・Windows の TCP | std.http（HTTP/1.1、http:// の get/post、chunked）と std.net の TCP は Linux・macOS で実装済み。TLS と Windows はまだ |
 | 圧縮 | deflate/gzip の展開 | ない |
 | 描画 | 2D 描画・文字の配置（DirectWrite） | 設計済み・未実装 |
 | 画像 | PNG/JPEG の展開 | WIC で設計済み・未実装 |
