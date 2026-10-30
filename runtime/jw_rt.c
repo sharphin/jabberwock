@@ -2465,6 +2465,220 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
     return ok;
 }
 
+// ---------------------------------------------------------------- 資源（std.fs の File など）
+//
+// 資源の値は「札」（64 ビット）: 世代 << 21 | 番号 << 1 | 写しの印。OS の番号やポインタは言語の値に出さない。
+// 表の場所（番号）を使い回すときは世代を進め、古い札は種類・世代・状態で必ず見つける。
+// 世代が上限に達した場所は退役させ、使い回さない（ref の区画と同じ考え方）。
+// 資源はほかのスレッドへ渡せない（型検査で止める）ので、中身に触るのは持ち主のスレッドだけ。
+// 表の確保と解放だけを g_lock で守り、読み書きの間は錠を持たない。場所は動かない（塊ごとに確保して公開する）。
+
+#define RES_CHUNK 1024
+#define RES_CHUNKS 1024
+#define RES_GEN_MAX (((uint64_t)1 << 43) - 1)
+#define RES_FILE 1
+
+typedef struct WRes {
+    uint64_t gen;
+    uint32_t kind;
+    // 0: 空き、1: 開いている、2: 退役（使い回さない）
+    uint32_t state;
+    FILE *fp;
+    // 空きの場所のつながり（0 で終わり）
+    int64_t next_free;
+} WRes;
+
+static WRes *g_res[RES_CHUNKS];
+static int64_t g_res_next = 1;
+static int64_t g_res_free = 0;
+
+static WRes *res_at(int64_t slot) {
+    if (slot <= 0 || slot >= (int64_t)RES_CHUNK * RES_CHUNKS) return NULL;
+    WRes *c = __atomic_load_n(&g_res[slot / RES_CHUNK], __ATOMIC_ACQUIRE);
+    return c ? &c[slot % RES_CHUNK] : NULL;
+}
+
+// テスト用: JW_RES_FAIL=open / read / write / close でその操作をわざと失敗させる（--release では効かない）
+static int res_fail(const char *op) {
+    const char *s = jw_nfiles > 0 ? getenv("JW_RES_FAIL") : NULL;
+    return s && strcmp(s, op) == 0;
+}
+
+// 新しい場所を取って札を返す。場所が尽きたら 0
+static uint64_t res_new(uint32_t kind, FILE *fp) {
+    lock(&g_lock);
+    int64_t slot = 0;
+    if (g_res_free > 0) {
+        slot = g_res_free;
+        g_res_free = res_at(slot)->next_free;
+    } else if (g_res_next < (int64_t)RES_CHUNK * RES_CHUNKS) {
+        slot = g_res_next++;
+        if (!g_res[slot / RES_CHUNK]) {
+            WRes *c = jw_checked_calloc(RES_CHUNK, sizeof(WRes));
+            __atomic_store_n(&g_res[slot / RES_CHUNK], c, __ATOMIC_RELEASE);
+        }
+    }
+    uint64_t tok = 0;
+    if (slot > 0) {
+        WRes *r = res_at(slot);
+        r->kind = kind;
+        r->state = 1;
+        r->fp = fp;
+        tok = (r->gen << 21) | ((uint64_t)slot << 1);
+    }
+    unlock(&g_lock);
+    return tok;
+}
+
+// 札の指す開いた資源。古い札・写しでない札・違う種類なら実行時エラー（型検査を通ったプログラムでは起きない）
+static WRes *res_get(uint64_t tok, uint32_t kind, const WSite *at) {
+    WRes *r = res_at((int64_t)((tok >> 1) & (((uint64_t)1 << 20) - 1)));
+    if (!r || r->gen != (tok >> 21) || r->kind != kind || r->state != 1) {
+        begin_error("閉じた資源を使いました");
+        finish_error(at, "この資源はもう閉じている", NULL);
+    }
+    return r;
+}
+
+// 場所を空ける。世代を進め、上限なら退役させる
+static void res_release(WRes *r, int64_t slot) {
+    lock(&g_lock);
+    r->fp = NULL;
+    if (r->gen >= RES_GEN_MAX) {
+        r->state = 2;
+    } else {
+        r->gen++;
+        r->state = 0;
+        r->next_free = g_res_free;
+        g_res_free = slot;
+    }
+    unlock(&g_lock);
+}
+
+static int64_t res_slot(uint64_t tok) { return (int64_t)((tok >> 1) & (((uint64_t)1 << 20) - 1)); }
+
+// mode: 0 読む、1 書く（作る・空にする）、2 後ろに足す
+int32_t jw_fs_open(WStr *path, int64_t mode, void **out, WStr **err) {
+    if (memchr(path->data, 0, (size_t)path->len)) {
+        *err = message("パスに NUL 文字があります: ", path);
+        return 0;
+    }
+    char *cp = c_str(path);
+#ifdef _WIN32
+    const wchar_t *m = mode == 0 ? L"rb" : mode == 1 ? L"wb" : L"ab";
+#else
+    const char *m = mode == 0 ? "rb" : mode == 1 ? "wb" : "ab";
+#endif
+    FILE *f = res_fail("open") ? NULL : open_file(cp, m);
+    free(cp);
+    if (!f) {
+        *err = message(mode == 0 ? "ファイルを開けません: " : "ファイルを書くために開けません: ", path);
+        return 0;
+    }
+    uint64_t tok = res_new(RES_FILE, f);
+    if (!tok) {
+        fclose(f);
+        *err = message("開いている資源が多すぎます: ", path);
+        return 0;
+    }
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}
+
+static WStr *err_text(const char *s) {
+    WSb *b = jw_sb_new();
+    jw_sb_push(b, s, (int64_t)strlen(s));
+    return jw_sb_finish(b);
+}
+
+// 最大 n バイト読む（終わりなら空のリスト）
+int32_t jw_file_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    if (n < 0) {
+        begin_error("読む大きさが負です");
+        finish_error(at, "read(n) の n は 0 以上", NULL);
+    }
+    if (n == 0) return 1;
+    int64_t want = n < 65536 ? n : 65536;
+    jw_list_reserve(out, 1, want);
+    size_t got = res_fail("read") ? 0 : fread(out->data, 1, (size_t)want, r->fp);
+    if (got == 0 && (res_fail("read") || ferror(r->fp))) {
+        clearerr(r->fp);
+        *err = err_text("ファイルを読めません");
+        return 0;
+    }
+    out->len = (int64_t)got;
+    return 1;
+}
+
+// 残りをすべて読む（UTF-8 でなければ Err）
+int32_t jw_file_read_text(void *h, WStr **out, WStr **err, const WSite *at) {
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    WSb *b = jw_sb_new();
+    char buf[65536];
+    size_t n;
+    while (!res_fail("read") && (n = fread(buf, 1, sizeof buf, r->fp)) > 0) jw_sb_push(b, buf, (int64_t)n);
+    if (res_fail("read") || ferror(r->fp)) {
+        clearerr(r->fp);
+        sb_drop(b);
+        *err = err_text("ファイルを読めません");
+        return 0;
+    }
+    if (!valid_utf8((const unsigned char *)b->p, b->len)) {
+        sb_drop(b);
+        *err = err_text("ファイルが UTF-8 ではありません");
+        return 0;
+    }
+    *out = jw_sb_finish(b);
+    return 1;
+}
+
+static int32_t file_write(WRes *r, const char *p, int64_t n, WStr **err) {
+    if (res_fail("write") || fwrite(p, 1, (size_t)n, r->fp) != (size_t)n) {
+        clearerr(r->fp);
+        *err = err_text("ファイルに書けません");
+        return 0;
+    }
+    return 1;
+}
+
+// 全部書く。リストはムーブされてきたので解放する
+int32_t jw_file_write(void *h, WList *data, WStr **err, const WSite *at) {
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    int32_t ok = file_write(r, data->data, data->len, err);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}
+
+int32_t jw_file_write_text(void *h, WStr *text, WStr **err, const WSite *at) {
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    return file_write(r, text->data, text->len, err);
+}
+
+// 閉じる（資源はムーブされてきた）。失敗しても場所は空ける（もう使えない）
+int32_t jw_res_close(void *h, WStr **err, const WSite *at) {
+    uint64_t tok = (uint64_t)(uintptr_t)h;
+    WRes *r = res_get(tok, RES_FILE, at);
+    int bad = fclose(r->fp) != 0 || res_fail("close");
+    res_release(r, res_slot(tok));
+    if (bad) {
+        *err = err_text("ファイルを閉じられません（書いた内容が残っていないかもしれません）");
+        return 0;
+    }
+    return 1;
+}
+
+// 持ち主がいなくなった: 黙って閉じる（写しなら何もしない）。結果が要るなら close を使う
+void jw_res_drop(void *h, const WSite *site) {
+    uint64_t tok = (uint64_t)(uintptr_t)h;
+    if (tok & 1 || tok == 0) return;
+    WRes *r = res_get(tok, RES_FILE, site);
+    fclose(r->fp);
+    res_release(r, res_slot(tok));
+}
+
+void *jw_res_view(void *h) { return (void *)((uintptr_t)h | 1); }
+
 void jw_exit(int64_t code) {
     jw_flush();
     quit((int)code);

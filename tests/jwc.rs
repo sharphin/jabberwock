@@ -533,6 +533,48 @@ fn jwc_standard_library() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// std.fs の File（資源）。正しい使い方、わざと失敗させたとき、誤用がはじかれること
+#[test]
+fn jwc_std_fs() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-fs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let build = |name: &str, src: &str| {
+        let path = dir.join(format!("{}.jw", name));
+        std::fs::write(&path, src).unwrap();
+        let exe = dir.join(name);
+        let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+        (out, exe)
+    };
+    let (out, exe) = build("main", "use std.fs;\n\
+        fn Result<(), str> run() {\n    \
+            let mut f = fs.create(\"t.txt\")?;\n    f.write_text(\"日本\\n\")?;\n    f.write([65, 66])?;\n    fs.close(f)?;\n    \
+            let mut a = fs.append(\"t.txt\")?;\n    a.write_text(\"!\")?;\n    fs.close(a)?;\n    \
+            let mut r = fs.open(\"t.txt\")?;\n    print(r.read(3)?);\n    print(r.read_text()?, r.read(8)?.len(), r);\n    \
+            match fs.open(\"nai.txt\") { case Ok(x) -> print(\"?\"); case Err(e) -> print(e); }\n    Ok(())\n}\n\
+        fn main() { match run() { case Ok(u) -> print(\"ok\"); case Err(e) -> print(\"err\", e); } }\n");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = |fail: &str| {
+        let got = Command::new(&exe).current_dir(&dir).env("JW_RES_FAIL", fail).output().unwrap();
+        String::from_utf8_lossy(&got.stdout).to_string()
+    };
+    assert_eq!(run(""), "[230, 151, 165]\n本\nAB! 0 <fs.File>\nファイルを開けません: nai.txt\nok\n");
+    assert_eq!(run("write"), "err ファイルに書けません\n");
+    assert_eq!(run("close"), "err ファイルを閉じられません（書いた内容が残っていないかもしれません）\n");
+    for (name, src, want) in [
+        ("inner", "fn main() { __fs_open(\"a\", 0); }", "`__fs_open` は標準ライブラリの中だけで使えます"),
+        ("decl", "resource X;\nfn main() {}", "`resource` は標準ライブラリの中だけで書けます"),
+        ("send", "use std.fs;\nfn main() { match fs.open(\"a\") { case Ok(f) -> { let t = spawn(() -> { let g = f; }); } case Err(e) -> {} } }",
+            "ほかのスレッドへ渡せません"),
+        ("readonly", "use std.fs;\nfn main() { match fs.open(\"a\") { case Ok(f) -> { f.read(1); } case Err(e) -> {} } }", "mut ではない"),
+    ] {
+        let (out, _) = build(name, src);
+        assert!(!out.status.success(), "{}", name);
+        assert!(String::from_utf8_lossy(&out.stderr).contains(want), "{}: {}", name, String::from_utf8_lossy(&out.stderr));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// `jwc build` で作った実行ファイルが、interp と同じものを出す
 #[test]
 fn jwc_build_makes_an_executable() {

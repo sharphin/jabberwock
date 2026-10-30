@@ -1480,6 +1480,8 @@ struct FnGen {
         let mut v = llvm.vt("0", ty.Ty.Unit);
         if kind == "str" { v = llvm.vt(b.val("load ptr, ptr " + from), ty.Ty.Str); }
         if kind == "int" { v = llvm.vt(b.val("load i64, ptr " + from), ty.i64t()); }
+        if kind == "res" { v = llvm.vt(b.val("load ptr, ptr " + from), ty.Ty.Res("std:fs.File")); }
+        if kind == "bytes" { v = llvm.vt(b.val("load %list, ptr " + from), ty.Ty.List(own ty.Ty.Int("u8"))); }
         let ov = make_enum(m, want, "Ok", [v])?;
         b.op("store " + lt + " " + ov + ", ptr " + res);
         b.br(done);
@@ -1839,6 +1841,51 @@ struct FnGen {
             let ok = b.val("call i32 @jw_read_file(ptr " + vals[0].v + ", ptr " + out + ")");
             release(vals, all);
             return result_of(m, want, ok, out, "str", out);
+        }
+        // 資源（std.fs の File）。札は実行時ライブラリが確かめる
+        if name == "__fs_open" {
+            let out = b.alloca("ptr");
+            let err = b.alloca("ptr");
+            let ok = b.val("call i32 @jw_fs_open(ptr " + vals[0].v + ", i64 " + vals[1].v + ", ptr " + out + ", ptr " + err + ")");
+            release(vals, all);
+            return result_of(m, want, ok, err, "res", out);
+        }
+        if name == "__res_close" {
+            let err = b.alloca("ptr");
+            let site = m.site(span, "");
+            let ok = b.val("call i32 @jw_res_close(ptr " + vals[0].v + ", ptr " + err + ", ptr " + site + ")");
+            return result_of(m, want, ok, err, "unit", "");
+        }
+        if name == "file.read" {
+            let out = b.alloca("%list");
+            b.op("store %list zeroinitializer, ptr " + out);
+            let err = b.alloca("ptr");
+            let site = m.site(span, "");
+            let ok = b.val("call i32 @jw_file_read(ptr " + vals[0].v + ", i64 " + vals[1].v + ", ptr " + out + ", ptr " + err + ", ptr " + site + ")");
+            return result_of(m, want, ok, err, "bytes", out);
+        }
+        if name == "file.read_text" {
+            let out = b.alloca("ptr");
+            let err = b.alloca("ptr");
+            let site = m.site(span, "");
+            let ok = b.val("call i32 @jw_file_read_text(ptr " + vals[0].v + ", ptr " + out + ", ptr " + err + ", ptr " + site + ")");
+            return result_of(m, want, ok, err, "str", out);
+        }
+        // 書くリストはムーブされてきたので、jw_file_write が解放する
+        if name == "file.write" {
+            let lst = b.alloca("%list");
+            b.op("store %list " + vals[1].v + ", ptr " + lst);
+            let err = b.alloca("ptr");
+            let site = m.site(span, "");
+            let ok = b.val("call i32 @jw_file_write(ptr " + vals[0].v + ", ptr " + lst + ", ptr " + err + ", ptr " + site + ")");
+            return result_of(m, want, ok, err, "unit", "");
+        }
+        if name == "file.write_text" {
+            let err = b.alloca("ptr");
+            let site = m.site(span, "");
+            let ok = b.val("call i32 @jw_file_write_text(ptr " + vals[0].v + ", ptr " + vals[1].v + ", ptr " + err + ", ptr " + site + ")");
+            release(vals, all);
+            return result_of(m, want, ok, err, "unit", "");
         }
         if name == "write_file" {
             let out = b.alloca("ptr");

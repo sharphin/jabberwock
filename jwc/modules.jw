@@ -84,6 +84,11 @@ fn Info info_of(ref ast.Program p) {
         info.kinds.push("interface");
         info.pubs.push(has(p.public, i.name));
     }
+    for r in p.resources {
+        info.names.push(r);
+        info.kinds.push("resource");
+        info.pubs.push(has(p.public, r));
+    }
     info
 }
 
@@ -165,7 +170,7 @@ pub struct Loader {
         }
         let mut all = ast.Program {
             structs: [], enums: [], interfaces: [], fns: [], uses: [], use_spans: [], public: [], modules: mods,
-            consts: [], borrow_lambdas: [], nodes: 0,
+            consts: [], borrow_lambdas: [], nodes: 0, resources: [], resource_spans: [],
         };
         for p in parts.drain() {
             let mut q = p;
@@ -175,6 +180,8 @@ pub struct Loader {
             for x in q.fns.drain() { all.fns.push(x); }
             for x in q.consts.drain() { all.consts.push(x); }
             for x in q.borrow_lambdas.drain() { all.borrow_lambdas.push(x); }
+            for x in q.resources.drain() { all.resources.push(x); }
+            for x in q.resource_spans.drain() { all.resource_spans.push(x); }
         }
         Ok(all)
     }
@@ -295,6 +302,9 @@ pub struct Loader {
         }
         let merged = merge_paths(toks, mods, targets, which, infos)?;
         let mut prog = parser.parse_with(merged, structs, enums, variants)?;
+        if prog.resources.len() > 0 && !name.starts_with("std:") {
+            return Err(diag.error("`resource` は標準ライブラリの中だけで書けます", prog.resource_spans[0], "資源の型は std.fs などが用意する"));
+        }
         let info = info_of(prog);
         if name != "" {
             prog = qualify(prog, name, info);
@@ -355,9 +365,11 @@ fn ast.Program qualify(ast.Program p, str module, ref Info info) {
     for c in p.consts { consts.push(module + "." + c); }
     let i64[] mut bl = [];
     for x in p.borrow_lambdas { bl.push(x); }
+    let str[] mut res = [];
+    for r in p.resources { res.push(module + "." + r); }
     ast.Program {
         structs: structs, enums: enums, interfaces: ifaces, fns: fns, uses: [], use_spans: [], public: strs(p.public),
-        modules: [], consts: consts, borrow_lambdas: bl, nodes: 0,
+        modules: [], consts: consts, borrow_lambdas: bl, nodes: 0, resources: res, resource_spans: ints(p.resource_spans),
     }
 }
 
