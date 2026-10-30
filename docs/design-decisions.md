@@ -730,3 +730,5 @@ let x = pick(true, 1, 2);
   list_dir は名前の順に並べる（OS の返す順は決まっていないので、出力を同じにするため）。TCP は TcpStream・TcpListener を資源に足し、表は File と共用（種類で閉じ方を分ける）。
   Windows の std.net は Winsock の初期化を含めて後で足す（今は Err を返すだけ。ここでは Windows のビルドも実行も確かめていない）。
   SIGPIPE で止まらないよう、送るときは MSG_NOSIGNAL（macOS は SO_NOSIGPIPE）を使う。
+- std.http（2026-10-30、オーナーの了承のうえ）: 設計では HTTP は初期版の外だったが、オーナーの希望で std.net の上に .jw だけで最小のクライアントを置いた（コンパイラ・実行時ライブラリは変えない）。
+  Linux の TLS は設計で Unsupported なので https はまだ。バイト列を文字列にする組み込みがないので、std.text.from_utf8 を .jw で書いた（遅ければ組み込みにする）。

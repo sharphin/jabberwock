@@ -603,6 +603,81 @@ fn jwc_std_net() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// std.http（std.net の上の HTTP/1.1 クライアント）。同じプログラムの中に小さなサーバーを立てて試す
+#[cfg(unix)]
+#[test]
+fn jwc_std_http() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-http-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, HTTP_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "200 text/plain 1, 2 こんに\n404 abcde\n\
+        Ok(GET /a?b=1 HTTP/1.1|POST /p HTTP/1.1|)\nNone None None\nhttps はまだ使えません: https://x\nok\n");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+const HTTP_SRC: &str = r#"use std.net;
+use std.http;
+use std.text;
+
+fn Result<str, str> serve(i64 port, i64 n) {
+    let mut l = net.listen("127.0.0.1", port)?;
+    let mut seen = "";
+    for i in range(n) {
+        let mut c = l.accept()?;
+        let got = c.read(4096)?;
+        match text.from_utf8(ref got) {
+            case Some(s) -> seen += s.lines()[0] + "|";
+            case None -> {}
+        }
+        if i == 0 {
+            c.write_text("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nX-A: 1\r\nx-a: 2\r\n\r\nこんにちはxx")?;
+        } else {
+            c.write_text("HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;x=y\r\nde\r\n0\r\n\r\n")?;
+        }
+        net.close(c)?;
+    }
+    Ok(seen)
+}
+
+fn Result<(), str> run() {
+    let mut probe = net.listen("127.0.0.1", 0)?;
+    let port = probe.port();
+    net.stop(probe)?;
+    let t = spawn(() -> serve(port, 2));
+    let mut tries = 0;
+    loop {
+        match http.get("http://127.0.0.1:{port}/a?b=1") {
+            case Ok(a) -> {
+                print(a.status, a.headers["content-type"], a.headers["x-a"], a.text()?);
+                break;
+            }
+            case Err(e) -> {
+                tries += 1;
+                if tries > 1000 { return Err(e); }
+            }
+        }
+    }
+    let b = http.post("http://127.0.0.1:{port}/p", "text/plain", "日本")?;
+    print(b.status, b.text()?);
+    print(t.join());
+    let u8[] x1 = [237, 160, 128];
+    let u8[] x2 = [192, 128];
+    let u8[] x3 = [230, 151];
+    print(text.from_utf8(ref x1), text.from_utf8(ref x2), text.from_utf8(ref x3));
+    match http.get("https://x") { case Ok(x) -> print("?"); case Err(e) -> print(e); }
+    Ok(())
+}
+
+fn main() { match run() { case Ok(u) -> print("ok"); case Err(e) -> print("err", e); } }
+"#;
+
 /// `jwc build` で作った実行ファイルが、interp と同じものを出す
 #[test]
 fn jwc_build_makes_an_executable() {

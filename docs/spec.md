@@ -84,8 +84,9 @@ fn main() {
 | モジュール | 関数 |
 |---|---|
 | `std.math` | `gcd(a, b)`・`lcm(a, b)`・`pow(base, exp)`（exp は 0 以上）・`clamp(x, lo, hi)`（どれも i64）、`pi()`・`floor(x)`・`ceil(x)`・`round(x)`（f64。round はちょうど半分なら 0 から遠い方） |
-| `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9） |
+| `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9）・`from_utf8(ref bytes)`（`Option<str>`。正しい UTF-8 でなければ None） |
 | `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
+| `std.http` | `get(url)`・`post(url, content_type, body)` と `Response`（[1.5](#15-stdhttpjwc-だけ)） |
 | `std.net` | `connect(host, port)`・`listen(host, port)`・`close(s)`・`stop(l)` と資源の型 `TcpStream`・`TcpListener`（[1.4](#14-stdnetjwc-だけ)） |
 
 - 詳しい動き（一周・実行時エラーになる条件）は `std/*.jw` の各関数の説明に書いてある。
@@ -139,6 +140,21 @@ net.close(c)?;
 - TcpStream: `read(n)`（`u8[]`）・`write(bytes)`・`write_text(s)`・`set_timeout(ms)`。時間切れは `Err("時間切れです")`。相手が閉じた接続へ書くと Err（プログラムは止まらない）。
 - TcpListener: `accept()`（`Result<TcpStream, str>`）・`port()`（`i64`）。やめるのは `net.stop(l)`。
 - **今は Linux・macOS だけ。** Windows では connect / listen が `Err("std.net はまだ Windows で使えません: ...")` を返す。
+
+### 1.5 std.http（jwc だけ）
+
+```
+use std.http;
+let r = http.get("http://127.0.0.1:8080/a?b=1")?;          // http.Response
+print(r.status, r.headers["content-type"], r.text()?);
+let p = http.post("http://127.0.0.1:8080/p", "application/json", "{{}}")?;
+```
+
+- HTTP/1.1 のクライアント。std.net の上に .jw だけで書いている（`std/http.jw`）。**http:// だけ**（https は Err）。std.net と同じく今は Linux・macOS だけ。
+- 1 回ごとにつなぎ、`Connection: close` を送って、相手が閉じるまで読む。本文は chunked なら読み解き、`Content-Length` があればその長さにする（足りなければ Err）。
+  リダイレクトはたどらない。状態の番号が 404 などでも Ok（`status` を見る）。
+- `Response`: `status`（`i64`）・`headers`（`str[str]`。名前は小文字。同じ名前が二つ以上なら `", "` でつなぐ）・`body`（`u8[]`）・`text()`（本文を `str` に。UTF-8 でなければ Err）。
+- URL に空白・改行、content_type に改行があれば Err（ヘッダーを足されないように）。
 
 ## 2. 字句
 
