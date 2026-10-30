@@ -1,0 +1,63 @@
+open jabberwock
+chrome_load 76
+tab_new 1
+tab_show 1
+set_title jabberwock
+navigate 1 about:blank
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	1	
+tab_new 2
+tab_show 2
+set_title jabberwock
+navigate 2 about:blank
+chrome_post focus
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	0	
+tab	2	1	
+navigate 2 https://b.example
+set_title title:https://b.example - jabberwock
+chrome_post state
+url	https://b.example
+nav	1	0	0	0
+tab	1	0	
+tab	2	1	title:https://b.example
+tab_show 1
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	1	
+tab	2	0	title:https://b.example
+tab_close 1
+tab_show 2
+set_title title:https://b.example - jabberwock
+chrome_post state
+url	https://b.example
+nav	1	0	0	0
+tab	2	1	title:https://b.example
+tab_close 2
+tab_new 3
+tab_show 3
+set_title jabberwock
+navigate 3 about:blank
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	3	1	
+chrome_post state
+url	
+nav	0	0	0	0
+tab	3	1	
+note	知らない命令: what
+chrome_post state
+url	
+nav	0	0	0	0
+tab	3	1	
+close

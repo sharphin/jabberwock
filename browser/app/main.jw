@@ -1,0 +1,57 @@
+// jabberwock の軽量ブラウザ。
+//   jabberwock browser/app/main.jw [--data フォルダ] [--ephemeral] [--fake 台本] [--log]
+// --data: 履歴・ブックマーク・Cookie の置き場所（あるフォルダ。既定は今のフォルダ）
+// --ephemeral: 何も残さない
+// --fake / --log: 偽エンジンの台本と、呼ばれた操作の表示（テスト用）
+
+use browser;
+use engine;
+
+fn str read_lines_or_exit(str path) {
+    match read_file(path) {
+        case Ok(t) -> t;
+        case Err(e) -> {
+            eprint("台本を読めません:", path, e);
+            exit(1)
+        }
+    }
+}
+
+fn main() {
+    let a = args();
+    let mut data = ".";
+    let mut ephemeral = false;
+    let mut script = "";
+    let mut show_log = false;
+    let mut i = 0;
+    while i < a.len() {
+        match a[i] {
+            case "--data" -> {
+                i++;
+                if i < a.len() { data = a[i]; }
+            }
+            case "--ephemeral" -> ephemeral = true;
+            case "--fake" -> {
+                i++;
+                if i < a.len() { script = read_lines_or_exit(a[i]); }
+            }
+            case "--log" -> show_log = true;
+            default -> {
+                eprint("知らない引数:", a[i]);
+                exit(2);
+            }
+        }
+        i++;
+    }
+    let cfg = engine.Config {
+        title: "jabberwock", data_dir: data, width: 1100, height: 760,
+        ephemeral: ephemeral, fake_script: script.lines(),
+    };
+    let mut b = browser.Browser.open(cfg, if ephemeral { "" } else { data });
+    b.run();
+    if show_log {
+        for l in b.eng.log {
+            print(l);
+        }
+    }
+}

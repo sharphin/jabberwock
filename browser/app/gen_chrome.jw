@@ -1,0 +1,28 @@
+// chrome.html から chrome.jw を作る（HTML を文字列として埋め込む）。
+//   jabberwock browser/app/gen_chrome.jw browser/app
+// chrome.html を直したら、これを動かして chrome.jw を作り直す（chrome.jw は手で直さない）。
+
+fn main() {
+    let a = args();
+    let dir = if a.len() > 0 { a[0] } else { "." };
+    let html = match read_file(dir + "/chrome.html") {
+        case Ok(t) -> t;
+        case Err(e) -> {
+            eprint("chrome.html を読めません:", e);
+            exit(1)
+        }
+    };
+    // 埋め込みの { } と \ を文字そのものにする
+    let body = html.replace("\\", "\\\\").replace("{{", "{{{{").replace("}}", "}}}}").replace("\"\"\"", "\\\"\\\"\\\"");
+    let mut out = "// このファイルは gen_chrome.jw が chrome.html から作る。手で直さない。\n";
+    out += "// 外枠とのやりとりの決まりは chrome.html の先頭にある。\n\n";
+    out += "// 外枠の高さ（論理ピクセル）\npub fn i64 height() {{ 76 }}\n\n";
+    out += "pub fn str html() {{\n    \"\"\"" + body + "\"\"\"\n}}\n";
+    match write_file(dir + "/chrome.jw", out) {
+        case Ok(_) -> print("chrome.jw を作りました");
+        case Err(e) -> {
+            eprint("chrome.jw を書けません:", e);
+            exit(1);
+        }
+    }
+}

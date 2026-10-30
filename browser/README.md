@@ -4,6 +4,13 @@
 
 ```
 browser/
+  app/main.jw                   本体の入口（引数を読んで Browser を動かす）
+  app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり
+  app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
+  app/store.jw                  履歴・ブックマークをファイルに残す（1 か所だけ）
+  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク）。chrome.jw は gen_chrome.jw がここから作る
+  app/engine.jw                 エンジンとの境目の jabberwock 側。今は jabberwock で書いた偽エンジン
+  app/test_*.jw, app/testdata/  テスト（cargo test --test browser）
   engine/jw_engine.h            エンジンとの境目（C の関数だけ）。ブラウザ本体はこれだけを使う
   engine/webview2/              WebView2（Windows）での実装
   engine/mock/                  試験用の偽エンジン（画面なし。どの OS でも動く）
@@ -13,7 +20,26 @@ browser/
 
 エンジンを差し替えるときは、`jw_engine.h` の関数を実装したファイルを 1 つ足し、リンクするファイルを替えるだけ。
 
-## 偽エンジンのテスト（Linux / macOS / Windows）
+## 本体を偽エンジンで動かす（どの OS でも）
+
+今は jabberwock から C の関数を呼べないので、本体は jabberwock で書いた偽エンジン（app/engine.jw）とつないである。
+std.browser ができたら engine.jw だけを置き換えれば、WebView2 で動く（ほかのファイルは変えない）。
+
+```
+cd browser/app
+jabberwock main.jw --ephemeral --fake testdata/basic.txt --log
+```
+
+- `--fake 台本`: 利用者の操作の代わり（`chrome go example.com`・`key 7` など。書き方は engine.jw の先頭）
+- `--log`: エンジンに出した操作を表示する
+- `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）の置き場所。あるフォルダを指定する（既定は今のフォルダ）
+- `--ephemeral`: 何も残さない
+
+`jabberwock build main.jw` で実行ファイルにしても同じ動き。テストは `cargo test --test browser`
+（出力を直したときは `JW_BLESS=1 cargo test --test browser` で testdata/*.out を作り直す）。
+外枠を直したら `jabberwock gen_chrome.jw .`（browser/app で）で chrome.jw を作り直す。
+
+## 偽エンジンのテスト（C。Linux / macOS / Windows）
 
 ```
 cc -Wall -o mock_test browser/engine/tests/mock_test.c browser/engine/mock/jwe_mock.c

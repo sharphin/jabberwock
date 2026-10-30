@@ -1,0 +1,74 @@
+open jabberwock
+chrome_load 76
+tab_new 1
+tab_show 1
+set_title jabberwock
+navigate 1 about:blank
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	1	
+navigate 1 https://example.com
+set_title title:https://example.com - jabberwock
+chrome_post state
+url	https://example.com
+nav	1	0	0	0
+tab	1	1	title:https://example.com
+navigate 1 https://duckduckgo.com/?q=rust+%E8%A8%80%E8%AA%9E
+set_title title:https://duckduckgo.com/?q=rust+%E8%A8%80%E8%AA%9E - jabberwock
+chrome_post state
+url	https://duckduckgo.com/?q=rust+%E8%A8%80%E8%AA%9E
+nav	1	0	0	0
+tab	1	1	title:https://duckduckgo.com/?q=rust+%E8%A8%80%E8%AA%9E
+back 1
+set_title title:https://example.com - jabberwock
+chrome_post state
+url	https://example.com
+nav	1	1	0	0
+tab	1	1	title:https://example.com
+chrome_post state
+url	https://example.com
+nav	1	1	0	1
+tab	1	1	title:https://example.com
+bm	https://example.com	title:https://example.com
+note	ブックマークに足しました
+tab_new 2
+tab_show 2
+set_title jabberwock
+navigate 2 https://a.example/
+set_title title:https://a.example/ - jabberwock
+chrome_post state
+url	https://a.example/
+nav	0	0	0	0
+tab	1	0	title:https://example.com
+tab	2	1	title:https://a.example/
+bm	https://example.com	title:https://example.com
+tab_show 1
+set_title title:https://example.com - jabberwock
+chrome_post state
+url	https://example.com
+nav	1	1	0	1
+tab	1	1	title:https://example.com
+tab	2	0	title:https://a.example/
+bm	https://example.com	title:https://example.com
+tab_close 2
+chrome_post state
+url	https://example.com
+nav	1	1	0	1
+tab	1	1	title:https://example.com
+bm	https://example.com	title:https://example.com
+navigate 1 fail://x
+set_title title:fail://x - jabberwock
+chrome_post state
+url	fail://x
+nav	1	0	0	0
+tab	1	1	title:fail://x
+bm	https://example.com	title:https://example.com
+note	読み込めませんでした（1）
+chrome_post state
+url	fail://x
+nav	1	0	0	0
+tab	1	1	title:fail://x
+bm	https://example.com	title:https://example.com
+close

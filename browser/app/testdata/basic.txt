@@ -1,0 +1,9 @@
+# アドレス欄から開く・検索・戻る・ブックマーク・別タブ・タブの切り替えと閉じる・読み込みの失敗
+chrome go example.com
+chrome go rust 言語
+key 7
+chrome bookmark
+newtab https://a.example/
+key 5
+chrome close 2
+chrome go fail://x

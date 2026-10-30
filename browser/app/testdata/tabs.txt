@@ -1,0 +1,9 @@
+# 最後のタブを閉じると空のタブが 1 つ残る・Ctrl+T・Ctrl+Tab・Ctrl+W・知らない命令
+key 2
+chrome go b.example
+key 4
+key 3
+key 3
+chrome what
+close
+chrome go never.example

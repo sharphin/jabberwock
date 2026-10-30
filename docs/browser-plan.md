@@ -80,9 +80,11 @@ jabberwock のプログラム（browser.jw）
 
 1. ✓ 境目 `jw_engine.h`、偽エンジンとそのテスト、WebView2 版（Windows 向けにコンパイル・リンクできることまで確認）。
 2. WebView2 版を Windows で動かして確かめる（browser/README.md の smoke）。
-3. jabberwock から境目の関数を呼べるようにする（標準ライブラリのスレッドと調整）。
-4. browser.jw: アドレス入力・戻る/進む・再読み込み・タブ。偽エンジンでテストを書く。
-5. 履歴・ブックマーク（ファイル保存）。
+3. jabberwock から境目の関数を呼べるようにする（標準ライブラリ側で std.browser として。時期は相談）。
+   できたら browser/app/engine.jw を std.browser を呼ぶものに置き換える。
+4. ✓ 本体（browser/app）: アドレス入力・検索・戻る/進む・再読み込み・タブ・キー操作・履歴・ブックマーク。
+   今は jabberwock で書いた偽エンジンにつなぎ、台本でテストする（`cargo test --test browser`）。
+5. 履歴の一覧ページ・ダウンロード・ズームなど。
 6. （余裕があれば）別のエンジン（Servo / Blitz / jabberwock 製）を同じ境目で足す。
 
 決めていないこと: サイトの Cookie を終了時に消すか（今の案は「1 か所に残し、ボタン 1 つで全部消せる」）。

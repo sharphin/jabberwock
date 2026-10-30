@@ -1,0 +1,305 @@
+// ブラウザ本体: タブ・アドレス欄・戻る/進む・履歴・ブックマーク。
+// エンジンとは engine モジュール（jw_engine.h と同じ形）だけで話す。
+
+use engine;
+use address;
+use store;
+use chrome;
+
+const HOME = "about:blank";
+
+pub struct Tab {
+    i64 id;
+    str url;
+    str title;
+    bool loading;
+    bool back;
+    bool forward;
+}
+
+pub struct Browser {
+    engine.Engine eng;
+    store.Store data;
+    Tab[] tabs;
+    i64 current;     // 今のタブの番号（0 はなし）
+    bool done;
+    str note;        // 外枠に出す短い知らせ
+    bool chrome_view;
+
+    static fn Browser open(engine.Config cfg, str data_dir) {
+        let eng = engine.Engine.open(cfg);
+        let chrome_view = eng.info().chrome_view;
+        let mut b = Browser {
+            eng: eng, data: store.Store.open(data_dir), tabs: [], current: 0,
+            done: false, note: "", chrome_view: chrome_view,
+        };
+        if chrome_view {
+            b.check(b.eng.chrome_load(chrome.html(), chrome.height()));
+        }
+        b
+    }
+
+    // エンジンの操作が失敗したら知らせに出す（止めない）
+    fn mut check(Result<(), str> r) {
+        match r {
+            case Ok(_) -> {}
+            case Err(e) -> note = e;
+        }
+    }
+
+    fn i64 index_of(i64 id) {
+        for (i, t) in tabs {
+            if t.id == id {
+                return i;
+            }
+        }
+        -1
+    }
+
+    // ---- 操作 ----
+
+    fn mut i64 new_tab(str url) {
+        let id = eng.tab_new();
+        tabs.push(Tab { id: id, url: url, title: "", loading: false, back: false, forward: false });
+        select(id);
+        check(eng.navigate(id, url));
+        id
+    }
+
+    fn mut select(i64 id) {
+        if index_of(id) < 0 {
+            return;
+        }
+        current = id;
+        check(eng.tab_show(id));
+        update_title();
+    }
+
+    fn mut close_tab(i64 id) {
+        let i = index_of(id);
+        if i < 0 {
+            return;
+        }
+        check(eng.tab_close(id));
+        tabs.remove(i);
+        if tabs.len() == 0 {
+            // 最後のタブを閉じたら、空のタブを 1 つ残す
+            current = 0;
+            new_tab(HOME);
+            return;
+        }
+        if current == id {
+            let next = if i < tabs.len() { i } else { tabs.len() - 1 };
+            select(tabs[next].id);
+        }
+    }
+
+    fn mut step_tab(i64 d) {
+        let i = index_of(current);
+        if i < 0 || tabs.len() == 0 {
+            return;
+        }
+        let n = tabs.len();
+        select(tabs[(i + d + n) % n].id);
+    }
+
+    fn mut go(str input) {
+        match address.from_input(input) {
+            case Some(u) -> {
+                if current == 0 {
+                    new_tab(u);
+                } else {
+                    check(eng.navigate(current, u));
+                }
+            }
+            case None -> {}
+        }
+    }
+
+    fn mut toggle_bookmark() {
+        let i = index_of(current);
+        if i < 0 {
+            return;
+        }
+        let u = tabs[i].url;
+        let t = tabs[i].title;
+        if data.toggle_bookmark(u, t) {
+            note = "ブックマークに足しました";
+        } else {
+            note = "ブックマークから外しました";
+        }
+    }
+
+    // ---- エンジンからのイベント ----
+
+    fn mut handle(engine.Event ev) {
+        match ev {
+            case Ready -> {
+                if tabs.len() == 0 {
+                    new_tab(HOME);
+                }
+            }
+            case CloseRequested -> done = true;
+            case NavStarted(id, u) -> {
+                let i = index_of(id);
+                if i >= 0 {
+                    tabs[i].loading = true;
+                    tabs[i].url = u;
+                }
+            }
+            case NavFinished(id, u, code) -> {
+                let i = index_of(id);
+                if i >= 0 {
+                    tabs[i].loading = false;
+                    if code == 0 {
+                        let t = tabs[i].title;
+                        data.visit(u, t);
+                    } else if id == current {
+                        note = "読み込めませんでした（{code}）";
+                    }
+                }
+            }
+            case UrlChanged(id, u) -> {
+                let i = index_of(id);
+                if i >= 0 {
+                    tabs[i].url = u;
+                }
+            }
+            case TitleChanged(id, t) -> {
+                let i = index_of(id);
+                if i >= 0 {
+                    tabs[i].title = t;
+                    let u = tabs[i].url;
+                    data.retitle(u, t);
+                    if id == current {
+                        update_title();
+                    }
+                }
+            }
+            case HistoryChanged(id, b, f) -> {
+                let i = index_of(id);
+                if i >= 0 {
+                    tabs[i].back = b;
+                    tabs[i].forward = f;
+                }
+            }
+            case NewTabRequested(_, u) -> new_tab(u);
+            case ChromeMessage(m) -> command(m);
+            case Key(k) -> key(engine.KeyCode.of(k));
+            case PermissionDenied(_, what) -> note = "断りました: " + what;
+            case Failed(_, text) -> note = text;
+        }
+    }
+
+    fn mut key(engine.KeyCode k) {
+        match k {
+            case FocusAddress -> check(eng.chrome_post("focus"));
+            case NewTab -> {
+                new_tab(HOME);
+                check(eng.chrome_post("focus"));
+            }
+            case CloseTab -> close_tab(current);
+            case NextTab -> step_tab(1);
+            case PrevTab -> step_tab(-1);
+            case Reload -> check(eng.reload(current));
+            case Back -> check(eng.back(current));
+            case Forward -> check(eng.forward(current));
+            case Unknown -> {}
+        }
+    }
+
+    // 外枠から来た命令
+    fn mut command(str m) {
+        let sp = m.find(" ");
+        let name = match sp { case Some(i) -> m.slice(0, i); case None -> m; };
+        let arg = match sp { case Some(i) -> m.slice(i + 1, m.len()); case None -> ""; };
+        match name {
+            case "go" -> go(arg);
+            case "open" -> go(arg);
+            case "back" -> check(eng.back(current));
+            case "forward" -> check(eng.forward(current));
+            case "reload" -> check(eng.reload(current));
+            case "stop" -> check(eng.stop(current));
+            case "newtab" -> {
+                new_tab(HOME);
+                check(eng.chrome_post("focus"));
+            }
+            case "select" -> select(arg.to_int().unwrap_or(0));
+            case "close" -> close_tab(arg.to_int().unwrap_or(0));
+            case "bookmark" -> toggle_bookmark();
+            case "clear" -> {
+                check(eng.clear_site_data());
+                data.clear_history();
+                note = "Cookie と履歴を消しました";
+            }
+            default -> note = "知らない命令: " + name;
+        }
+    }
+
+    // ---- 表示 ----
+
+    fn mut update_title() {
+        let i = index_of(current);
+        let t = if i >= 0 && tabs[i].title != "" { tabs[i].title + " - jabberwock" } else { "jabberwock" };
+        check(eng.set_title(t));
+    }
+
+    static fn str clean(str s) {
+        s.replace("\t", " ").replace("\n", " ").replace("\r", " ")
+    }
+
+    static fn str flag(bool b) {
+        if b { "1" } else { "0" }
+    }
+
+    // 外枠に今の状態を送る
+    fn mut sync_chrome() {
+        if !chrome_view {
+            return;
+        }
+        let mut s = "state";
+        let i = index_of(current);
+        if i >= 0 {
+            let u = tabs[i].url;
+            let marked = data.is_bookmarked(u);
+            s += "\nurl\t" + clean(if u == HOME { "" } else { u });
+            s += "\nnav\t" + flag(tabs[i].back) + "\t" + flag(tabs[i].forward) + "\t" + flag(tabs[i].loading) + "\t" + flag(marked);
+        }
+        for t in tabs {
+            let title = if t.url == HOME { "" } else { clean(t.title) };   // 空なら外枠が「新しいタブ」と出す
+            s += "\ntab\t{t.id}\t" + flag(t.id == current) + "\t" + title;
+        }
+        for b in data.bookmarks {
+            s += "\nbm\t" + clean(b.url) + "\t" + clean(b.title);
+        }
+        for e in data.errors {
+            note = e;
+        }
+        if note != "" {
+            s += "\nnote\t" + clean(note);
+            note = "";
+        }
+        check(eng.chrome_post(s));
+    }
+
+    // イベントを待って処理する。窓が閉じられたら終わる
+    fn mut run() {
+        while !done {
+            match eng.wait(-1) {
+                case Some(ev) -> {
+                    handle(ev);
+                    // まとめて届いたイベントは全部処理してから外枠を直す
+                    loop {
+                        match eng.poll() {
+                            case Some(ev2) -> handle(ev2);
+                            case None -> break;
+                        }
+                    }
+                    sync_chrome();
+                }
+                case None -> {}
+            }
+        }
+        eng.close();
+    }
+}

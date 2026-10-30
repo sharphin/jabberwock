@@ -1,0 +1,140 @@
+// 履歴とブックマークをファイルに残す。1 行 1 件、「URL<タブ>題」のテキスト。
+// アカウントも同期もないので、置き場所はこのフォルダ 1 か所だけ。
+
+const HISTORY_MAX = 1000;
+
+pub struct Entry {
+    str url;
+    str title;
+}
+
+pub struct Store {
+    str dir;          // 空なら何も残さない
+    Entry[] history;  // 古い順
+    Entry[] bookmarks;
+    str[] errors;     // 書けなかったときの説明（同じものは 1 回だけ）
+
+    static fn Store open(str dir) {
+        let mut s = Store { dir: dir, history: [], bookmarks: [], errors: [] };
+        if dir != "" {
+            s.history = load(path(dir, "history.tsv"));
+            s.bookmarks = load(path(dir, "bookmarks.tsv"));
+        }
+        s
+    }
+
+    static fn str path(str dir, str name) {
+        if dir.ends_with("/") || dir.ends_with("\\") { dir + name } else { dir + "/" + name }
+    }
+
+    static fn Entry[] load(str file) {
+        let Entry[] mut out = [];
+        match read_file(file) {
+            case Ok(text) -> {
+                for line in text.lines() {
+                    match line.find("\t") {
+                        case Some(i) -> out.push(Entry { url: line.slice(0, i), title: line.slice(i + 1, line.len()) });
+                        case None -> if line != "" { out.push(Entry { url: line, title: "" }); }
+                    }
+                }
+            }
+            case Err(_) -> {}   // まだないなら空
+        }
+        out
+    }
+
+    fn mut save(str name, str text) {
+        if dir == "" {
+            return;
+        }
+        match write_file(path(dir, name), text) {
+            case Ok(_) -> {}
+            case Err(e) -> {
+                let msg = name + " を書けません: " + e;
+                for x in errors {
+                    if x == msg {
+                        return;
+                    }
+                }
+                errors.push(msg);
+            }
+        }
+    }
+
+    static fn str clean(str s) {
+        s.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    }
+
+    static fn str to_text(ref Entry[] es) {
+        let mut out = "";
+        for e in es {
+            out += clean(e.url) + "\t" + clean(e.title) + "\n";
+        }
+        out
+    }
+
+    // 開いたページを足す。直前と同じ URL なら題だけ直す
+    fn mut visit(str url, str title) {
+        if url == "" || url.starts_with("data:") {
+            return;
+        }
+        let n = history.len();
+        if n > 0 && history[n - 1].url == url {
+            if title != "" {
+                history[n - 1].title = title;
+            }
+        } else {
+            history.push(Entry { url: url, title: title });
+            while history.len() > HISTORY_MAX {
+                history.remove(0);
+            }
+        }
+        let text = to_text(history);
+        save("history.tsv", text);
+    }
+
+    // いちばん新しい履歴の題を直す（題が読み込みのあとに届くことがあるため）
+    fn mut retitle(str url, str title) {
+        let n = history.len();
+        if n > 0 && history[n - 1].url == url && history[n - 1].title != title {
+            history[n - 1].title = title;
+            let text = to_text(history);
+            save("history.tsv", text);
+        }
+    }
+
+    fn bool is_bookmarked(str url) {
+        for b in bookmarks {
+            if b.url == url {
+                return true;
+            }
+        }
+        false
+    }
+
+    // ブックマークを足すか外す。足したら true
+    fn mut bool toggle_bookmark(str url, str title) {
+        if url == "" {
+            return false;
+        }
+        let mut added = true;
+        for i in range(bookmarks.len()) {
+            if bookmarks[i].url == url {
+                bookmarks.remove(i);
+                added = false;
+                break;
+            }
+        }
+        if added {
+            bookmarks.push(Entry { url: url, title: title });
+        }
+        let text = to_text(bookmarks);
+        save("bookmarks.tsv", text);
+        added
+    }
+
+    fn mut clear_history() {
+        history = [];
+        save("history.tsv", "");
+    }
+}

@@ -1,0 +1,24 @@
+use address;
+
+fn check(str input, str want) {
+    let got = address.from_input(input).unwrap_or("<none>");
+    if got != want {
+        print("NG", input, "→", got, "（期待:", want, "）");
+        exit(1);
+    }
+}
+
+fn main() {
+    check("", "<none>");
+    check("   ", "<none>");
+    check("https://example.com/a", "https://example.com/a");
+    check("example.com", "https://example.com");
+    check("  example.com/path?q=1 ", "https://example.com/path?q=1");
+    check("localhost:8080", "http://localhost:8080");
+    check("127.0.0.1:3000/x", "http://127.0.0.1:3000/x");
+    check("about:blank", "about:blank");
+    check("rust 言語", "https://duckduckgo.com/?q=rust+%E8%A8%80%E8%AA%9E");
+    check("a&b=c", "https://duckduckgo.com/?q=a%26b%3Dc");
+    check("hello", "https://duckduckgo.com/?q=hello");
+    print("ok");
+}

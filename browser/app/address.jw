@@ -1,0 +1,67 @@
+// アドレス欄に打った文字を、開く URL にする
+
+const SEARCH = "https://duckduckgo.com/?q=";
+
+// 打った文字を開く URL にする。空なら None
+pub fn Option<str> from_input(str input) {
+    let s = input.trim();
+    if s == "" {
+        return None;
+    }
+    if has_scheme(s) {
+        return Some(s);
+    }
+    if looks_like_host(s) {
+        // 手元のサーバーはたいてい TLS なし
+        if s.to_lower().starts_with("localhost") || s.starts_with("127.0.0.1") {
+            return Some("http://" + s);
+        }
+        return Some("https://" + s);
+    }
+    Some(SEARCH + encode(s))
+}
+
+// "https:" "about:" のように、英字で始まる名前と ":" で始まるか（"localhost:8080" は除く）
+fn bool has_scheme(str s) {
+    if s.contains("://") {
+        return true;
+    }
+    for p in ["about:", "data:", "file:", "mailto:", "view-source:"] {
+        if s.to_lower().starts_with(p) {
+            return true;
+        }
+    }
+    false
+}
+
+// 空白がなく、"." を含むか localhost で始まる
+fn bool looks_like_host(str s) {
+    if s.contains(" ") || s.contains("\t") {
+        return false;
+    }
+    let host = match s.find("/") {
+        case Some(i) -> s.slice(0, i);
+        case None -> s;
+    };
+    if host == "" {
+        return false;
+    }
+    host.contains(".") || host.to_lower().starts_with("localhost")
+}
+
+// 検索語の %エンコード（英数字と - _ . ~ 以外は %XX。空白は +）
+pub fn str encode(str s) {
+    let hex = "0123456789ABCDEF";
+    let mut out = "";
+    for b in s.bytes() {
+        let n = b as i64;
+        if (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || n == 45 || n == 95 || n == 46 || n == 126 {
+            out += chr(n);
+        } else if n == 32 {
+            out += "+";
+        } else {
+            out += "%" + hex.slice(n / 16, n / 16 + 1) + hex.slice(n % 16, n % 16 + 1);
+        }
+    }
+    out
+}

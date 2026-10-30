@@ -1,0 +1,7 @@
+use chrome;
+fn main() {
+    let h = chrome.html();
+    let src = match read_file("chrome.html") { case Ok(t) -> t; case Err(e) -> { print(e); exit(1) } };
+    assert(h == src);
+    print("ok");
+}
