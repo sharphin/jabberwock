@@ -304,7 +304,12 @@ struct Parser {
                 // `use geom;`: 同じフォルダの geom.jw を使う
                 bump();
                 let s = span();
-                let n = expect_ident("モジュールの名前")?;
+                let mut n = expect_ident("モジュールの名前")?;
+                // `use std.math;`: 標準ライブラリの math（読み込みは modules.jw）
+                if n == "std" && peek() == "." {
+                    bump();
+                    n = "std." + expect_ident("標準ライブラリのモジュールの名前")?;
+                }
                 expect(";", "`;`")?;
                 if has(uses, n) {
                     return Err(diag.error("`use {n}` が二回あります", s, "ここが二回目"));

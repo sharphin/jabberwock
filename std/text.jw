@@ -1,0 +1,54 @@
+// 標準ライブラリ std.text: 文字列の補助。`use std.text;` と書いて `text.pad_left("7", 3, "0")` のように使う
+// 長さと位置は文字単位（str のメソッドと同じ）
+
+/// 左を fill（1 文字）で埋めて width 文字にする。もとから width 文字以上ならそのまま
+pub fn str pad_left(str s, i64 width, str fill) {
+    assert(fill.len() == 1);
+    if s.len() >= width { return s; }
+    fill.repeat(width - s.len()) + s
+}
+
+/// 右を fill（1 文字）で埋めて width 文字にする。もとから width 文字以上ならそのまま
+pub fn str pad_right(str s, i64 width, str fill) {
+    assert(fill.len() == 1);
+    if s.len() >= width { return s; }
+    s + fill.repeat(width - s.len())
+}
+
+/// 文字を逆の順に並べる
+pub fn str reverse(str s) {
+    let cs = s.chars();
+    let mut out = "";
+    let mut i = cs.len();
+    while i > 0 {
+        i -= 1;
+        out += cs[i];
+    }
+    out
+}
+
+/// sub が重ならずに何回出てくるか（sub が空なら実行時エラー）
+pub fn i64 count(str s, str sub) {
+    assert(sub != "");
+    let mut n = 0;
+    let mut rest = s;
+    loop {
+        match rest.find(sub) {
+            case Some(i) -> {
+                n += 1;
+                rest = rest.slice(i + sub.len(), rest.len());
+            }
+            case None -> break;
+        }
+    }
+    n
+}
+
+/// 空でなく、すべて 0〜9 の文字か
+pub fn bool is_digits(str s) {
+    if s == "" { return false; }
+    for c in s.chars() {
+        if !"0123456789".contains(c) { return false; }
+    }
+    true
+}

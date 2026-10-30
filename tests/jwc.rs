@@ -470,6 +470,69 @@ fn runtime_is_up_to_date() {
     assert!(got == want, "jwc/runtime.jw が runtime/jw_rt.c と合っていません。`python3 scripts/sync_runtime.py` で作り直してください");
 }
 
+/// scripts/sync_stdlib.py と同じ形で std/*.jw を埋め込んだ jwc/stdlib.jw
+fn stdlib_jw() -> String {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(root().join("std")).unwrap().map(|e| e.unwrap().path())
+        .filter(|p| p.extension() == Some(std::ffi::OsStr::new("jw"))).collect();
+    paths.sort();
+    let mut names = String::new();
+    let mut bodies = String::new();
+    for p in &paths {
+        let name = p.file_stem().unwrap().to_str().unwrap();
+        let src = std::fs::read_to_string(p).unwrap().replace("\r\n", "\n");
+        let body = src.replace('\\', "\\\\").replace('{', "{{").replace('}', "}}");
+        names += &format!("    out.push(\"{}\");\n", name);
+        bodies += &format!("    if name == \"{}\" {{\n        return Some(\"\"\"\n{}\"\"\");\n    }}\n", name, body);
+    }
+    format!(
+        "// 標準ライブラリ（std/*.jw）を文字列にしたもの。`use std.名前;` で modules.jw が読む。\n\
+         // 手で書き換えない: std/ を直したら `python3 scripts/sync_stdlib.py` で作り直す。\n\
+         pub fn str[] names() {{\n    let str[] mut out = [];\n{}    out\n}}\n\npub fn Option<str> source(str name) {{\n{}    None\n}}\n",
+        names, bodies
+    )
+}
+
+#[test]
+fn stdlib_is_up_to_date() {
+    let path = root().join("jwc/stdlib.jw");
+    let want = stdlib_jw();
+    if std::env::var("JWC_REGEN").is_ok() {
+        std::fs::write(&path, &want).unwrap();
+    }
+    let got = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(got == want, "jwc/stdlib.jw が std/ と合っていません。`python3 scripts/sync_stdlib.py` で作り直してください");
+}
+
+/// `use std.名前;` の標準ライブラリ（jwc だけの機能なので、期待する出力を書いて確かめる）
+#[test]
+fn jwc_standard_library() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-std-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let build = |name: &str, src: &str| {
+        let path = dir.join(format!("{}.jw", name));
+        std::fs::write(&path, src).unwrap();
+        let exe = dir.join(name);
+        let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+        (out, exe)
+    };
+    let (out, exe) = build("main", "use std.math;\nuse std.text;\nfn main() {\n    \
+        print(math.gcd(12, -18), math.lcm(4, 6), math.pow(2, 10), math.clamp(15, 0, 10));\n    \
+        print(math.floor(-2.5), math.ceil(2.1), math.round(2.5), math.round(-2.5), math.round(0.49999999999999994));\n    \
+        print(text.pad_left(\"7\", 3, \"0\"), text.pad_right(\"ab\", 4, \".\"), text.reverse(\"日本語\"), text.count(\"abababa\", \"aba\"), text.is_digits(\"12\"), text.is_digits(\"\"));\n}\n");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "6 12 1024 10\n-3.0 3.0 3.0 -3.0 0.0\n007 ab.. 語本日 2 true false\n");
+    // 同じフォルダの math.jw は標準の math を置き換えない（両方を use するとエラー）
+    std::fs::write(dir.join("math.jw"), "pub fn i64 gcd(i64 a, i64 b) { 0 }\n").unwrap();
+    let (out, _) = build("both", "use math;\nuse std.math;\nfn main() {}\n");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("`math` という名前のモジュールを二つ使っています"));
+    let (out, _) = build("nope", "use std.nope;\nfn main() {}\n");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("標準ライブラリに `nope` はありません"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// `jwc build` で作った実行ファイルが、interp と同じものを出す
 #[test]
 fn jwc_build_makes_an_executable() {

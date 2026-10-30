@@ -711,3 +711,8 @@ let x = pick(true, 1, 2);
   refinement の判定は、今のソースから jwc を作り直して（Rust 版で。Rust 版の正しさは前提）検査器にかけ直し、evidence と同じときだけ
   `verified_subset` を記録する。プログラムごとの確かめなので、全プログラムについての analyze の正しさではない。義務は REFINEMENT_NOT_PROVEN のまま。
   1 回の再生に数分かかる（jwc の作り直しが大半）。formal_tool に evidence を渡すと段ごとに再生するので、`--stage-timeout` を大きくする。
+- 標準ライブラリの読み込み（2026-10-30、オーナーと相談して「読み込みの仕組み＋小さい std」から始めた）: `use std.名前;` を jwc にだけ足した。
+  設計（コミット 68e5977 の standard-library-loading.md）のうち、`std.` の指定・利用名は末尾の名前・同じフォルダの同名ファイルで上書きできない・`use std;` は従来どおり、を採った。
+  ソースは `std/*.jw` に置き、`scripts/sync_stdlib.py` で `jwc/stdlib.jw` に埋め込む（runtime.jw と同じやり方。配布ルートやカタログを探さないので、jwc を動かしても壊れない）。
+  カタログ・`--sysroot`・`as`・資源型は後回し。中の名前は `std:math.gcd` として、パッケージ `std` のモジュール（`std/math`）と取り違えない。
+  最初の中身は .jw だけで書ける std.math・std.text（外部の資源に触れないので、安全性の前提を増やさない）。
