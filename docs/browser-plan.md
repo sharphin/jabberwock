@@ -57,12 +57,12 @@ jabberwock のプログラム（browser.jw）
 
 | 決まり | 中身 |
 |---|---|
-| 別のプログラム | `jwvault.exe` が別の窓で動き、jabberwock の本体 `jwvault-app.exe`（browser/app/vault_main.jw）を子プロセスにする。ブラウザ本体（jabberwock-browser.exe）はパスワードを一切持たない |
+| 別のプログラム | 金庫 `jwvault-app.exe`（browser/app/vault_main.jw）は別の窓で動く。ブラウザが 🔑 で子プロセスとして起こし、パイプの 1 行ずつで話す（ほかのプロセスからはつなげない）。ブラウザ本体は入力を頼まれたときだけパスワードを受け取り、持ち続けない |
 | ページとは別の WebView | 金庫の画面（vault.html）はタブを作らない WebView に出し、WebView2 の置き場所も分ける（`<データ>\vault\webview2`）。CSP で外への読み込みを全部止める |
 | 暗号 | マスターパスワード → PBKDF2-HMAC-SHA256（60 万回）→ 32 バイトの鍵 → ChaCha20-Poly1305。std.hash・std.crypto（jabberwock で書いたもの。RFC の値と Python の暗号ライブラリとの突き合わせで確かめてある）を使う。ファイルの 1・2 行目（回数・塩）も印に入れる |
 | 乱数 | std.random（OS の乱数。Windows は BCryptGenRandom）。塩 16 バイト・nonce 12 バイト（保存のたびに新しく） |
 | 画面に出さない | パスワードは「見る」「編集」を押したときだけ 1 回画面に送る |
-| 入力 | 利用者が「入力」を押したときだけ。金庫 → ブラウザは Windows のメッセージ（WM_COPYDATA）。ブラウザは見えているタブの出どころ（scheme://host[:port]）が保存したサイトと完全に同じときだけ `jwe_fill_login` で入れ、ページの中でも入れる直前に `location.origin` を確かめる |
+| 入力 | 利用者が「入力」を押したときだけ。金庫 → ブラウザはパイプ（std.process）。ブラウザは見えているタブの出どころ（scheme://host[:port]）が保存したサイトと完全に同じときだけ `jwe_fill_login` で入れ、ページの中でも入れる直前に `location.origin` を確かめる |
 | コピー | クリップボードの履歴・クラウドには残さない印を付け、30 秒たって変わっていなければ消す |
 | 自動で閉じる | 5 分触らなければ閉じる（鍵と中身を手放す） |
 
@@ -100,8 +100,7 @@ jabberwock のプログラム（browser.jw）
 2. ✓ WebView2 版を Windows で動かして確かめる（smoke。WebView2Loader.dll なしで起動）。
 3. jabberwock から境目の関数を呼べるようにする（標準ライブラリ側で std.browser として。時期は相談）。
    ✓ 2026-10-31 にブラウザ本体を std.browser に移した（jwc で作り、WebView2 版を `--link` で直接リンク。jabberwock-browser.exe 1 つ）。
-   それまでのつなぎ（C の jwbrowser が本体を子プロセスにして 1 行ずつつなぐ）は、金庫の窓（host/jwvault.c）にだけ残した。
-   金庫は std.process（子プロセスとのパイプ）と std.clipboard ができたら同じように移し、ブラウザ側のつなぎ（engine/webview2/vault_link.c）も消す。
+   金庫も std.browser・std.process・std.clipboard・std.io に移し、C のつなぎ（jwbrowser.c・jwvault.c・vault_link.c）はなくした（同じ日）。
 4. ✓ 本体（browser/app）: アドレス入力・検索・戻る/進む・再読み込み・タブ・キー操作・履歴・ブックマーク。
    C の偽エンジン（runtime/engine/mock）にリンクし、台本でテストする（`cargo test --test browser`）。
 5. ✓ 設定のタブ（2026-10-31）。外枠が窓全体を覆って設定の画面を出す（`jwe_chrome_height` の `JWE_CHROME_FULL`）。

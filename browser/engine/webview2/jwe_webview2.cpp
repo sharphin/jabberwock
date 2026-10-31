@@ -529,6 +529,9 @@ JweStatus jwe_open(const JweConfig *cfg, JweEngine **out) {
     }
     if (!create && !create_internal) {
         jwe_close(e);
+        // 呼ぶ側は窓を持たない（コンソールもない）ことが多いので、ここで知らせる
+        MessageBoxW(nullptr, L"WebView2 の実行環境が見つかりません。https://developer.microsoft.com/microsoft-edge/webview2/ から入れてください",
+                    L"jabberwock", MB_OK | MB_ICONERROR);
         return JWE_ERR_UNAVAILABLE;
     }
 

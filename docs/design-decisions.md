@@ -855,6 +855,6 @@ let x = pick(true, 1, 2);
   Linux は poll、Windows はパイプなら PeekNamedPipe、端末なら WaitForSingleObject、ファイルならすぐ読む。
 - ブラウザを jwc と std.browser に移した（2026-10-31、まつさんの決定）: browser/ の本体は jwc で作り、WebView2 版を `--link` で直接リンクする。
   エンジンの境目・偽エンジン・出どころの規則は runtime/engine のものだけを使い、browser/engine の写しは消した。金庫の暗号は std.hash・std.crypto・std.random。
-  金庫の窓は、std にクリップボードとプロセスどうしのやりとりがないあいだ、C のつなぎ（browser/host/jwvault.c）の子プロセスのまま。
-  ブラウザ側で金庫とやりとりする部分は、本体（jabberwock）に入れられないので、Windows 版のエンジンの 5 つの関数を包む C のつなぎ
-  （browser/engine/webview2/vault_link.c）に置いた（std.process ができたら本体へ移して消す）。
+  金庫も std.browser で窓を出し、ブラウザが std.process で子プロセスとして起こして、パイプの 1 行ずつで話す（金庫は std.io.read_line_for(0) で待たずに読む）。
+  クリップボードは std.clipboard（30 秒後に clear_if）、何もしないで 5 分たったら閉じるのは金庫の中で時刻を見る。C のつなぎはなくした。
+  WebView2 の実行環境がないときの知らせの窓はエンジン（jwe_webview2.cpp）が出す（本体はコンソールも窓も持たないため）。

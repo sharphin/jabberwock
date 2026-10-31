@@ -10,14 +10,13 @@ browser/
   app/store.jw                  履歴・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
   app/settings.jw               設定の項目の一覧と値（settings.tsv）。項目は items() に 1 行足すだけで増やせる
   app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。chrome.jw は gen_chrome.jw がここから作る
-  app/vault_main.jw             パスワードの金庫（別のプログラム。host/jwvault が起動する）
+  app/vault_main.jw             パスワードの金庫（別のプログラム。ブラウザの 🔑 で、ブラウザが子プロセスとして起こす）
   app/vault.jw                  金庫のファイル vault.dat（作る・開ける・足す・消す・マスターパスワードの変更・パスワード作り）。暗号は std.hash・std.crypto
-  app/vault_engine.jw           金庫とつなぎ（jwvault）のあいだの 1 行ずつのやりとりと、テスト用の偽エンジン
+  app/vault_engine.jw           金庫の窓（std.browser）・ブラウザとの 1 行ずつのやりとり・クリップボード・自動で閉じる。テスト用の偽エンジンも
+  app/vault_link.jw             ブラウザの側の、金庫とのやりとり（std.process で起こし、パイプの 1 行ずつで話す）
   app/vault.html                金庫の画面。vault_ui.jw は gen_chrome.jw がここから作る
   app/test_*.jw, app/testdata/  テスト（cargo test --test browser）
-  host/jwvault.c                金庫の窓のつなぎ（エンジンを動かし、金庫の本体を子プロセスにして 1 行ずつつなぐ。説明は host/README.md）
   engine/webview2/              WebView2（Windows）での実装（jw_engine.h の関数）
-  engine/webview2/vault_link.c  Windows 版のブラウザで、エンジンと金庫の窓をつなぐ（std にプロセスどうしのやりとりができるまで）
   engine/tests/mock_test.c      偽エンジンが決まりどおりに動くかのテスト
   engine/tests/smoke.c          手で動かして確かめる小さなブラウザ（jabberwock なし）
   build-windows.sh              Windows 版を Linux から作る
@@ -41,7 +40,7 @@ JWE_MOCK_SCRIPT=browser/app/testdata/basic.txt JWE_MOCK_LOG=/tmp/mock.log /tmp/j
   （既定は Windows なら `%LOCALAPPDATA%\jabberwock-browser`、ほかは `./browser-data`）
 - `--ephemeral`: 何も残さない
 
-金庫は jabberwock で書いた偽エンジンを持つ: `jwc build -o /tmp/jv browser/app/vault_main.jw` のあと
+金庫は jabberwock で書いた偽エンジンも持つ: `jwc build --link runtime/engine/mock/jwe_mock.c -o /tmp/jv browser/app/vault_main.jw` のあと
 `/tmp/jv --data /tmp/v --iterations 2 --fake browser/app/testdata/vault.txt --log`（`--iterations` は鍵を作る回数。テストを速くするためだけ）。
 
 テストは `cargo test --test browser`（jwc を作るので数分かかる。作ってある jwc を使うなら `JW_SAFETY_JWC=jwc の場所`）。
@@ -51,7 +50,7 @@ JWE_MOCK_SCRIPT=browser/app/testdata/basic.txt JWE_MOCK_LOG=/tmp/mock.log /tmp/j
 ## Windows 版を作る
 
 Linux から: `WV2_EXTRA_INC="-I <足りないヘッダー>" browser/build-windows.sh <jwc> <WebView2.h のフォルダ> <出力フォルダ>`。
-jabberwock-browser.exe・jwvault.exe・jwvault-app.exe ができる。3 つを同じフォルダに置き、jabberwock-browser.exe を起動する。
+jabberwock-browser.exe と jwvault-app.exe ができる。2 つを同じフォルダに置き、jabberwock-browser.exe を起動する。
 
 ## 偽エンジンのテスト（C。Linux / macOS / Windows）
 

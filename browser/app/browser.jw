@@ -6,6 +6,7 @@ use address;
 use store;
 use chrome;
 use settings;
+use vault_link;
 
 const HOME = "about:blank";
 const SETTINGS_URL = "jw://settings";
@@ -32,6 +33,7 @@ pub struct Browser {
     bool chrome_view;
     bool frameless;
     bool covered;    // 外枠が窓全体を覆っている（設定のタブを見せている）
+    vault_link.Link vault;   // パスワードの金庫（別のプログラム）とのやりとり
 
     // data: 置き場所。ephemeral なら何も残さない（設定は読むだけ）。エンジンを開けなければ Err
     static fn Result<Browser, str> open(str data, bool ephemeral) {
@@ -44,6 +46,7 @@ pub struct Browser {
         let mut b = Browser {
             eng: eng, data: store.Store.open(data_dir), prefs: prefs,
             tabs: [], current: 0, done: false, note: "", chrome_view: chrome_view, frameless: frameless, covered: false,
+            vault: vault_link.Link.new(data),   // 金庫は --ephemeral でも同じ置き場所の vault.dat を使う
         };
         if chrome_view {
             let h = b.bar_height();
@@ -370,7 +373,13 @@ pub struct Browser {
             case "reload" -> nav(name);
             case "stop" -> nav(name);
             case "settings" -> open_settings();
-            case "vault" -> {}   // 金庫の窓は Windows 版のつなぎ（engine/webview2/vault_link.c）が出す
+            case "vault" -> {
+                let u = shown_url();
+                match vault.open(u) {
+                    case Ok(_) -> {}
+                    case Err(e) -> note = e;
+                }
+            }
             case "set" -> apply_setting(arg);
             case "act" -> act(arg);
             case "newtab" -> {
@@ -449,10 +458,54 @@ pub struct Browser {
         check(eng.chrome_post(s));
     }
 
-    // イベントを待って処理する。窓が閉じられたら終わる
+    // 見えているタブの URL（設定のタブなら空）
+    fn str shown_url() {
+        let i = index_of(current);
+        if i < 0 || tabs[i].settings {
+            return "";
+        }
+        tabs[i].url
+    }
+
+    // 金庫から届いた行を処理する
+    fn mut from_vault() {
+        for line in vault.poll() {
+            let f = line.split("\t");
+            match f[0] {
+                case "ask_site" -> {
+                    let u = shown_url();
+                    vault.send("site\t" + vault_link.escape(u));
+                }
+                case "fill" -> {
+                    if f.len() != 4 {
+                        continue;
+                    }
+                    // 見えているタブのログイン欄に入れる。出どころが完全に同じかはエンジンが確かめる
+                    let code = if shown_url() == "" {
+                        2
+                    } else {
+                        match eng.fill_login(current, vault_link.unescape(f[1]), vault_link.unescape(f[2]), vault_link.unescape(f[3])) {
+                            case Ok(_) -> {
+                                eng.window(4).unwrap_or(());   // ブラウザを手前に出す
+                                0
+                            }
+                            case Err(_) -> 3;
+                        }
+                    };
+                    vault.send("filled\t{code}");
+                }
+                default -> {}
+            }
+        }
+        let u = shown_url();
+        vault.tell(u);
+    }
+
+    // イベントを待って処理する。窓が閉じられたら終わる。金庫が動いているあいだは、短く待って金庫からの行も見る
     fn mut run() {
         while !done {
-            match eng.wait(-1) {
+            let wait_ms = if vault.running() { 50 } else { -1 };
+            match eng.wait(wait_ms) {
                 case Some(ev) -> {
                     handle(ev);
                     // まとめて届いたイベントは全部処理してから外枠を直す
@@ -466,6 +519,7 @@ pub struct Browser {
                 }
                 case None -> {}
             }
+            from_vault();
         }
         save_session();
     }

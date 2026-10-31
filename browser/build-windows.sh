@@ -1,8 +1,7 @@
 #!/bin/sh
 # Windows 版（x86_64）を Linux から作る。出来上がりは <出力フォルダ> に置く:
-#   jabberwock-browser.exe  ブラウザ（jwc で作った本体 + WebView2 のエンジン + 金庫とのつなぎ）
-#   jwvault.exe             金庫の窓（C のつなぎ + WebView2 のエンジン）
-#   jwvault-app.exe         金庫の本体（jwc で作った jabberwock）
+#   jabberwock-browser.exe  ブラウザ（jwc で作った本体 + WebView2 のエンジン）
+#   jwvault-app.exe         パスワードの金庫（jwc で作った本体 + WebView2 のエンジン。ブラウザが子プロセスとして起こす）
 #
 #   browser/build-windows.sh <jwc> <WebView2.h のあるフォルダ> <出力フォルダ>
 #
@@ -23,27 +22,19 @@ CC=x86_64-w64-mingw32-gcc
 CXX=x86_64-w64-mingw32-g++
 WIN="-lole32 -luser32 -lshell32 -lshlwapi -lgdi32"
 
-# WebView2 のエンジン。ブラウザ用は 5 つの関数の名前を変え、vault_link.c がそれを包む
-RENAME="-Djwe_open=jwe_inner_open -Djwe_close=jwe_inner_close -Djwe_poll=jwe_inner_poll -Djwe_wait=jwe_inner_wait -Djwe_tab_show=jwe_inner_tab_show"
-$CXX -std=c++17 -O2 -c "$B/engine/webview2/jwe_webview2.cpp" -I "$SDK" ${WV2_EXTRA_INC:-} $RENAME -o "$W/wv_browser.o"
-$CXX -std=c++17 -O2 -c "$B/engine/webview2/jwe_webview2.cpp" -I "$SDK" ${WV2_EXTRA_INC:-} -o "$W/wv_vault.o"
-$CC -O2 -c "$B/engine/webview2/vault_link.c" -o "$W/vault_link.o"
+# WebView2 のエンジン（ブラウザと金庫で同じもの）
+$CXX -std=c++17 -O2 -c "$B/engine/webview2/jwe_webview2.cpp" -I "$SDK" ${WV2_EXTRA_INC:-} -o "$W/wv.o"
 
-# 実行時ライブラリ（jwc が埋め込んでいるものと同じ runtime/jw_rt.c）
-$CC -O2 -c "$ROOT/runtime/jw_rt.c" -DJW_BROWSER -o "$W/rt_browser.o"
-$CC -O2 -c "$ROOT/runtime/jw_rt.c" -o "$W/rt.o"
+# 実行時ライブラリ（jwc が埋め込んでいるものと同じ runtime/jw_rt.c。std.browser を使うので -DJW_BROWSER）
+$CC -O2 -c "$ROOT/runtime/jw_rt.c" -DJW_BROWSER -o "$W/rt.o"
 
 # jabberwock の本体（モジュールは入口のファイルのフォルダから探す）
-"$JWC" --ll "$B/app/main.jw" > "$W/browser.ll"
-"$JWC" --ll "$B/app/vault_main.jw" > "$W/vault.ll"
-clang --target=x86_64-w64-mingw32 -O2 -Wno-override-module -c "$W/browser.ll" -o "$W/browser.o"
-clang --target=x86_64-w64-mingw32 -O2 -Wno-override-module -c "$W/vault.ll" -o "$W/vault.o"
-
 STACK="-Wl,--stack,268435456"
-$CXX -static -s -mwindows $STACK -o "$OUT/jabberwock-browser.exe" "$W/browser.o" "$W/rt_browser.o" "$W/vault_link.o" "$W/wv_browser.o" $WIN
-$CC -static -s $STACK -o "$OUT/jwvault-app.exe" "$W/vault.o" "$W/rt.o" -lshell32
-
-# 金庫の窓（C のつなぎ）
-$CC -O2 -c "$B/host/jwvault.c" -o "$W/jwvault.o"
-$CXX -static -s -mwindows -o "$OUT/jwvault.exe" "$W/jwvault.o" "$W/wv_vault.o" $WIN
+for app in main:jabberwock-browser vault_main:jwvault-app; do
+    src=${app%%:*}
+    exe=${app##*:}
+    "$JWC" --ll "$B/app/$src.jw" > "$W/$src.ll"
+    clang --target=x86_64-w64-mingw32 -O2 -Wno-override-module -c "$W/$src.ll" -o "$W/$src.o"
+    $CXX -static -s -mwindows $STACK -o "$OUT/$exe.exe" "$W/$src.o" "$W/rt.o" "$W/wv.o" $WIN
+done
 echo "作りました: $OUT"

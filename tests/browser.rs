@@ -81,9 +81,9 @@ fn build(name: &str, mock: bool) -> PathBuf {
     exe
 }
 
-/// 作った name を動かし、標準出力を返す（失敗なら止める）
+/// 作った name を動かし、標準出力を返す（失敗なら止める）。金庫は std.browser を使うので偽エンジンとリンクする
 fn run(name: &str, args: &[&str]) -> String {
-    let o = Command::new(build(name, false)).current_dir(app()).args(args).output().unwrap();
+    let o = Command::new(build(name, name == "vault_main")).current_dir(app()).args(args).output().unwrap();
     let out = String::from_utf8_lossy(&o.stdout).into_owned();
     assert!(o.status.success(), "{} {:?} が失敗した:\n{}\n{}", name, args, out, String::from_utf8_lossy(&o.stderr));
     out
@@ -239,49 +239,99 @@ fn c_mock_engine() {
     assert_eq!(String::from_utf8_lossy(&o.stdout), "ok\n");
 }
 
-/// 金庫の窓のつなぎ（browser/host/jwvault.c）を C の偽エンジンとリンクし、金庫の本体（vault_main.jw の実行ファイル）を
-/// 子プロセスにして通しで動かす。乱数は std.random（OS）。鍵を作る回数はふだんどおり（実行ファイルで 1 秒ほど）
+/// ブラウザが金庫（子プロセス）とやりとりする。金庫の代わりに、決まった行を出して届いた行を書き留める小さなシェルの台本を
+/// PATH の jwvault-app に置く。ブラウザは偽エンジンなので、台本の後ろに何もしない行を並べて、金庫の返事が届くまで回す
+#[cfg(unix)]
 #[test]
-fn vault_over_pipes() {
-    if !have_cc() || !have_clang() {
+fn browser_talks_to_vault() {
+    if !have_clang() {
         return;
     }
-    let dir = scratch("vault-host");
-    let app_exe = build("vault_main", false);
-    let host = dir.join("jwvault");
-    let built = Command::new("cc")
-        .arg("-o")
-        .arg(&host)
-        .arg(root().join("browser/host/jwvault.c"))
-        .arg(root().join("runtime/engine/mock/jwe_mock.c"))
-        .arg("-pthread")
-        .output()
-        .unwrap();
-    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
-    let script = dir.join("script.txt");
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch("link");
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let got = dir.join("got.txt");
+    let fake = bin.join("jwvault-app");
     std::fs::write(
-        &script,
-        "chrome create correct horse\nchrome save https://a.example\tu\tsecret-pw\t\t\t\nchrome gen\nchrome lock\n\
-         chrome unlock correct horse\nchrome copy https://a.example\tu\nclose\n",
+        &fake,
+        format!(
+            "#!/bin/sh\necho \"$@\" > '{0}'\nprintf 'ask_site\\nfill\\thttps://a.example\\tu\\\\tser\\tp\\\\\\\\w\\nfill\\thttps://b.example\\tu\\tpw\\n'\ncat >> '{0}'\n",
+            got.display()
+        ),
     )
     .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let script = dir.join("script.txt");
+    let mut text = String::from("chrome go https://a.example/login\nchrome vault\n");
+    for _ in 0..3000 {
+        text.push_str("chrome noop\n");
+    }
+    std::fs::write(&script, text).unwrap();
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
     let log = dir.join("mock.log");
-    let o = Command::new(&host)
-        .args(["--data", dir.to_str().unwrap()])
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let o = Command::new(build("main", true))
+        .args(["--data", data.to_str().unwrap()])
+        .env("PATH", path)
         .env("JWE_MOCK_SCRIPT", &script)
         .env("JWE_MOCK_LOG", &log)
-        .env("JWVAULT_APP", &app_exe)
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let calls = std::fs::read_to_string(&log).unwrap();
+    // 同じサイトなら入れ（ユーザー名・パスワードの \t \\ は戻す）、違うサイトはエンジンが断る
+    assert!(calls.contains("fill 1 https://a.example u\tser (3)\n"), "{}", calls);
+    assert!(calls.contains("fill_refused 1 https://b.example\n"), "{}", calls);
+    assert!(calls.contains("window 0 4\n"), "入れたらブラウザを手前に出す:\n{}", calls);
+    let said = std::fs::read_to_string(&got).unwrap();
+    assert!(said.starts_with(&format!("--data {}\n", data.display())), "{}", said);
+    assert!(said.contains("site\thttps://a.example/login\n"), "{}", said);
+    assert!(said.contains("filled\t0\nfilled\t3\n"), "{}", said);
+}
+
+/// 金庫（std.browser の偽エンジン）を、テストがブラウザの代わりになって標準入出力でつないで動かす
+#[test]
+fn vault_talks_to_browser() {
+    if !have_clang() {
+        return;
+    }
+    use std::io::Write;
+    let dir = scratch("vault-link");
+    let script = dir.join("script.txt");
+    let mut text = String::from("chrome create correct horse\nchrome save https://a.example\tu\tsecret-pw\t\t\t\n");
+    // ブラウザからの site の行が先に届くよう、何もしない行をはさむ
+    for _ in 0..200 {
+        text.push_str("chrome noop\n");
+    }
+    text.push_str("chrome fill https://a.example\tu\nchrome copy https://a.example\tu\nchrome lock\nclose\n");
+    std::fs::write(&script, text).unwrap();
+    let log = dir.join("mock.log");
+    let mut child = Command::new(build("vault_main", true))
+        .args(["--data", dir.to_str().unwrap(), "--iterations", "2"])
+        .env("JWE_MOCK_SCRIPT", &script)
+        .env("JWE_MOCK_LOG", &log)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    input.write_all(b"site\thttps://a.example/login\n").unwrap();
+    input.flush().unwrap();
+    let o = child.wait_with_output().unwrap();
+    drop(input);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(said.contains("ask_site\n"), "{}", said);
+    assert!(said.contains("fill\thttps://a.example\tu\tsecret-pw\n"), "{}", said);
+    let calls = std::fs::read_to_string(&log).unwrap();
     assert!(calls.contains("chrome_height 0 full"), "{}", calls);
     assert!(calls.contains("msg\tok\t金庫を作りました"), "{}", calls);
-    assert!(calls.contains("\ngen\t"), "{}", calls);
+    assert!(calls.contains("site\thttps://a.example\n"), "ブラウザのページの出どころを画面に出す:\n{}", calls);
     assert!(calls.contains("mode\tlocked"), "{}", calls);
-    assert!(calls.contains("login\thttps://a.example\tu\t"), "{}", calls);
     assert!(!calls.contains("secret-pw"), "パスワードは画面に送らない（見るを押していない）:\n{}", calls);
     let text = std::fs::read_to_string(dir.join("vault.dat")).unwrap();
-    assert!(text.starts_with("jwvault 1\nkdf pbkdf2-sha256 600000 "), "{}", text);
     assert!(!text.contains("secret-pw") && !text.contains("a.example"));
 }

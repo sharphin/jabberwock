@@ -1,6 +1,7 @@
-// パスワードの金庫（ブラウザとは別のプログラム。つなぎの jwvault.exe が別の窓で起動する。ブラウザの 🔑 からも開く）。
-//   jwc build -o jwvault-app browser/app/vault_main.jw → jwvault-app [--data フォルダ] [--fake 台本] [--log] [--iterations 回数]
-// --data: vault.dat の置き場所（既定は今のフォルダ）
+// パスワードの金庫（ブラウザとは別のプログラム。ブラウザの 🔑 で、ブラウザが子プロセスとして起こす）。
+//   jwc build --link <エンジン> -o jwvault-app browser/app/vault_main.jw
+//   jwvault-app [--data フォルダ] [--fake 台本] [--log] [--iterations 回数]
+// --data: vault.dat の置き場所（既定はブラウザと同じ。Windows なら %LOCALAPPDATA%\jabberwock-browser）
 // --fake / --log: 偽エンジンの台本と、呼ばれた操作の表示（テスト用。台本の書き方は vault_engine.jw の先頭）
 // --iterations: 新しく作る金庫の鍵を作る回数（テスト用。ふだんは vault.iterations()）
 //
@@ -10,6 +11,8 @@
 use vault_engine;
 use vault;
 use vault_ui;
+use std.env;
+use std.fs;
 
 struct App {
     vault_engine.Engine eng;
@@ -156,14 +159,18 @@ struct App {
             }
             case "copy" -> match v.password_of(k[0], k[1]) {
                 case Some(p) -> {
-                    eng.copy_text(p);
-                    say("パスワードをコピーしました（30 秒で消えます）");
+                    match eng.copy_text(p, true) {
+                        case Ok(_) -> say("パスワードをコピーしました（30 秒で消えます）");
+                        case Err(e) -> fail("コピーできませんでした: " + e);
+                    }
                 }
                 case None -> fail("見つかりません");
             };
             case "copyuser" -> {
-                eng.copy_text(k[1]);
-                say("ユーザー名をコピーしました");
+                match eng.copy_text(k[1], false) {
+                    case Ok(_) -> say("ユーザー名をコピーしました");
+                    case Err(e) -> fail("コピーできませんでした: " + e);
+                }
             }
             case "fill" -> {
                 if k[0] != site {
@@ -290,9 +297,22 @@ struct App {
     }
 }
 
+// 置き場所の既定（ブラウザと同じ。ブラウザから起こすときは --data で渡す）
+fn str default_data() {
+    match env.get("LOCALAPPDATA") {
+        case Some(d) -> {
+            if d != "" {
+                return d + "\\jabberwock-browser";
+            }
+        }
+        case None -> {}
+    }
+    "browser-data"
+}
+
 fn main() {
     let a = args();
-    let mut data = ".";
+    let mut data = "";
     let mut script = "";
     let mut fake = false;
     let mut show_log = false;
@@ -329,13 +349,26 @@ fn main() {
         }
         i++;
     }
+    if data == "" {
+        data = default_data();
+    }
+    if !fake && !fs.exists(data) {
+        fs.make_dir(data).unwrap_or(());
+    }
     let file = if data.ends_with("/") || data.ends_with("\\") { data + "vault.dat" } else { data + "/vault.dat" };
     let cfg = vault_engine.Config {
-        title: "jabberwock 金庫", data_dir: data, width: 520, height: 640,
+        title: "jabberwock 金庫", data_dir: data + "/vault", width: 520, height: 640,
         fake: fake, fake_script: script.lines(),
     };
+    let eng = match vault_engine.Engine.open(cfg) {
+        case Ok(x) -> x;
+        case Err(e) -> {
+            eprint("エンジンを開けません:", e);
+            exit(1)
+        }
+    };
     let mut app = App {
-        eng: vault_engine.Engine.open(cfg), v: vault.Vault.at(file), rounds: rounds, site: "", msg: "", msg_err: false,
+        eng: eng, v: vault.Vault.at(file), rounds: rounds, site: "", msg: "", msg_err: false,
         reveal: "", gen: "", done: false,
     };
     app.run();

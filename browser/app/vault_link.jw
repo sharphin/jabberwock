@@ -1,0 +1,132 @@
+// ブラウザと金庫（別のプログラム jwvault-app）のあいだ。ブラウザが金庫を子プロセスとして起こし（std.process）、
+// 子の標準入力・標準出力の 1 行ずつで話す。パイプなので、ほかのプロセスからはつなげない。
+//
+// 行の形（区切りはタブ文字。文字の中の \ タブ 改行は \\ \t \n）:
+//   ブラウザ → 金庫: site <URL>（見えているタブの URL）/ filled <番号>（入力の結果）/ show（窓を手前に出す）
+//   金庫 → ブラウザ: fill <サイト> <ユーザー> <パスワード>（見えているタブのログイン欄に入れる）/ ask_site
+// 入れてよいかの確かめ（出どころが完全に同じか）はエンジンの fill_login がする。
+
+use std.process;
+use std.text;
+
+pub struct Link {
+    process.Child[] child;   // 動いている金庫（0 か 1 つ）
+    u8[] buf;                // 読んだが行になっていないところ（UTF-8 が読む区切りで割れても大丈夫なようにバイトで持つ）
+    str sent;                // 最後に知らせた URL
+    str data;                // 金庫に渡す置き場所
+
+    static fn Link new(str data) {
+        Link { child: [], buf: [], sent: "", data: data }
+    }
+
+    fn bool running() {
+        child.len() > 0
+    }
+
+    // 金庫の窓を出す（動いていれば手前に出す）。起こせなければ Err
+    fn mut Result<(), str> open(str url) {
+        if child.len() > 0 {
+            if !child[0].exited() {
+                send("show");
+                return Ok(());
+            }
+            child.pop();
+        }
+        let str[] mut argv = [];
+        if data != "" {
+            argv.push("--data");
+            argv.push(data);
+        }
+        let mut c = match process.start("jwvault-app", argv) {
+            case Ok(x) -> x;
+            case Err(e) -> return Err("金庫（jwvault-app）を起こせません: " + e);
+        };
+        c.set_timeout(1)?;
+        child.push(c);
+        buf = [];
+        sent = "";
+        tell(url);
+        Ok(())
+    }
+
+    fn mut send(str line) {
+        if child.len() == 0 {
+            return;
+        }
+        match child[0].write_text(line + "\n") {
+            case Ok(_) -> {}
+            case Err(_) -> child.pop();   // 金庫が終わった
+        }
+    }
+
+    // 見えているタブの URL を知らせる（変わったときだけ）
+    fn mut tell(str url) {
+        if child.len() > 0 && url != sent {
+            sent = url;
+            send("site\t" + escape(url));
+        }
+    }
+
+    // 金庫から届いた行（待たない）。金庫が終わっていれば手放す
+    fn mut str[] poll() {
+        let str[] mut out = [];
+        if child.len() == 0 {
+            return out;
+        }
+        loop {
+            match child[0].read(4096) {
+                case Ok(b) -> {
+                    if b.len() == 0 {
+                        child.pop();   // 金庫が出力を閉じた（終わった）
+                        break;
+                    }
+                    for x in b {
+                        buf.push(x);
+                    }
+                }
+                case Err(_) -> break;    // 時間切れ（届いていない）
+            }
+        }
+        let u8[] mut line = [];
+        let u8[] mut rest = [];
+        for x in buf {
+            if x == 10 {
+                match text.from_utf8(ref line) {
+                    case Some(t) -> out.push(t.replace("\r", ""));
+                    case None -> {}      // 読めない行は捨てる
+                }
+                line = [];
+            } else {
+                line.push(x);
+            }
+        }
+        for x in line {
+            rest.push(x);
+        }
+        buf = rest;
+        out
+    }
+}
+
+pub fn str escape(str s) {
+    s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "")
+}
+
+pub fn str unescape(str s) {
+    if !s.contains("\\") {
+        return s;
+    }
+    let mut out = "";
+    let mut esc = false;
+    for c in s.chars() {
+        if esc {
+            out += match c { case "t" -> "\t"; case "n" -> "\n"; default -> c; };
+            esc = false;
+        } else if c == "\\" {
+            esc = true;
+        } else {
+            out += c;
+        }
+    }
+    out
+}
