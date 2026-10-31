@@ -105,6 +105,10 @@ JWE_HANDLER(DevToolsDone, ICoreWebView2CallDevToolsProtocolMethodCompletedHandle
 
 typedef HRESULT(STDAPICALLTYPE *CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions *,
                                               ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
+// WebView2Loader.dll がないときに、入っている実行環境の DLL を直接呼ぶための入口
+// （WebView2Loader.dll が中でしていることと同じ。webview/webview の組み込みの loader と同じ方法）
+typedef HRESULT(STDMETHODCALLTYPE *CreateInternalFn)(bool, int, PCWSTR, IUnknown *,
+                                                     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
 
 const wchar_t kClass[] = L"JabberwockBrowser";
 
@@ -352,6 +356,61 @@ struct JweEngine {
 
 namespace {
 
+// "130.0.2849.80" のような版を比べる（a が新しければ正）
+int compare_version(const std::wstring &a, const std::wstring &b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() || j < b.size()) {
+        unsigned long x = 0, y = 0;
+        while (i < a.size() && a[i] != L'.') x = x * 10 + (unsigned long)(a[i++] - L'0');
+        while (j < b.size() && b[j] != L'.') y = y * 10 + (unsigned long)(b[j++] - L'0');
+        if (x != y) return x > y ? 1 : -1;
+        i++;
+        j++;
+    }
+    return 0;
+}
+
+std::wstring env_var(const wchar_t *name) {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(name, buf, MAX_PATH);
+    return n && n < MAX_PATH ? std::wstring(buf, n) : std::wstring();
+}
+
+// 入っている WebView2 の実行環境のうち、いちばん新しい版の EmbeddedBrowserWebView.dll を探す
+std::wstring find_runtime_dll() {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    const wchar_t *arch = L"arm64";
+#else
+    const wchar_t *arch = L"x64";
+#endif
+    std::wstring bases[] = {env_var(L"ProgramFiles(x86)"), env_var(L"ProgramFiles"), env_var(L"LOCALAPPDATA")};
+    std::wstring best, best_ver;
+    for (const auto &b : bases) {
+        if (b.empty()) continue;
+        std::wstring app = b + L"\\Microsoft\\EdgeWebView\\Application";
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW((app + L"\\*").c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] < L'0' || fd.cFileName[0] > L'9') continue;
+            std::wstring dll = app + L"\\" + fd.cFileName + L"\\EBWebView\\" + arch + L"\\EmbeddedBrowserWebView.dll";
+            if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+            if (best.empty() || compare_version(fd.cFileName, best_ver) > 0) {
+                best = dll;
+                best_ver = fd.cFileName;
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    return best;
+}
+
+std::wstring full_path(const std::wstring &p) {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetFullPathNameW(p.c_str(), MAX_PATH, buf, nullptr);
+    return n && n < MAX_PATH ? std::wstring(buf, n) : p;
+}
+
 LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     JweEngine *e = (JweEngine *)GetWindowLongPtrW(h, GWLP_USERDATA);
     switch (msg) {
@@ -429,9 +488,19 @@ JweStatus jwe_open(const JweConfig *cfg, JweEngine **out) {
     e->com = SUCCEEDED(hr);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+    // WebView2Loader.dll が実行ファイルの横にあればそれを使い、なければ実行環境の DLL を直接呼ぶ
+    CreateEnvFn create = nullptr;
+    CreateInternalFn create_internal = nullptr;
     e->loader = LoadLibraryW(L"WebView2Loader.dll");
-    CreateEnvFn create = e->loader ? (CreateEnvFn)(void *)GetProcAddress(e->loader, "CreateCoreWebView2EnvironmentWithOptions") : nullptr;
+    if (e->loader) create = (CreateEnvFn)(void *)GetProcAddress(e->loader, "CreateCoreWebView2EnvironmentWithOptions");
     if (!create) {
+        if (e->loader) FreeLibrary(e->loader);
+        e->loader = nullptr;
+        std::wstring dll = find_runtime_dll();
+        if (!dll.empty()) e->loader = LoadLibraryW(dll.c_str());
+        if (e->loader) create_internal = (CreateInternalFn)(void *)GetProcAddress(e->loader, "CreateWebViewEnvironmentWithOptionsInternal");
+    }
+    if (!create && !create_internal) {
         jwe_close(e);
         return JWE_ERR_UNAVAILABLE;
     }
@@ -460,20 +529,23 @@ JweStatus jwe_open(const JweConfig *cfg, JweEngine **out) {
 
     std::wstring base = widen(cfg->data_dir, cfg->data_dir_len);
     e->ephemeral = cfg->ephemeral != 0;
-    if (!base.empty()) {
+    if (base.empty()) base = env_var(L"TEMP") + L"\\jabberwock-browser"; // 置き場所はいつも 1 か所に決める
+    base = full_path(base);
+    {
         CreateDirectoryW(base.c_str(), nullptr);
         sweep_ephemeral(base);
         e->data_dir = e->ephemeral ? base + L"\\ephemeral-" + std::to_wstring(GetCurrentProcessId()) : base + L"\\webview2";
     }
-    hr = create(nullptr, e->data_dir.empty() ? nullptr : e->data_dir.c_str(), nullptr,
-                new EnvDone([e](HRESULT r, ICoreWebView2Environment *env) {
-                    if (FAILED(r) || !env) {
-                        e->push(JWE_EV_ERROR, 0, JWE_ERR_UNAVAILABLE, "WebView2 の実行環境を使えませんでした");
-                        return S_OK;
-                    }
-                    e->on_env(env);
-                    return S_OK;
-                }));
+    EnvDone *done = new EnvDone([e](HRESULT r, ICoreWebView2Environment *env) {
+        if (FAILED(r) || !env) {
+            e->push(JWE_EV_ERROR, 0, JWE_ERR_UNAVAILABLE, "WebView2 の実行環境を使えませんでした");
+            return S_OK;
+        }
+        e->on_env(env);
+        return S_OK;
+    });
+    if (create) hr = create(nullptr, e->data_dir.c_str(), nullptr, done);
+    else hr = create_internal(true, 0 /* 入っている実行環境 */, e->data_dir.c_str(), nullptr, done);
     if (FAILED(hr)) {
         jwe_close(e);
         return JWE_ERR_UNAVAILABLE;

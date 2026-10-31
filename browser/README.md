@@ -60,15 +60,16 @@ clang は docs/native.md の「Windows で clang を入れる」の A（llvm-min
    clang++ -std=c++17 -O2 -c browser\engine\webview2\jwe_webview2.cpp -I wv2\build\native\include -o jwe_webview2.o
    clang -O2 -c browser\engine\tests\smoke.c -o smoke.o
    clang++ -o smoke.exe smoke.o jwe_webview2.o -lole32 -luser32 -lshell32
-   copy wv2\build\native\x64\WebView2Loader.dll .
    ```
+   WebView2Loader.dll は要らない（なければ、入っている WebView2 の実行環境を直接探して使う。横に置けばそちらを使う）。
    （ARM の PC なら `x64` を `arm64` に）
 3. `.\smoke.exe` で窓が開き、example.com が出る。上の欄に URL を入れて Enter で移動。Alt+← / Alt+→ で戻る・進む、F5 で再読み込み。
    PowerShell にはエンジンから届いたイベントが 1 行ずつ出る。
 
 | 症状 | 直し方 |
 |---|---|
-| `jwe_open: 1` と出てすぐ終わる | `WebView2Loader.dll` が smoke.exe と同じフォルダにない。または WebView2 の実行環境がない（Windows 11 には最初から入っている。Windows 10 なら https://developer.microsoft.com/microsoft-edge/webview2/ の Evergreen Bootstrapper） |
+| 「WebView2 runtime not found」と出る | WebView2 の実行環境がない（Windows 11 には最初から入っている。Windows 10 なら https://developer.microsoft.com/microsoft-edge/webview2/ の Evergreen Bootstrapper） |
 | `EventToken.h` が見つからない | llvm-mingw が古い。新しい版を入れ直す |
+| `vcruntime.h` / `excpt.h` が見つからない | 公式の LLVM の clang で、Visual Studio の C++ 部品がない。llvm-mingw を使うか、Build Tools の「C++ によるデスクトップ開発」を入れる |
 
 試作なので、データ（Cookie など）は `smoke-data` の一時フォルダに置き、終わると消す。

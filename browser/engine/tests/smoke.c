@@ -5,6 +5,17 @@
 
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+/* 起動できなかった理由を、ダブルクリックで開いたときにも見えるように出す */
+static void fail(const char *msg) {
+    fprintf(stderr, "%s\n", msg);
+#ifdef _WIN32
+    MessageBoxA(NULL, msg, "smoke", MB_OK | MB_ICONERROR);
+#endif
+}
 
 static const char CHROME[] =
     "<!doctype html><meta charset=utf-8><body style='margin:0;font:14px sans-serif'>"
@@ -28,8 +39,14 @@ int main(int argc, char **argv) {
     cfg.ephemeral = 1;
     JweEngine *e;
     JweStatus st = jwe_open(&cfg, &e);
+    if (st == JWE_ERR_UNAVAILABLE) {
+        fail("WebView2 runtime not found. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ (Evergreen Bootstrapper).");
+        return 1;
+    }
     if (st != JWE_OK) {
-        fprintf(stderr, "jwe_open: %d\n", (int)st);
+        char msg[64];
+        snprintf(msg, sizeof msg, "jwe_open failed: %d", (int)st);
+        fail(msg);
         return 1;
     }
     JweInfo info;
@@ -47,6 +64,10 @@ int main(int argc, char **argv) {
                ev.tab, (long long)ev.code, (int)ev.text_len, ev.text ? ev.text : "");
         fflush(stdout);
         if (ev.kind == JWE_EV_CLOSE_REQUESTED) break;
+        if (ev.kind == JWE_EV_ERROR && ev.code == JWE_ERR_UNAVAILABLE) {
+            fail("WebView2 runtime could not start.");
+            break;
+        }
         if (ev.kind == JWE_EV_CHROME_MESSAGE && ev.text_len > 3 && memcmp(ev.text, "go ", 3) == 0) {
             char url[4096];
             snprintf(url, sizeof url, "%.*s", (int)(ev.text_len - 3), ev.text + 3);
