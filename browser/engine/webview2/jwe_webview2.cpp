@@ -144,6 +144,8 @@ struct JweEngine {
     std::wstring chrome_html;
     uint32_t chrome_height = 0;
     bool chrome_wanted = false;
+    bool chrome_ready = false;               // 外枠のページを読み終えた
+    std::vector<std::wstring> chrome_pending; // それまでに頼まれた chrome_post
     std::wstring data_dir;
     bool ephemeral = false;
     bool com = false;
@@ -336,6 +338,13 @@ struct JweEngine {
                 bool inline_page = uri && wcsncmp(uri, L"data:", 5) == 0;
                 if (uri) CoTaskMemFree(uri);
                 if (!inline_page) a->put_Cancel(TRUE);
+                return S_OK;
+            }), &tok);
+            // 外枠のページを読み終えたら、それまでに溜めたものを送る
+            chrome->add_NavigationCompleted(new NavCompleted([this](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *) {
+                chrome_ready = true;
+                for (const auto &m : chrome_pending) chrome->PostWebMessageAsString(m.c_str());
+                chrome_pending.clear();
                 return S_OK;
             }), &tok);
             chrome->NavigateToString(chrome_html.c_str());
@@ -668,6 +677,7 @@ JweStatus jwe_chrome_load(JweEngine *e, const char *html, uint32_t html_len, uin
     e->chrome_html = widen(html, html_len);
     e->chrome_height = height;
     if (e->chrome) {
+        e->chrome_ready = false;
         e->chrome->NavigateToString(e->chrome_html.c_str());
         e->layout();
     } else if (!e->chrome_wanted) {
@@ -678,8 +688,16 @@ JweStatus jwe_chrome_load(JweEngine *e, const char *html, uint32_t html_len, uin
 }
 
 JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len) {
-    if (!e->chrome) return JWE_ERR_FAILED; // 外枠の準備がまだ
+    if (!e->chrome_wanted) return JWE_ERR_FAILED; // jwe_chrome_load がまだ
     std::wstring w = widen(msg, msg_len);
+    if (!e->chrome || !e->chrome_ready) {
+        // 準備ができるまで溜める（多すぎたら古いものを捨てる。状態はいつも全部を送るので、新しいものだけで足りる）
+        if (e->chrome_pending.size() >= 16) e->chrome_pending.erase(e->chrome_pending.begin());
+        e->chrome_pending.push_back(w);
+        return JWE_OK;
+    }
+    // アドレス欄へ移すときは、キーボードの入力先も外枠へ移す
+    if (w == L"focus" && e->chrome_ctl) e->chrome_ctl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
     return SUCCEEDED(e->chrome->PostWebMessageAsString(w.c_str())) ? JWE_OK : JWE_ERR_FAILED;
 }
 

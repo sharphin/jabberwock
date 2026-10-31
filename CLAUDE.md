@@ -66,8 +66,8 @@
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/fuzz.rs` | 差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
 | `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す**。確かめた範囲と残りは docs/safety-testing.md |
-| `browser/` | 軽量ブラウザの試作（設計は docs/browser-plan.md、使い方は browser/README.md）。`engine/jw_engine.h` がエンジンとの境目（C の関数だけ。WebView2 版・C の偽エンジン）、`app/` が jabberwock で書いた本体（今は `app/engine.jw` の偽エンジンにつなぐ）。`app/chrome.jw` は `gen_chrome.jw` が作る |
-| `tests/browser.rs` | ブラウザの本体を偽エンジンの台本で動かし `browser/app/testdata/*.out` と比べる（`JW_BLESS=1` で作り直す）。cc があれば C の偽エンジンのテストも |
+| `browser/` | 軽量ブラウザの試作（設計は docs/browser-plan.md、使い方は browser/README.md）。`engine/jw_engine.h` がエンジンとの境目（C の関数だけ。WebView2 版・C の偽エンジン）、`app/` が jabberwock で書いた本体（`app/engine.jw` は標準入出力の向こうのエンジンか、`--fake` で偽エンジンにつなぐ）、`host/jwbrowser.c` がエンジンを動かして本体を子プロセスにするつなぎ（std.browser ができるまで）。`app/chrome.jw` は `gen_chrome.jw` が作る |
+| `tests/browser.rs` | ブラウザの本体を偽エンジンの台本で動かし `browser/app/testdata/*.out` と比べる（`JW_BLESS=1` で作り直す）。cc があれば C の偽エンジンのテストも、clang もあれば host と本体の通しのテストも |
 | `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
 
 ## 大事な不変条件

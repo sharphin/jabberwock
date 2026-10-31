@@ -4,6 +4,7 @@
 
 ```
 browser/
+  host/jwbrowser.c              エンジンを動かし、本体（jwbrowser-app）を子プロセスにして 1 行ずつつなぐ（説明は host/README.md）
   app/main.jw                   本体の入口（引数を読んで Browser を動かす）
   app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり
   app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
@@ -22,8 +23,9 @@ browser/
 
 ## 本体を偽エンジンで動かす（どの OS でも）
 
-今は jabberwock から C の関数を呼べないので、本体は jabberwock で書いた偽エンジン（app/engine.jw）とつないである。
-std.browser ができたら engine.jw だけを置き換えれば、WebView2 で動く（ほかのファイルは変えない）。
+今は jabberwock から C の関数を呼べないので、本体の app/engine.jw は 2 通りに動く。
+ふつうは標準入出力の向こうのエンジン（host/jwbrowser が起動する。WebView2 で動くのはこちら）、`--fake` なら jabberwock で書いた偽エンジン。
+std.browser ができたら engine.jw だけを置き換える（ほかのファイルは変えない）。
 
 ```
 cd browser/app

@@ -101,7 +101,8 @@ JweStatus jwe_forward(JweEngine *e, uint32_t tab);
 JweStatus jwe_reload(JweEngine *e, uint32_t tab);
 JweStatus jwe_stop(JweEngine *e, uint32_t tab);
 
-/* 外枠（JWE_CAP_CHROME_VIEW があるときだけ）。height は外枠の高さ（論理ピクセル） */
+/* 外枠（JWE_CAP_CHROME_VIEW があるときだけ）。height は外枠の高さ（論理ピクセル）
+ * jwe_chrome_post は jwe_chrome_load のあとなら、外枠の準備ができる前でも受け付ける（準備ができたら送る） */
 JweStatus jwe_chrome_load(JweEngine *e, const char *html, uint32_t html_len, uint32_t height);
 JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len);
 

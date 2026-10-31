@@ -1,8 +1,11 @@
 // エンジンとの境目（browser/engine/jw_engine.h と同じ形）を jabberwock から使うためのモジュール。
 //
-// 今はまだ jabberwock から C の関数を呼べないので、ここには jabberwock で書いた偽エンジンを置く
-// （browser/engine/mock/jwe_mock.c と同じ動き）。std.browser ができたら、このファイルだけを
-// std.browser を呼ぶものに置き換える。pub の型と関数の形は変えない。
+// 今はまだ jabberwock から C の関数を呼べないので、2 通りの動きを持つ:
+// - パイプ（ふつう）: エンジンを動かす別の実行ファイル（browser/host/jwbrowser.c）が、このプログラムを
+//   子プロセスとして起動する。操作は 1 行ずつ標準出力へ書き、イベントは標準入力から 1 行ずつ読む。
+//   行の形は browser/host/README.md（区切りはタブ文字。文字の中の \ タブ 改行は \\ \t \n）。
+// - 偽エンジン（Config.fake が true。テスト用）: browser/engine/mock/jwe_mock.c と同じ動き。
+// std.browser ができたら、このファイルだけを std.browser を呼ぶものに置き換える。pub の型と関数の形は変えない。
 //
 // 偽エンジン: ページは読まず、決まった順にイベントを出す:
 //   navigate → NavStarted → UrlChanged → TitleChanged（"title:" + URL）→ NavFinished → HistoryChanged
@@ -16,6 +19,7 @@ pub struct Config {
     i64 width;
     i64 height;
     bool ephemeral;   // true なら何も残さない
+    bool fake;        // true なら偽エンジン（テスト用）
     str[] fake_script; // 偽エンジンだけが使う
 }
 
@@ -76,6 +80,7 @@ struct FakeTab {
 }
 
 pub struct Engine {
+    bool piped;
     i64 next_id;
     FakeTab[] tabs;
     Event[] queue;
@@ -88,20 +93,87 @@ pub struct Engine {
 
     static fn Engine open(Config cfg) {
         let mut e = Engine {
-            next_id: 1, tabs: [], queue: [], script: cfg.fake_script.map((l) -> l), script_pos: 0,
+            piped: !cfg.fake, next_id: 1, tabs: [], queue: [], script: cfg.fake_script.map((l) -> l), script_pos: 0,
             close_sent: false, chrome: false, ephemeral: cfg.ephemeral, log: [],
         };
         e.log.push("open " + cfg.title);
-        e.queue.push(Event.Ready);
+        if e.piped {
+            e.send("set_title\t" + escape(cfg.title));   // Ready はエンジンから届く
+        } else {
+            e.queue.push(Event.Ready);
+        }
         e
     }
 
+    // ---- パイプ ----
+
+    static fn str escape(str s) {
+        s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "")
+    }
+
+    static fn str unescape(str s) {
+        if !s.contains("\\") {
+            return s;
+        }
+        let mut out = "";
+        let mut esc = false;
+        for c in s.chars() {
+            if esc {
+                out += match c { case "t" -> "\t"; case "n" -> "\n"; default -> c; };
+                esc = false;
+            } else if c == "\\" {
+                esc = true;
+            } else {
+                out += c;
+            }
+        }
+        out
+    }
+
+    fn send(str line) {
+        print(line);
+    }
+
+    // エンジンから届いた 1 行をイベントにする
+    static fn Event parse(str line) {
+        let f = line.split("\t");
+        let n = f.len();
+        let kind = f[0];
+        let a = if n > 1 { unescape(f[1]) } else { "" };
+        let b = if n > 2 { unescape(f[2]) } else { "" };
+        let c = if n > 3 { unescape(f[3]) } else { "" };
+        let ai = a.to_int().unwrap_or(0);
+        let bi = b.to_int().unwrap_or(0);
+        match kind {
+            case "ready" -> Event.Ready;
+            case "close" -> Event.CloseRequested;
+            case "nav_started" -> Event.NavStarted(ai, b);
+            case "nav_finished" -> Event.NavFinished(ai, c, bi);
+            case "url" -> Event.UrlChanged(ai, b);
+            case "title" -> Event.TitleChanged(ai, b);
+            case "history" -> Event.HistoryChanged(ai, (bi & 1) != 0, (bi & 2) != 0);
+            case "new_tab" -> Event.NewTabRequested(ai, b);
+            case "chrome" -> Event.ChromeMessage(a);
+            case "key" -> Event.Key(ai);
+            case "permission" -> Event.PermissionDenied(ai, b);
+            case "error" -> Event.Failed(ai, b);
+            default -> Event.Failed(3, "読めない行: " + line);
+        }
+    }
+
     fn Info info() {
+        if piped {
+            return Info { name: "pipe", script: true, chrome_view: true, persist: !ephemeral };
+        }
         Info { name: "mock", script: false, chrome_view: true, persist: !ephemeral }
     }
 
     fn mut close() {
         log.push("close");
+        if piped {
+            send("close");
+            read_line();   // 出した行を送り切る（read_line の前に出力がまとめて書き出される）。エンジンは返事をせずに閉じる
+        }
     }
 
     // イベントがあれば取り出す（待たない）
@@ -114,6 +186,22 @@ pub struct Engine {
 
     // イベントが来るか timeout_ms たつまで待つ（-1 は無期限）
     fn mut Option<Event> wait(i64 timeout_ms) {
+        if piped {
+            if queue.len() == 0 {
+                send("wait");   // 次のイベントを待ち始めた（偽エンジンにつないだとき、順番をそろえるのに使う）
+                match read_line() {
+                    case Some(line) -> queue.push(parse(line));
+                    case None -> {
+                        // エンジンがいなくなった
+                        if !close_sent {
+                            close_sent = true;
+                            queue.push(Event.CloseRequested);
+                        }
+                    }
+                }
+            }
+            return poll();
+        }
         if queue.len() == 0 && !script_step() && !close_sent {
             close_sent = true;
             queue.push(Event.CloseRequested);
@@ -167,12 +255,26 @@ pub struct Engine {
     fn mut i64 tab_new() {
         let id = next_id;
         next_id++;
+        if piped {
+            send("tab_new\t{id}");
+            tabs.push(FakeTab { id: id, open: true, hist: [], pos: 0 });
+            return id;
+        }
         tabs.push(FakeTab { id: id, open: true, hist: [], pos: 0 });
         log.push("tab_new {id}");
         id
     }
 
     fn mut Result<(), str> tab_close(i64 tab) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            let i = index_of(tab);
+            tabs[i].open = false;
+            send("tab_close\t{tab}");
+            return Ok(());
+        }
         let i = index_of(tab);
         if i < 0 {
             return Err("そのタブはありません");
@@ -184,6 +286,13 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> tab_show(i64 tab) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            send("tab_show\t{tab}");
+            return Ok(());
+        }
         if index_of(tab) < 0 {
             return Err("そのタブはありません");
         }
@@ -192,6 +301,13 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> navigate(i64 tab, str url) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            send("navigate\t{tab}\t" + escape(url));
+            return Ok(());
+        }
         let i = index_of(tab);
         if i < 0 {
             return Err("そのタブはありません");
@@ -211,6 +327,13 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> back(i64 tab) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            send("back\t{tab}");
+            return Ok(());
+        }
         let i = index_of(tab);
         if i < 0 {
             return Err("そのタブはありません");
@@ -224,6 +347,13 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> forward(i64 tab) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            send("forward\t{tab}");
+            return Ok(());
+        }
         let i = index_of(tab);
         if i < 0 {
             return Err("そのタブはありません");
@@ -237,6 +367,13 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> reload(i64 tab) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            send("reload\t{tab}");
+            return Ok(());
+        }
         let i = index_of(tab);
         if i < 0 {
             return Err("そのタブはありません");
@@ -249,6 +386,13 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> stop(i64 tab) {
+        if piped {
+            if index_of(tab) < 0 {
+                return Err("そのタブはありません");
+            }
+            send("stop\t{tab}");
+            return Ok(());
+        }
         if index_of(tab) < 0 {
             return Err("そのタブはありません");
         }
@@ -268,12 +412,21 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> chrome_load(str html, i64 height) {
+        if piped {
+            chrome = true;
+            send("chrome_load\t{height}\t" + escape(html));
+            return Ok(());
+        }
         log.push("chrome_load {height}");
         chrome = true;
         Ok(())
     }
 
     fn mut Result<(), str> chrome_post(str msg) {
+        if piped {
+            send("chrome_post\t" + escape(msg));
+            return Ok(());
+        }
         if !chrome {
             return Err("外枠がまだありません");
         }
@@ -282,11 +435,19 @@ pub struct Engine {
     }
 
     fn mut Result<(), str> set_title(str title) {
+        if piped {
+            send("set_title\t" + escape(title));
+            return Ok(());
+        }
         log.push("set_title " + title);
         Ok(())
     }
 
     fn mut Result<(), str> clear_site_data() {
+        if piped {
+            send("clear_site_data");
+            return Ok(());
+        }
         log.push("clear_site_data");
         Ok(())
     }

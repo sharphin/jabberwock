@@ -75,7 +75,7 @@ pub struct Store {
 
     // 開いたページを足す。直前と同じ URL なら題だけ直す
     fn mut visit(str url, str title) {
-        if url == "" || url.starts_with("data:") {
+        if url == "" || url.starts_with("data:") || url.starts_with("about:") {
             return;
         }
         let n = history.len();

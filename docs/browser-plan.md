@@ -81,6 +81,8 @@ jabberwock のプログラム（browser.jw）
 1. ✓ 境目 `jw_engine.h`、偽エンジンとそのテスト、WebView2 版。2026-10-31 に Windows で起動し、example.com の読み込みとイベント（ready・nav_started・url・history・title・nav_finished）を確認した。
 2. ✓ WebView2 版を Windows で動かして確かめる（smoke。WebView2Loader.dll なしで起動）。
 3. jabberwock から境目の関数を呼べるようにする（標準ライブラリ側で std.browser として。時期は相談）。
+   それまでのつなぎとして、browser/host/jwbrowser.c がエンジンを動かし、本体を子プロセスにして標準入出力の 1 行ずつでつなぐ（2026-10-31）。
+   これでタブ型の本体が WebView2 で動く（jwbrowser.exe + jwbrowser-app.exe）。
    できたら browser/app/engine.jw を std.browser を呼ぶものに置き換える。
 4. ✓ 本体（browser/app）: アドレス入力・検索・戻る/進む・再読み込み・タブ・キー操作・履歴・ブックマーク。
    今は jabberwock で書いた偽エンジンにつなぎ、台本でテストする（`cargo test --test browser`）。
