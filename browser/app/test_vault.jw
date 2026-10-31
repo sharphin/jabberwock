@@ -1,0 +1,92 @@
+// vault.jw: 作る・開ける・違うパスワード・書き換え・出どころ・パスワード作り
+use vault;
+use crypto;
+
+// テスト用の決まった「乱数」
+fn u8[] fake_random(str seed, i64 n) {
+    let mut out = crypto.sha256(seed.bytes());
+    let mut i = 0;
+    while out.len() < n {
+        let more = crypto.sha256((seed + "{i}").bytes());
+        for b in more {
+            out.push(b);
+        }
+        i++;
+    }
+    while out.len() > n {
+        out.pop();
+    }
+    out
+}
+
+fn main() {
+    let a = args();
+    let file = if a.len() > 0 { a[0] } else { "test_vault.dat" };
+    let mut v = vault.Vault.at(file);
+    assert(v.create("short", fake_random("s", 16), 3, fake_random("n0", 12)).is_err());
+    match v.create("correct horse", fake_random("s", 16), 3, fake_random("n1", 12)) {
+        case Ok(_) -> {}
+        case Err(e) -> { print("NG create", e); exit(1); }
+    }
+    assert(v.exists());
+    v.put("https://example.com", "まつ", "pa\tss\\word", "メモ\n2 行");
+    v.put("https://example.com", "other", "x", "");
+    v.put("https://example.com", "まつ", "new\tpass", "メモ\n2 行");   // 置き換え
+    assert(v.save(fake_random("n2", 12)).is_ok());
+    v.lock();
+    assert(!v.unlocked && v.logins.len() == 0);
+
+    match v.unlock("wrong horse") {
+        case Ok(_) -> { print("NG 違うパスワードで開いた"); exit(1); }
+        case Err(e) -> assert(e.contains("違います"));
+    }
+    match v.unlock("correct horse") {
+        case Ok(_) -> {}
+        case Err(e) -> { print("NG unlock", e); exit(1); }
+    }
+    assert(v.logins.len() == 2);
+    assert(v.password_of("https://example.com", "まつ").unwrap_or("") == "new\tpass");
+    assert(v.logins[0].note == "メモ\n2 行");
+    assert(v.remove("https://example.com", "other"));
+    assert(!v.remove("https://example.com", "other"));
+
+    // マスターパスワードを変える
+    assert(v.change_master("battery staple", fake_random("s2", 16), fake_random("n3", 12)).is_ok());
+    v.lock();
+    assert(v.unlock("correct horse").is_err());
+    assert(v.unlock("battery staple").is_ok());
+    assert(v.logins.len() == 1);
+
+    // ファイルの回数を書き換えると開けない（回数も印に入っている）
+    let text = read_file(file).unwrap_or("");
+    let lines = text.lines();
+    let k = lines[1].split(" ");
+    let tampered = lines[0] + "\nkdf pbkdf2-sha256 4 " + k[3] + "\n" + lines[2] + "\n";
+    write_file(file, tampered).unwrap_or(());
+    v.lock();
+    assert(v.unlock("battery staple").is_err());
+
+    // 出どころ
+    assert(vault.site_of("https://Example.COM/login?x=1") == "https://example.com");
+    assert(vault.site_of("https://example.com:443/") == "https://example.com");
+    assert(vault.site_of("https://example.com:8443/a") == "https://example.com:8443");
+    assert(vault.site_of("http://a.example#x") == "http://a.example");
+    assert(vault.site_of("https://evil.example@bank.example/") == "https://bank.example");
+    assert(vault.site_of("https://bank.example.evil.example/") == "https://bank.example.evil.example");
+    assert(vault.site_of("about:blank") == "");
+    assert(vault.site_of("javascript:alert(1)") == "");
+
+    // パスワード作り: 長さと 4 種類
+    let p = vault.generate(fake_random("g", 256), 20);
+    assert(p.len() == 20);
+    let mut digit = false;
+    for c in p.chars() {
+        if "23456789".contains(c) {
+            digit = true;
+        }
+    }
+    assert(digit);
+    assert(vault.generate(fake_random("g", 256), 20) == p);
+    assert(vault.generate(fake_random("h", 256), 20) != p);
+    print("ok");
+}

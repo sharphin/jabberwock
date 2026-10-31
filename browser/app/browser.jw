@@ -308,6 +308,9 @@ pub struct Browser {
             case Key(k) -> key(engine.KeyCode.of(k));
             case PermissionDenied(_, what) -> note = "断りました: " + what;
             case Failed(_, text) -> note = text;
+            case Site(_) -> {}       // 金庫だけ
+            case Filled(_) -> {}
+            case Lock -> {}
         }
     }
 
@@ -355,6 +358,7 @@ pub struct Browser {
             case "reload" -> nav(name);
             case "stop" -> nav(name);
             case "settings" -> open_settings();
+            case "vault" -> eng.open_vault();
             case "set" -> apply_setting(arg);
             case "act" -> act(arg);
             case "newtab" -> {

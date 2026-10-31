@@ -1,0 +1,75 @@
+// crypto.jw を RFC・NIST の値で確かめる（--slow なら回数の多い PBKDF2 も）
+use crypto;
+
+fn same(str what, str got, str want) {
+    if got != want {
+        print("NG", what);
+        print("  出た:", got);
+        print("  期待:", want);
+        exit(1);
+    }
+}
+
+fn u8[] bx(str s) {
+    crypto.unhex(s).unwrap_or([])
+}
+
+fn main() {
+    // SHA-256（FIPS 180-2 の例）
+    same("sha256 空", crypto.hex(crypto.sha256("".bytes())), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    same("sha256 abc", crypto.hex(crypto.sha256("abc".bytes())), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    same("sha256 2 塊", crypto.hex(crypto.sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".bytes())),
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    // HMAC-SHA256（RFC 4231 の 1 と 2、長い鍵の 6）
+    same("hmac 1", crypto.hex(crypto.hmac_sha256(bx("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), "Hi There".bytes())),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    same("hmac 2", crypto.hex(crypto.hmac_sha256("Jefe".bytes(), "what do ya want for nothing?".bytes())),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    let u8[] mut bk = [];
+    for _ in range(131) {
+        bk.push(0xaa);
+    }
+    same("hmac 6 長い鍵", crypto.hex(crypto.hmac_sha256(bk, "Test Using Larger Than Block-Size Key - Hash Key First".bytes())),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+    // PBKDF2-HMAC-SHA256（RFC 7914 の 11 節の 1 つめ、よく使われる値）
+    same("pbkdf2 1", crypto.hex(crypto.pbkdf2_sha256("password".bytes(), "salt".bytes(), 1)),
+        "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+    same("pbkdf2 2", crypto.hex(crypto.pbkdf2_sha256("password".bytes(), "salt".bytes(), 2)),
+        "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43");
+    // 回数の多いものは遅いので、実行ファイルにしたときだけ（引数 --slow）
+    let a = args();
+    if a.len() > 0 && a[0] == "--slow" {
+        same("pbkdf2 4096", crypto.hex(crypto.pbkdf2_sha256("password".bytes(), "salt".bytes(), 4096)),
+            "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a");
+    }
+    // ChaCha20（RFC 8439 2.4.2）
+    let key = bx("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    let n1 = bx("000000000000004a00000000");
+    let plain = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.".bytes();
+    same("chacha20", crypto.hex(crypto.chacha20(key, 1, n1, plain)),
+        "6e2e359a2568f98041ba0728dd0d6981e97e7aec1d4360c20a27afccfd9fae0bf91b65c5524733ab8f593dabcd62b3571639d624e65152ab8f530c359f0861d807ca0dbf500d6a6156a38e088a22b65e52bc514d16ccf806818ce91ab77937365af90bbf74a35be6b40b8eedf2785e42874d");
+    // Poly1305（RFC 8439 2.5.2）
+    same("poly1305", crypto.hex(crypto.poly1305(bx("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"), "Cryptographic Forum Research Group".bytes())),
+        "a8061dc1305136c6c22b8baf0c0127a9");
+    // ChaCha20-Poly1305（RFC 8439 2.8.2）
+    let k2 = bx("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+    let n2 = bx("070000004041424344454647");
+    let aad = bx("50515253c0c1c2c3c4c5c6c7");
+    let sealed = crypto.seal(k2, n2, aad, plain);
+    same("seal", crypto.hex(sealed),
+        "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116"
+        + "1ae10b594f09e26a7e902ecbd0600691");
+    let back = crypto.open(k2, n2, aad, sealed).unwrap_or([]);
+    same("open", crypto.utf8(back).unwrap_or("<utf8 でない>"), "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.");
+    // 1 バイト書き換えると開けない
+    let mut bad = crypto.seal(k2, n2, aad, plain);
+    bad[3] = bad[3] ^ 1;
+    assert(crypto.open(k2, n2, aad, bad).is_none());
+    assert(crypto.open(key, n2, aad, sealed).is_none());
+    // UTF-8
+    same("utf8", crypto.utf8("あ😀z".bytes()).unwrap_or("?"), "あ😀z");
+    assert(crypto.utf8(bx("c0af")).is_none());
+    assert(crypto.utf8(bx("e3")).is_none());
+    assert(crypto.unhex("0g").is_none());
+    print("ok");
+}

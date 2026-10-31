@@ -1,0 +1,180 @@
+open jabberwock 金庫
+chrome_load 0
+chrome_height full
+chrome_post state
+mode	new
+site	
+chrome_post state
+mode	new
+site	
+chrome_post state
+mode	new
+site	
+msg	err	金庫のファイルを読めません
+random 16
+random 12
+chrome_post state
+mode	new
+site	
+msg	err	マスターパスワードは 8 文字以上にしてください
+random 16
+random 12
+ask_site
+chrome_post state
+mode	open
+site	
+msg	ok	金庫を作りました
+chrome_post state
+mode	open
+site	
+msg	err	金庫はもうあります
+chrome_post state
+mode	open
+site	https://example.com
+random 12
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	保存しました
+login	https://example.com	まつ	メモ\n2 行
+chrome_post state
+mode	open
+site	https://example.com
+msg	err	サイトは https://example.com のように書いてください
+login	https://example.com	まつ	メモ\n2 行
+random 12
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	保存しました
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+random 256
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+gen	PFaSAmABCYre?DKpN7y5
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+pw	https://example.com	まつ	pw\t1
+copy (4 文字)
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	パスワードをコピーしました（30 秒で消えます）
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+copy (2 文字)
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	ユーザー名をコピーしました
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+fill https://example.com まつ (4 文字)
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	ブラウザに入力を頼みました
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	入力しました
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+chrome_post state
+mode	open
+site	https://example.com
+msg	err	ブラウザの今のページは https://example.com です。入れられるのは同じサイトのときだけです
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+chrome_post state
+mode	open
+site	https://example.com
+msg	err	ブラウザのページが変わったので入れませんでした
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+chrome_post state
+mode	open
+site	https://example.com
+msg	err	ブラウザが開いていません
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+chrome_post state
+mode	locked
+site	https://example.com
+msg	ok	しばらく使わなかったので閉じました
+chrome_post state
+mode	locked
+site	https://example.com
+msg	err	金庫が閉じています
+chrome_post state
+mode	locked
+site	https://example.com
+msg	err	マスターパスワードが違います（またはファイルが書き換えられています）
+ask_site
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ\n2 行
+login	https://other.example	bob	
+random 12
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	保存しました
+login	https://example.com	まつ	メモ
+login	https://other.example	bob	
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ
+login	https://other.example	bob	
+pw	https://example.com	まつ	pw2
+chrome_post state
+mode	open
+site	https://example.com
+msg	err	今のマスターパスワードが違います
+login	https://example.com	まつ	メモ
+login	https://other.example	bob	
+random 16
+random 12
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	マスターパスワードを変えました
+login	https://example.com	まつ	メモ
+login	https://other.example	bob	
+chrome_post state
+mode	locked
+site	https://example.com
+msg	ok	閉じました
+ask_site
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ
+login	https://other.example	bob	
+random 12
+chrome_post state
+mode	open
+site	https://example.com
+msg	ok	消しました
+login	https://example.com	まつ	メモ
+window 1
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ
+chrome_post state
+mode	open
+site	https://example.com
+login	https://example.com	まつ	メモ
+close

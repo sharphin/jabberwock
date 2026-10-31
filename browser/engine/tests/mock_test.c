@@ -1,5 +1,6 @@
 /* 偽エンジンが jw_engine.h の決まりどおりに動くかを確かめる（cc tests/mock_test.c mock/jwe_mock.c） */
 #include "../jw_engine.h"
+#include "../site.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +67,26 @@ int main(void) {
     uint32_t t2;
     CHECK(jwe_tab_new(e, &t2) == JWE_OK && t2 == 2); /* 番号は使い回さない */
     CHECK(jwe_chrome_post(e, "x", 1) == JWE_ERR_FAILED);
+
+    /* ログインの欄に入れるのは、今のページの出どころが完全に同じときだけ */
+    CHECK(jwe_navigate(e, t2, "https://Bank.example:443/login?x", 32) == JWE_OK);
+    drain_load(e, "https://Bank.example:443/login?x", 0);
+    CHECK(jwe_fill_login(e, t2, "https://bank.example", 20, "u", 1, "p", 1) == JWE_OK);
+    CHECK(jwe_fill_login(e, t2, "https://bank.example.evil", 25, "u", 1, "p", 1) == JWE_ERR_BAD_ARG);
+    CHECK(jwe_fill_login(e, t2, "http://bank.example", 19, "u", 1, "p", 1) == JWE_ERR_BAD_ARG);
+    CHECK(jwe_fill_login(e, t2 + 1, "https://bank.example", 20, "u", 1, "p", 1) == JWE_ERR_BAD_TAB);
+    {
+        char o[128];
+        const char *cases[][2] = {
+            {"https://Example.COM/a", "https://example.com"}, {"https://example.com:8443/", "https://example.com:8443"},
+            {"http://a.example:80#x", "http://a.example"}, {"https://evil.example@bank.example/", "https://bank.example"},
+            {"about:blank", ""}, {"javascript:alert(1)", ""}, {"https:///x", ""},
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+            jwe_site_of(cases[i][0], strlen(cases[i][0]), o, sizeof o);
+            if (strcmp(o, cases[i][1]) != 0) { fprintf(stderr, "site_of(%s) = %s\n", cases[i][0], o); fails++; }
+        }
+    }
     CHECK(jwe_chrome_height(e, JWE_CHROME_FULL) == JWE_ERR_FAILED); /* jwe_chrome_load がまだ */
 
     /* 台本がなければ CLOSE_REQUESTED を 1 回だけ */

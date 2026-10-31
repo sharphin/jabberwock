@@ -16,7 +16,8 @@ jwbrowser.exe ──(イベント 1 行ずつ: 子の標準入力)──▶ jwbr
 | 向き | 行 |
 |---|---|
 | エンジン → 本体 | 最初に 1 回 `info 名前 caps`（caps は jw_engine.h の JWE_CAP_* の和）。あとは `ready` / `close` / `nav_started 番号 URL` / `nav_finished 番号 code URL` / `url 番号 URL` / `title 番号 題` / `history 番号 code` / `new_tab 番号 URL` / `chrome 文字` / `key code` / `permission 番号 何か` / `error code 文字` |
-| 本体 → エンジン | `tab_new 番号` / `tab_close 番号` / `tab_show 番号` / `navigate 番号 URL` / `back 番号` / `forward 番号` / `reload 番号` / `stop 番号` / `chrome_load 高さ HTML` / `chrome_post 文字` / `chrome_height 高さ`（`full` なら窓全体）/ `set_title 題` / `window op`（jw_engine.h の JWE_WINDOW_*）/ `clear_site_data` / `close` / `wait` |
+| 本体 → エンジン | `tab_new 番号` / `tab_close 番号` / `tab_show 番号` / `navigate 番号 URL` / `back 番号` / `forward 番号` / `reload 番号` / `stop 番号` / `chrome_load 高さ HTML` / `chrome_post 文字` / `chrome_height 高さ`（`full` なら窓全体）/ `set_title 題` / `window op`（jw_engine.h の JWE_WINDOW_*）/ `clear_site_data` / `open_vault`（金庫の窓を出す）/ `close` / `wait` |
+| 金庫だけ（`--vault`） | 本体 → つなぎ: `random n`（返事は `random 16進`）/ `copy 文字`（30 秒で消す）/ `fill サイト ユーザー パスワード`（ブラウザへ頼む）/ `ask_site`。つなぎ → 本体: `site URL` / `filled 結果`（0 は入れた、-1 はブラウザがない）/ `lock`（5 分触らなかった） |
 
 - `wait` は本体が次のイベントを待ち始めた印。偽エンジンのときは、jwbrowser はこれを見てから次のイベントを渡す（毎回同じ順になる）。
 - 本体が `close` を出すか、本体が終わったら、jwbrowser も終わる。窓の × は `close` イベントとして本体に渡し、閉じるかは本体が決める。

@@ -1,0 +1,282 @@
+// パスワードの金庫（vault.dat）。ブラウザ本体とは別のプログラム（vault_main.jw）だけが使う。
+//
+// ファイルはテキスト 3 行:
+//   jwvault 1
+//   kdf pbkdf2-sha256 <回数> <塩（16 進）>
+//   data <nonce（16 進）> <暗号文と印（16 進）>
+// マスターパスワードから PBKDF2-HMAC-SHA256 で 32 バイトの鍵を作り、中身を ChaCha20-Poly1305 で暗号化する。
+// 1・2 行目は印（AEAD の付け足しデータ）に入れるので、回数や塩を書き換えると開けなくなる。
+// 中身は 1 行 1 件「サイト<タブ>ユーザー名<タブ>パスワード<タブ>メモ」（\ タブ 改行は \\ \t \n）。
+// 乱数（塩・nonce）は呼ぶ側が渡す（jabberwock にはまだ乱数がないので、つなぎの jwbrowser が OS から取る）。
+
+use crypto;
+
+// 鍵を作るときの回数。OWASP の勧め（2023）。実行ファイルで 1 秒ほど
+pub fn i64 iterations() {
+    600000
+}
+
+pub struct Login {
+    str site;      // https://example.com のような「出どころ」（scheme://host[:port]）
+    str user;
+    str password;
+    str note;
+}
+
+pub struct Vault {
+    str file;
+    bool unlocked;
+    u8[] key;
+    u8[] salt;
+    i64 iterations;
+    Login[] logins;
+
+    static fn Vault at(str file) {
+        Vault { file: file, unlocked: false, key: [], salt: [], iterations: 0, logins: [] }
+    }
+
+    // ファイルがあるか（なければ create で作る）
+    fn bool exists() {
+        match read_file(file) {
+            case Ok(t) -> t.starts_with("jwvault ");
+            case Err(_) -> false;
+        }
+    }
+
+    // 新しく作る。salt は 16 バイト、nonce は 12 バイトの乱数
+    fn mut Result<(), str> create(str master, ref u8[] new_salt, i64 rounds, ref u8[] nonce) {
+        if master.len() < 8 {
+            return Err("マスターパスワードは 8 文字以上にしてください");
+        }
+        key = crypto.pbkdf2_sha256(master.bytes(), new_salt, rounds);
+        salt = new_salt.map((x) -> x);
+        iterations = rounds;
+        logins = [];
+        unlocked = true;
+        save(nonce)
+    }
+
+    fn str header() {
+        "jwvault 1\nkdf pbkdf2-sha256 {iterations} " + crypto.hex(salt)
+    }
+
+    // 開ける。マスターパスワードが違う・ファイルが壊れていれば Err
+    fn mut Result<(), str> unlock(str master) {
+        let text = match read_file(file) {
+            case Ok(t) -> t;
+            case Err(_) -> return Err("金庫のファイルを読めません");
+        };
+        let lines = text.lines();
+        if lines.len() < 3 || lines[0] != "jwvault 1" {
+            return Err("金庫のファイルの形が違います");
+        }
+        let k = lines[1].split(" ");
+        let d = lines[2].split(" ");
+        if k.len() != 4 || k[0] != "kdf" || k[1] != "pbkdf2-sha256" || d.len() != 3 || d[0] != "data" {
+            return Err("金庫のファイルの形が違います");
+        }
+        let n = k[2].to_int().unwrap_or(0);
+        if n < 1 || n > 100000000 {
+            return Err("金庫のファイルの形が違います");
+        }
+        let s = match crypto.unhex(k[3]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
+        let nonce = match crypto.unhex(d[1]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
+        let sealed = match crypto.unhex(d[2]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
+        if nonce.len() != 12 {
+            return Err("金庫のファイルの形が違います");
+        }
+        let kk = crypto.pbkdf2_sha256(master.bytes(), s, n);
+        let aad = (lines[0] + "\n" + lines[1]).bytes();
+        let plain = match crypto.open(kk, nonce, aad, sealed) {
+            case Some(p) -> p;
+            case None -> return Err("マスターパスワードが違います（またはファイルが書き換えられています）");
+        };
+        let body = match crypto.utf8(plain) { case Some(t) -> t; case None -> return Err("金庫の中身が読めません"); };
+        let Login[] mut ls = [];
+        for line in body.lines() {
+            if line == "" {
+                continue;
+            }
+            let f = line.split("\t");
+            if f.len() != 4 {
+                return Err("金庫の中身が読めません");
+            }
+            ls.push(Login { site: unescape(f[0]), user: unescape(f[1]), password: unescape(f[2]), note: unescape(f[3]) });
+        }
+        key = kk;
+        salt = s;
+        iterations = n;
+        logins = ls;
+        unlocked = true;
+        Ok(())
+    }
+
+    // 閉じる（鍵と中身を手放す）
+    fn mut lock() {
+        key = [];
+        logins = [];
+        unlocked = false;
+    }
+
+    // 書き出す。nonce は毎回新しい 12 バイトの乱数
+    fn mut Result<(), str> save(ref u8[] nonce) {
+        if !unlocked {
+            return Err("金庫が閉じています");
+        }
+        if nonce.len() != 12 {
+            return Err("乱数が足りません");
+        }
+        let mut body = "";
+        for l in logins {
+            body += escape(l.site) + "\t" + escape(l.user) + "\t" + escape(l.password) + "\t" + escape(l.note) + "\n";
+        }
+        let h = header();
+        let sealed = crypto.seal(key, nonce, h.bytes(), body.bytes());
+        let text = h + "\ndata " + crypto.hex(nonce) + " " + crypto.hex(sealed) + "\n";
+        match write_file(file, text) {
+            case Ok(_) -> Ok(());
+            case Err(e) -> Err("vault.dat を書けません: " + e);
+        }
+    }
+
+    // マスターパスワードを変える（塩も新しくする）
+    fn mut Result<(), str> change_master(str master, ref u8[] new_salt, ref u8[] nonce) {
+        if !unlocked {
+            return Err("金庫が閉じています");
+        }
+        if master.len() < 8 {
+            return Err("マスターパスワードは 8 文字以上にしてください");
+        }
+        key = crypto.pbkdf2_sha256(master.bytes(), new_salt, iterations);
+        salt = new_salt.map((x) -> x);
+        save(nonce)
+    }
+
+    // 足すか、同じサイトとユーザー名があれば置き換える（save は呼ぶ側）
+    fn mut put(str site, str user, str password, str note) {
+        for i in range(logins.len()) {
+            if logins[i].site == site && logins[i].user == user {
+                logins[i].password = password;
+                logins[i].note = note;
+                return;
+            }
+        }
+        logins.push(Login { site: site, user: user, password: password, note: note });
+    }
+
+    fn mut bool remove(str site, str user) {
+        for i in range(logins.len()) {
+            if logins[i].site == site && logins[i].user == user {
+                logins.remove(i);
+                return true;
+            }
+        }
+        false
+    }
+
+    // そのサイトとユーザー名のパスワード
+    fn Option<str> password_of(str site, str user) {
+        for l in logins {
+            if l.site == site && l.user == user {
+                return Some(l.password);
+            }
+        }
+        None
+    }
+}
+
+pub fn str escape(str s) {
+    s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "")
+}
+
+pub fn str unescape(str s) {
+    if !s.contains("\\") {
+        return s;
+    }
+    let mut out = "";
+    let mut esc = false;
+    for c in s.chars() {
+        if esc {
+            out += match c { case "t" -> "\t"; case "n" -> "\n"; default -> c; };
+            esc = false;
+        } else if c == "\\" {
+            esc = true;
+        } else {
+            out += c;
+        }
+    }
+    out
+}
+
+// URL の出どころ（scheme://host[:port]。host は小文字）。http / https でなければ空
+pub fn str site_of(str url) {
+    let u = url.trim();
+    let lower = u.to_lower();
+    let scheme = if lower.starts_with("https://") { "https" } else if lower.starts_with("http://") { "http" } else { "" };
+    if scheme == "" {
+        return "";
+    }
+    let rest = u.slice(scheme.len() + 3, u.len());
+    let mut end = rest.len();
+    for sep in ["/", "?", "#"] {
+        match rest.find(sep) {
+            case Some(i) -> if i < end { end = i; };
+            case None -> {}
+        }
+    }
+    let mut host = rest.slice(0, end).to_lower();
+    // ユーザー名つきの URL（user@host）は @ の後ろだけ
+    match host.find("@") {
+        case Some(i) -> host = host.slice(i + 1, host.len());
+        case None -> {}
+    }
+    // 既定のポートは書かない
+    if scheme == "https" && host.ends_with(":443") {
+        host = host.slice(0, host.len() - 4);
+    }
+    if scheme == "http" && host.ends_with(":80") {
+        host = host.slice(0, host.len() - 3);
+    }
+    if host == "" {
+        return "";
+    }
+    scheme + "://" + host
+}
+
+// 乱数のバイトからパスワードを作る（英大小・数字・記号。4 種類がそろうまで作り直す）。
+// random が足りなければ、そろっていなくても最後に作ったものを返す（256 バイトあれば足りる）
+pub fn str generate(ref u8[] random, i64 length) {
+    let groups = ["abcdefghijkmnopqrstuvwxyz", "ABCDEFGHJKLMNPQRSTUVWXYZ", "23456789", "-_!@#%+=?"];
+    let all = groups[0] + groups[1] + groups[2] + groups[3];
+    let n = all.len();
+    let mut out = "";
+    let mut i = 0;
+    while i < random.len() {
+        out = "";
+        while out.len() < length && i < random.len() {
+            let b = random[i] as i64;
+            i++;
+            // 偏らないよう、n の倍数より上は捨てる
+            if b >= 256 - 256 % n {
+                continue;
+            }
+            out += all.slice(b % n, b % n + 1);
+        }
+        let mut kinds = 0;
+        for g in groups {
+            let mut has = false;
+            for c in out.chars() {
+                if g.contains(c) {
+                    has = true;
+                }
+            }
+            if has {
+                kinds++;
+            }
+        }
+        if kinds == 4 && out.len() == length {
+            return out;
+        }
+    }
+    out
+}

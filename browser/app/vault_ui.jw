@@ -1,0 +1,255 @@
+// このファイルは gen_chrome.jw が vault.html から作る。手で直さない。
+// 画面とのやりとりの決まりは vault.html の先頭にある。
+
+pub fn str html() {
+    """<!doctype html>
+<!--
+パスワードの金庫の画面。jwbrowser --vault の別の窓に出す（ページは開かない。ネットにもつながない: 下の CSP）。
+本体（vault_main.jw）と文字列だけでやりとりする。値の中の \\ タブ 改行は \\\\ \\t \\n にする（両向き）。
+- 画面 → 本体: "create <マスター>" / "unlock <マスター>" / "lock" / "gen" /
+  "save <サイト>\\t<ユーザー>\\t<パスワード>\\t<メモ>\\t<元のサイト>\\t<元のユーザー>"（元が空なら新しく足す）/
+  "delete <サイト>\\t<ユーザー>" / "copy <サイト>\\t<ユーザー>" / "copyuser <サイト>\\t<ユーザー>" / "fill <サイト>\\t<ユーザー>" /
+  "reveal <サイト>\\t<ユーザー>" / "master <今のマスター>\\t<新しいマスター>" / "window drag" / "window min" / "window close"
+- 本体 → 画面: 状態を 1 行ずつ（区切りはタブ文字）:
+    state
+    mode   new / locked / open
+    site   ブラウザの今のページの出どころ（空ならなし）
+    msg    ok か err  文
+    login  サイト  ユーザー  メモ
+    pw     サイト  ユーザー  パスワード（「見る」「編集」を押したときだけ、1 回）
+    gen    作ったパスワード
+-->
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+:root {{ color-scheme: light dark; --bg: #f8f9fa; --fg: #1f1f1f; --bar: #dee1e6; --card: #fff; --line: #d0d4d9; --field: #f1f3f4; --accent: #1a73e8; --err: #c5221f; --ok: #188038; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg: #202124; --fg: #e8eaed; --bar: #2b2c2f; --card: #2d2e31; --line: #4a4c50; --field: #202124; --accent: #8ab4f8; --err: #f28b82; --ok: #81c995; }} }}
+* {{ box-sizing: border-box; }}
+html, body {{ height: 100%; }}
+body {{ margin: 0; font: 14px "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; overflow: hidden; }}
+#top {{ display: flex; align-items: center; height: 40px; background: var(--bar); flex: none; user-select: none; }}
+#top h1 {{ font-size: 13px; font-weight: 600; margin: 0 0 0 14px; pointer-events: none; }}
+#drag {{ flex: 1; align-self: stretch; }}
+#top button {{ width: 46px; height: 40px; border-radius: 0; }}
+#wclose:hover {{ background: #c42b1c; color: #fff; }}
+button {{ font: inherit; color: inherit; background: none; border: 0; border-radius: 6px; cursor: pointer; }}
+button:hover:not(:disabled) {{ background: color-mix(in srgb, var(--fg) 10%, transparent); }}
+button:disabled {{ opacity: .4; cursor: default; }}
+button.main {{ background: var(--accent); color: #fff; padding: 8px 16px; }}
+@media (prefers-color-scheme: dark) {{ button.main {{ color: #202124; }} }}
+button.main:hover:not(:disabled) {{ background: color-mix(in srgb, var(--accent) 85%, #000); }}
+button.line {{ border: 1px solid var(--line); padding: 5px 10px; font-size: 13px; }}
+input, textarea {{ font: inherit; color: inherit; background: var(--field); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; }}
+input:focus, textarea:focus {{ outline: 2px solid var(--accent); outline-offset: -1px; }}
+textarea {{ resize: vertical; min-height: 56px; }}
+main {{ flex: 1; overflow: auto; padding: 18px; }}
+.center {{ max-width: 340px; margin: 40px auto 0; display: flex; flex-direction: column; gap: 12px; }}
+.center h2 {{ font-size: 20px; font-weight: 400; margin: 0 0 4px; text-align: center; }}
+.center p {{ margin: 0; font-size: 13px; opacity: .8; line-height: 1.6; }}
+#msg {{ min-height: 20px; font-size: 13px; margin-bottom: 8px; }}
+#msg.err {{ color: var(--err); }}
+#msg.ok {{ color: var(--ok); }}
+.row {{ display: flex; gap: 8px; align-items: center; }}
+.row > input {{ flex: 1; }}
+#here {{ font-size: 12px; opacity: .8; margin: 0 0 10px; word-break: break-all; }}
+.card {{ background: var(--card); border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.2); }}
+.item {{ padding: 10px 12px; border-top: 1px solid var(--line); }}
+.item:first-child {{ border-top: 0; }}
+.item .head {{ display: flex; align-items: center; gap: 10px; }}
+.item .who {{ flex: 1; min-width: 0; }}
+.item .who b {{ display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+.item .who span {{ font-size: 12px; opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }}
+.item.match {{ box-shadow: inset 3px 0 var(--accent); }}
+.letter {{ width: 28px; height: 28px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; flex: none; }}
+.acts {{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }}
+.secret {{ font-family: Consolas, monospace; margin-top: 6px; word-break: break-all; user-select: all; }}
+.note {{ font-size: 12px; opacity: .8; white-space: pre-wrap; margin-top: 4px; }}
+form.edit {{ display: flex; flex-direction: column; gap: 8px; padding: 14px; }}
+form.edit label {{ font-size: 12px; opacity: .8; }}
+.empty {{ padding: 24px; text-align: center; opacity: .7; }}
+h3 {{ font-size: 13px; margin: 18px 0 8px; opacity: .85; }}
+</style>
+<div id="top">
+  <h1>🔑 パスワードの金庫</h1>
+  <div id="drag"></div>
+  <button id="wmin" title="最小化">─</button><button id="wclose" title="閉じる">✕</button>
+</div>
+<main id="main"></main>
+<script>
+const send = (s) => chrome.webview.postMessage(s);
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/\\\\/g, "\\\\\\\\").replace(/\\t/g, "\\\\t").replace(/\\r?\\n/g, "\\\\n");
+const unesc = (s) => String(s).replace(/\\\\(.)/g, (_, c) => c === "t" ? "\\t" : c === "n" ? "\\n" : c);
+$("wmin").onclick = () => send("window min");
+$("wclose").onclick = () => send("window close");
+$("drag").onmousedown = (e) => {{ if (e.button === 0 && e.detail === 1) send("window drag"); }};
+$("top").onmousedown = (e) => {{ if (e.target === $("top") && e.button === 0) send("window drag"); }};
+function el(tag, cls, text) {{ const x = document.createElement(tag); if (cls) x.className = cls; if (text !== undefined) x.textContent = text; return x; }}
+function input(type, ph) {{ const i = el("input"); i.type = type; i.placeholder = ph || ""; i.spellcheck = false; i.autocomplete = "off"; return i; }}
+function button(text, cls, f) {{ const b = el("button", cls, text); b.type = "button"; b.onclick = f; return b; }}
+
+let S = {{ mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "" }};
+let editing = null;   // 編集中のもの（{{site, user}} か "new"）
+let shown = {{}};       // 見せているパスワード（サイト\\tユーザー → パスワード）
+let filter = "";
+let busy = false;
+const key = (site, user) => site + "\\t" + user;
+
+function msgLine() {{
+  const m = el("div", S.msg[0] || ""); m.id = "msg"; m.textContent = S.msg[1] || ""; return m;
+}}
+
+function letter(site) {{
+  const host = site.replace(/^https?:\\/\\//, "").replace(/^www\\./, "");
+  const d = el("div", "letter", (host[0] || "?").toUpperCase());
+  let h = 0; for (const c of host) h = (h * 31 + c.charCodeAt(0)) % 360;
+  d.style.background = "hsl(" + h + " 45% 45%)";
+  return d;
+}}
+
+function render() {{
+  const main = $("main");
+  const focused = document.activeElement && document.activeElement.id;
+  main.textContent = "";
+  if (S.mode === "new") {{
+    const c = el("div", "center");
+    c.append(el("h2", "", "金庫を作る"));
+    c.append(el("p", "", "マスターパスワードを決めてください（8 文字以上）。忘れると中身は二度と取り出せません。どこにも送らず、この PC の金庫のファイルだけに使います。"));
+    const a = input("password", "マスターパスワード"), b = input("password", "もう一度");
+    const go = button("作る", "main", () => {{
+      if (a.value.length < 8) {{ S.msg = ["err", "8 文字以上にしてください"]; render(); return; }}
+      if (a.value !== b.value) {{ S.msg = ["err", "2 つが違います"]; render(); return; }}
+      busy = true; S.msg = ["", "作っています…"]; send("create " + esc(a.value)); render();
+    }});
+    b.onkeydown = (e) => {{ if (e.key === "Enter") go.click(); }};
+    c.append(a, b, go, msgLine());
+    main.append(c);
+    a.focus();
+    return;
+  }}
+  if (S.mode === "locked") {{
+    const c = el("div", "center");
+    c.append(el("h2", "", "金庫は閉じています"));
+    const a = input("password", "マスターパスワード");
+    const go = button(busy ? "開けています…" : "開ける", "main", () => {{
+      if (!a.value) return;
+      busy = true; S.msg = ["", "開けています…"]; send("unlock " + esc(a.value)); a.value = ""; render();
+    }});
+    go.disabled = busy;
+    a.onkeydown = (e) => {{ if (e.key === "Enter") go.click(); }};
+    c.append(a, go, msgLine());
+    main.append(c);
+    a.focus();
+    return;
+  }}
+  if (S.mode !== "open") return;
+  // 開いている
+  main.append(msgLine());
+  const here = el("p"); here.id = "here";
+  here.textContent = S.site ? "ブラウザの今のページ: " + S.site : "ブラウザの今のページ: （なし）";
+  main.append(here);
+  const tools = el("div", "row");
+  const q = input("search", "さがす"); q.value = filter; q.id = "q";
+  q.oninput = () => {{ filter = q.value; render(); }};
+  tools.append(q, button("＋ 足す", "line", () => {{ editing = "new"; render(); }}), button("閉じる", "line", () => {{ shown = {{}}; send("lock"); }}));
+  main.append(tools);
+  const gap = el("div"); gap.style.height = "10px"; main.append(gap);
+  if (editing === "new") main.append(editForm(null));
+  const list = el("div", "card");
+  const ls = S.logins.filter((l) => !filter || (l.site + " " + l.user + " " + l.note).toLowerCase().includes(filter.toLowerCase()));
+  ls.sort((a, b) => (b.site === S.site) - (a.site === S.site) || a.site.localeCompare(b.site) || a.user.localeCompare(b.user));
+  if (!ls.length) list.append(el("div", "empty", S.logins.length ? "見つかりません" : "まだ何もありません。＋ 足す から入れてください"));
+  for (const l of ls) {{
+    const k = key(l.site, l.user);
+    if (editing && editing !== "new" && key(editing.site, editing.user) === k) {{ list.append(editForm(l)); continue; }}
+    const it = el("div", "item" + (l.site === S.site ? " match" : ""));
+    const head = el("div", "head");
+    const who = el("div", "who"); who.append(el("b", "", l.site), el("span", "", l.user || "（ユーザー名なし）"));
+    head.append(letter(l.site), who);
+    it.append(head);
+    if (shown[k] !== undefined) it.append(el("div", "secret", shown[k]));
+    if (l.note) it.append(el("div", "note", l.note));
+    const acts = el("div", "acts");
+    const fill = button("入力", "line", () => send("fill " + esc(l.site) + "\\t" + esc(l.user)));
+    fill.disabled = l.site !== S.site;
+    fill.title = fill.disabled ? "ブラウザで同じサイトを開いているときだけ入れられます" : "ブラウザのログイン欄に入れる";
+    acts.append(fill,
+      button("コピー", "line", () => send("copy " + esc(l.site) + "\\t" + esc(l.user))),
+      button("名前をコピー", "line", () => send("copyuser " + esc(l.site) + "\\t" + esc(l.user))),
+      button(shown[k] !== undefined ? "隠す" : "見る", "line", () => {{
+        if (shown[k] !== undefined) {{ delete shown[k]; render(); }} else send("reveal " + esc(l.site) + "\\t" + esc(l.user));
+      }}),
+      button("編集", "line", () => {{ editing = {{ site: l.site, user: l.user }}; send("reveal " + esc(l.site) + "\\t" + esc(l.user)); render(); }}),
+      button("削除", "line", () => {{ if (confirm(l.site + " の " + (l.user || "（ユーザー名なし）") + " を消しますか？")) send("delete " + esc(l.site) + "\\t" + esc(l.user)); }}));
+    it.append(acts);
+    list.append(it);
+  }}
+  main.append(list);
+  // マスターパスワードを変える
+  main.append(el("h3", "", "マスターパスワードを変える"));
+  const mc = el("div", "card");
+  const mf = el("form", "edit");
+  const o = input("password", "今のマスターパスワード"), n1 = input("password", "新しいマスターパスワード（8 文字以上）"), n2 = input("password", "もう一度");
+  mf.append(o, n1, n2, button("変える", "line", () => {{
+    if (n1.value.length < 8) {{ S.msg = ["err", "新しいマスターパスワードは 8 文字以上にしてください"]; render(); return; }}
+    if (n1.value !== n2.value) {{ S.msg = ["err", "新しいマスターパスワードが 2 つで違います"]; render(); return; }}
+    send("master " + esc(o.value) + "\\t" + esc(n1.value));
+  }}));
+  mc.append(mf); main.append(mc);
+  if (focused === "q") {{ $("q").focus(); }}
+}}
+
+let draft = null;  // 編集中の欄（作り直しても消えないように）
+function editForm(l) {{
+  const f = el("form", "edit item");
+  if (!draft || draft.of !== (l ? key(l.site, l.user) : "new")) {{
+    draft = {{ of: l ? key(l.site, l.user) : "new", site: l ? l.site : S.site, user: l ? l.user : "", pw: l ? (shown[key(l.site, l.user)] || "") : "", note: l ? l.note : "" }};
+  }}
+  const site = input("text", "https://example.com"); site.value = draft.site; site.oninput = () => draft.site = site.value;
+  const user = input("text", "ユーザー名・メールアドレス"); user.value = draft.user; user.oninput = () => draft.user = user.value;
+  const pw = input("password", "パスワード"); pw.value = draft.pw; pw.oninput = () => draft.pw = pw.value; pw.id = "pwfield";
+  const note = el("textarea"); note.value = draft.note; note.placeholder = "メモ（なくてよい）"; note.oninput = () => draft.note = note.value;
+  const pwrow = el("div", "row");
+  pwrow.append(pw, button("作る", "line", () => send("gen")), button("見る", "line", (e) => {{
+    pw.type = pw.type === "password" ? "text" : "password"; e.target.textContent = pw.type === "password" ? "見る" : "隠す";
+  }}));
+  const done = el("div", "acts");
+  done.append(button("保存", "main", () => {{
+    if (!/^https?:\\/\\/[^\\/?#\\s]+$/i.test(draft.site.trim())) {{ S.msg = ["err", "サイトは https://example.com のように書いてください（/ より後ろは要りません）"]; render(); return; }}
+    if (!draft.pw) {{ S.msg = ["err", "パスワードが空です"]; render(); return; }}
+    send("save " + [draft.site.trim(), draft.user, draft.pw, draft.note, l ? l.site : "", l ? l.user : ""].map(esc).join("\\t"));
+    editing = null; draft = null;
+  }}), button("やめる", "line", () => {{ editing = null; draft = null; render(); }}));
+  f.append(el("label", "", "サイト"), site, el("label", "", "ユーザー名"), user, el("label", "", "パスワード"), pwrow, el("label", "", "メモ"), note, done);
+  return f;
+}}
+
+chrome.webview.addEventListener("message", (ev) => {{
+  const lines = String(ev.data).split("\\n");
+  if (lines[0] !== "state") return;
+  const next = {{ mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "" }};
+  for (const line of lines.slice(1)) {{
+    const f = line.split("\\t").map(unesc);
+    if (f[0] === "mode") next.mode = f[1];
+    if (f[0] === "site") next.site = f[1] || "";
+    if (f[0] === "msg") next.msg = [f[1], f[2]];
+    if (f[0] === "login") next.logins.push({{ site: f[1], user: f[2], note: f[3] || "" }});
+    if (f[0] === "pw") next.pw = {{ site: f[1], user: f[2], pw: f[3] }};
+    if (f[0] === "gen") next.gen = f[1];
+  }}
+  if (next.mode !== "open") {{ shown = {{}}; editing = null; draft = null; }}
+  if (next.mode !== S.mode || next.msg[1]) busy = false;
+  if (next.pw) {{
+    const k = key(next.pw.site, next.pw.user);
+    if (editing && editing !== "new" && key(editing.site, editing.user) === k) {{
+      if (draft && draft.of === k) draft.pw = next.pw.pw;
+    }} else shown[k] = next.pw.pw;
+  }}
+  S = next;
+  if (next.gen && draft) draft.pw = next.gen;
+  render();
+  if (next.gen && $("pwfield")) {{ $("pwfield").type = "text"; }}
+}});
+</script>
+"""
+}

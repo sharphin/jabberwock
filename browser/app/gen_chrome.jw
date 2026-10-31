@@ -1,29 +1,46 @@
-// chrome.html から chrome.jw を作る（HTML を文字列として埋め込む）。
+// chrome.html から chrome.jw を、vault.html から vault_ui.jw を作る（HTML を文字列として埋め込む）。
 //   jabberwock browser/app/gen_chrome.jw browser/app
-// chrome.html を直したら、これを動かして chrome.jw を作り直す（chrome.jw は手で直さない）。
+// HTML を直したら、これを動かして作り直す（chrome.jw / vault_ui.jw は手で直さない）。
+
+fn str read_or_exit(str path) {
+    match read_file(path) {
+        case Ok(t) -> t;
+        case Err(e) -> {
+            eprint(path, "を読めません:", e);
+            exit(1)
+        }
+    }
+}
+
+// 埋め込みの { } と \ を文字そのものにする
+fn str literal(str html) {
+    html.replace("\\", "\\\\").replace("{{", "{{{{").replace("}}", "}}}}").replace("\"\"\"", "\\\"\\\"\\\"")
+}
+
+fn write_or_exit(str path, str text) {
+    match write_file(path, text) {
+        case Ok(_) -> print(path, "を作りました");
+        case Err(e) -> {
+            eprint(path, "を書けません:", e);
+            exit(1);
+        }
+    }
+}
 
 fn main() {
     let a = args();
     let dir = if a.len() > 0 { a[0] } else { "." };
-    let html = match read_file(dir + "/chrome.html") {
-        case Ok(t) -> t;
-        case Err(e) -> {
-            eprint("chrome.html を読めません:", e);
-            exit(1)
-        }
-    };
-    // 埋め込みの { } と \ を文字そのものにする
-    let body = html.replace("\\", "\\\\").replace("{{", "{{{{").replace("}}", "}}}}").replace("\"\"\"", "\\\"\\\"\\\"");
+    let html = read_or_exit(dir + "/chrome.html");
     let mut out = "// このファイルは gen_chrome.jw が chrome.html から作る。手で直さない。\n";
     out += "// 外枠とのやりとりの決まりは chrome.html の先頭にある。\n\n";
     // 高さは chrome.html の #top（40）+ #bar（44）+ #bms（30）
     out += "// 外枠の高さ（論理ピクセル）。bookmarks: ブックマークバーを出すか\npub fn i64 height(bool bookmarks) {{ if bookmarks {{ 114 }} else {{ 84 }} }}\n\n";
-    out += "pub fn str html() {{\n    \"\"\"" + body + "\"\"\"\n}}\n";
-    match write_file(dir + "/chrome.jw", out) {
-        case Ok(_) -> print("chrome.jw を作りました");
-        case Err(e) -> {
-            eprint("chrome.jw を書けません:", e);
-            exit(1);
-        }
-    }
+    out += "pub fn str html() {{\n    \"\"\"" + literal(html) + "\"\"\"\n}}\n";
+    write_or_exit(dir + "/chrome.jw", out);
+
+    let vhtml = read_or_exit(dir + "/vault.html");
+    let mut vout = "// このファイルは gen_chrome.jw が vault.html から作る。手で直さない。\n";
+    vout += "// 画面とのやりとりの決まりは vault.html の先頭にある。\n\n";
+    vout += "pub fn str html() {{\n    \"\"\"" + literal(vhtml) + "\"\"\"\n}}\n";
+    write_or_exit(dir + "/vault_ui.jw", vout);
 }

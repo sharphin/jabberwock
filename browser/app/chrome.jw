@@ -10,7 +10,7 @@ pub fn str html() {
 外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
 - 外枠 → 本体（ChromeMessage）: "go <打った文字>" / "back" / "forward" / "reload" / "stop" /
   "newtab" / "select <タブ>" / "close <タブ>" / "bookmark" / "open <URL>" / "clear" /
-  "settings"（設定のタブを開く）/ "set <キー> <値>"（設定を変える）/ "act <キー>"（設定の画面のボタン）/
+  "settings"（設定のタブを開く）/ "vault"（パスワードの金庫の窓を出す）/ "set <キー> <値>"（設定を変える）/ "act <キー>"（設定の画面のボタン）/
   "window drag" / "window min" / "window max" / "window close"（窓を動かす・最小化・最大化と戻す・閉じる）
 - 本体 → 外枠（chrome_post）: "focus"（アドレス欄へ）か、状態を 1 行ずつ書いたもの（区切りはタブ文字）:
     state
@@ -94,6 +94,7 @@ button:disabled {{ opacity: .35; }}
   <input id="addr" spellcheck="false" placeholder="URL か検索語">
   <span id="note"></span>
   <button id="star" title="ブックマーク">☆</button>
+  <button id="key" title="パスワード（別の窓の金庫）">🔑</button>
   <button id="gear" title="設定">⚙</button>
 </div>
 <div id="bms"></div>
@@ -107,6 +108,7 @@ $("fwd").onclick = () => send("forward");
 $("rel").onclick = () => send(loading ? "stop" : "reload");
 $("star").onclick = () => send("bookmark");
 $("gear").onclick = () => send("settings");
+$("key").onclick = () => send("vault");
 $("plus").onclick = () => send("newtab");
 $("wmin").onclick = () => send("window min");
 $("wmax").onclick = () => send("window max");

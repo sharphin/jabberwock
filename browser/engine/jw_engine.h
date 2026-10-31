@@ -116,9 +116,17 @@ JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len);
 enum {
     JWE_WINDOW_DRAG = 1,        /* 押している間、マウスで窓を動かす（外枠の空いたところが押されたとき） */
     JWE_WINDOW_MINIMIZE = 2,
-    JWE_WINDOW_TOGGLE_MAXIMIZE = 3
+    JWE_WINDOW_TOGGLE_MAXIMIZE = 3,
+    JWE_WINDOW_FOCUS = 4         /* 最小化を戻して手前に出す */
 };
 JweStatus jwe_window(JweEngine *e, uint32_t op);
+
+/* ログインの欄にユーザー名とパスワードを入れる（パスワードの金庫から、利用者が押したときだけ呼ぶ）。
+ * site は "https://example.com" のような出どころ（scheme://host[:port]。既定のポートは書かない）。
+ * タブの今のページの出どころが site と完全に同じときだけ入れる（違えば JWE_ERR_BAD_ARG で何もしない）。
+ * エンジンはパスワードを覚えない。入れる直前にもページの中でもう一度出どころを確かめる */
+JweStatus jwe_fill_login(JweEngine *e, uint32_t tab, const char *site, uint32_t site_len,
+                         const char *user, uint32_t user_len, const char *password, uint32_t password_len);
 
 /* Cookie・キャッシュ・サイトのデータを全部消す */
 JweStatus jwe_clear_site_data(JweEngine *e);

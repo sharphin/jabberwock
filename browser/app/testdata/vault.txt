@@ -1,0 +1,31 @@
+# 金庫: 作る・足す・見る・コピー・入力・自動で閉じる・開ける・マスターの変更・消す
+chrome unlock nope
+chrome create short
+chrome create correct horse
+chrome create again!!
+site https://Example.com/login?next=1
+chrome save https://example.com/x	まつ	pw\t1	メモ\n2 行		
+chrome save notaurl	a	b			
+chrome save https://other.example	bob	secret			
+chrome gen
+chrome reveal https://example.com	まつ
+chrome copy https://example.com	まつ
+chrome copyuser https://example.com	まつ
+chrome fill https://example.com	まつ
+filled 0
+chrome fill https://other.example	bob
+filled 3
+filled -1
+lock
+chrome copy https://example.com	まつ
+chrome unlock wrong horse
+chrome unlock correct horse
+chrome save https://example.com	まつ	pw2	メモ	https://example.com	まつ
+chrome reveal https://example.com	まつ
+chrome master wrong	battery staple
+chrome master correct horse	battery staple
+chrome lock
+chrome unlock battery staple
+chrome delete https://other.example	bob
+chrome window drag
+chrome window close

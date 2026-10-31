@@ -30,6 +30,7 @@
 
 #include "WebView2.h"
 #include "../jw_engine.h"
+#include "../site.h"
 
 namespace {
 
@@ -101,6 +102,7 @@ JWE_HANDLER(NewWindow, ICoreWebView2NewWindowRequestedEventHandler, (IID{0xd4c18
 JWE_HANDLER(Permission, ICoreWebView2PermissionRequestedEventHandler, (IID{0x15e1c6a3, 0xc72a, 0x4df3, {0x91, 0xd7, 0xd0, 0x97, 0xfb, 0xec, 0x6b, 0xfd}}), ICoreWebView2 *, ICoreWebView2PermissionRequestedEventArgs *)
 JWE_HANDLER(WebMessage, ICoreWebView2WebMessageReceivedEventHandler, (IID{0x57213f19, 0x00e6, 0x49fa, {0x8e, 0x07, 0x89, 0x8e, 0xa0, 0x1e, 0xcb, 0xd2}}), ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *)
 JWE_HANDLER(AccelKey, ICoreWebView2AcceleratorKeyPressedEventHandler, (IID{0xb29c7e28, 0xfa79, 0x41a8, {0x8e, 0x44, 0x65, 0x81, 0x1c, 0x76, 0xdc, 0xb2}}), ICoreWebView2Controller *, ICoreWebView2AcceleratorKeyPressedEventArgs *)
+JWE_HANDLER(ScriptDone, ICoreWebView2ExecuteScriptCompletedHandler, (IID{0x49511172, 0xcc67, 0x4bca, {0x99, 0x23, 0x13, 0x71, 0x12, 0xf4, 0xc4, 0xcc}}), HRESULT, LPCWSTR)
 JWE_HANDLER(DevToolsDone, ICoreWebView2CallDevToolsProtocolMethodCompletedHandler, (IID{0x5c4889f0, 0x5ef6, 0x4c5a, {0x95, 0x2c, 0xd8, 0xf1, 0xb9, 0x2d, 0x05, 0x74}}), HRESULT, LPCWSTR)
 
 typedef HRESULT(STDAPICALLTYPE *CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions *,
@@ -743,6 +745,10 @@ JweStatus jwe_window(JweEngine *e, uint32_t op) {
     case JWE_WINDOW_TOGGLE_MAXIMIZE:
         ShowWindow(e->hwnd, IsZoomed(e->hwnd) ? SW_RESTORE : SW_MAXIMIZE);
         return JWE_OK;
+    case JWE_WINDOW_FOCUS:
+        if (IsIconic(e->hwnd)) ShowWindow(e->hwnd, SW_RESTORE);
+        SetForegroundWindow(e->hwnd);
+        return JWE_OK;
     }
     return JWE_ERR_BAD_ARG;
 }
@@ -750,6 +756,55 @@ JweStatus jwe_window(JweEngine *e, uint32_t op) {
 JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len) {
     std::wstring w = widen(title, title_len);
     return SetWindowTextW(e->hwnd, w.c_str()) ? JWE_OK : JWE_ERR_FAILED;
+}
+
+namespace {
+// JavaScript の文字列の書き方（"..."）にする
+std::wstring js_string(const std::wstring &s) {
+    std::wstring r = L"\"";
+    for (wchar_t c : s) {
+        if (c == L'\\' || c == L'"') { r += L'\\'; r += c; }
+        else if (c < 0x20 || c == 0x2028 || c == 0x2029 || c == L'<') {
+            wchar_t buf[8];
+            swprintf(buf, 8, L"\\u%04x", (unsigned)c);
+            r += buf;
+        } else r += c;
+    }
+    return r + L"\"";
+}
+}
+
+JweStatus jwe_fill_login(JweEngine *e, uint32_t tab, const char *site, uint32_t site_len,
+                         const char *user, uint32_t user_len, const char *password, uint32_t password_len) {
+    Tab *t = e->find(tab);
+    if (!t || !t->wv) return JWE_ERR_BAD_TAB;
+    // 今のページの出どころが完全に同じときだけ
+    LPWSTR src = nullptr;
+    t->wv->get_Source(&src);
+    std::string now_url = take(src);
+    char now[512];
+    jwe_site_of(now_url.data(), now_url.size(), now, sizeof now);
+    if (!now[0] || strlen(now) != site_len || memcmp(now, site, site_len) != 0) return JWE_ERR_BAD_ARG;
+    // ページの中でも、入れる直前に出どころを確かめる（確かめてから入れるまでのあいだに移ったときのため）。
+    // 見えているパスワードの欄（フォーカスがあればそれ）と、その前の文字の欄に入れ、input / change を起こす
+    std::wstring script =
+        L"(function(o,u,p){if(location.origin!==o)return 0;"
+        L"var vis=function(x){return !x.disabled&&!x.readOnly&&x.offsetParent!==null;};"
+        L"var pw=Array.prototype.filter.call(document.querySelectorAll('input[type=password]'),vis);"
+        L"if(!pw.length)return 0;"
+        L"var a=document.activeElement,P=(a&&a.type==='password'&&vis(a))?a:pw[0];"
+        L"var set=function(x,v){var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');"
+        L"d.set.call(x,v);x.dispatchEvent(new Event('input',{bubbles:true}));x.dispatchEvent(new Event('change',{bubbles:true}));};"
+        L"var all=Array.prototype.slice.call((P.form||document).querySelectorAll('input')),i=all.indexOf(P),U=null;"
+        L"for(var k=i-1;k>=0;k--){var ty=(all[k].type||'text').toLowerCase();"
+        L"if((ty==='text'||ty==='email'||ty==='tel')&&vis(all[k])){U=all[k];break;}}"
+        L"if(U&&u)set(U,u);set(P,p);P.focus();return 1;})(" +
+        js_string(widen(site, site_len)) + L"," + js_string(widen(user, user_len)) + L"," +
+        js_string(widen(password, password_len)) + L")";
+    HRESULT hr = t->wv->ExecuteScript(script.c_str(), new ScriptDone([](HRESULT, LPCWSTR) { return S_OK; }));
+    // 書いた文字列は消しておく（パスワードを長く残さない）
+    SecureZeroMemory(&script[0], script.size() * sizeof(wchar_t));
+    return SUCCEEDED(hr) ? JWE_OK : JWE_ERR_FAILED;
 }
 
 JweStatus jwe_clear_site_data(JweEngine *e) {

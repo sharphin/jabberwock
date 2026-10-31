@@ -1,0 +1,347 @@
+// パスワードの金庫（ブラウザとは別のプログラム。jwbrowser --vault が別の窓で起動する）。
+//   jabberwock browser/app/vault_main.jw [--data フォルダ] [--fake 台本] [--log] [--iterations 回数]
+// --data: vault.dat の置き場所（既定は今のフォルダ）
+// --fake / --log: 偽エンジンの台本と、呼ばれた操作の表示（テスト用。台本の書き方は engine.jw の先頭）
+// --iterations: 新しく作る金庫の鍵を作る回数（テスト用。ふだんは vault.iterations()）
+//
+// 画面（vault.html）はページを開かない別の WebView に出す。パスワードは画面に送らない（「見る」「編集」を押したときだけ 1 回送る）。
+// ブラウザへの入力は、ブラウザ側が今のページの出どころを確かめてから入れる（jw_engine.h の jwe_fill_login）。
+
+use engine;
+use vault;
+use vault_ui;
+
+struct App {
+    engine.Engine eng;
+    vault.Vault v;
+    i64 rounds;
+    str site;        // ブラウザの今のページの出どころ
+    str msg;
+    bool msg_err;
+    str reveal;      // 次の状態で 1 回だけ送るパスワードの行（"pw\t..."）
+    str gen;
+    bool done;
+
+    fn mut say(str m) {
+        msg = m;
+        msg_err = false;
+    }
+
+    fn mut fail(str m) {
+        msg = m;
+        msg_err = true;
+    }
+
+    // 乱数を n バイト（取れなければ空。呼ぶ側がエラーにする）
+    fn mut u8[] random(i64 n) {
+        eng.random(n)
+    }
+
+    // "サイト<タブ>ユーザー" を分ける
+    static fn str[] two(str arg) {
+        let f = arg.split("\t");
+        let a = if f.len() > 0 { vault.unescape(f[0]) } else { "" };
+        let b = if f.len() > 1 { vault.unescape(f[1]) } else { "" };
+        [a, b]
+    }
+
+    fn mut save() {
+        let nonce = random(12);
+        if nonce.len() != 12 {
+            fail("乱数を取れませんでした。保存していません");
+            return;
+        }
+        match v.save(nonce) {
+            case Ok(_) -> {}
+            case Err(e) -> fail(e);
+        }
+    }
+
+    fn mut command(str m) {
+        let sp = m.find(" ");
+        let name = match sp { case Some(i) -> m.slice(0, i); case None -> m; };
+        let arg = match sp { case Some(i) -> m.slice(i + 1, m.len()); case None -> ""; };
+        match name {
+            case "window" -> match arg {
+                case "drag" -> { eng.window(engine.WindowOp.Drag).unwrap_or(()); }
+                case "min" -> { eng.window(engine.WindowOp.Minimize).unwrap_or(()); }
+                case "close" -> done = true;
+                default -> {}
+            };
+            case "create" -> create(vault.unescape(arg));
+            case "unlock" -> unlock(vault.unescape(arg));
+            case "lock" -> {
+                v.lock();
+                say("閉じました");
+            }
+            default -> {
+                if !v.unlocked {
+                    fail("金庫が閉じています");
+                    return;
+                }
+                opened(name, arg);
+            }
+        }
+    }
+
+    fn mut create(str master) {
+        if v.exists() {
+            fail("金庫はもうあります");
+            return;
+        }
+        let salt = random(16);
+        let nonce = random(12);
+        if salt.len() != 16 || nonce.len() != 12 {
+            fail("乱数を取れませんでした");
+            return;
+        }
+        match v.create(master, salt, rounds, nonce) {
+            case Ok(_) -> {
+                say("金庫を作りました");
+                eng.ask_site();
+            }
+            case Err(e) -> fail(e);
+        }
+    }
+
+    fn mut unlock(str master) {
+        match v.unlock(master) {
+            case Ok(_) -> {
+                say("");
+                eng.ask_site();
+            }
+            case Err(e) -> fail(e);
+        }
+    }
+
+    // 開いているときだけの命令
+    fn mut opened(str name, str arg) {
+        let k = two(arg);
+        match name {
+            case "save" -> {
+                let f = arg.split("\t");
+                if f.len() != 6 {
+                    fail("保存の形が違います");
+                    return;
+                }
+                let at = vault.site_of(vault.unescape(f[0]));
+                if at == "" {
+                    fail("サイトは https://example.com のように書いてください");
+                    return;
+                }
+                let user = vault.unescape(f[1]);
+                let pw = vault.unescape(f[2]);
+                if pw == "" {
+                    fail("パスワードが空です");
+                    return;
+                }
+                let old_site = vault.unescape(f[4]);
+                let old_user = vault.unescape(f[5]);
+                if old_site != "" && (old_site != at || old_user != user) {
+                    v.remove(old_site, old_user);
+                }
+                v.put(at, user, pw, vault.unescape(f[3]));
+                save();
+                if !msg_err {
+                    say("保存しました");
+                }
+            }
+            case "delete" -> {
+                if v.remove(k[0], k[1]) {
+                    save();
+                    if !msg_err {
+                        say("消しました");
+                    }
+                }
+            }
+            case "copy" -> match v.password_of(k[0], k[1]) {
+                case Some(p) -> {
+                    eng.copy_text(p);
+                    say("パスワードをコピーしました（30 秒で消えます）");
+                }
+                case None -> fail("見つかりません");
+            };
+            case "copyuser" -> {
+                eng.copy_text(k[1]);
+                say("ユーザー名をコピーしました");
+            }
+            case "fill" -> {
+                if k[0] != site {
+                    fail("ブラウザの今のページは " + (if site == "" { "（なし）" } else { site }) + " です。入れられるのは同じサイトのときだけです");
+                    return;
+                }
+                match v.password_of(k[0], k[1]) {
+                    case Some(p) -> {
+                        eng.fill(k[0], k[1], p);
+                        say("ブラウザに入力を頼みました");
+                    }
+                    case None -> fail("見つかりません");
+                }
+            }
+            case "reveal" -> match v.password_of(k[0], k[1]) {
+                case Some(p) -> reveal = "pw\t" + vault.escape(k[0]) + "\t" + vault.escape(k[1]) + "\t" + vault.escape(p);
+                case None -> fail("見つかりません");
+            };
+            case "gen" -> {
+                let r = random(256);
+                if r.len() != 256 {
+                    fail("乱数を取れませんでした");
+                    return;
+                }
+                gen = vault.generate(r, 20);
+            }
+            case "master" -> {
+                let f = arg.split("\t");
+                if f.len() != 2 {
+                    return;
+                }
+                let old = vault.unescape(f[0]);
+                let nw = vault.unescape(f[1]);
+                // 今のマスターパスワードを確かめる（ファイルから開け直す）
+                match v.unlock(old) {
+                    case Ok(_) -> {}
+                    case Err(_) -> {
+                        fail("今のマスターパスワードが違います");
+                        return;
+                    }
+                }
+                let salt = random(16);
+                let nonce = random(12);
+                if salt.len() != 16 || nonce.len() != 12 {
+                    fail("乱数を取れませんでした");
+                    return;
+                }
+                match v.change_master(nw, salt, nonce) {
+                    case Ok(_) -> say("マスターパスワードを変えました");
+                    case Err(e) -> fail(e);
+                }
+            }
+            default -> fail("知らない命令: " + name);
+        }
+    }
+
+    fn mut handle(engine.Event ev) {
+        match ev {
+            case CloseRequested -> done = true;
+            case ChromeMessage(m) -> command(m);
+            case Site(u) -> site = vault.site_of(u);
+            case Filled(code) -> match code {
+                case 0 -> say("入力しました");
+                case -1 -> fail("ブラウザが開いていません");
+                case 3 -> fail("ブラウザのページが変わったので入れませんでした");
+                default -> fail("入れられませんでした（{code}）");
+            };
+            case Lock -> {
+                if v.unlocked {
+                    v.lock();
+                    say("しばらく使わなかったので閉じました");
+                }
+            }
+            default -> {}
+        }
+    }
+
+    // 画面に今の状態を送る
+    fn mut sync() {
+        let mode = if v.unlocked { "open" } else if v.exists() { "locked" } else { "new" };
+        let mut s = "state\nmode\t" + mode + "\nsite\t" + vault.escape(site);
+        if msg != "" {
+            s += "\nmsg\t" + (if msg_err { "err" } else { "ok" }) + "\t" + vault.escape(msg);
+            msg = "";
+            msg_err = false;
+        }
+        if v.unlocked {
+            for l in v.logins {
+                s += "\nlogin\t" + vault.escape(l.site) + "\t" + vault.escape(l.user) + "\t" + vault.escape(l.note);
+            }
+            if reveal != "" {
+                s += "\n" + reveal;
+            }
+            if gen != "" {
+                s += "\ngen\t" + vault.escape(gen);
+            }
+        }
+        reveal = "";
+        gen = "";
+        eng.chrome_post(s).unwrap_or(());
+    }
+
+    fn mut run() {
+        eng.chrome_load(vault_ui.html(), 0).unwrap_or(());
+        eng.chrome_height(-1).unwrap_or(());
+        sync();
+        while !done {
+            match eng.wait(-1) {
+                case Some(ev) -> {
+                    handle(ev);
+                    loop {
+                        match eng.poll() {
+                            case Some(ev2) -> handle(ev2);
+                            case None -> break;
+                        }
+                    }
+                    sync();
+                }
+                case None -> {}
+            }
+        }
+        v.lock();
+        eng.close();
+    }
+}
+
+fn main() {
+    let a = args();
+    let mut data = ".";
+    let mut script = "";
+    let mut fake = false;
+    let mut show_log = false;
+    let mut rounds = vault.iterations();
+    let mut i = 0;
+    while i < a.len() {
+        match a[i] {
+            case "--data" -> {
+                i++;
+                if i < a.len() { data = a[i]; }
+            }
+            case "--fake" -> {
+                i++;
+                fake = true;
+                if i < a.len() {
+                    script = match read_file(a[i]) {
+                        case Ok(t) -> t;
+                        case Err(e) -> {
+                            eprint("台本を読めません:", a[i], e);
+                            exit(1)
+                        }
+                    };
+                }
+            }
+            case "--log" -> show_log = true;
+            case "--iterations" -> {
+                i++;
+                if i < a.len() { rounds = a[i].to_int().unwrap_or(rounds); }
+            }
+            default -> {
+                eprint("知らない引数:", a[i]);
+                exit(2);
+            }
+        }
+        i++;
+    }
+    let file = if data.ends_with("/") || data.ends_with("\\") { data + "vault.dat" } else { data + "/vault.dat" };
+    let cfg = engine.Config {
+        title: "jabberwock 金庫", data_dir: data, width: 520, height: 640,
+        ephemeral: false, fake: fake, fake_script: script.lines(),
+    };
+    let mut app = App {
+        eng: engine.Engine.open(cfg), v: vault.Vault.at(file), rounds: rounds, site: "", msg: "", msg_err: false,
+        reveal: "", gen: "", done: false,
+    };
+    app.run();
+    if show_log {
+        for l in app.eng.log {
+            print(l);
+        }
+    }
+}

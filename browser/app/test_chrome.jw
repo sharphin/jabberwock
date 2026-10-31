@@ -1,7 +1,9 @@
 use chrome;
+use vault_ui;
 fn main() {
-    let h = chrome.html();
     let src = match read_file("chrome.html") { case Ok(t) -> t; case Err(e) -> { print(e); exit(1) } };
-    assert(h == src);
+    assert(chrome.html() == src);
+    let vsrc = match read_file("vault.html") { case Ok(t) -> t; case Err(e) -> { print(e); exit(1) } };
+    assert(vault_ui.html() == vsrc);
     print("ok");
 }

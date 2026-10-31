@@ -37,9 +37,12 @@ fn same_as_file(got: &str, name: &str) {
 
 #[test]
 fn parts() {
-    for f in ["test_address.jw", "test_store.jw", "test_chrome.jw"] {
+    for f in ["test_address.jw", "test_store.jw", "test_chrome.jw", "test_crypto.jw"] {
         assert_eq!(run(&[f]), "ok\n", "{}", f);
     }
+    let dir = scratch("vault-part");
+    let file = dir.join("v.dat");
+    assert_eq!(run(&["test_vault.jw", file.to_str().unwrap()]), "ok\n");
 }
 
 #[test]
@@ -70,6 +73,39 @@ fn keeps_history_and_bookmarks_in_one_folder() {
     let e = eph.to_str().unwrap().replace('\\', "/");
     run(&["main.jw", "--data", &e, "--ephemeral", "--fake", "testdata/basic.txt"]);
     assert_eq!(std::fs::read_dir(&eph).unwrap().count(), 0);
+}
+
+/// パスワードの金庫（vault_main.jw）を偽エンジンの台本で動かす（鍵を作る回数は 2 にして速くする）
+#[test]
+fn vault_script() {
+    let dir = scratch("vault");
+    let d = dir.to_str().unwrap().replace('\\', "/");
+    let out = run(&["vault_main.jw", "--data", &d, "--iterations", "2", "--fake", "testdata/vault.txt", "--log"]);
+    same_as_file(&out, "vault.out");
+    let text = std::fs::read_to_string(dir.join("vault.dat")).unwrap();
+    assert!(text.starts_with("jwvault 1\nkdf pbkdf2-sha256 2 "), "{}", text);
+    // パスワード・ユーザー名・サイトは平文で残さない
+    for plain in ["pw2", "example.com", "まつ", "メモ"] {
+        assert!(!text.contains(plain), "{} が vault.dat にそのまま入っている", plain);
+    }
+}
+
+/// 暗号の部品を実行ファイルにして、回数の多い PBKDF2 も確かめる（clang がなければ何もしない）
+#[test]
+fn crypto_native() {
+    if Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let dir = scratch("crypto");
+    let exe = dir.join("test_crypto");
+    let o = Command::new(env!("CARGO_BIN_EXE_jabberwock"))
+        .current_dir(app())
+        .args(["build", "-o", exe.to_str().unwrap(), "test_crypto.jw"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = Command::new(&exe).arg("--slow").output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "ok\n", "{}", String::from_utf8_lossy(&o.stderr));
 }
 
 /// 設定の「起動したときに開くページ」と、settings.tsv の読み書き
@@ -175,4 +211,58 @@ fn host_and_app_over_pipes() {
     );
     let history = std::fs::read_to_string(data.join("history.tsv")).unwrap();
     assert!(history.starts_with("https://example.com\t"), "about: は残さない:\n{}", history);
+}
+
+/// つなぎを --vault で動かし、金庫の本体（vault_main.jw の実行ファイル）を子プロセスにして通しで動かす。
+/// 乱数はつなぎが OS から取る。鍵を作る回数はふだんどおり（実行ファイルで 1 秒ほど）。clang と cc がなければ何もしない
+#[test]
+fn vault_over_pipes() {
+    if Command::new("cc").arg("--version").output().is_err() || Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let dir = scratch("vault-host");
+    let app_exe = dir.join("jwvault-app");
+    let o = Command::new(env!("CARGO_BIN_EXE_jabberwock"))
+        .current_dir(app())
+        .args(["build", "-o", app_exe.to_str().unwrap(), "vault_main.jw"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("browser");
+    let host = dir.join("jwbrowser");
+    let built = Command::new("cc")
+        .arg("-o")
+        .arg(&host)
+        .arg(root.join("host/jwbrowser.c"))
+        .arg(root.join("engine/mock/jwe_mock.c"))
+        .arg("-pthread")
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let script = dir.join("script.txt");
+    std::fs::write(
+        &script,
+        "chrome create correct horse\nchrome save https://a.example\tu\tsecret-pw\t\t\t\nchrome gen\nchrome lock\n\
+         chrome unlock correct horse\nchrome copy https://a.example\tu\nclose\n",
+    )
+    .unwrap();
+    let log = dir.join("mock.log");
+    let o = Command::new(&host)
+        .args(["--data", dir.to_str().unwrap(), "--vault"])
+        .env("JWE_MOCK_SCRIPT", &script)
+        .env("JWE_MOCK_LOG", &log)
+        .env("JWVAULT_APP", &app_exe)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("chrome_height 0 full"), "{}", calls);
+    assert!(calls.contains("msg\tok\t金庫を作りました"), "{}", calls);
+    assert!(calls.contains("\ngen\t"), "{}", calls);
+    assert!(calls.contains("mode\tlocked"), "{}", calls);
+    assert!(calls.contains("login\thttps://a.example\tu\t"), "{}", calls);
+    assert!(!calls.contains("secret-pw"), "パスワードは画面に送らない（見るを押していない）:\n{}", calls);
+    let text = std::fs::read_to_string(dir.join("vault.dat")).unwrap();
+    assert!(text.starts_with("jwvault 1\nkdf pbkdf2-sha256 600000 "), "{}", text);
+    assert!(!text.contains("secret-pw") && !text.contains("a.example"));
 }

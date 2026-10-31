@@ -5,13 +5,17 @@
 //   子プロセスとして起動する。操作は 1 行ずつ標準出力へ書き、イベントは標準入力から 1 行ずつ読む。
 //   行の形は browser/host/README.md（区切りはタブ文字。文字の中の \ タブ 改行は \\ \t \n）。
 // - 偽エンジン（Config.fake が true。テスト用）: browser/engine/mock/jwe_mock.c と同じ動き。
+// 金庫（vault_main.jw）も同じ形でつなぐ（jwbrowser --vault が起動する）。乱数・クリップボード・ブラウザへの入力の頼みも、つなぎを通す。
 // std.browser ができたら、このファイルだけを std.browser を呼ぶものに置き換える。pub の型と関数の形は変えない。
 //
 // 偽エンジン: ページは読まず、決まった順にイベントを出す:
 //   navigate → NavStarted → UrlChanged → TitleChanged（"title:" + URL）→ NavFinished → HistoryChanged
 // 利用者の操作は Config.fake_script の行から作る（イベントが空のときに wait が 1 行ずつ出す）:
 //   chrome <文字列> / key <番号> / newtab <URL> / close
+//   金庫用: site <URL>（ブラウザの今のページ）/ filled <番号>（入力の結果）/ lock（しばらく触らなかった）
 // 台本が終わったら CloseRequested を 1 回出す。呼ばれた操作は log に残す（テストで見る）。
+
+use crypto;
 
 pub struct Config {
     str title;
@@ -36,6 +40,10 @@ pub enum Event {
     Key(i64 code);
     PermissionDenied(i64 tab, str what);
     Failed(i64 code, str text);
+    // ここから金庫だけ
+    Site(str url);        // ブラウザの見えているタブの URL
+    Filled(i64 code);     // 入力の結果（0 は入れた。2 はタブがない、3 はサイトが違う、-1 はブラウザがない）
+    Lock;                 // しばらく触らなかった
 }
 
 // キーの番号（jw_engine.h の JWE_KEY_*）
@@ -108,11 +116,12 @@ pub struct Engine {
     bool chrome;
     bool ephemeral;
     str[] log;          // 呼ばれた操作（偽エンジンだけ）
+    i64 random_count;   // 偽エンジンの乱数の番号
 
     static fn Engine open(Config cfg) {
         let mut e = Engine {
             piped: !cfg.fake, name: "mock", caps: 2, next_id: 1, tabs: [], queue: [], script: cfg.fake_script.map((l) -> l), script_pos: 0,
-            close_sent: false, chrome: false, ephemeral: cfg.ephemeral, log: [],
+            close_sent: false, chrome: false, ephemeral: cfg.ephemeral, log: [], random_count: 0,
         };
         e.log.push("open " + cfg.title);
         if e.piped {
@@ -188,6 +197,9 @@ pub struct Engine {
             case "key" -> Event.Key(ai);
             case "permission" -> Event.PermissionDenied(ai, b);
             case "error" -> Event.Failed(ai, b);
+            case "site" -> Event.Site(a);
+            case "filled" -> Event.Filled(ai);
+            case "lock" -> Event.Lock;
             default -> Event.Failed(3, "読めない行: " + line);
         }
     }
@@ -255,6 +267,12 @@ pub struct Engine {
                 queue.push(Event.NewTabRequested(shown_tab(), line.slice(7, line.len())));
             } else if line == "close" {
                 queue.push(Event.CloseRequested);
+            } else if line.starts_with("site ") {
+                queue.push(Event.Site(line.slice(5, line.len())));
+            } else if line.starts_with("filled ") {
+                queue.push(Event.Filled(line.slice(7, line.len()).to_int().unwrap_or(0)));
+            } else if line == "lock" {
+                queue.push(Event.Lock);
             } else {
                 queue.push(Event.Failed(3, "台本の行が読めません: " + line));
             }
@@ -495,6 +513,81 @@ pub struct Engine {
             send("window\t{n}");
         }
         Ok(())
+    }
+
+    // ---- 金庫とブラウザのあいだ（つなぎの jwbrowser がする。エンジンの機能ではない） ----
+
+    // OS の乱数を n バイト。取れなければ空
+    fn mut u8[] random(i64 n) {
+        if !piped {
+            // 偽エンジン: 毎回同じ並び（テスト用）
+            let u8[] mut out = [];
+            while out.len() < n {
+                let block = crypto.sha256("random {random_count}".bytes());
+                random_count++;
+                for b in block {
+                    if out.len() < n {
+                        out.push(b);
+                    }
+                }
+            }
+            log.push("random {n}");
+            return out;
+        }
+        send("random\t{n}");
+        // 返事が来るまでに届いたイベントは溜めておく
+        loop {
+            match read_line() {
+                case Some(line) -> {
+                    if line.starts_with("random\t") || line == "random" {
+                        let h = if line.len() > 7 { line.slice(7, line.len()) } else { "" };
+                        let b = crypto.unhex(h).unwrap_or([]);
+                        if b.len() != n {
+                            return [];
+                        }
+                        return b;
+                    }
+                    queue.push(parse(line));
+                }
+                case None -> return [];
+            }
+        }
+    }
+
+    // クリップボードに置く（30 秒で消える。クリップボードの履歴には残さない）
+    fn mut copy_text(str text) {
+        if piped {
+            send("copy\t" + escape(text));
+        } else {
+            log.push("copy ({text.len()} 文字)");
+        }
+    }
+
+    // ブラウザの見えているタブのログイン欄に入れるよう頼む。結果は Filled で届く
+    fn mut fill(str site, str user, str password) {
+        if piped {
+            send("fill\t" + escape(site) + "\t" + escape(user) + "\t" + escape(password));
+        } else {
+            log.push("fill " + site + " " + user + " ({password.len()} 文字)");
+        }
+    }
+
+    // ブラウザに今の URL を聞く。答えは Site で届く
+    fn mut ask_site() {
+        if piped {
+            send("ask_site");
+        } else {
+            log.push("ask_site");
+        }
+    }
+
+    // 金庫の窓を出す（ブラウザから）
+    fn mut open_vault() {
+        if piped {
+            send("open_vault");
+        } else {
+            log.push("open_vault");
+        }
     }
 
     fn mut Result<(), str> clear_site_data() {

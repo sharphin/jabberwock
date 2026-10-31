@@ -9,10 +9,15 @@ browser/
   app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり
   app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
   app/store.jw                  履歴・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
+  app/vault_main.jw             パスワードの金庫（別のプログラム。jwbrowser --vault が起動する）
+  app/vault.jw                  金庫のファイル vault.dat（作る・開ける・足す・消す・マスターパスワードの変更・パスワード作り）
+  app/crypto.jw                 暗号（SHA-256・HMAC・PBKDF2・ChaCha20-Poly1305）。jabberwock だけで書いた
+  app/vault.html                金庫の画面。vault_ui.jw は gen_chrome.jw がここから作る
   app/settings.jw               設定の項目の一覧と値（settings.tsv）。項目は items() に 1 行足すだけで増やせる
   app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。chrome.jw は gen_chrome.jw がここから作る
   app/engine.jw                 エンジンとの境目の jabberwock 側。今は jabberwock で書いた偽エンジン
   app/test_*.jw, app/testdata/  テスト（cargo test --test browser）
+  engine/site.h                 URL の出どころ（ログイン欄に入れてよいかの判定。エンジンどうしで同じ規則）
   engine/jw_engine.h            エンジンとの境目（C の関数だけ）。ブラウザ本体はこれだけを使う
   engine/webview2/              WebView2（Windows）での実装
   engine/mock/                  試験用の偽エンジン（画面なし。どの OS でも動く）
@@ -37,6 +42,9 @@ jabberwock main.jw --ephemeral --fake testdata/basic.txt --log
 - `--log`: エンジンに出した操作を表示する
 - `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）・設定（settings.tsv）・前回のタブ（session.tsv）の置き場所。あるフォルダを指定する（既定は今のフォルダ）
 - `--ephemeral`: 何も残さない
+
+金庫も同じように動かせる: `jabberwock vault_main.jw --data /tmp/v --iterations 2 --fake testdata/vault.txt --log`
+（`--iterations` は鍵を作る回数。テストを速くするためだけ）。
 
 `jabberwock build main.jw` で実行ファイルにしても同じ動き。テストは `cargo test --test browser`
 （出力を直したときは `JW_BLESS=1 cargo test --test browser` で testdata/*.out を作り直す）。
