@@ -328,13 +328,13 @@ fn reloader(files: &[(String, String)], elide: bool) -> Box<dyn Fn() -> ast::Pro
 }
 
 /// IR で動かすときの、新しいスレッドのための IR の作り直し
-fn ir_reloader(files: &[(String, String)]) -> Box<dyn Fn() -> ir::Program + Send + Sync> {
+fn ir_reloader(files: &[(String, String)], elide: bool) -> Box<dyn Fn() -> ir::Program + Send + Sync> {
     let load = reloader(files, false);
     Box::new(move || {
         let prog = load();
         let (_, info) = types::check_with_info(&prog).expect("checked before");
         let mut irp = ir::lower::lower(&prog, &info).expect("lowered before");
-        ir::analyze::analyze(&mut irp);
+        if elide { ir::analyze::analyze(&mut irp); }
         irp
     })
 }
@@ -393,7 +393,7 @@ fn run_inner(
     // デバッグビルドでは、書き出せるプログラムは IR でも実行して結果を突き合わせる（IR の書き出しの検査）
     let lowered = if cfg!(debug_assertions) { ir::lower::lower(&prog, &info).ok() } else { None };
     let lowered = lowered.map(|mut p| {
-        ir::analyze::analyze(&mut p);
+        if elide { ir::analyze::analyze(&mut p); }
         p
     });
     drop(info);
@@ -415,10 +415,14 @@ fn run_inner(
         exit: it.exit_code(),
     };
     // 入力を使うプログラムは、同じ入力をもう一度渡せるときだけ突き合わせる
-    let lowered = lowered.filter(|p| io.0.is_some() || !p.uses_input());
+    // 通常実行後の IR/native 比較は同じプログラムをもう一度実行する。
+    // ファイルや外部コマンドを扱うプログラムでは、二重書込み・コマンドの
+    // 二重起動だけでなく、一度目の実行で変わった状態を読んでしまう。
+    // 外部効果を持つプログラムの比較は、独立した環境を使う専用テストで行う。
+    let lowered = lowered.filter(|p| (io.0.is_some() || !p.uses_input()) && !p.uses_external_system());
     if let Some(irp) = lowered {
         let input = io.0.clone().unwrap_or_default();
-        if let Some(diff) = ir_mismatch(&irp, &files, &want, &input, &io.1) {
+        if let Some(diff) = ir_mismatch(&irp, &files, &want, &input, &io.1, elide) {
             panic!("IR の実行結果がインタプリタと違います: {}\n--- IR ---\n{}", diff, irp);
         }
         // JW_NATIVE があれば、clang で作った実行ファイルとも突き合わせる（clang が要る）
@@ -452,9 +456,9 @@ struct Expected {
 }
 
 /// IR を実行して、インタプリタの結果（出力・エラーの題と位置・残ったヒープの数・終了コード）と違えばその説明を返す
-fn ir_mismatch(irp: &ir::Program, files: &[(String, String)], want: &Expected, input: &[u8], args: &[String]) -> Option<String> {
+fn ir_mismatch(irp: &ir::Program, files: &[(String, String)], want: &Expected, input: &[u8], args: &[String], elide: bool) -> Option<String> {
     let mut it = interp::Interp::new(false);
-    it.set_world(threads::World::new_ir(ir_reloader(files)));
+    it.set_world(threads::World::new_ir(ir_reloader(files, elide)));
     it.set_io(Box::new(std::io::Cursor::new(input.to_vec())), args.to_vec());
     let res = ir::exec::run(irp, &mut it);
     let res = match res {

@@ -1,10 +1,10 @@
 // 実行時ライブラリ（runtime/jw_rt.c）を文字列にしたもの。`jwc build` が書き出して一緒にコンパイルする。
-// 手で書き換えない: runtime/jw_rt.c を直したら `JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直す。
+// 手で書き換えない: runtime/jw_rt.c を直したら `python3 scripts/sync_runtime.py` で作り直す。
 pub fn str source() {
     """
 // jabberwock の実行時ライブラリ。`jabberwock build` が LLVM の書き出し（src/ir/llvm.rs）と一緒に clang でコンパイルする。
 //
-// - own の先は「区画」。区画の頭（16 バイト）に世代と「最後に解放された場所」を置く。解放しても OS には返さず、
+// - own の先は「区画」。区画の頭（8 バイト）に世代を置く。解放しても OS には返さず、
 //   同じ大きさの区画の置き場に戻すだけ（世代は進めたまま残るので、古い ref は必ず見つかる）。
 // - ref は (指す先, 区画, 借りたときの世代, 借りた場所)。区画の世代と比べて確かめる（比べるのは書き出したコード）。
 // - own の「読むだけの写し」（for の要素・クロージャが取り込んだ値）は、下の 1 ビットを立てたポインタで、
@@ -12,11 +12,30 @@ pub fn str source() {
 // - 文字列は書き換えない。数を数えて共有する（rc が負なら消えない定数）。
 // - 実行時エラーは、出力をすべて書き出してから標準エラーに出し、終了コード 1 で終わる。
 
+// -std=c11 でも getaddrinfo などの POSIX の宣言が見えるように（glibc。macOS は何もしなくても見える）
+#if !defined(_WIN32) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+#endif
+// MSVC の C ライブラリが strcpy・getenv などに出す「安全でない」の警告を止める（使い方は確かめてある）
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// All runtime allocation failures are language errors, including metadata and output buffers.
+static void *jw_checked_malloc(size_t n);
+static void *jw_checked_calloc(size_t n, size_t size);
+static void *jw_checked_realloc(void *old, size_t n);
+
+// LLVM の計測版から呼ぶ。標準エラーの FILE は C 側で扱い、Windows でも同じ表示にする。
+void jw_report_checks(int64_t gen, int64_t elided, int64_t bounds) {{
+    fprintf(stderr, "[checks] gen %lld elided %lld bounds %lld\\n",
+            (long long)gen, (long long)elided, (long long)bounds);
+}}
 
 // ---------------------------------------------------------------- スレッドの道具（錠と条件変数）
 
@@ -74,7 +93,8 @@ static int thread_new(WThread *t, void *arg) {{
 static void thread_join(WThread t) {{ pthread_join(t, NULL); }}
 #endif
 
-// spawn したことがあるか（なければ出力の錠を取らない）。最初の spawn の前に立てるので、ほかのスレッドからは立って見える
+// spawn したことがあるか（なければ出力の錠を取らない）。最初の spawn の前に立てる。
+// 複数スレッドで spawn と出力が重なるため、同じ 1 の書き込みでも不可分の操作にする。
 static int g_threaded;
 
 // 位置（ファイル・行・列・長さ）と、その位置の説明。解放の場所なら chain は「連鎖して解放された」の位置
@@ -104,9 +124,27 @@ typedef struct WSb {{
 
 // ---------------------------------------------------------------- 出力
 
+// 標準出力が端末なら、print の 1 行ごとに書き出す（サーバーの記録などがすぐ見えるように）。
+// 端末でない（パイプ・ファイル）なら、ためてまとめて書き出す（速さのため）。どちらでも出る中身は同じ
+#ifdef _WIN32
+#include <io.h>
+#define jw_isatty(fd) _isatty(fd)
+#else
+#include <unistd.h>
+#define jw_isatty(fd) isatty(fd)
+#endif
+static int out_tty = -1; // -1: まだ調べていない
+
 static char *out_buf;
 static size_t out_len, out_cap;
 static WLock out_lock = WLOCK_INIT;
+static _Thread_local int out_owned;
+static void out_enter(void) {{
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) {{ lock(&out_lock); out_owned = 1; }}
+}}
+static void out_leave(void) {{
+    if (out_owned) {{ out_owned = 0; unlock(&out_lock); }}
+}}
 
 static void flush_locked(void) {{
     if (out_len) fwrite(out_buf, 1, out_len, stdout);
@@ -115,16 +153,26 @@ static void flush_locked(void) {{
 }}
 
 void jw_flush(void) {{
-    if (g_threaded) lock(&out_lock);
+    // Allocation failure may occur while this thread is assembling a print line.
+    if (out_owned) {{ flush_locked(); return; }}
+    out_enter();
     flush_locked();
-    if (g_threaded) unlock(&out_lock);
+    out_leave();
+}}
+
+// エラーと exit で終わる: 片づけずに終わる（atexit の処理も動かさない。ほかのスレッドがまだ動いていても
+// 後始末と競合しない。LeakSanitizer も、片づけない終わり方を漏れと見なさない）
+static _Noreturn void quit(int code) {{
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(code);
 }}
 
 static void out_write(const char *p, size_t n) {{
     if (out_len + n > out_cap) {{
         size_t cap = out_cap ? out_cap * 2 : 1 << 16;
         while (cap < out_len + n) cap *= 2;
-        out_buf = realloc(out_buf, cap);
+        out_buf = jw_checked_realloc(out_buf, cap);
         out_cap = cap;
     }}
     memcpy(out_buf + out_len, p, n);
@@ -134,7 +182,7 @@ static void out_write(const char *p, size_t n) {{
 
 // 1 回の print のあいだ出力の錠を持つ（行が混ざらない）
 void jw_print_begin(void) {{
-    if (g_threaded) lock(&out_lock);
+    out_enter();
 }}
 
 // print の 1 つ分（first でなければ前に空白）
@@ -145,12 +193,14 @@ void jw_print_part(WStr *s, int32_t first) {{
 
 void jw_print_end(void) {{
     out_write("\\n", 1);
-    if (g_threaded) unlock(&out_lock);
+    if (out_tty < 0) out_tty = jw_isatty(1) ? 1 : 0;
+    if (out_tty) flush_locked();
+    out_leave();
 }}
 
 // eprint: 標準エラーへ 1 行。先に標準出力を出しておく（端末で順番が入れ替わらないように）
 void jw_eprint_begin(void) {{
-    if (g_threaded) lock(&out_lock);
+    out_enter();
     flush_locked();
 }}
 
@@ -162,7 +212,7 @@ void jw_eprint_part(WStr *s, int32_t first) {{
 void jw_eprint_end(void) {{
     fputc('\\n', stderr);
     fflush(stderr);
-    if (g_threaded) unlock(&out_lock);
+    out_leave();
 }}
 
 // ---------------------------------------------------------------- エラー
@@ -191,7 +241,7 @@ static WLock err_lock = WLOCK_INIT;
 
 static void begin_error(const char *title) {{
     // エラーを出すのは 1 つのスレッドだけ（出したら終わる。錠は返さない）
-    if (g_threaded) lock(&err_lock);
+    if (__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) lock(&err_lock);
     jw_flush();
     snprintf(err_title, sizeof err_title, "%s", title);
     nlabels = 0;
@@ -246,7 +296,7 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
         // --release: 使った位置だけ
         fprintf(stderr, " --> %s:%d:%d\\n", at->file, at->line, at->col);
         fprintf(stderr, "  = %s\\n", label ? label : "");
-        exit(1);
+        quit(1);
     }}
     int order[MAXL], main_file = at->fileno;
     for (int i = 0; i < nlabels; i++) order[i] = i;
@@ -306,7 +356,7 @@ static _Noreturn void finish_error(const WSite *at, const char *label, const cha
         spaces(width);
         fprintf(stderr, " = note: %s\\n", note);
     }}
-    exit(1);
+    quit(1);
 }}
 
 _Noreturn void jw_fail(const char *title, const WSite *at, const char *label, const char *note) {{
@@ -314,11 +364,35 @@ _Noreturn void jw_fail(const char *title, const WSite *at, const char *label, co
     finish_error(at, label, note);
 }}
 
+// 確保失敗は内部エラーではなく、言語仕様上の実行時エラー。
+static _Noreturn void jw_oom(void) {{
+    jw_flush();
+    fputs("error: メモリが足りません\\n", stderr);
+    quit(1);
+}}
+
+static void *jw_checked_malloc(size_t n) {{
+    void *p = malloc(n ? n : 1);
+    if (!p) jw_oom();
+    return p;
+}}
+static void *jw_checked_calloc(size_t n, size_t size) {{
+    if (size && n > SIZE_MAX / size) jw_oom();
+    void *p = calloc(n && size ? n : 1, n && size ? size : 1);
+    if (!p) jw_oom();
+    return p;
+}}
+static void *jw_checked_realloc(void *old, size_t n) {{
+    void *p = realloc(old, n ? n : 1);
+    if (!p) jw_oom();
+    return p;
+}}
+
 // IR では来ないはずの場所（書き出しの誤り）
 _Noreturn void jw_bug(const char *what) {{
     jw_flush();
     fprintf(stderr, "内部エラー: %s\\n", what);
-    exit(2);
+    quit(2);
 }}
 
 static int same_site(const WSite *a, const WSite *b) {{
@@ -347,6 +421,54 @@ typedef struct WHdr {{
 #define HDR(p) ((WHdr *)((char *)(p) - sizeof(WHdr)))
 #define FREED_SITE(p) (((const WSite **)(p))[1])
 
+// 所有者だけが世代を書き換えるが、送信元の無効な ref が別のスレッドで読むことはある。
+// 読み書きは不可分にする。書き手は唯一なので、加算も load/store でよい（read-modify-write は不要）。
+static uint64_t gen_get(void *p) {{ return __atomic_load_n(&HDR(p)->gen, __ATOMIC_RELAXED); }}
+static void gen_set(void *p, uint64_t gen) {{ __atomic_store_n(&HDR(p)->gen, gen, __ATOMIC_RELAXED); }}
+
+// bit62はリストの保持印、bit0/1は解放/借用印。bit63を含む全1は退役専用で、refには発行しない。
+#define GEN_RETIRED UINT64_MAX
+#define GEN_COUNTER_MASK ((UINT64_C(1) << 62) - 1)
+#ifdef JW_TEST_GENERATION_LIMIT
+_Static_assert(JW_TEST_GENERATION_LIMIT >= 3 && JW_TEST_GENERATION_LIMIT <= GEN_COUNTER_MASK
+               && (JW_TEST_GENERATION_LIMIT & 3) == 3,
+               "test generation limit must include both low state bits");
+#define GEN_LIMIT ((uint64_t)JW_TEST_GENERATION_LIMIT)
+#else
+#define GEN_LIMIT GEN_COUNTER_MASK
+#endif
+// live payloadとは別に、全スレッドの退役識別子を数える。
+static uint64_t retired_blocks;
+static void *retired_head;
+static uint64_t retired_count(void) {{ return __atomic_load_n(&retired_blocks, __ATOMIC_RELAXED); }}
+
+static int gen_has_room(uint64_t gen, uint64_t step) {{
+    return gen != GEN_RETIRED && step <= GEN_LIMIT && (gen & GEN_COUNTER_MASK) <= GEN_LIMIT - step;
+}}
+
+static void gen_retire(void *p) {{
+    if (gen_get(p) != GEN_RETIRED) {{
+        gen_set(p, GEN_RETIRED);
+        // 退役後の先頭語は保持表のリンクに転用する。古いrefはpayloadを読む前に拒否する。
+        // 保持表はプロセス終了まで削除しない。別スレッドの退役も安全に公開する。
+        void *head = __atomic_load_n(&retired_head, __ATOMIC_RELAXED);
+        do {{ *(void **)p = head; }}
+        while (!__atomic_compare_exchange_n(&retired_head, &head, p, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+        __atomic_fetch_add(&retired_blocks, 1, __ATOMIC_RELAXED);
+    }}
+}}
+
+// 所有者だけが書く。上限確認からstoreの間にも過去の世代値を公開しない。
+static int gen_advance(void *p, uint64_t step) {{
+    uint64_t gen = gen_get(p);
+    if (!gen_has_room(gen, step)) {{
+        gen_retire(p);
+        return 0;
+    }}
+    gen_set(p, gen + step);
+    return 1;
+}}
+
 // 使い回した区画の、前の解放の位置（エラーで「ここで解放された」を出すため。古いものから消える）
 #define NREUSED 4096
 static _Thread_local struct {{
@@ -365,9 +487,19 @@ static _Thread_local struct {{
 }} sent[NREUSED];
 static _Thread_local unsigned sent_n;
 
+static void remember_sent(void *p, const WSite *why) {{
+    unsigned i = sent_n++ % NREUSED;
+    sent[i].block = p;
+    sent[i].gen = gen_get(p);
+    sent[i].why = why;
+}}
+
 // 世代 gen の ref を無効にした出来事（解放なら世代 gen+1、送った・要素が動いたなら表の中）の位置
 static const WSite *freed_at(void *block, uint64_t gen) {{
-    if (HDR(block)->gen == gen + 1) return FREED_SITE(block);
+    if (gen == GEN_RETIRED) return NULL;
+    // 退役したpayloadは診断用にも読まない。保持したmetadata/スレッドローカル履歴だけを使う。
+    uint64_t current = gen_get(block);
+    if (current != GEN_RETIRED && current == gen + 1) return FREED_SITE(block);
     for (unsigned k = 0; k < NREUSED; k++) {{
         unsigned i = (reused_n - 1 - k) % NREUSED;
         if (reused[i].block == block && reused[i].gen == gen + 1) return reused[i].freed;
@@ -390,6 +522,11 @@ _Noreturn void jw_fail_dangling(const WSite *use, const WSite *borrowed, void *b
         put_site(f, label);
     }}
     finish_error(use, "ここで使ったが、借りた先はもう存在しない", "参照は、借りた元の所有者より長くは生きられません");
+}}
+
+static _Noreturn void fail_generation(const WSite *at) {{
+    begin_error("世代番号の上限に達しました");
+    finish_error(at, "これ以上この区画の参照を安全に無効化できません", NULL);
 }}
 
 // 整数を 10 進の文字にする（buf は 21 バイト以上）。書いた長さを返す
@@ -468,23 +605,34 @@ static size_t round8(int64_t n) {{ return n <= 16 ? 16 : ((size_t)n + 7) & ~(siz
 
 // 塊から n バイト（8 の倍数）を切り出す
 static void *slab_take(size_t n) {{
-    if ((size_t)(slab_end - slab_cur) < n) {{
-        size_t sz = 256 * 1024;
-        slab_cur = malloc(sz);
-        if (!slab_cur) jw_bug("メモリが足りません");
-        slab_end = slab_cur + sz;
+    const size_t slab_size = 256 * 1024;
+    // Large requests get their own process-lifetime allocation. Keep the
+    // arena subtraction below restricted to initialized pointers from one slab.
+    if (n > slab_size) {{
+        void *r = jw_checked_malloc(n);
+        if (!r) jw_oom();
+        return r;
+    }}
+    if (!slab_cur || !slab_end || (size_t)(slab_end - slab_cur) < n) {{
+        slab_cur = jw_checked_malloc(slab_size);
+        if (!slab_cur) jw_oom();
+        slab_end = slab_cur + slab_size;
     }}
     void *r = slab_cur;
     slab_cur += n;
     return r;
 }}
 
-static void remember_reuse(void *p) {{
+static int remember_reuse(void *p) {{
+    if (!gen_has_room(gen_get(p), 1)) {{
+        gen_retire(p);
+        return 0;
+    }}
     unsigned i = reused_n++ % NREUSED;
     reused[i].block = p;
-    reused[i].gen = HDR(p)->gen;
+    reused[i].gen = gen_get(p);
     reused[i].freed = FREED_SITE(p);
-    HDR(p)->gen++;
+    return gen_advance(p, 1);
 }}
 
 // 区画を確保する（生きている区画の数は数えない。リストの中身の区画はこれだけを使う）
@@ -492,32 +640,32 @@ static void *block_alloc(int64_t size) {{
     size_t s = round8(size);
     void *p = NULL;
     if (s / 8 <= NCLASS) {{
-        p = free_small[s / 8];
-        if (p) {{
+        while ((p = free_small[s / 8]) != NULL) {{
             free_small[s / 8] = *(void **)p;
-            remember_reuse(p);
-        }} else {{
+            if (remember_reuse(p)) break;
+        }}
+        if (!p) {{
             WHdr *h = slab_take(sizeof(WHdr) + s);
-            h->gen = 0;
+            gen_set(h + 1, 0);
             p = h + 1;
         }}
     }} else {{
-        for (Big **b = &free_big; *b; b = &(*b)->next) {{
+        for (Big **b = &free_big; *b;) {{
             if ((*b)->size == s) {{
                 Big *x = *b;
                 *b = x->next;
                 p = x->payload;
                 free(x);
-                remember_reuse(p);
-                break;
-            }}
+                if (remember_reuse(p)) break;
+                p = NULL;
+            }} else b = &(*b)->next;
         }}
         if (!p) {{
             // 中身を 64 バイトの境目にそろえる（リストの要素をまとめて読み書きする命令が速くなる）。大きな区画は OS に返さない
-            char *raw = malloc(sizeof(WHdr) + s + 64);
-            if (!raw) jw_bug("メモリが足りません");
+            char *raw = jw_checked_malloc(sizeof(WHdr) + s + 64);
+            if (!raw) jw_oom();
             p = (void *)(((uintptr_t)raw + sizeof(WHdr) + 63) & ~(uintptr_t)63);
-            HDR(p)->gen = 0;
+            gen_set(p, 0);
         }}
     }}
     return p;
@@ -530,15 +678,20 @@ void *jw_alloc(int64_t size) {{
 
 // 区画を解放する（生きている区画の数は数えない）
 static void block_free(void *p, int64_t size, const WSite *why) {{
-    WHdr *h = HDR(p);
-    h->gen++;
+    // 解放+次の再利用の両方の余地がなければ、空き表へ戻さず早期退役する。
+    if (!gen_has_room(gen_get(p), 2)) {{
+        remember_sent(p, why);
+        gen_retire(p);
+        return;
+    }}
+    (void)gen_advance(p, 1);
     FREED_SITE(p) = why;
     size_t s = round8(size);
     if (s / 8 <= NCLASS) {{
         *(void **)p = free_small[s / 8];
         free_small[s / 8] = p;
     }} else {{
-        Big *b = malloc(sizeof(Big));
+        Big *b = jw_checked_malloc(sizeof(Big));
         b->next = free_big;
         b->size = s;
         b->payload = p;
@@ -552,7 +705,7 @@ void jw_free(void *p, int64_t size, const WSite *why) {{
     block_free(p, size, why);
 }}
 
-uint64_t jw_gen(void *p) {{ return HDR(p)->gen; }}
+uint64_t jw_gen(void *p) {{ return gen_get(p); }}
 
 // ---------------------------------------------------------------- own の読むだけの写し
 
@@ -576,7 +729,7 @@ void *jw_view(void *own, const WSite *site) {{
         *c = *CELL(own);
     }} else {{
         c->target = own;
-        c->gen = HDR(own)->gen;
+        c->gen = gen_get(own);
         c->site = site;
     }}
     return (void *)((uintptr_t)c | 1);
@@ -591,11 +744,13 @@ void jw_view_free(void *v) {{
 // 写しの先（世代を確かめる）
 void *jw_view_target(void *v, const WSite *use) {{
     WCell *c = CELL(v);
-    if (HDR(c->target)->gen != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
+    uint64_t gen = gen_get(c->target);
+    if (gen == GEN_RETIRED || gen != c->gen) jw_fail_dangling(use, c->site, c->target, c->gen);
     return c->target;
 }}
 
-void *jw_view_target_nocheck(void *v) {{ return CELL(v)->target; }}
+// 写しでなければ v のまま（書き出しは写しかどうかを見る前に呼んで select で選ぶことがある。own の中身を読まないように）
+void *jw_view_target_nocheck(void *v) {{ return IS_VIEW(v) ? CELL(v)->target : v; }}
 uint64_t jw_view_gen(void *v) {{ return CELL(v)->gen; }}
 const WSite *jw_view_site(void *v) {{ return CELL(v)->site; }}
 
@@ -608,8 +763,8 @@ static _Thread_local void *free_bytes[SCLASS + 1];
 static void *bytes_alloc(size_t n) {{
     size_t c = (n + 15) >> 4;
     if (c > SCLASS) {{
-        void *p = malloc(n);
-        if (!p) jw_bug("メモリが足りません");
+        void *p = jw_checked_malloc(n);
+        if (!p) jw_oom();
         return p;
     }}
     void *p = free_bytes[c];
@@ -680,8 +835,8 @@ WStr *jw_str_append(WStr **slot, WStr *b) {{
     size_t old = str_bytes(a->len), need = str_bytes(n);
     if (need != old) {{
         if (((old + 15) >> 4) > SCLASS) {{
-            a = realloc(a, need);
-            if (!a) jw_bug("メモリが足りません");
+            a = jw_checked_realloc(a, need);
+            if (!a) jw_oom();
         }} else {{
             WStr *s = bytes_alloc(need);
             memcpy(s, a, sizeof(WStr) + (size_t)a->len);
@@ -909,7 +1064,6 @@ int64_t jw_f2i(double x, int32_t bits, int32_t is_signed) {{
 
 // ---------------------------------------------------------------- リスト
 
-static void remember_sent(void *p, const WSite *why);
 
 // リストの中身は own の先と同じく、頭に世代を持つ区画に置く（要素を借りた ref はこの区画と世代を持つ）。
 // 要素を借りるときは世代に「借りられた」の印（2 のビット）と「借りられたことがある」の印（LIST_SHARED）を立てる（書き出したコード）。
@@ -925,18 +1079,20 @@ static void remember_sent(void *p, const WSite *why);
 static int64_t list_bytes(int64_t esize, int64_t n) {{ return (int64_t)round8(n * (esize ? esize : 1)); }}
 
 static char *list_new_data(int64_t bytes) {{
-    char *raw = malloc((size_t)(LIST_PAD + bytes));
-    if (!raw) jw_bug("メモリが足りません");
+    char *raw = jw_checked_malloc((size_t)(LIST_PAD + bytes));
+    if (!raw) jw_oom();
     char *d = raw + LIST_PAD;
-    HDR(d)->gen = 0;
+    gen_set(d, 0);
     return d;
 }}
 
 // 要素が動いた（interp の `list_moved`）
 void jw_list_moved(WList *l, const WSite *why) {{
-    if (!l->data || !why || !(HDR(l->data)->gen & 2)) return;
+    if (!l->data || !why || !(gen_get(l->data) & 2)) return;
     remember_sent(l->data, why);
-    HDR(l->data)->gen = (HDR(l->data)->gen & ~(uint64_t)3) + 4;
+    // 借用中のlive世代は下位2bitが10なので、従来の (gen & ~3) + 4 と同じ遷移。
+    // counterがbit62へはみ出して保持印と衝突する前に停止する。
+    if (!gen_advance(l->data, 2)) fail_generation(why);
 }}
 
 // 長さ n まで入れられるようにする。取り直したら true
@@ -947,14 +1103,14 @@ static int list_grow(WList *l, int64_t esize, int64_t n, const WSite *why) {{
     int64_t bytes = list_bytes(esize, cap);
     if (!l->data) {{
         l->data = list_new_data(bytes);
-    }} else if (HDR(l->data)->gen & LIST_SHARED) {{
+    }} else if (gen_get(l->data) & LIST_SHARED) {{
         char *nd = list_new_data(bytes);
         memcpy(nd, l->data, (size_t)(l->len * (esize ? esize : 1)));
         block_free(l->data, list_bytes(esize, l->cap), why);
         l->data = nd;
     }} else {{
-        char *raw = realloc(l->data - LIST_PAD, (size_t)(LIST_PAD + bytes));
-        if (!raw) jw_bug("メモリが足りません");
+        char *raw = jw_checked_realloc(l->data - LIST_PAD, (size_t)(LIST_PAD + bytes));
+        if (!raw) jw_oom();
         l->data = raw + LIST_PAD;
     }}
     l->cap = cap;
@@ -987,7 +1143,7 @@ void jw_list_remove(WList *l, int64_t esize, int64_t i, void *out, const WSite *
 
 void jw_list_reverse(WList *l, int64_t esize, const WSite *why) {{
     char tmp[256];
-    char *big = esize > (int64_t)sizeof tmp ? malloc((size_t)esize) : tmp;
+    char *big = esize > (int64_t)sizeof tmp ? jw_checked_malloc((size_t)esize) : tmp;
     for (int64_t i = 0, j = l->len - 1; i < j; i++, j--) {{
         memcpy(big, l->data + i * esize, (size_t)esize);
         memcpy(l->data + i * esize, l->data + j * esize, (size_t)esize);
@@ -1000,7 +1156,7 @@ void jw_list_reverse(WList *l, int64_t esize, const WSite *why) {{
 // 中身の区画を解放する（要素の own は書き出したコードが先に解放する）
 void jw_list_free(WList *l, int64_t esize, const WSite *why) {{
     if (!l->data) return;
-    if (HDR(l->data)->gen & LIST_SHARED) block_free(l->data, list_bytes(esize, l->cap), why);
+    if (gen_get(l->data) & LIST_SHARED) block_free(l->data, list_bytes(esize, l->cap), why);
     else free(l->data - LIST_PAD);
 }}
 
@@ -1130,7 +1286,7 @@ static void s_binsert(WSort *S, int64_t lo, int64_t done, int64_t n) {{
 static void s_stable(WSort *S) {{
     int64_t n = S->n, es = S->es;
     if (n < 64) {{ s_binsert(S, 0, 1, n); return; }}
-    S->s = malloc((size_t)(n * es));
+    S->s = jw_checked_malloc((size_t)(n * es));
     int64_t minrun = s_minrun(n);
     // (始め, 長さ, 次の run との境目の深さ)
     int64_t rs[130], rl[130];
@@ -1249,7 +1405,7 @@ static void s_init(WSort *S, char *data, int64_t n, int64_t es, WLess less, void
     S->es = es;
     S->less = less;
     S->env = env;
-    S->xb = malloc((size_t)(2 * es));
+    S->xb = jw_checked_malloc((size_t)(2 * es));
     S->sw = S->xb + es;
 }}
 
@@ -1324,8 +1480,8 @@ void jw_sort_int(char *data, int64_t n, int32_t bytes, int32_t sgn) {{
         return;
     }}
     // 8 バイトの整数は data をそのまま鍵の場所に使う（作業用の場所は n 個ぶんだけ）
-    uint64_t *buf = malloc((size_t)n * (bytes == 8 ? 8 : 16));
-    if (!buf) jw_bug("メモリが足りません");
+    uint64_t *buf = jw_checked_malloc((size_t)n * (bytes == 8 ? 8 : 16));
+    if (!buf) jw_oom();
     uint64_t *k = bytes == 8 ? (uint64_t *)data : buf + n, *t = buf;
     uint64_t mn = ~0ull, mx = 0;
     for (int64_t j = 0; j < n; j++) {{
@@ -1393,13 +1549,13 @@ static void reindex(WMap *m) {{
     int64_t cap = 8;
     while (cap < m->len * 2 + 2) cap *= 2;
     free(m->idx);
-    m->idx = calloc((size_t)cap, sizeof(int64_t));
+    m->idx = jw_checked_calloc((size_t)cap, sizeof(int64_t));
     m->icap = cap;
     for (int64_t i = 0; i < m->len; i++) index_put(m, i);
 }}
 
 WMap *jw_map_new(int64_t vsize, int32_t kind) {{
-    WMap *m = calloc(1, sizeof(WMap));
+    WMap *m = jw_checked_calloc(1, sizeof(WMap));
     m->esize = 8 + ((vsize + 7) & ~(int64_t)7);
     m->kind = kind;
     return m;
@@ -1421,7 +1577,7 @@ int64_t jw_map_find(WMap *m, int64_t key) {{
 int64_t jw_map_add(WMap *m, int64_t key) {{
     if (m->len == m->cap) {{
         m->cap = m->cap ? m->cap * 2 : 4;
-        m->e = realloc(m->e, (size_t)(m->cap * m->esize));
+        m->e = jw_checked_realloc(m->e, (size_t)(m->cap * m->esize));
     }}
     int64_t i = m->len++;
     *(int64_t *)(m->e + i * m->esize) = key;
@@ -1755,7 +1911,7 @@ int32_t jw_str_to_float(WStr *s, double *out) {{
     if (i != n) return 0;
     char buf[128];
     char *heap = NULL, *t = buf;
-    if (n + 1 > (int64_t)sizeof buf) t = heap = malloc((size_t)n + 1);
+    if (n + 1 > (int64_t)sizeof buf) t = heap = jw_checked_malloc((size_t)n + 1);
     memcpy(t, p, (size_t)n);
     t[n] = 0;
     *out = strtod(t, NULL);
@@ -1795,7 +1951,7 @@ int32_t jw_str_to_int(WStr *s, int64_t *out) {{
 // order の順に要素を並べ直す（sort_by）
 void jw_permute(char *data, int64_t n, int64_t es, const int64_t *order) {{
     if (n < 2) return;
-    char *tmp = malloc((size_t)(n * es));
+    char *tmp = jw_checked_malloc((size_t)(n * es));
     for (int64_t k = 0; k < n; k++) memcpy(tmp + k * es, data + order[k] * es, (size_t)es);
     memcpy(data, tmp, (size_t)(n * es));
     free(tmp);
@@ -1818,7 +1974,7 @@ typedef struct WEnv {{
 }} WEnv;
 
 void *jw_env_new(int64_t size, const WEnvVt *vt) {{
-    WEnv *e = calloc(1, (size_t)size);
+    WEnv *e = jw_checked_calloc(1, (size_t)size);
     e->rc = 1;
     e->vt = vt;
     return e;
@@ -1897,7 +2053,7 @@ typedef struct WChan {{
 }} WChan;
 
 WChan *jw_chan_new(int64_t esize, WDrop drop) {{
-    WChan *c = calloc(1, sizeof(WChan));
+    WChan *c = jw_checked_calloc(1, sizeof(WChan));
     c->rc = 1;
     c->esize = esize > 0 ? esize : 1;
     c->drop = drop;
@@ -1925,7 +2081,7 @@ void jw_chan_send(WChan *c, void *v, const WSite *at) {{
     }}
     if (c->len == c->cap) {{
         int64_t cap = c->cap ? c->cap * 2 : 8; // いつも 2 のべき（位置は & で回す）
-        char *nb = malloc((size_t)(cap * c->esize));
+        char *nb = jw_checked_malloc((size_t)(cap * c->esize));
         for (int64_t i = 0; i < c->len; i++)
             memcpy(nb + i * c->esize, c->buf + ((c->head + i) & (c->cap - 1)) * c->esize, (size_t)c->esize);
         free(c->buf);
@@ -2020,13 +2176,13 @@ static int64_t max_threads(void) {{
 // spawn: thunk(args, 戻り値の置き場) を新しいスレッドで動かす。args は malloc したもの（終わったら解放する）。
 // 作れなければ at でエラー（生きているスレッドの数には入れない。錠を持ったまま作るので、新しいスレッドが先に終わって数を減らすことはない）
 WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop, const WSite *at) {{
-    WTask *t = calloc(1, sizeof(WTask));
+    WTask *t = jw_checked_calloc(1, sizeof(WTask));
     t->thunk = thunk;
     t->args = args;
     t->rsize = rsize > 0 ? rsize : 1;
-    t->result = calloc(1, (size_t)t->rsize);
+    t->result = jw_checked_calloc(1, (size_t)t->rsize);
     t->drop = drop;
-    g_threaded = 1;
+    __atomic_store_n(&g_threaded, 1, __ATOMIC_RELAXED);
     lock(&g_lock);
     int64_t m = max_threads();
     if ((m >= 0 && g_alive - 1 >= m) || !thread_new(&t->thread, t)) {{
@@ -2040,7 +2196,7 @@ WTask *jw_spawn(WThunk thunk, void *args, int64_t rsize, WDrop drop, const WSite
     return t;
 }}
 
-void *jw_spawn_args(int64_t size) {{ return calloc(1, (size_t)(size > 0 ? size : 1)); }}
+void *jw_spawn_args(int64_t size) {{ return jw_checked_calloc(1, (size_t)(size > 0 ? size : 1)); }}
 
 static int task_ready(void *p) {{ return ((WTask *)p)->done; }}
 
@@ -2082,25 +2238,18 @@ static int all_done(void *p) {{
 
 // main の終わり: ほかのスレッドが終わるのを待つ
 void jw_wait_all(const WSite *at) {{
-    if (!g_threaded) return;
+    if (!__atomic_load_n(&g_threaded, __ATOMIC_RELAXED)) return;
     lock(&g_lock);
     wait_until(all_done, NULL, at);
     unlock(&g_lock);
 }}
 
 // ほかのスレッドへ送る区画: 世代を進める（送った側に残った ref は、使うとダングリングとして見つかる）
-static void remember_sent(void *p, const WSite *why) {{
-    unsigned i = sent_n++ % NREUSED;
-    sent[i].block = p;
-    sent[i].gen = HDR(p)->gen;
-    sent[i].why = why;
-}}
-
 void jw_send_block(void *p, const WSite *why) {{
     // 読むだけの写し（下の 1 ビット）は送れない（型検査と取り出しのエラーで来ないはず。来たら区画を壊す前に止める）
     if ((uintptr_t)p & 1) jw_bug("読むだけの写しをほかのスレッドへ送ろうとした");
     remember_sent(p, why);
-    HDR(p)->gen += 2;
+    if (!gen_advance(p, 2)) fail_generation(why);
 }}
 
 // ほかのスレッドへ送る文字列: 数を数えて共有しているので、複製する（定数はそのまま）
@@ -2161,7 +2310,7 @@ intptr_t _wspawnvp(int, const wchar_t *, const wchar_t *const *);
 
 static wchar_t *to_wide(const char *s) {{
     int n = MultiByteToWideChar(65001, 0, s, -1, NULL, 0);
-    wchar_t *w = malloc(sizeof(wchar_t) * (size_t)(n > 0 ? n : 1));
+    wchar_t *w = jw_checked_malloc(sizeof(wchar_t) * (size_t)(n > 0 ? n : 1));
     if (n <= 0) w[0] = 0;
     else MultiByteToWideChar(65001, 0, s, -1, w, n);
     return w;
@@ -2186,7 +2335,7 @@ extern char **environ;
 
 // 終わりに 0 のある写し（WStr は 0 で終わるとは限らない）
 static char *c_str(WStr *s) {{
-    char *c = malloc((size_t)s->len + 1);
+    char *c = jw_checked_malloc((size_t)s->len + 1);
     memcpy(c, s->data, (size_t)s->len);
     c[s->len] = 0;
     return c;
@@ -2300,13 +2449,13 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {{
     jw_flush();
     int64_t n = args->len;
     WStr **items = (WStr **)args->data;
-    char **argv = malloc(sizeof(char *) * (size_t)(n + 2));
+    char **argv = jw_checked_malloc(sizeof(char *) * (size_t)(n + 2));
     argv[0] = c_str(cmd);
     for (int64_t i = 0; i < n; i++) argv[i + 1] = c_str(items[i]);
     argv[n + 1] = NULL;
     int ok;
 #ifdef _WIN32
-    wchar_t **wargv = malloc(sizeof(wchar_t *) * (size_t)(n + 2));
+    wchar_t **wargv = jw_checked_malloc(sizeof(wchar_t *) * (size_t)(n + 2));
     for (int64_t i = 0; i <= n; i++) {{
         WSb *b = jw_sb_new();
         quote_arg(b, argv[i]);
@@ -2341,9 +2490,2333 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {{
     return ok;
 }}
 
+// ---------------------------------------------------------------- 資源（std.fs の File など）
+//
+// 資源の値は「札」（64 ビット）: 世代 << 21 | 番号 << 1 | 写しの印。OS の番号やポインタは言語の値に出さない。
+// 表の場所（番号）を使い回すときは世代を進め、古い札は種類・世代・状態で必ず見つける。
+// 世代が上限に達した場所は退役させ、使い回さない（ref の区画と同じ考え方）。
+// 資源はほかのスレッドへ渡せない（型検査で止める）ので、中身に触るのは持ち主のスレッドだけ。
+// 表の確保と解放だけを g_lock で守り、読み書きの間は錠を持たない。場所は動かない（塊ごとに確保して公開する）。
+
+#define RES_CHUNK 1024
+#define RES_CHUNKS 1024
+#define RES_GEN_MAX (((uint64_t)1 << 43) - 1)
+#define RES_FILE 1
+#define RES_TCP 2
+#define RES_LISTENER 3
+#define RES_BROWSER 4
+#define RES_TLS 5
+#define RES_UDP 6
+
+typedef struct WRes {{
+    uint64_t gen;
+    uint32_t kind;
+    // 0: 空き、1: 開いている、2: 退役（使い回さない）
+    uint32_t state;
+    FILE *fp;
+    // ソケット（TCP）
+    int64_t fd;
+    // ブラウザのエンジン（std.browser。WBrowser）
+    void *ptr;
+    // 空きの場所のつながり（0 で終わり）
+    int64_t next_free;
+}} WRes;
+
+static WRes *g_res[RES_CHUNKS];
+static int64_t g_res_next = 1;
+static int64_t g_res_free = 0;
+
+static WRes *res_at(int64_t slot) {{
+    if (slot <= 0 || slot >= (int64_t)RES_CHUNK * RES_CHUNKS) return NULL;
+    WRes *c = __atomic_load_n(&g_res[slot / RES_CHUNK], __ATOMIC_ACQUIRE);
+    return c ? &c[slot % RES_CHUNK] : NULL;
+}}
+
+// テスト用: JW_RES_FAIL=open / read / write / close / list / make_dir / remove / connect / listen / accept でその操作をわざと失敗させる（--release では効かない）
+static int res_fail(const char *op) {{
+    const char *s = jw_nfiles > 0 ? getenv("JW_RES_FAIL") : NULL;
+    return s && strcmp(s, op) == 0;
+}}
+
+// 新しい場所を取って札を返す。場所が尽きたら 0
+static uint64_t res_new(uint32_t kind, FILE *fp, int64_t fd) {{
+    lock(&g_lock);
+    int64_t slot = 0;
+    if (g_res_free > 0) {{
+        slot = g_res_free;
+        g_res_free = res_at(slot)->next_free;
+    }} else if (g_res_next < (int64_t)RES_CHUNK * RES_CHUNKS) {{
+        slot = g_res_next++;
+        if (!g_res[slot / RES_CHUNK]) {{
+            WRes *c = jw_checked_calloc(RES_CHUNK, sizeof(WRes));
+            __atomic_store_n(&g_res[slot / RES_CHUNK], c, __ATOMIC_RELEASE);
+        }}
+    }}
+    uint64_t tok = 0;
+    if (slot > 0) {{
+        WRes *r = res_at(slot);
+        r->kind = kind;
+        r->state = 1;
+        r->fp = fp;
+        r->fd = fd;
+        tok = (r->gen << 21) | ((uint64_t)slot << 1);
+    }}
+    unlock(&g_lock);
+    return tok;
+}}
+
+// 札の指す開いた資源。古い札・違う種類なら実行時エラー（型検査を通ったプログラムでは起きない）。kind が 0 ならどの種類でもよい
+static WRes *res_get(uint64_t tok, uint32_t kind, const WSite *at) {{
+    WRes *r = res_at((int64_t)((tok >> 1) & (((uint64_t)1 << 20) - 1)));
+    if (!r || r->gen != (tok >> 21) || (kind && r->kind != kind) || r->state != 1) {{
+        begin_error("閉じた資源を使いました");
+        finish_error(at, "この資源はもう閉じている", NULL);
+    }}
+    return r;
+}}
+
+// 場所を空ける。世代を進め、上限なら退役させる
+static void res_release(WRes *r, int64_t slot) {{
+    lock(&g_lock);
+    r->fp = NULL;
+    r->ptr = NULL;
+    if (r->gen >= RES_GEN_MAX) {{
+        r->state = 2;
+    }} else {{
+        r->gen++;
+        r->state = 0;
+        r->next_free = g_res_free;
+        g_res_free = slot;
+    }}
+    unlock(&g_lock);
+}}
+
+static int64_t res_slot(uint64_t tok) {{ return (int64_t)((tok >> 1) & (((uint64_t)1 << 20) - 1)); }}
+
+// mode: 0 読む、1 書く（作る・空にする）、2 後ろに足す
+int32_t jw_fs_open(WStr *path, int64_t mode, void **out, WStr **err) {{
+    if (memchr(path->data, 0, (size_t)path->len)) {{
+        *err = message("パスに NUL 文字があります: ", path);
+        return 0;
+    }}
+    char *cp = c_str(path);
+#ifdef _WIN32
+    const wchar_t *m = mode == 0 ? L"rb" : mode == 1 ? L"wb" : L"ab";
+#else
+    const char *m = mode == 0 ? "rb" : mode == 1 ? "wb" : "ab";
+#endif
+    FILE *f = res_fail("open") ? NULL : open_file(cp, m);
+    free(cp);
+    if (!f) {{
+        *err = message(mode == 0 ? "ファイルを開けません: " : "ファイルを書くために開けません: ", path);
+        return 0;
+    }}
+    uint64_t tok = res_new(RES_FILE, f, -1);
+    if (!tok) {{
+        fclose(f);
+        *err = message("開いている資源が多すぎます: ", path);
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+static WStr *err_text(const char *s) {{
+    WSb *b = jw_sb_new();
+    jw_sb_push(b, s, (int64_t)strlen(s));
+    return jw_sb_finish(b);
+}}
+
+// 最大 n バイト読む（終わりなら空のリスト）
+int32_t jw_file_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    if (n < 0) {{
+        begin_error("読む大きさが負です");
+        finish_error(at, "read(n) の n は 0 以上", NULL);
+    }}
+    if (n == 0) return 1;
+    int64_t want = n < 65536 ? n : 65536;
+    jw_list_reserve(out, 1, want);
+    size_t got = res_fail("read") ? 0 : fread(out->data, 1, (size_t)want, r->fp);
+    if (got == 0 && (res_fail("read") || ferror(r->fp))) {{
+        clearerr(r->fp);
+        jw_list_free(out, 1, NULL);
+        *err = err_text("ファイルを読めません");
+        return 0;
+    }}
+    out->len = (int64_t)got;
+    return 1;
+}}
+
+// 残りをすべて読む（UTF-8 でなければ Err）
+int32_t jw_file_read_text(void *h, WStr **out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    WSb *b = jw_sb_new();
+    char buf[65536];
+    size_t n;
+    while (!res_fail("read") && (n = fread(buf, 1, sizeof buf, r->fp)) > 0) jw_sb_push(b, buf, (int64_t)n);
+    if (res_fail("read") || ferror(r->fp)) {{
+        clearerr(r->fp);
+        sb_drop(b);
+        *err = err_text("ファイルを読めません");
+        return 0;
+    }}
+    if (!valid_utf8((const unsigned char *)b->p, b->len)) {{
+        sb_drop(b);
+        *err = err_text("ファイルが UTF-8 ではありません");
+        return 0;
+    }}
+    *out = jw_sb_finish(b);
+    return 1;
+}}
+
+static int32_t file_write(WRes *r, const char *p, int64_t n, WStr **err) {{
+    if (res_fail("write") || fwrite(p, 1, (size_t)n, r->fp) != (size_t)n) {{
+        clearerr(r->fp);
+        *err = err_text("ファイルに書けません");
+        return 0;
+    }}
+    return 1;
+}}
+
+// 全部書く。リストはムーブされてきたので解放する
+int32_t jw_file_write(void *h, WList *data, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    int32_t ok = file_write(r, data->data, data->len, err);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+
+int32_t jw_file_write_text(void *h, WStr *text, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_FILE, at);
+    return file_write(r, text->data, text->len, err);
+}}
+
+// 閉じる（資源はムーブされてきた）。失敗しても場所は空ける（もう使えない）
+static int sock_close(int64_t fd);
+
+// 種類ごとに OS の資源を手放す。失敗したら 0（それでも手放したとみなす。同じ番号をもう一度閉じない）
+static int browser_free(void *p);
+static int tls_free(WRes *r);
+
+static int res_free_os(WRes *r) {{
+    if (r->kind == RES_FILE) return fclose(r->fp) == 0;
+    if (r->kind == RES_BROWSER) return browser_free(r->ptr);
+    if (r->kind == RES_TLS) return tls_free(r);
+    return sock_close(r->fd);
+}}
+
+int32_t jw_res_close(void *h, WStr **err, const WSite *at) {{
+    uint64_t tok = (uint64_t)(uintptr_t)h;
+    WRes *r = res_get(tok, 0, at);
+    uint32_t kind = r->kind;
+    int bad = !res_free_os(r) || res_fail("close");
+    res_release(r, res_slot(tok));
+    if (bad) {{
+        *err = err_text(kind == RES_FILE ? "ファイルを閉じられません（書いた内容が残っていないかもしれません）" : "接続を閉じられません");
+        return 0;
+    }}
+    return 1;
+}}
+
+// 持ち主がいなくなった: 黙って閉じる（写しなら何もしない）。結果が要るなら close を使う
+void jw_res_drop(void *h, const WSite *site) {{
+    uint64_t tok = (uint64_t)(uintptr_t)h;
+    if (tok & 1 || tok == 0) return;
+    WRes *r = res_get(tok, 0, site);
+    res_free_os(r);
+    res_release(r, res_slot(tok));
+}}
+
+void *jw_res_view(void *h) {{ return (void *)((uintptr_t)h | 1); }}
+
+// ---------------------------------------------------------------- ブラウザのエンジン（std.browser）
+//
+// エンジンとの境目は runtime/engine/jw_engine.h（C の関数だけ。呼び返しなし）。下にそのまま写してある（テストで同じか確かめる）。
+// エンジンの実装は jwc build の --link で渡す。std.browser を使うプログラムだけ JW_BROWSER をつけて作る
+// （使わないプログラムは jwe_* を呼ばないので、エンジンなしでリンクできる）。
+// 資源の中身は WBrowser: エンジンと、最後に取ったイベント（文字列は写して持つ）。エンジンは開いたスレッドだけが触る（資源は送れない）。
+
+#ifdef JW_BROWSER
+// ---- jw_engine.h ここから
+/* jw_engine.h: ブラウザのエンジンとの境目（C の関数だけ）。
+ *
+ * jabberwock のブラウザ（browser.jw）はこのヘッダーの関数だけを使う。
+ * エンジン（WebView2・試験用の偽エンジン・あとで Servo や jabberwock 製）は、
+ * それぞれこの関数を 1 組ずつ実装する。差し替えはリンクするファイルを変えるだけ。
+ *
+ * 決まり:
+ * - 呼び返しはしない。エンジンはイベントを溜め、呼ぶ側が jwe_poll / jwe_wait で取りに行く。
+ * - すべての関数は jwe_open を呼んだスレッドから呼ぶ。
+ * - 文字列はすべて UTF-8。長さつき（終わりの 0 は要らない）。
+ * - イベントの中の文字列はエンジンが持ち、次に jwe_poll / jwe_wait / jwe_close を呼ぶまで有効。
+ *   取っておくなら呼ぶ側で写す。
+ * - タブは 1 から始まる番号。閉じた番号は使い回さない。0 は「タブではない」。
+ * - アカウント・同期・プロファイル・パスワード保存の関数は置かない（作らない）。
+ */
+#ifndef JW_ENGINE_H
+#define JW_ENGINE_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
+#define JWE_ABI_VERSION 1
+
+typedef struct JweEngine JweEngine;
+
+/* エンジンができること。jwe_info で返す */
+enum {{
+    JWE_CAP_SCRIPT = 1u << 0,      /* ページの JavaScript が動く */
+    JWE_CAP_CHROME_VIEW = 1u << 1, /* 外枠（アドレスバーなど）を HTML で表示できる（jwe_chrome_*） */
+    JWE_CAP_PERSIST = 1u << 2      /* Cookie などをディスクに残せる */
+}};
+
+typedef struct {{
+    uint32_t abi_version; /* JWE_ABI_VERSION */
+    uint32_t caps;        /* JWE_CAP_* の組み合わせ */
+    const char *name;     /* 例 "webview2"。0 で終わる。エンジンが持つ */
+    const char *version;  /* エンジンの版。0 で終わる。エンジンが持つ */
+}} JweInfo;
+
+typedef struct {{
+    const char *title;    uint32_t title_len;
+    const char *data_dir; uint32_t data_dir_len; /* Cookie などの置き場所（1 か所だけ） */
+    uint32_t width, height;                      /* 論理ピクセル */
+    uint32_t ephemeral;                          /* 1: 何もディスクに残さない（終わると全部消える） */
+}} JweConfig;
+
+typedef enum {{
+    JWE_OK = 0,
+    JWE_ERR_UNAVAILABLE = 1, /* エンジンが使えない（例: WebView2 の実行環境が入っていない） */
+    JWE_ERR_BAD_TAB = 2,     /* その番号のタブはない */
+    JWE_ERR_BAD_ARG = 3,
+    JWE_ERR_UNSUPPORTED = 4, /* このエンジンにはその機能がない（JweInfo.caps を見る） */
+    JWE_ERR_FAILED = 5
+}} JweStatus;
+
+typedef enum {{
+    JWE_EV_NONE = 0,
+    JWE_EV_READY,             /* エンジンの準備ができた。これより前の navigate も受け付けて後で動かす */
+    JWE_EV_CLOSE_REQUESTED,   /* 窓の × が押された。閉じるかどうかは呼ぶ側が決める */
+    JWE_EV_NAV_STARTED,       /* tab, text = URL */
+    JWE_EV_NAV_FINISHED,      /* tab, text = URL, code = 0 成功 / それ以外は失敗 */
+    JWE_EV_URL_CHANGED,       /* tab, text = URL（ページ内の移動・リダイレクトも） */
+    JWE_EV_TITLE_CHANGED,     /* tab, text = 題 */
+    JWE_EV_HISTORY_CHANGED,   /* tab, code = 1 なら戻れる | 2 なら進める */
+    JWE_EV_NEW_TAB_REQUESTED, /* tab = 元のタブ, text = URL（target=_blank など）。開くかは呼ぶ側が決める */
+    JWE_EV_CHROME_MESSAGE,    /* 外枠の HTML から来た文字列（text） */
+    JWE_EV_KEY,               /* 呼ぶ側に渡すショートカット。code = JWE_KEY_* */
+    JWE_EV_PERMISSION_DENIED, /* tab, text = 何を求められたか。いつも断る（記録用） */
+    JWE_EV_ERROR              /* code = JweStatus, text = 説明 */
+}} JweEventKind;
+
+enum {{ JWE_KEY_FOCUS_ADDRESS = 1, JWE_KEY_NEW_TAB, JWE_KEY_CLOSE_TAB, JWE_KEY_NEXT_TAB, JWE_KEY_PREV_TAB, JWE_KEY_RELOAD, JWE_KEY_BACK, JWE_KEY_FORWARD }};
+
+typedef struct {{
+    uint32_t kind; /* JweEventKind */
+    uint32_t tab;
+    int64_t code;
+    const char *text; uint32_t text_len;
+}} JweEvent;
+
+/* 開く・閉じる */
+JweStatus jwe_open(const JweConfig *cfg, JweEngine **out);
+void jwe_close(JweEngine *e); /* 開いているタブも全部閉じる。ephemeral なら data_dir の中も消す */
+void jwe_info(const JweEngine *e, JweInfo *out);
+
+/* イベント。あれば *out に入れて 1、なければ 0 */
+int jwe_poll(JweEngine *e, JweEvent *out);
+/* イベントが来るか timeout_ms たつまで待つ（OS のメッセージもここで処理する）。-1 は無期限 */
+int jwe_wait(JweEngine *e, int32_t timeout_ms, JweEvent *out);
+
+/* タブ */
+JweStatus jwe_tab_new(JweEngine *e, uint32_t *out_tab);
+JweStatus jwe_tab_close(JweEngine *e, uint32_t tab);
+JweStatus jwe_tab_show(JweEngine *e, uint32_t tab); /* 見えるタブを切り替える */
+JweStatus jwe_navigate(JweEngine *e, uint32_t tab, const char *url, uint32_t url_len);
+JweStatus jwe_back(JweEngine *e, uint32_t tab);
+JweStatus jwe_forward(JweEngine *e, uint32_t tab);
+JweStatus jwe_reload(JweEngine *e, uint32_t tab);
+JweStatus jwe_stop(JweEngine *e, uint32_t tab);
+
+/* 外枠（JWE_CAP_CHROME_VIEW があるときだけ）。height は外枠の高さ（論理ピクセル） */
+JweStatus jwe_chrome_load(JweEngine *e, const char *html, uint32_t html_len, uint32_t height);
+JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len);
+
+/* 窓 */
+JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len);
+
+/* Cookie・キャッシュ・サイトのデータを全部消す */
+JweStatus jwe_clear_site_data(JweEngine *e);
+
+#ifdef __cplusplus
+}}
+#endif
+
+#endif
+// ---- jw_engine.h ここまで
+
+typedef struct {{
+    JweEngine *e;
+    int64_t tab, code;
+    WStr *text;
+}} WBrowser;
+
+static int browser_free(void *p) {{
+    WBrowser *b = p;
+    jwe_close(b->e);
+    if (b->text) jw_str_release(b->text);
+    free(b);
+    return 1;
+}}
+
+static WStr *browser_err(const char *head, int st) {{
+    char buf[160];
+    snprintf(buf, sizeof buf, "%s（jw_engine の状態 %d）", head, st);
+    return err_text(buf);
+}}
+
+int32_t jw_browser_open(WStr *title, WStr *dir, int64_t w, int64_t h, int64_t eph, void **out, WStr **err) {{
+    if (w < 1 || w > 100000 || h < 1 || h > 100000) {{
+        *err = err_text("窓の大きさは 1〜100000 にしてください");
+        return 0;
+    }}
+    if (title->len > 0x7fffffff || dir->len > 0x7fffffff) {{
+        *err = err_text("題や置き場所が長すぎます");
+        return 0;
+    }}
+    JweConfig cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.title = title->data;
+    cfg.title_len = (uint32_t)title->len;
+    cfg.data_dir = dir->data;
+    cfg.data_dir_len = (uint32_t)dir->len;
+    cfg.width = (uint32_t)w;
+    cfg.height = (uint32_t)h;
+    cfg.ephemeral = eph ? 1 : 0;
+    JweEngine *e = NULL;
+    JweStatus st = res_fail("open") ? JWE_ERR_FAILED : jwe_open(&cfg, &e);
+    if (st != JWE_OK || !e) {{
+        *err = browser_err("ブラウザのエンジンを開けません", (int)st);
+        return 0;
+    }}
+    JweInfo info;
+    memset(&info, 0, sizeof info);
+    jwe_info(e, &info);
+    if (info.abi_version != JWE_ABI_VERSION) {{
+        jwe_close(e);
+        *err = err_text("エンジンの jw_engine.h の版が違います");
+        return 0;
+    }}
+    WBrowser *b = jw_checked_calloc(1, sizeof(WBrowser));
+    b->e = e;
+    uint64_t tok = res_new(RES_BROWSER, NULL, -1);
+    if (!tok) {{
+        browser_free(b);
+        *err = err_text("開いている資源が多すぎます");
+        return 0;
+    }}
+    res_at(res_slot(tok))->ptr = b;
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+static WBrowser *browser_get(void *h, const WSite *at) {{ return res_get((uint64_t)(uintptr_t)h, RES_BROWSER, at)->ptr; }}
+
+// 操作 op（std/browser.jw の OP_*）。0 以上は成功（タブを作ったらその番号）、負は -JweStatus
+int64_t jw_browser_call(void *h, int64_t op, int64_t tab, WStr *text, int64_t n, const WSite *at) {{
+    WBrowser *b = browser_get(h, at);
+    if (tab < 0 || tab > 0xffffffffLL || text->len > 0x7fffffff || n < 0 || n > 100000) return -(int64_t)JWE_ERR_BAD_ARG;
+    uint32_t t = (uint32_t)tab;
+    uint32_t len = (uint32_t)text->len;
+    JweStatus st = JWE_ERR_BAD_ARG;
+    switch (op) {{
+    case 1: {{
+        uint32_t got = 0;
+        st = jwe_tab_new(b->e, &got);
+        if (st == JWE_OK) return got;
+        break;
+    }}
+    case 2: st = jwe_tab_close(b->e, t); break;
+    case 3: st = jwe_tab_show(b->e, t); break;
+    case 4: st = jwe_navigate(b->e, t, text->data, len); break;
+    case 5: st = jwe_back(b->e, t); break;
+    case 6: st = jwe_forward(b->e, t); break;
+    case 7: st = jwe_reload(b->e, t); break;
+    case 8: st = jwe_stop(b->e, t); break;
+    case 9: st = jwe_chrome_load(b->e, text->data, len, (uint32_t)n); break;
+    case 10: st = jwe_chrome_post(b->e, text->data, len); break;
+    case 11: st = jwe_set_title(b->e, text->data, len); break;
+    case 12: st = jwe_clear_site_data(b->e); break;
+    default: break;
+    }}
+    return st == JWE_OK ? 0 : -(int64_t)st;
+}}
+
+// 次のイベントの種類（なければ 0）。timeout_ms が -2 なら待たない（poll）、-1 は無期限
+int64_t jw_browser_next(void *h, int64_t timeout_ms, const WSite *at) {{
+    WBrowser *b = browser_get(h, at);
+    if (timeout_ms < -2) {{
+        begin_error("待つ時間が負です");
+        finish_error(at, "wait(ms) の ms は 0 以上か -1（無期限）", NULL);
+    }}
+    jw_flush();
+    JweEvent ev;
+    memset(&ev, 0, sizeof ev);
+    int got = timeout_ms == -2 ? jwe_poll(b->e, &ev)
+                               : jwe_wait(b->e, timeout_ms > 0x7fffffff ? 0x7fffffff : (int32_t)timeout_ms, &ev);
+    if (b->text) jw_str_release(b->text);
+    b->text = NULL;
+    if (!got || ev.kind == JWE_EV_NONE) return 0;
+    b->tab = ev.tab;
+    b->code = ev.code;
+    // 文字列はエンジンが持つので、ここで写す（jabberwock の文字列は UTF-8 でなければならない）
+    if (ev.text_len > 0 && !ev.text) ev.text_len = 0;
+    if (valid_utf8((const unsigned char *)ev.text, ev.text_len)) {{
+        b->text = jw_str_new(ev.text ? ev.text : "", ev.text_len);
+    }} else {{
+        ev.kind = JWE_EV_ERROR;
+        b->code = JWE_ERR_BAD_ARG;
+        b->text = jw_str_new("エンジンが UTF-8 でない文字列を返しました", (int64_t)strlen("エンジンが UTF-8 でない文字列を返しました"));
+    }}
+    return ev.kind;
+}}
+
+int64_t jw_browser_event_tab(void *h, const WSite *at) {{ return browser_get(h, at)->tab; }}
+int64_t jw_browser_event_code(void *h, const WSite *at) {{ return browser_get(h, at)->code; }}
+
+WStr *jw_browser_event_text(void *h, const WSite *at) {{
+    WBrowser *b = browser_get(h, at);
+    if (!b->text) return jw_str_new("", 0);
+    jw_str_retain(b->text);
+    return b->text;
+}}
+
+// できること（JWE_CAP_*）
+int64_t jw_browser_caps(void *h, const WSite *at) {{
+    JweInfo info;
+    memset(&info, 0, sizeof info);
+    jwe_info(browser_get(h, at)->e, &info);
+    return info.caps;
+}}
+
+WStr *jw_browser_name(void *h, const WSite *at) {{
+    JweInfo info;
+    memset(&info, 0, sizeof info);
+    jwe_info(browser_get(h, at)->e, &info);
+    const char *n = info.name ? info.name : "";
+    int64_t len = (int64_t)strlen(n);
+    return valid_utf8((const unsigned char *)n, len) ? jw_str_new(n, len) : jw_str_new("?", 1);
+}}
+#else
+static int browser_free(void *p) {{
+    (void)p;
+    return 1;
+}}
+#endif
+
+// ---------------------------------------------------------------- 環境変数・時計（std.env・std.time）
+
+#ifdef _WIN32
+__declspec(dllimport) int __stdcall QueryPerformanceCounter(int64_t *);
+__declspec(dllimport) int __stdcall QueryPerformanceFrequency(int64_t *);
+__declspec(dllimport) void __stdcall GetSystemTimeAsFileTime(uint64_t *);
+__declspec(dllimport) int __stdcall MoveFileExW(const wchar_t *, const wchar_t *, unsigned long);
+__declspec(dllimport) void __stdcall Sleep(unsigned long);
+__declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+wchar_t *_wgetenv(const wchar_t *);
+#else
+#include <time.h>
+#endif
+
+// 環境変数。あれば 1（UTF-8 でない値は、ないとみなす）
+int32_t jw_env_get(WStr *name, WStr **out) {{
+    if (name->len == 0 || memchr(name->data, 0, (size_t)name->len) || memchr(name->data, '=', (size_t)name->len)) return 0;
+    char *cp = c_str(name);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    const wchar_t *v = _wgetenv(w);
+    free(w);
+    char *val = NULL;
+    if (v) {{
+        int n = WideCharToMultiByte(65001, 0, v, -1, NULL, 0, NULL, NULL);
+        val = jw_checked_malloc((size_t)(n > 0 ? n : 1));
+        if (n <= 0) val[0] = 0;
+        else WideCharToMultiByte(65001, 0, v, -1, val, n, NULL, NULL);
+    }}
+#else
+    const char *v = getenv(cp);
+    char *val = NULL;
+    if (v) {{
+        val = jw_checked_malloc(strlen(v) + 1);
+        memcpy(val, v, strlen(v) + 1);
+    }}
+#endif
+    free(cp);
+    if (!val) return 0;
+    int64_t n = (int64_t)strlen(val);
+    int ok = valid_utf8((const unsigned char *)val, n);
+    if (ok) *out = jw_str_new(val, n);
+    free(val);
+    return ok;
+}}
+
+// 単調な時計（ナノ秒。始まりの位置は決めない。壁時計の修正に影響されない）
+int64_t jw_time_now_ns(void) {{
+#ifdef _WIN32
+    int64_t c = 0, f = 1;
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return (int64_t)((double)c * 1e9 / (double)f);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+#endif
+}}
+
+// 壁時計（1970-01-01 UTC からのミリ秒。時刻の修正で戻ることがある）
+int64_t jw_time_unix_ms(void) {{
+#ifdef _WIN32
+    uint64_t t = 0; // FILETIME（1601 年からの 100 ナノ秒）と同じ並び
+    GetSystemTimeAsFileTime(&t);
+    return (int64_t)((t - 116444736000000000ULL) / 10000);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
+}}
+
+#include <time.h>
+
+// 地域の時刻（OS に設定したタイムゾーン）が、ms の時点で UTC からどれだけずれているか（ミリ秒。東が正）。
+// OS の localtime で年月日と時刻を出し、UTC として数え直した差を返す（夏時間もその時点のもの）。分からなければ 0 を返して Err
+int32_t jw_time_local_offset(int64_t ms, int64_t *out, WStr **err) {{
+    int64_t s = ms / 1000;
+    if (ms % 1000 < 0) s -= 1;
+    struct tm tm;
+#ifdef _WIN32
+    __time64_t t = (__time64_t)s;
+    int ok = _localtime64_s(&tm, &t) == 0;
+#else
+    time_t t = (time_t)s;
+    int ok = (int64_t)t == s && localtime_r(&t, &tm) != NULL;
+#endif
+    if (!ok) {{
+        *err = err_text("この時点の地域の時刻が分かりません（OS が答えません）");
+        return 0;
+    }}
+    // days_from_civil（std/date.jw と同じ数え方）
+    int64_t y = (int64_t)tm.tm_year + 1900, m = (int64_t)tm.tm_mon + 1, d = tm.tm_mday;
+    if (m <= 2) y -= 1;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = era * 146097 + doe - 719468;
+    int64_t local = ((days * 24 + tm.tm_hour) * 60 + tm.tm_min) * 60 + tm.tm_sec;
+    *out = (local - s) * 1000;
+    return 1;
+}}
+
+void jw_time_sleep_ms(int64_t ms, const WSite *at) {{
+    if (ms < 0) {{
+        begin_error("待つ時間が負です");
+        finish_error(at, "sleep(ms) の ms は 0 以上", NULL);
+    }}
+    jw_flush();
+#ifdef _WIN32
+    while (ms > 0) {{
+        unsigned long k = ms > 86400000 ? 86400000 : (unsigned long)ms;
+        Sleep(k);
+        ms -= k;
+    }}
+#else
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ms / 1000);
+    ts.tv_nsec = (long)((ms % 1000) * 1000000);
+    while (nanosleep(&ts, &ts) != 0) {{}}
+#endif
+}}
+
+// ---------------------------------------------------------------- TCP（std.net）
+// 同期だけ。名前の解決は getaddrinfo。
+// Windows は Winsock（ws2_32.dll）を初めて使うときに読み込む（リンクの指定を増やさないため。Rust 版で作る実行ファイルも同じ）。
+
+#ifdef _WIN32
+// windows.h なしで宣言する（x64 の Winsock と同じ並び）
+typedef uintptr_t WSock;
+#define WSOCK_BAD (~(WSock)0)
+struct w_addrinfo {{
+    int ai_flags, ai_family, ai_socktype, ai_protocol;
+    size_t ai_addrlen;
+    char *ai_canonname;
+    void *ai_addr;
+    struct w_addrinfo *ai_next;
+}};
+__declspec(dllimport) void *__stdcall LoadLibraryW(const wchar_t *);
+__declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
+
+static struct {{
+    int ready; // 0: まだ、1: 使える、-1: 使えない
+    int(__stdcall *startup)(unsigned short, void *);
+    int(__stdcall *getaddrinfo)(const char *, const char *, const struct w_addrinfo *, struct w_addrinfo **);
+    void(__stdcall *freeaddrinfo)(struct w_addrinfo *);
+    WSock(__stdcall *socket)(int, int, int);
+    int(__stdcall *connect)(WSock, const void *, int);
+    int(__stdcall *bind)(WSock, const void *, int);
+    int(__stdcall *listen)(WSock, int);
+    WSock(__stdcall *accept)(WSock, void *, int *);
+    int(__stdcall *recv)(WSock, char *, int, int);
+    int(__stdcall *send)(WSock, const char *, int, int);
+    int(__stdcall *closesocket)(WSock);
+    int(__stdcall *setsockopt)(WSock, int, int, const char *, int);
+    int(__stdcall *getsockname)(WSock, void *, int *);
+    int(__stdcall *last_error)(void);
+    int(__stdcall *sendto)(WSock, const char *, int, int, const void *, int);
+    int(__stdcall *recvfrom)(WSock, char *, int, int, void *, int *);
+    int(__stdcall *getnameinfo)(const void *, int, char *, unsigned long, char *, unsigned long, int);
+}} g_ws;
+
+// 初めてなら ws2_32.dll を読み込んで WSAStartup する。使えれば 1
+static int ws_ready(void) {{
+    lock(&g_lock);
+    if (g_ws.ready == 0) {{
+        void *m = LoadLibraryW(L"ws2_32.dll");
+        g_ws.ready = -1;
+        if (m) {{
+#define WS_GET(f, n) *(void **)&g_ws.f = GetProcAddress(m, n)
+            WS_GET(startup, "WSAStartup");
+            WS_GET(getaddrinfo, "getaddrinfo");
+            WS_GET(freeaddrinfo, "freeaddrinfo");
+            WS_GET(socket, "socket");
+            WS_GET(connect, "connect");
+            WS_GET(bind, "bind");
+            WS_GET(listen, "listen");
+            WS_GET(accept, "accept");
+            WS_GET(recv, "recv");
+            WS_GET(send, "send");
+            WS_GET(closesocket, "closesocket");
+            WS_GET(setsockopt, "setsockopt");
+            WS_GET(getsockname, "getsockname");
+            WS_GET(last_error, "WSAGetLastError");
+            WS_GET(sendto, "sendto");
+            WS_GET(recvfrom, "recvfrom");
+            WS_GET(getnameinfo, "getnameinfo");
+#undef WS_GET
+            char data[1024]; // WSADATA より大きい
+            if (g_ws.startup && g_ws.getaddrinfo && g_ws.freeaddrinfo && g_ws.socket && g_ws.connect && g_ws.bind &&
+                g_ws.listen && g_ws.accept && g_ws.recv && g_ws.send && g_ws.closesocket && g_ws.setsockopt &&
+                g_ws.getsockname && g_ws.last_error && g_ws.sendto && g_ws.recvfrom && g_ws.getnameinfo && g_ws.startup(0x0202, data) == 0)
+                g_ws.ready = 1;
+        }}
+    }}
+    int ok = g_ws.ready == 1;
+    unlock(&g_lock);
+    return ok;
+}}
+
+static int sock_close(int64_t fd) {{ return g_ws.closesocket((WSock)fd) == 0; }}
+
+// 名前を解決して、つなぐ（listen なら待ち受ける）。できたらソケット、だめなら -1
+static int64_t net_open(WStr *host, int64_t port, int listening) {{
+    if (port < 0 || port > 65535 || memchr(host->data, 0, (size_t)host->len) || !ws_ready()) return -1;
+    char *hc = c_str(host);
+    char ps[16];
+    snprintf(ps, sizeof ps, "%d", (int)port);
+    struct w_addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = 0;   // AF_UNSPEC
+    hints.ai_socktype = 1; // SOCK_STREAM
+    if (listening) hints.ai_flags = 1; // AI_PASSIVE
+    WSock fd = WSOCK_BAD;
+    if (g_ws.getaddrinfo(hc, ps, &hints, &res) == 0) {{
+        for (struct w_addrinfo *a = res; a && fd == WSOCK_BAD; a = a->ai_next) {{
+            fd = g_ws.socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+            if (fd == WSOCK_BAD) continue;
+            int ok;
+            if (listening) {{
+                // ほかのプログラムに同じ番号を横取りさせない（SO_EXCLUSIVEADDRUSE）
+                int one = 1;
+                g_ws.setsockopt(fd, 0xffff, ~4, (const char *)&one, sizeof one);
+                ok = g_ws.bind(fd, a->ai_addr, (int)a->ai_addrlen) == 0 && g_ws.listen(fd, 64) == 0;
+            }} else {{
+                ok = g_ws.connect(fd, a->ai_addr, (int)a->ai_addrlen) == 0;
+            }}
+            if (!ok) {{
+                g_ws.closesocket(fd);
+                fd = WSOCK_BAD;
+            }}
+        }}
+        g_ws.freeaddrinfo(res);
+    }}
+    free(hc);
+    return fd == WSOCK_BAD ? -1 : (int64_t)fd;
+}}
+
+static int32_t net_start(WStr *host, int64_t port, int listening, void **out, WStr **err) {{
+    int64_t fd = res_fail(listening ? "listen" : "connect") ? -1 : net_open(host, port, listening);
+    if (fd < 0) {{
+        *err = message(listening ? "待ち受けられません: " : "接続できません: ", host);
+        return 0;
+    }}
+    uint64_t tok = res_new(listening ? RES_LISTENER : RES_TCP, NULL, fd);
+    if (!tok) {{
+        sock_close(fd);
+        *err = message("開いている資源が多すぎます: ", host);
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+int32_t jw_net_connect(WStr *host, int64_t port, void **out, WStr **err) {{ return net_start(host, port, 0, out, err); }}
+
+int32_t jw_net_listen(WStr *host, int64_t port, void **out, WStr **err) {{ return net_start(host, port, 1, out, err); }}
+
+static WStr *sock_error(const char *what) {{
+    return err_text(g_ws.last_error() == 10060 /* WSAETIMEDOUT */ ? "時間切れです" : what);
+}}
+
+// 最大 n バイト受け取る（相手が閉じたら空のリスト）
+int32_t jw_tcp_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TCP, at);
+    if (n < 0) {{
+        begin_error("読む大きさが負です");
+        finish_error(at, "read(n) の n は 0 以上", NULL);
+    }}
+    if (n == 0) return 1;
+    int64_t want = n < 65536 ? n : 65536;
+    jw_list_reserve(out, 1, want);
+    int got = res_fail("read") ? -1 : g_ws.recv((WSock)r->fd, out->data, (int)want, 0);
+    if (got < 0) {{
+        jw_list_free(out, 1, NULL);
+        *err = res_fail("read") ? err_text("受け取れません") : sock_error("受け取れません");
+        return 0;
+    }}
+    out->len = (int64_t)got;
+    return 1;
+}}
+
+static int32_t sock_write(WRes *r, const char *p, int64_t n, WStr **err) {{
+    while (n > 0) {{
+        int chunk = n > 0x40000000 ? 0x40000000 : (int)n;
+        int k = res_fail("write") ? -1 : g_ws.send((WSock)r->fd, p, chunk, 0);
+        if (k <= 0) {{
+            *err = res_fail("write") ? err_text("送れません") : sock_error("送れません");
+            return 0;
+        }}
+        p += k;
+        n -= k;
+    }}
+    return 1;
+}}
+
+int32_t jw_tcp_write(void *h, WList *data, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TCP, at);
+    int32_t ok = sock_write(r, data->data, data->len, err);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+
+int32_t jw_tcp_write_text(void *h, WStr *text, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TCP, at);
+    return sock_write(r, text->data, text->len, err);
+}}
+
+// 受け取り・送りの待ち時間（ミリ秒。0 なら待ち続ける）
+static int32_t sock_timeout(WRes *r, int64_t ms, WStr **err, const WSite *at) {{
+    if (ms < 0) {{
+        begin_error("待ち時間が負です");
+        finish_error(at, "set_timeout(ms) の ms は 0 以上", NULL);
+    }}
+    unsigned long t = ms > 0xffffffffLL ? 0xfffffffful : (unsigned long)ms;
+    // SO_RCVTIMEO・SO_SNDTIMEO（Windows ではミリ秒の DWORD）
+    if (g_ws.setsockopt((WSock)r->fd, 0xffff, 0x1006, (const char *)&t, sizeof t) != 0 ||
+        g_ws.setsockopt((WSock)r->fd, 0xffff, 0x1005, (const char *)&t, sizeof t) != 0) {{
+        *err = err_text("待ち時間を決められません");
+        return 0;
+    }}
+    return 1;
+}}
+
+int32_t jw_tcp_set_timeout(void *h, int64_t ms, WStr **err, const WSite *at) {{
+    return sock_timeout(res_get((uint64_t)(uintptr_t)h, RES_TCP, at), ms, err, at);
+}}
+
+int32_t jw_listener_accept(void *h, void **out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_LISTENER, at);
+    WSock fd = res_fail("accept") ? WSOCK_BAD : g_ws.accept((WSock)r->fd, NULL, NULL);
+    if (fd == WSOCK_BAD) {{
+        *err = err_text("接続を受けられません");
+        return 0;
+    }}
+    uint64_t tok = res_new(RES_TCP, NULL, (int64_t)fd);
+    if (!tok) {{
+        g_ws.closesocket(fd);
+        *err = err_text("開いている資源が多すぎます");
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+// 待ち受けている番号（listen で 0 を渡したときに OS が選んだもの）。番号は IPv4・IPv6 とも 2 バイト目から（ネットワークの順）
+int64_t jw_listener_port(void *h, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_LISTENER, at);
+    unsigned char ss[128];
+    int n = sizeof ss;
+    if (g_ws.getsockname((WSock)r->fd, ss, &n) != 0 || n < 4) return -1;
+    unsigned short fam = (unsigned short)(ss[0] | ss[1] << 8);
+    if (fam != 2 && fam != 23) return -1;
+    return (int64_t)(ss[2] << 8 | ss[3]);
+}}
+
+// ---- UDP（std.net の UdpSocket）。1 回の送り・受け取りが 1 つのまとまり（データグラム）
+
+// 受け取ったまとまりを、std.net が読む形にする: [名前の長さ(2)][名前（数字の形）][番号(2)][中身]
+static void udp_pack(WList *out, const char *name, int port, const char *data, int64_t n) {{
+    int64_t hl = (int64_t)strlen(name);
+    jw_list_reserve(out, 1, 4 + hl + n);
+    char *p = out->data;
+    p[0] = (char)(hl >> 8);
+    p[1] = (char)(hl & 255);
+    memcpy(p + 2, name, (size_t)hl);
+    p[2 + hl] = (char)((port >> 8) & 255);
+    p[3 + hl] = (char)(port & 255);
+    if (n > 0) memcpy(p + 4 + hl, data, (size_t)n);
+    out->len = 4 + hl + n;
+}}
+
+static void udp_check_size(int64_t n, const char *what, const WSite *at) {{
+    if (n < 0 || n > 65507) {{
+        begin_error("UDP のまとまりの大きさが範囲の外です");
+        finish_error(at, what, NULL);
+    }}
+}}
+
+// host の port で UDP を受ける（port が 0 なら OS が選ぶ）
+int32_t jw_udp_bind(WStr *host, int64_t port, void **out, WStr **err) {{
+    WSock fd = WSOCK_BAD;
+    if (!res_fail("listen") && port >= 0 && port <= 65535 && !memchr(host->data, 0, (size_t)host->len) && ws_ready()) {{
+        char *hc = c_str(host);
+        char ps[16];
+        snprintf(ps, sizeof ps, "%d", (int)port);
+        struct w_addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_socktype = 2; // SOCK_DGRAM
+        hints.ai_flags = 1;    // AI_PASSIVE
+        if (g_ws.getaddrinfo(hc, ps, &hints, &res) == 0) {{
+            for (struct w_addrinfo *a = res; a && fd == WSOCK_BAD; a = a->ai_next) {{
+                fd = g_ws.socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+                if (fd == WSOCK_BAD) continue;
+                int one = 1;
+                g_ws.setsockopt(fd, 0xffff, ~4, (const char *)&one, sizeof one); // SO_EXCLUSIVEADDRUSE
+                if (g_ws.bind(fd, a->ai_addr, (int)a->ai_addrlen) != 0) {{
+                    g_ws.closesocket(fd);
+                    fd = WSOCK_BAD;
+                }}
+            }}
+            g_ws.freeaddrinfo(res);
+        }}
+        free(hc);
+    }}
+    if (fd == WSOCK_BAD) {{
+        *err = message("UDP で待ち受けられません: ", host);
+        return 0;
+    }}
+    uint64_t tok = res_new(RES_UDP, NULL, (int64_t)fd);
+    if (!tok) {{
+        g_ws.closesocket(fd);
+        *err = message("開いている資源が多すぎます: ", host);
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+// host の port へ 1 つのまとまりを送る（ソケットと同じ種類のアドレス IPv4・IPv6 に解決する）
+static int32_t udp_send_to(void *h, WList *data, WStr *host, int64_t port, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_UDP, at);
+    udp_check_size(data->len, "send_to のデータは 65507 バイトまで", at);
+    if (port < 1 || port > 65535 || memchr(host->data, 0, (size_t)host->len)) {{
+        *err = message("送り先が正しくありません: ", host);
+        return 0;
+    }}
+    unsigned char me[128];
+    int ml = sizeof me;
+    if (g_ws.getsockname((WSock)r->fd, me, &ml) != 0 || ml < 2) {{
+        *err = err_text("UDP のソケットが使えません");
+        return 0;
+    }}
+    char *hc = c_str(host);
+    char ps[16];
+    snprintf(ps, sizeof ps, "%d", (int)port);
+    struct w_addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = me[0] | me[1] << 8;
+    hints.ai_socktype = 2;
+    if (g_ws.getaddrinfo(hc, ps, &hints, &res) == 0) {{
+        int ok = res && g_ws.sendto((WSock)r->fd, data->data, (int)data->len, 0, res->ai_addr, (int)res->ai_addrlen) == (int)data->len;
+        g_ws.freeaddrinfo(res);
+        free(hc);
+        if (!ok) {{
+            *err = sock_error("UDP で送れません");
+            return 0;
+        }}
+        return 1;
+    }}
+    free(hc);
+    *err = message("送り先の名前が分かりません: ", host);
+    return 0;
+}}
+
+// 1 つのまとまりを受け取る（n バイトより長い分は捨てる）。送り元と中身を udp_pack の形で
+int32_t jw_udp_recv_raw(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_UDP, at);
+    udp_check_size(n, "recv_from(n) の n は 0〜65507", at);
+    char *buf = jw_checked_malloc((size_t)(n > 0 ? n : 1));
+    unsigned char from[128];
+    int fl = sizeof from;
+    int got = res_fail("read") ? -1 : g_ws.recvfrom((WSock)r->fd, buf, (int)n, 0, from, &fl);
+    // WSAEMSGSIZE（10040）: n より長いまとまり。n バイトまでは受け取れている
+    if (got < 0 && g_ws.last_error() == 10040) got = (int)n;
+    if (got < 0) {{
+        free(buf);
+        *err = sock_error("UDP で受け取れません");
+        return 0;
+    }}
+    char name[64], serv[16];
+    if (g_ws.getnameinfo(from, fl, name, sizeof name, serv, sizeof serv, 2 | 8) != 0) {{ // NI_NUMERICHOST・NI_NUMERICSERV
+        name[0] = 0;
+        serv[0] = '0';
+        serv[1] = 0;
+    }}
+    udp_pack(out, name, atoi(serv), buf, got);
+    free(buf);
+    return 1;
+}}
+
+int64_t jw_udp_port(void *h, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_UDP, at);
+    unsigned char ss[128];
+    int n = sizeof ss;
+    if (g_ws.getsockname((WSock)r->fd, ss, &n) != 0 || n < 4) return -1;
+    unsigned short fam = (unsigned short)(ss[0] | ss[1] << 8);
+    if (fam != 2 && fam != 23) return -1;
+    return (int64_t)(ss[2] << 8 | ss[3]);
+}}
+
+int32_t jw_udp_set_timeout(void *h, int64_t ms, WStr **err, const WSite *at) {{
+    return sock_timeout(res_get((uint64_t)(uintptr_t)h, RES_UDP, at), ms, err, at);
+}}
+
+// 送るリストはムーブされてきたので、ここで解放する
+int32_t jw_udp_send_to(void *h, WList *data, WStr *host, int64_t port, WStr **err, const WSite *at) {{
+    int32_t ok = udp_send_to(h, data, host, port, err, at);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+#else
+#include <errno.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+static int sock_close(int64_t fd) {{ return close((int)fd) == 0; }}
+
+static void sock_quiet(int fd) {{
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#else
+    (void)fd;
+#endif
+}}
+
+// 名前を解決して、つなぐ（listen なら待ち受ける）。できたらソケット、だめなら -1
+static int net_open(WStr *host, int64_t port, int listening) {{
+    if (port < 0 || port > 65535 || memchr(host->data, 0, (size_t)host->len)) return -1;
+    char *hc = c_str(host);
+    char ps[16];
+    snprintf(ps, sizeof ps, "%d", (int)port);
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (listening) hints.ai_flags = AI_PASSIVE;
+    int fd = -1;
+    if (getaddrinfo(hc, ps, &hints, &res) == 0) {{
+        for (struct addrinfo *a = res; a && fd < 0; a = a->ai_next) {{
+            fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+            if (fd < 0) continue;
+            int ok;
+            if (listening) {{
+                int one = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+                ok = bind(fd, a->ai_addr, a->ai_addrlen) == 0 && listen(fd, 64) == 0;
+            }} else {{
+                ok = connect(fd, a->ai_addr, a->ai_addrlen) == 0;
+            }}
+            if (!ok) {{
+                close(fd);
+                fd = -1;
+            }}
+        }}
+        freeaddrinfo(res);
+    }}
+    free(hc);
+    if (fd >= 0) sock_quiet(fd);
+    return fd;
+}}
+
+static int32_t net_start(WStr *host, int64_t port, int listening, void **out, WStr **err) {{
+    int fd = res_fail(listening ? "listen" : "connect") ? -1 : net_open(host, port, listening);
+    if (fd < 0) {{
+        *err = message(listening ? "待ち受けられません: " : "接続できません: ", host);
+        return 0;
+    }}
+    uint64_t tok = res_new(listening ? RES_LISTENER : RES_TCP, NULL, fd);
+    if (!tok) {{
+        close(fd);
+        *err = message("開いている資源が多すぎます: ", host);
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+int32_t jw_net_connect(WStr *host, int64_t port, void **out, WStr **err) {{ return net_start(host, port, 0, out, err); }}
+
+int32_t jw_net_listen(WStr *host, int64_t port, void **out, WStr **err) {{ return net_start(host, port, 1, out, err); }}
+
+static WStr *sock_error(const char *what) {{
+    return err_text(errno == EAGAIN || errno == EWOULDBLOCK ? "時間切れです" : what);
+}}
+
+// 最大 n バイト受け取る（相手が閉じたら空のリスト）
+int32_t jw_tcp_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TCP, at);
+    if (n < 0) {{
+        begin_error("読む大きさが負です");
+        finish_error(at, "read(n) の n は 0 以上", NULL);
+    }}
+    if (n == 0) return 1;
+    int64_t want = n < 65536 ? n : 65536;
+    jw_list_reserve(out, 1, want);
+    ssize_t got;
+    do {{
+        got = res_fail("read") ? -1 : recv((int)r->fd, out->data, (size_t)want, 0);
+    }} while (got < 0 && errno == EINTR && !res_fail("read"));
+    if (got < 0) {{
+        jw_list_free(out, 1, NULL);
+        *err = sock_error("受け取れません");
+        return 0;
+    }}
+    out->len = (int64_t)got;
+    return 1;
+}}
+
+static int32_t sock_write(WRes *r, const char *p, int64_t n, WStr **err) {{
+    while (n > 0) {{
+        ssize_t k = res_fail("write") ? -1 : send((int)r->fd, p, (size_t)n, MSG_NOSIGNAL);
+        if (k < 0 && errno == EINTR && !res_fail("write")) continue;
+        if (k <= 0) {{
+            *err = sock_error("送れません");
+            return 0;
+        }}
+        p += k;
+        n -= k;
+    }}
+    return 1;
+}}
+
+int32_t jw_tcp_write(void *h, WList *data, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TCP, at);
+    int32_t ok = sock_write(r, data->data, data->len, err);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+
+int32_t jw_tcp_write_text(void *h, WStr *text, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TCP, at);
+    return sock_write(r, text->data, text->len, err);
+}}
+
+// 受け取り・送りの待ち時間（ミリ秒。0 なら待ち続ける）
+static int32_t sock_timeout(WRes *r, int64_t ms, WStr **err, const WSite *at) {{
+    if (ms < 0) {{
+        begin_error("待ち時間が負です");
+        finish_error(at, "set_timeout(ms) の ms は 0 以上", NULL);
+    }}
+    struct timeval tv;
+    tv.tv_sec = (time_t)(ms / 1000);
+    tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
+    if (setsockopt((int)r->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0 ||
+        setsockopt((int)r->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0) {{
+        *err = err_text("待ち時間を決められません");
+        return 0;
+    }}
+    return 1;
+}}
+
+int32_t jw_tcp_set_timeout(void *h, int64_t ms, WStr **err, const WSite *at) {{
+    return sock_timeout(res_get((uint64_t)(uintptr_t)h, RES_TCP, at), ms, err, at);
+}}
+
+int32_t jw_listener_accept(void *h, void **out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_LISTENER, at);
+    int fd;
+    do {{
+        fd = res_fail("accept") ? -1 : accept((int)r->fd, NULL, NULL);
+    }} while (fd < 0 && errno == EINTR && !res_fail("accept"));
+    if (fd < 0) {{
+        *err = err_text("接続を受けられません");
+        return 0;
+    }}
+    sock_quiet(fd);
+    uint64_t tok = res_new(RES_TCP, NULL, fd);
+    if (!tok) {{
+        close(fd);
+        *err = err_text("開いている資源が多すぎます");
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+// 待ち受けている番号（listen で 0 を渡したときに OS が選んだもの）
+int64_t jw_listener_port(void *h, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_LISTENER, at);
+    struct sockaddr_storage ss;
+    socklen_t n = sizeof ss;
+    if (getsockname((int)r->fd, (struct sockaddr *)&ss, &n) != 0) return -1;
+    if (ss.ss_family == AF_INET) return ntohs(((struct sockaddr_in *)&ss)->sin_port);
+    if (ss.ss_family == AF_INET6) return ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
+    return -1;
+}}
+
+// ---- UDP（std.net の UdpSocket）。1 回の送り・受け取りが 1 つのまとまり（データグラム）
+
+// 受け取ったまとまりを、std.net が読む形にする: [名前の長さ(2)][名前（数字の形）][番号(2)][中身]
+static void udp_pack(WList *out, const char *name, int port, const char *data, int64_t n) {{
+    int64_t hl = (int64_t)strlen(name);
+    jw_list_reserve(out, 1, 4 + hl + n);
+    char *p = out->data;
+    p[0] = (char)(hl >> 8);
+    p[1] = (char)(hl & 255);
+    memcpy(p + 2, name, (size_t)hl);
+    p[2 + hl] = (char)((port >> 8) & 255);
+    p[3 + hl] = (char)(port & 255);
+    if (n > 0) memcpy(p + 4 + hl, data, (size_t)n);
+    out->len = 4 + hl + n;
+}}
+
+static void udp_check_size(int64_t n, const char *what, const WSite *at) {{
+    if (n < 0 || n > 65507) {{
+        begin_error("UDP のまとまりの大きさが範囲の外です");
+        finish_error(at, what, NULL);
+    }}
+}}
+
+// host の port で UDP を受ける（port が 0 なら OS が選ぶ）
+int32_t jw_udp_bind(WStr *host, int64_t port, void **out, WStr **err) {{
+    int fd = -1;
+    if (!res_fail("listen") && port >= 0 && port <= 65535 && !memchr(host->data, 0, (size_t)host->len)) {{
+        char *hc = c_str(host);
+        char ps[16];
+        snprintf(ps, sizeof ps, "%d", (int)port);
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_PASSIVE;
+        if (getaddrinfo(hc, ps, &hints, &res) == 0) {{
+            for (struct addrinfo *a = res; a && fd < 0; a = a->ai_next) {{
+                fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+                if (fd >= 0 && bind(fd, a->ai_addr, a->ai_addrlen) != 0) {{
+                    close(fd);
+                    fd = -1;
+                }}
+            }}
+            freeaddrinfo(res);
+        }}
+        free(hc);
+    }}
+    if (fd < 0) {{
+        *err = message("UDP で待ち受けられません: ", host);
+        return 0;
+    }}
+    uint64_t tok = res_new(RES_UDP, NULL, fd);
+    if (!tok) {{
+        close(fd);
+        *err = message("開いている資源が多すぎます: ", host);
+        return 0;
+    }}
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+// host の port へ 1 つのまとまりを送る（ソケットと同じ種類のアドレス IPv4・IPv6 に解決する）
+static int32_t udp_send_to(void *h, WList *data, WStr *host, int64_t port, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_UDP, at);
+    udp_check_size(data->len, "send_to のデータは 65507 バイトまで", at);
+    if (port < 1 || port > 65535 || memchr(host->data, 0, (size_t)host->len)) {{
+        *err = message("送り先が正しくありません: ", host);
+        return 0;
+    }}
+    struct sockaddr_storage me;
+    socklen_t ml = sizeof me;
+    if (getsockname((int)r->fd, (struct sockaddr *)&me, &ml) != 0) {{
+        *err = err_text("UDP のソケットが使えません");
+        return 0;
+    }}
+    char *hc = c_str(host);
+    char ps[16];
+    snprintf(ps, sizeof ps, "%d", (int)port);
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = me.ss_family;
+    hints.ai_socktype = SOCK_DGRAM;
+    int ok = 0;
+    if (getaddrinfo(hc, ps, &hints, &res) == 0) {{
+        if (res) ok = sendto((int)r->fd, data->data, (size_t)data->len, MSG_NOSIGNAL, res->ai_addr, res->ai_addrlen) == (ssize_t)data->len;
+        freeaddrinfo(res);
+        free(hc);
+        if (!ok) {{
+            *err = sock_error("UDP で送れません");
+            return 0;
+        }}
+        return 1;
+    }}
+    free(hc);
+    *err = message("送り先の名前が分かりません: ", host);
+    return 0;
+}}
+
+// 1 つのまとまりを受け取る（n バイトより長い分は捨てる）。送り元と中身を udp_pack の形で
+int32_t jw_udp_recv_raw(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_UDP, at);
+    udp_check_size(n, "recv_from(n) の n は 0〜65507", at);
+    char *buf = jw_checked_malloc((size_t)(n > 0 ? n : 1));
+    struct sockaddr_storage from;
+    socklen_t fl;
+    ssize_t got;
+    do {{
+        fl = sizeof from;
+        got = res_fail("read") ? -1 : recvfrom((int)r->fd, buf, (size_t)n, 0, (struct sockaddr *)&from, &fl);
+    }} while (got < 0 && errno == EINTR && !res_fail("read"));
+    if (got < 0) {{
+        free(buf);
+        *err = sock_error("UDP で受け取れません");
+        return 0;
+    }}
+    char name[64], serv[16];
+    if (getnameinfo((struct sockaddr *)&from, fl, name, sizeof name, serv, sizeof serv, NI_NUMERICHOST | NI_NUMERICSERV) != 0) {{
+        name[0] = 0;
+        serv[0] = '0';
+        serv[1] = 0;
+    }}
+    udp_pack(out, name, atoi(serv), buf, got);
+    free(buf);
+    return 1;
+}}
+
+int64_t jw_udp_port(void *h, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_UDP, at);
+    struct sockaddr_storage ss;
+    socklen_t n = sizeof ss;
+    if (getsockname((int)r->fd, (struct sockaddr *)&ss, &n) != 0) return -1;
+    if (ss.ss_family == AF_INET) return ntohs(((struct sockaddr_in *)&ss)->sin_port);
+    if (ss.ss_family == AF_INET6) return ntohs(((struct sockaddr_in6 *)&ss)->sin6_port);
+    return -1;
+}}
+
+int32_t jw_udp_set_timeout(void *h, int64_t ms, WStr **err, const WSite *at) {{
+    return sock_timeout(res_get((uint64_t)(uintptr_t)h, RES_UDP, at), ms, err, at);
+}}
+
+// 送るリストはムーブされてきたので、ここで解放する
+int32_t jw_udp_send_to(void *h, WList *data, WStr *host, int64_t port, WStr **err, const WSite *at) {{
+    int32_t ok = udp_send_to(h, data, host, port, err, at);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+
+#endif
+
+// ---------------------------------------------------------------- TLS のクライアント（std.tls）
+//
+// TLS そのものは作らない。Linux は OS の OpenSSL（libssl.so.3）を初めて使うときに dlopen で読み込む（ヘッダーもリンクの指定も要らない）。
+// 証明書は OS の信頼の置き場所（OpenSSL の既定。環境変数 SSL_CERT_FILE / SSL_CERT_DIR も効く）で確かめ、接続先の名前（または IP）と照らす。
+// 最低の版は TLS 1.2。確かめられなければ接続しない（弱めて続ける道はない）。macOS は今は使えない（Err）。
+// 資源の中身: fd はソケット、ptr は SSL*。
+
+#ifndef _WIN32
+#include <dlfcn.h>
+#include <signal.h>
+#include <arpa/inet.h>
+
+static struct {{
+    int ready; // 0: まだ、1: 使える、-1: 使えない
+    const void *(*client_method)(void);
+    void *(*ctx_new)(const void *);
+    void (*ctx_free)(void *);
+    int (*ctx_default_paths)(void *);
+    void (*ctx_set_verify)(void *, int, void *);
+    long (*ctx_ctrl)(void *, int, long, void *);
+    void *(*ssl_new)(void *);
+    void (*ssl_free)(void *);
+    int (*set_fd)(void *, int);
+    long (*ssl_ctrl)(void *, int, long, void *);
+    int (*set1_host)(void *, const char *);
+    void *(*get0_param)(void *);
+    int (*param_set1_ip_asc)(void *, const char *);
+    int (*do_connect)(void *);
+    int (*do_read)(void *, void *, int);
+    int (*do_write)(void *, const void *, int);
+    int (*do_shutdown)(void *);
+    int (*get_error)(const void *, int);
+    long (*verify_result)(const void *);
+    const char *(*verify_text)(long);
+    void *ctx;
+}} g_tls;
+
+// 初めてなら libssl を読み込んで、確かめ方を決めた SSL_CTX を 1 つ作る。使えれば 1
+static int tls_ready(void) {{
+    lock(&g_lock);
+    if (g_tls.ready == 0) {{
+        g_tls.ready = -1;
+        void *m = dlopen("libssl.so.3", RTLD_NOW | RTLD_LOCAL);
+        if (!m) m = dlopen("libssl.so", RTLD_NOW | RTLD_LOCAL);
+        if (m) {{
+#define TLS_GET(f, n) *(void **)&g_tls.f = dlsym(m, n)
+            TLS_GET(client_method, "TLS_client_method");
+            TLS_GET(ctx_new, "SSL_CTX_new");
+            TLS_GET(ctx_free, "SSL_CTX_free");
+            TLS_GET(ctx_default_paths, "SSL_CTX_set_default_verify_paths");
+            TLS_GET(ctx_set_verify, "SSL_CTX_set_verify");
+            TLS_GET(ctx_ctrl, "SSL_CTX_ctrl");
+            TLS_GET(ssl_new, "SSL_new");
+            TLS_GET(ssl_free, "SSL_free");
+            TLS_GET(set_fd, "SSL_set_fd");
+            TLS_GET(ssl_ctrl, "SSL_ctrl");
+            TLS_GET(set1_host, "SSL_set1_host");
+            TLS_GET(get0_param, "SSL_get0_param");
+            TLS_GET(param_set1_ip_asc, "X509_VERIFY_PARAM_set1_ip_asc");
+            TLS_GET(do_connect, "SSL_connect");
+            TLS_GET(do_read, "SSL_read");
+            TLS_GET(do_write, "SSL_write");
+            TLS_GET(do_shutdown, "SSL_shutdown");
+            TLS_GET(get_error, "SSL_get_error");
+            TLS_GET(verify_result, "SSL_get_verify_result");
+            TLS_GET(verify_text, "X509_verify_cert_error_string");
+#undef TLS_GET
+            if (g_tls.client_method && g_tls.ctx_new && g_tls.ctx_free && g_tls.ctx_default_paths && g_tls.ctx_set_verify &&
+                g_tls.ctx_ctrl && g_tls.ssl_new && g_tls.ssl_free && g_tls.set_fd && g_tls.ssl_ctrl && g_tls.set1_host &&
+                g_tls.get0_param && g_tls.param_set1_ip_asc && g_tls.do_connect && g_tls.do_read && g_tls.do_write &&
+                g_tls.do_shutdown && g_tls.get_error && g_tls.verify_result && g_tls.verify_text) {{
+                void *ctx = g_tls.ctx_new(g_tls.client_method());
+                // SSL_VERIFY_PEER（1）・SSL_CTX_set_min_proto_version（123）を TLS1_2_VERSION（0x0303）
+                if (ctx && g_tls.ctx_default_paths(ctx) == 1 && g_tls.ctx_ctrl(ctx, 123, 0x0303, NULL) == 1) {{
+                    g_tls.ctx_set_verify(ctx, 1, NULL);
+                    g_tls.ctx = ctx;
+                    g_tls.ready = 1;
+                }} else if (ctx) {{
+                    g_tls.ctx_free(ctx);
+                }}
+            }}
+        }}
+    }}
+    int ok = g_tls.ready == 1;
+    unlock(&g_lock);
+    return ok;
+}}
+
+// 相手が閉じたソケットへ書いても SIGPIPE でプログラムを止めない。OpenSSL は write を使うので、
+// 書く間だけこのスレッドの SIGPIPE を止め、出たものは捨てる
+static void pipe_hold(sigset_t *old) {{
+    sigset_t pipe;
+    sigemptyset(&pipe);
+    sigaddset(&pipe, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &pipe, old);
+}}
+
+static void pipe_release(sigset_t *old) {{
+    sigset_t pend, pipe;
+    sigemptyset(&pipe);
+    sigaddset(&pipe, SIGPIPE);
+    if (sigpending(&pend) == 0 && sigismember(&pend, SIGPIPE) && !sigismember(old, SIGPIPE)) {{
+        struct timespec zero = {{0, 0}};
+        sigtimedwait(&pipe, NULL, &zero);
+    }}
+    pthread_sigmask(SIG_SETMASK, old, NULL);
+}}
+
+// TLS を始める前の確かめ。だめなら 0
+static int tls_checks(WStr *host, WStr **err) {{
+    if (res_fail("connect")) {{
+        *err = message("接続できません: ", host);
+        return 0;
+    }}
+    if (!tls_ready()) {{
+        *err = message("TLS が使えません（OpenSSL の libssl.so.3 が見つかりません）: ", host);
+        return 0;
+    }}
+    if (host->len == 0 || memchr(host->data, 0, (size_t)host->len)) {{
+        *err = message("接続先の名前が正しくありません: ", host);
+        return 0;
+    }}
+    return 1;
+}}
+
+static int32_t tls_start(int fd, WStr *host, void **out, WStr **err);
+
+int32_t jw_tls_connect(WStr *host, int64_t port, void **out, WStr **err) {{
+    if (!tls_checks(host, err)) return 0;
+    int fd = net_open(host, port, 0);
+    if (fd < 0) {{
+        *err = message("接続できません: ", host);
+        return 0;
+    }}
+    return tls_start(fd, host, out, err);
+}}
+
+// つないだ TCP の上で TLS を始める（std.pg のように、平文で少しやりとりしてから TLS にする手順のため）。TcpStream はムーブされてきた
+int32_t jw_tls_upgrade(void *h, WStr *host, void **out, WStr **err, const WSite *at) {{
+    uint64_t tok = (uint64_t)(uintptr_t)h;
+    WRes *r = res_get(tok, RES_TCP, at);
+    int fd = (int)r->fd;
+    res_release(r, res_slot(tok));
+    if (!tls_checks(host, err)) {{
+        sock_close(fd);
+        return 0;
+    }}
+    return tls_start(fd, host, out, err);
+}}
+
+// fd の上で握手し、証明書と名前を確かめる。だめなら fd を閉じて 0
+static int32_t tls_start(int fd, WStr *host, void **out, WStr **err) {{
+    char *hc = c_str(host);
+    unsigned char ip[16];
+    int is_ip = inet_pton(AF_INET, hc, ip) == 1 || inet_pton(AF_INET6, hc, ip) == 1;
+    void *ssl = g_tls.ssl_new(g_tls.ctx);
+    int ok = ssl && g_tls.set_fd(ssl, fd) == 1;
+    // 名前なら SNI（SSL_set_tlsext_host_name: 55, TLSEXT_NAMETYPE_host_name: 0）と名前の照合、IP なら IP の照合
+    if (ok) ok = is_ip ? g_tls.param_set1_ip_asc(g_tls.get0_param(ssl), hc) == 1
+                       : g_tls.ssl_ctrl(ssl, 55, 0, hc) == 1 && g_tls.set1_host(ssl, hc) == 1;
+    int done = ok && g_tls.do_connect(ssl) == 1;
+    free(hc);
+    if (!done) {{
+        long v = ssl ? g_tls.verify_result(ssl) : 0;
+        if (ssl) g_tls.ssl_free(ssl);
+        close(fd);
+        if (v != 0) {{
+            const char *why = g_tls.verify_text(v);
+            char buf[256];
+            snprintf(buf, sizeof buf, "TLS の証明書を確かめられません（%s）: ", why ? why : "?");
+            *err = message(buf, host);
+        }} else {{
+            *err = message("TLS で接続できません: ", host);
+        }}
+        return 0;
+    }}
+    uint64_t tok = res_new(RES_TLS, NULL, fd);
+    if (!tok) {{
+        g_tls.ssl_free(ssl);
+        close(fd);
+        *err = message("開いている資源が多すぎます: ", host);
+        return 0;
+    }}
+    res_at(res_slot(tok))->ptr = ssl;
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+// 閉じる: close_notify を 1 回送ってみて（返事は待たない）、手放す
+static int tls_free(WRes *r) {{
+    if (r->ptr) {{
+        sigset_t old;
+        pipe_hold(&old);
+        g_tls.do_shutdown(r->ptr);
+        pipe_release(&old);
+        g_tls.ssl_free(r->ptr);
+    }}
+    return close((int)r->fd) == 0;
+}}
+
+// 最大 n バイト受け取る（相手が閉じたら空のリスト）
+int32_t jw_tls_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    if (n < 0) {{
+        begin_error("読む大きさが負です");
+        finish_error(at, "read(n) の n は 0 以上", NULL);
+    }}
+    if (n == 0) return 1;
+    int want = n < 65536 ? (int)n : 65536;
+    jw_list_reserve(out, 1, want);
+    errno = 0;
+    int got = res_fail("read") ? -1 : g_tls.do_read(r->ptr, out->data, want);
+    if (got > 0) {{
+        out->len = got;
+        return 1;
+    }}
+    int e = res_fail("read") ? 1 : g_tls.get_error(r->ptr, got);
+    // 6: SSL_ERROR_ZERO_RETURN（相手が閉じた）。5: SSL_ERROR_SYSCALL で errno が 0 なら close_notify なしで閉じた
+    if (e == 6 || (e == 5 && errno == 0)) {{
+        out->len = 0;
+        return 1;
+    }}
+    jw_list_free(out, 1, NULL);
+    *err = err_text((e == 2 || e == 5) && (errno == EAGAIN || errno == EWOULDBLOCK) ? "時間切れです" : "受け取れません");
+    return 0;
+}}
+
+static int32_t tls_send(WRes *r, const char *p, int64_t n, WStr **err) {{
+    sigset_t old;
+    pipe_hold(&old);
+    int ok = 1;
+    while (n > 0 && ok) {{
+        int chunk = n > 0x40000000 ? 0x40000000 : (int)n;
+        errno = 0;
+        int k = res_fail("write") ? -1 : g_tls.do_write(r->ptr, p, chunk);
+        if (k <= 0) {{
+            int e = res_fail("write") ? 1 : g_tls.get_error(r->ptr, k);
+            *err = err_text((e == 3 || e == 5) && (errno == EAGAIN || errno == EWOULDBLOCK) ? "時間切れです" : "送れません");
+            ok = 0;
+        }} else {{
+            p += k;
+            n -= k;
+        }}
+    }}
+    pipe_release(&old);
+    return ok;
+}}
+
+int32_t jw_tls_write(void *h, WList *data, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    int32_t ok = tls_send(r, data->data, data->len, err);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+
+int32_t jw_tls_write_text(void *h, WStr *text, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    return tls_send(r, text->data, text->len, err);
+}}
+
+int32_t jw_tls_set_timeout(void *h, int64_t ms, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    return sock_timeout(r, ms, err, at);
+}}
+#endif
+
+#ifdef _WIN32
+// Windows は Schannel（secur32.dll。初めて使うときに読み込む）。版は TLS 1.2。
+// 証明書は握手のあとに自分で確かめる（SCH_CRED_MANUAL_CRED_VALIDATION）。crypt32.dll で Windows の信頼の置き場所までの鎖を作り、
+// SSL の決まり（CERT_CHAIN_POLICY_SSL）で接続先の名前と照らす。自動で確かめる指定は実装によって確かめないことがある（wine）ため使わない。
+typedef struct {{ unsigned long cb, type; void *p; }} WSecBuf;
+typedef struct {{ unsigned long version, count; WSecBuf *bufs; }} WSecDesc;
+typedef struct {{ uintptr_t lower, upper; }} WSecHandle;
+typedef struct {{
+    unsigned long version, ncreds;
+    void *creds, *root_store;
+    unsigned long nmappers;
+    void *mappers;
+    unsigned long nalgs;
+    void *algs;
+    unsigned long protocols, min_strength, max_strength, lifespan, flags, format;
+}} WSchannelCred;
+typedef struct {{ unsigned long header, trailer, max_message, nbuffers, block; }} WStreamSizes;
+
+static struct {{
+    int ready;
+    long(__stdcall *acquire)(wchar_t *, wchar_t *, unsigned long, void *, void *, void *, void *, WSecHandle *, int64_t *);
+    long(__stdcall *init)(WSecHandle *, WSecHandle *, wchar_t *, unsigned long, unsigned long, unsigned long, WSecDesc *,
+                          unsigned long, WSecHandle *, WSecDesc *, unsigned long *, int64_t *);
+    long(__stdcall *delete_ctx)(WSecHandle *);
+    long(__stdcall *free_buf)(void *);
+    long(__stdcall *query)(WSecHandle *, unsigned long, void *);
+    long(__stdcall *encrypt)(WSecHandle *, unsigned long, WSecDesc *, unsigned long);
+    long(__stdcall *decrypt)(WSecHandle *, WSecDesc *, unsigned long, unsigned long *);
+    long(__stdcall *control)(WSecHandle *, WSecDesc *);
+    // crypt32.dll
+    int(__stdcall *get_chain)(void *, void *, void *, void *, void *, unsigned long, void *, void **);
+    int(__stdcall *verify_chain)(const char *, void *, void *, void *);
+    void(__stdcall *free_chain)(void *);
+    int(__stdcall *free_cert)(void *);
+    WSecHandle cred;
+}} g_tls;
+
+// 証明書を確かめるときの形（wincrypt.h の CERT_CONTEXT・CERT_CHAIN_PARA・SSL_EXTRA_CERT_CHAIN_POLICY_PARA など）
+typedef struct {{
+    unsigned long encoding;
+    unsigned char *data;
+    unsigned long len;
+    void *info, *store;
+}} WCertCtx;
+typedef struct {{
+    unsigned long size, error, info; // CERT_CHAIN_CONTEXT の頭（cbSize と TrustStatus）
+}} WChainCtx;
+// CERT_CHAIN_PARA は入れ子の形（CERT_USAGE_MATCH の中に CERT_ENHKEY_USAGE）。入れ子はそれぞれ 8 バイトにそろうので、
+// 平たく並べると位置がずれる（x64 で 32 バイト。ずれると Windows が用途の数と配列を読み違えて落ちる。wine は読まない）
+typedef struct {{
+    unsigned long size;
+    struct {{
+        unsigned long type;
+        struct {{
+            unsigned long count;
+            char **ids;
+        }} usage;
+    }} requested;
+}} WChainPara;
+typedef struct {{
+    unsigned long size, auth_type, checks;
+    wchar_t *server;
+}} WSslPolicy;
+typedef struct {{
+    unsigned long size, flags;
+    void *extra;
+}} WPolicyPara;
+typedef struct {{
+    unsigned long size, error;
+    long chain_index, element_index;
+    void *extra;
+}} WPolicyStatus;
+
+#define SEC_OK 0
+#define SEC_CONTINUE 0x00090312L
+#define SEC_INCOMPLETE ((long)0x80090318L)
+#define SEC_EXPIRED 0x00090317L
+#define TLS_ISC_FLAGS (0x8 | 0x4 | 0x10 | 0x100 | 0x8000 | 0x4000) // SEQUENCE・REPLAY・CONFIDENTIALITY・ALLOCATE・STREAM・EXTENDED_ERROR
+
+static int tls_ready(void) {{
+    if (!ws_ready()) return 0;
+    lock(&g_lock);
+    if (g_tls.ready == 0) {{
+        g_tls.ready = -1;
+        void *m = LoadLibraryW(L"secur32.dll");
+        void *c = LoadLibraryW(L"crypt32.dll");
+        if (m && c) {{
+#define TLS_GET(f, n) *(void **)&g_tls.f = GetProcAddress(m, n)
+            TLS_GET(acquire, "AcquireCredentialsHandleW");
+            TLS_GET(init, "InitializeSecurityContextW");
+            TLS_GET(delete_ctx, "DeleteSecurityContext");
+            TLS_GET(free_buf, "FreeContextBuffer");
+            TLS_GET(query, "QueryContextAttributesW");
+            TLS_GET(encrypt, "EncryptMessage");
+            TLS_GET(decrypt, "DecryptMessage");
+            TLS_GET(control, "ApplyControlToken");
+#undef TLS_GET
+            *(void **)&g_tls.get_chain = GetProcAddress(c, "CertGetCertificateChain");
+            *(void **)&g_tls.verify_chain = GetProcAddress(c, "CertVerifyCertificateChainPolicy");
+            *(void **)&g_tls.free_chain = GetProcAddress(c, "CertFreeCertificateChain");
+            *(void **)&g_tls.free_cert = GetProcAddress(c, "CertFreeCertificateContext");
+            if (g_tls.acquire && g_tls.init && g_tls.delete_ctx && g_tls.free_buf && g_tls.query && g_tls.encrypt &&
+                g_tls.decrypt && g_tls.control && g_tls.get_chain && g_tls.verify_chain && g_tls.free_chain && g_tls.free_cert) {{
+                WSchannelCred cr;
+                memset(&cr, 0, sizeof cr);
+                cr.version = 4;      // SCHANNEL_CRED_VERSION
+                cr.protocols = 0x800; // SP_PROT_TLS1_2_CLIENT
+                cr.flags = 0x8 | 0x10 | 0x400000; // MANUAL_CRED_VALIDATION・NO_DEFAULT_CREDS・USE_STRONG_CRYPTO
+                int64_t exp;
+                if (g_tls.acquire(NULL, L"Microsoft Unified Security Protocol Provider", 2 /* OUTBOUND */, NULL, &cr, NULL, NULL,
+                                  &g_tls.cred, &exp) == SEC_OK)
+                    g_tls.ready = 1;
+            }}
+        }}
+    }}
+    int ok = g_tls.ready == 1;
+    unlock(&g_lock);
+    return ok;
+}}
+
+typedef struct {{
+    WSecHandle ctx;
+    WStreamSizes sizes;
+    char *in;       // 受け取って、まだ解いていない分
+    int inlen, incap;
+    char *plain;    // 解いて、まだ渡していない分
+    int plen, poff;
+    int eof;
+}} WTls;
+
+static int tls_recv_more(WSock fd, WTls *t) {{
+    if (t->incap - t->inlen < 16384) {{
+        t->incap = t->incap ? t->incap * 2 : 32768;
+        t->in = realloc(t->in, (size_t)t->incap);
+        if (!t->in) jw_oom();
+    }}
+    return g_ws.recv(fd, t->in + t->inlen, t->incap - t->inlen, 0);
+}}
+
+static int tls_send_all(WSock fd, const char *p, int n) {{
+    while (n > 0) {{
+        int k = g_ws.send(fd, p, n, 0);
+        if (k <= 0) return 0;
+        p += k;
+        n -= k;
+    }}
+    return 1;
+}}
+
+static void tls_drop(WTls *t) {{
+    g_tls.delete_ctx(&t->ctx);
+    free(t->in);
+    free(t->plain);
+    free(t);
+}}
+
+// 握手。できたら 1
+static int tls_handshake(WSock fd, WTls *t, wchar_t *target) {{
+    WSecBuf out = {{0, 2 /* TOKEN */, NULL}};
+    WSecDesc od = {{0, 1, &out}};
+    unsigned long attr = 0;
+    long st = g_tls.init(&g_tls.cred, NULL, target, TLS_ISC_FLAGS, 0, 0, NULL, 0, &t->ctx, &od, &attr, NULL);
+    if (out.p) {{
+        int sent = tls_send_all(fd, out.p, (int)out.cb);
+        g_tls.free_buf(out.p);
+        if (!sent) return 0;
+    }}
+    while (st == SEC_CONTINUE || st == SEC_INCOMPLETE) {{
+        if (t->inlen == 0 || st == SEC_INCOMPLETE) {{
+            int k = tls_recv_more(fd, t);
+            if (k <= 0) return 0;
+            t->inlen += k;
+        }}
+        WSecBuf in[2] = {{{{(unsigned long)t->inlen, 2, t->in}}, {{0, 0, NULL}}}};
+        WSecDesc id = {{0, 2, in}};
+        WSecBuf o = {{0, 2, NULL}};
+        WSecDesc odesc = {{0, 1, &o}};
+        st = g_tls.init(&g_tls.cred, &t->ctx, target, TLS_ISC_FLAGS, 0, 0, &id, 0, &t->ctx, &odesc, &attr, NULL);
+        if (st == SEC_INCOMPLETE) continue;
+        if (o.p) {{
+            int sent = o.cb == 0 || tls_send_all(fd, o.p, (int)o.cb);
+            g_tls.free_buf(o.p);
+            if (!sent) return 0;
+        }}
+        if (in[1].type == 5 /* EXTRA */) {{
+            memmove(t->in, t->in + t->inlen - in[1].cb, in[1].cb);
+            t->inlen = (int)in[1].cb;
+        }} else {{
+            t->inlen = 0;
+        }}
+    }}
+    return st == SEC_OK && g_tls.query(&t->ctx, 4 /* STREAM_SIZES */, &t->sizes) == SEC_OK;
+}}
+
+// 相手の証明書を、信頼の置き場所までの鎖と接続先の名前で確かめる。0 なら良し、そうでなければ理由の番号（HRESULT）
+static unsigned long tls_verify(WTls *t, wchar_t *target) {{
+    WCertCtx *cert = NULL;
+    if (g_tls.query(&t->ctx, 0x53 /* SECPKG_ATTR_REMOTE_CERT_CONTEXT */, &cert) != SEC_OK || !cert) return 0x800B010AUL; // CERT_E_CHAINING
+    char *server_auth = "1.3.6.1.5.5.7.3.1"; // szOID_PKIX_KP_SERVER_AUTH
+    WChainPara cp = {{sizeof cp, {{0 /* USAGE_MATCH_TYPE_AND */, {{1, &server_auth}}}}}};
+    WChainCtx *chain = NULL;
+    unsigned long why = 0x800B010AUL;
+    // 途中の証明書は、相手が送ってきたもの（cert->store）からも探す
+    if (g_tls.get_chain(NULL, cert, NULL, cert->store, &cp, 0, NULL, (void **)&chain) && chain) {{
+        WSslPolicy ssl = {{sizeof ssl, 2 /* AUTHTYPE_SERVER */, 0, target}};
+        WPolicyPara pp = {{sizeof pp, 0, &ssl}};
+        WPolicyStatus ps;
+        memset(&ps, 0, sizeof ps);
+        ps.size = sizeof ps;
+        why = g_tls.verify_chain((const char *)4 /* CERT_CHAIN_POLICY_SSL */, chain, &pp, &ps) ? ps.error : 0x800B010AUL;
+        // 鎖そのものの問題も見る（SSL の決まりが鎖の途切れを見逃す実装がある: wine）。取り消しは調べていないので、その印は除く
+        unsigned long bad = chain->error & ~(0x40UL | 0x1000000UL); // REVOCATION_STATUS_UNKNOWN・OFFLINE_REVOCATION
+        if (why == 0 && bad != 0) {{
+            why = bad & 0x1UL ? 0x800B0101UL /* 期限 */ : bad & 0x4UL ? 0x800B010CUL /* 取り消し */ : 0x800B010AUL;
+        }}
+        g_tls.free_chain(chain);
+    }}
+    g_tls.free_cert(cert);
+    return why;
+}}
+
+// TLS を始める前の確かめ。だめなら 0
+static int tls_checks(WStr *host, WStr **err) {{
+    if (res_fail("connect")) {{
+        *err = message("接続できません: ", host);
+        return 0;
+    }}
+    if (!tls_ready()) {{
+        *err = message("TLS が使えません（Schannel を読み込めません）: ", host);
+        return 0;
+    }}
+    if (host->len == 0 || memchr(host->data, 0, (size_t)host->len)) {{
+        *err = message("接続先の名前が正しくありません: ", host);
+        return 0;
+    }}
+    return 1;
+}}
+
+static int32_t tls_start(int64_t fd, WStr *host, void **out, WStr **err);
+
+int32_t jw_tls_connect(WStr *host, int64_t port, void **out, WStr **err) {{
+    if (!tls_checks(host, err)) return 0;
+    int64_t fd = net_open(host, port, 0);
+    if (fd < 0) {{
+        *err = message("接続できません: ", host);
+        return 0;
+    }}
+    return tls_start(fd, host, out, err);
+}}
+
+// つないだ TCP の上で TLS を始める（std.pg のように、平文で少しやりとりしてから TLS にする手順のため）。TcpStream はムーブされてきた
+int32_t jw_tls_upgrade(void *h, WStr *host, void **out, WStr **err, const WSite *at) {{
+    uint64_t tok = (uint64_t)(uintptr_t)h;
+    WRes *r = res_get(tok, RES_TCP, at);
+    int64_t fd = (int64_t)r->fd;
+    res_release(r, res_slot(tok));
+    if (!tls_checks(host, err)) {{
+        sock_close(fd);
+        return 0;
+    }}
+    return tls_start(fd, host, out, err);
+}}
+
+// fd の上で握手し、証明書と名前を確かめる。だめなら fd を閉じて 0
+static int32_t tls_start(int64_t fd, WStr *host, void **out, WStr **err) {{
+    WTls *t = jw_checked_calloc(1, sizeof(WTls));
+    char *hc = c_str(host);
+    wchar_t *target = to_wide(hc);
+    free(hc);
+    int ok = tls_handshake((WSock)fd, t, target);
+    unsigned long why = ok ? tls_verify(t, target) : 0;
+    free(target);
+    if (!ok || why != 0) {{
+        tls_drop(t);
+        sock_close(fd);
+        if (!ok) {{
+            *err = message("TLS で接続できません（相手が TLS 1.2 を使えないなど）: ", host);
+        }} else {{
+            const char *text = why == 0x800B0109UL || why == 0x800B010AUL ? "信頼できる発行元につながりません"
+                               : why == 0x800B010FUL ? "名前が合いません"
+                               : why == 0x800B0101UL ? "期限が切れています"
+                               : why == 0x800B010CUL ? "取り消されています"
+                                                     : NULL;
+            char buf[256];
+            if (text) {{
+                snprintf(buf, sizeof buf, "TLS の証明書を確かめられません（%s）: ", text);
+            }} else {{
+                snprintf(buf, sizeof buf, "TLS の証明書を確かめられません（0x%08lx）: ", why);
+            }}
+            *err = message(buf, host);
+        }}
+        return 0;
+    }}
+    uint64_t tok = res_new(RES_TLS, NULL, fd);
+    if (!tok) {{
+        tls_drop(t);
+        sock_close(fd);
+        *err = message("開いている資源が多すぎます: ", host);
+        return 0;
+    }}
+    res_at(res_slot(tok))->ptr = t;
+    *out = (void *)(uintptr_t)tok;
+    return 1;
+}}
+
+// 閉じる: 終わりの知らせ（close_notify）を 1 回送ってみて、手放す
+static int tls_free(WRes *r) {{
+    WTls *t = r->ptr;
+    if (t) {{
+        unsigned long kind = 1; // SCHANNEL_SHUTDOWN
+        WSecBuf b = {{sizeof kind, 2, &kind}};
+        WSecDesc d = {{0, 1, &b}};
+        if (g_tls.control(&t->ctx, &d) == SEC_OK) {{
+            WSecBuf o = {{0, 2, NULL}};
+            WSecDesc od = {{0, 1, &o}};
+            unsigned long attr = 0;
+            if (g_tls.init(&g_tls.cred, &t->ctx, NULL, TLS_ISC_FLAGS, 0, 0, NULL, 0, &t->ctx, &od, &attr, NULL) >= 0 && o.p) {{
+                tls_send_all((WSock)r->fd, o.p, (int)o.cb);
+            }}
+            if (o.p) g_tls.free_buf(o.p);
+        }}
+        tls_drop(t);
+    }}
+    return sock_close(r->fd);
+}}
+
+int32_t jw_tls_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    WTls *t = r->ptr;
+    if (n < 0) {{
+        begin_error("読む大きさが負です");
+        finish_error(at, "read(n) の n は 0 以上", NULL);
+    }}
+    if (n == 0) return 1;
+    if (res_fail("read")) {{
+        *err = err_text("受け取れません");
+        return 0;
+    }}
+    while (t->poff >= t->plen && !t->eof) {{
+        if (t->inlen > 0) {{
+            WSecBuf b[4] = {{{{(unsigned long)t->inlen, 1 /* DATA */, t->in}}, {{0, 0, NULL}}, {{0, 0, NULL}}, {{0, 0, NULL}}}};
+            WSecDesc d = {{0, 4, b}};
+            unsigned char rtype = (unsigned char)t->in[0]; // 記録の種類（21 は知らせ）
+            long st = g_tls.decrypt(&t->ctx, &d, 0, NULL);
+            if (st == SEC_OK) {{
+                WSecBuf *data = NULL, *extra = NULL;
+                for (int i = 0; i < 4; i++) {{
+                    if (b[i].type == 1 && !data) data = &b[i];
+                    if (b[i].type == 5 && !extra) extra = &b[i];
+                }}
+                free(t->plain);
+                t->plain = NULL;
+                t->plen = t->poff = 0;
+                if (data && data->cb > 0) {{
+                    t->plain = malloc(data->cb);
+                    if (!t->plain) jw_oom();
+                    memcpy(t->plain, data->p, data->cb);
+                    t->plen = (int)data->cb;
+                }}
+                if (extra) {{
+                    memmove(t->in, extra->p, extra->cb);
+                    t->inlen = (int)extra->cb;
+                }} else {{
+                    t->inlen = 0;
+                }}
+                // 終わりの知らせ（close_notify）は SEC_I_CONTEXT_EXPIRED で返るが、中身のない OK で返す実装もある（wine）。
+                // TLS 1.2 で握手のあとに来る知らせ（警告）は実際には終わりの知らせだけなので、終わりとして扱う
+                if (t->plen == 0 && rtype == 21) t->eof = 1;
+                continue;
+            }}
+            if (st == SEC_EXPIRED) {{
+                t->eof = 1;
+                break;
+            }}
+            if (st != SEC_INCOMPLETE) {{
+                *err = err_text("受け取れません（TLS の記録を解けません）");
+                return 0;
+            }}
+        }}
+        int k = tls_recv_more((WSock)r->fd, t);
+        if (k == 0) {{
+            t->eof = 1;
+        }} else if (k < 0) {{
+            *err = sock_error("受け取れません");
+            return 0;
+        }} else {{
+            t->inlen += k;
+        }}
+    }}
+    int64_t give = t->plen - t->poff;
+    if (give > n) give = n;
+    if (give > 65536) give = 65536;
+    if (give > 0) {{
+        jw_list_reserve(out, 1, give);
+        memcpy(out->data, t->plain + t->poff, (size_t)give);
+        t->poff += (int)give;
+    }}
+    out->len = give;
+    return 1;
+}}
+
+static int32_t tls_send(WRes *r, const char *p, int64_t n, WStr **err) {{
+    WTls *t = r->ptr;
+    if (res_fail("write")) {{
+        *err = err_text("送れません");
+        return 0;
+    }}
+    int max = (int)t->sizes.max_message;
+    char *buf = malloc((size_t)t->sizes.header + (size_t)max + (size_t)t->sizes.trailer);
+    if (!buf) jw_oom();
+    int ok = 1;
+    while (n > 0 && ok) {{
+        int chunk = n > max ? max : (int)n;
+        memcpy(buf + t->sizes.header, p, (size_t)chunk);
+        WSecBuf b[4] = {{{{t->sizes.header, 7 /* STREAM_HEADER */, buf}},
+                        {{(unsigned long)chunk, 1, buf + t->sizes.header}},
+                        {{t->sizes.trailer, 6 /* STREAM_TRAILER */, buf + t->sizes.header + chunk}},
+                        {{0, 0, NULL}}}};
+        WSecDesc d = {{0, 4, b}};
+        ok = g_tls.encrypt(&t->ctx, 0, &d, 0) == SEC_OK && tls_send_all((WSock)r->fd, buf, (int)(b[0].cb + b[1].cb + b[2].cb));
+        if (!ok) *err = sock_error("送れません");
+        p += chunk;
+        n -= chunk;
+    }}
+    free(buf);
+    return ok;
+}}
+
+int32_t jw_tls_write(void *h, WList *data, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    int32_t ok = tls_send(r, data->data, data->len, err);
+    jw_list_free(data, 1, NULL);
+    return ok;
+}}
+
+int32_t jw_tls_write_text(void *h, WStr *text, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    return tls_send(r, text->data, text->len, err);
+}}
+
+int32_t jw_tls_set_timeout(void *h, int64_t ms, WStr **err, const WSite *at) {{
+    WRes *r = res_get((uint64_t)(uintptr_t)h, RES_TLS, at);
+    return sock_timeout(r, ms, err, at);
+}}
+#endif
+
+// ---------------------------------------------------------------- OS の乱数（標準ライブラリの中だけで使う）
+
+#ifdef __APPLE__
+#include <sys/random.h> // getentropy
+#endif
+#ifdef _WIN32
+static long(__stdcall *g_gen_random)(void *, unsigned char *, unsigned long, unsigned long);
+#endif
+
+// n バイトの乱数を out に入れる（暗号に使える OS の乱数。取り出せなければ実行時エラー）
+void jw_random_bytes(int64_t n, WList *out, const WSite *at) {{
+    if (n < 0) {{
+        begin_error("乱数の大きさが負です");
+        finish_error(at, "n は 0 以上", NULL);
+    }}
+    jw_list_reserve(out, 1, n);
+    unsigned char *p = (unsigned char *)out->data;
+    int ok = 1;
+#ifdef _WIN32
+    lock(&g_lock);
+    if (!g_gen_random) {{
+        void *m = LoadLibraryW(L"bcrypt.dll");
+        if (m) *(void **)&g_gen_random = GetProcAddress(m, "BCryptGenRandom");
+    }}
+    unlock(&g_lock);
+    for (int64_t i = 0; ok && i < n;) {{
+        unsigned long k = n - i > 65536 ? 65536 : (unsigned long)(n - i);
+        ok = g_gen_random && g_gen_random(NULL, p + i, k, 2 /* BCRYPT_USE_SYSTEM_PREFERRED_RNG */) == 0;
+        i += k;
+    }}
+#else
+    for (int64_t i = 0; ok && i < n;) {{
+        size_t k = n - i > 256 ? 256 : (size_t)(n - i); // getentropy は 1 回に 256 バイトまで
+        ok = getentropy(p + i, k) == 0;
+        i += (int64_t)k;
+    }}
+#endif
+    if (!ok) {{
+        begin_error("OS の乱数を取り出せません");
+        finish_error(at, "ここで乱数を使った", NULL);
+    }}
+    out->len = n;
+}}
+
+// ---------------------------------------------------------------- ディレクトリ（std.fs）
+
+#ifdef _WIN32
+#include <io.h>
+#include <direct.h>
+#include <sys/stat.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
+static int path_ok(WStr *path, WStr **err) {{
+    if (memchr(path->data, 0, (size_t)path->len)) {{
+        *err = message("パスに NUL 文字があります: ", path);
+        return 0;
+    }}
+    return 1;
+}}
+
+// あるか（ファイルでもディレクトリでも）
+int32_t jw_fs_exists(WStr *path) {{
+    if (memchr(path->data, 0, (size_t)path->len)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    int ok = _waccess(w, 0) == 0;
+    free(w);
+#else
+    struct stat st;
+    int ok = stat(cp, &st) == 0;
+#endif
+    free(cp);
+    return ok;
+}}
+
+static int name_cmp(const void *a, const void *b) {{ return jw_str_cmp(*(WStr *const *)a, *(WStr *const *)b); }}
+
+// 中の名前のリスト（`.` と `..` は除き、名前の順に並べる）
+int32_t jw_fs_list(WStr *path, WList *out, WStr **err) {{
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+    int ok = 1;
+#ifdef _WIN32
+    WSb *pat = jw_sb_new();
+    jw_sb_push(pat, cp, (int64_t)strlen(cp));
+    jw_sb_push(pat, "\\\\*", 2);
+    WStr *ps = jw_sb_finish(pat);
+    char *pc = c_str(ps);
+    jw_str_release(ps);
+    wchar_t *w = to_wide(pc);
+    free(pc);
+    struct _wfinddata64_t fd;
+    intptr_t h = _wfindfirst64(w, &fd);
+    free(w);
+    if (h == -1) {{
+        ok = 0;
+    }} else {{
+        do {{
+            if (wcscmp(fd.name, L".") == 0 || wcscmp(fd.name, L"..") == 0) continue;
+            int n = WideCharToMultiByte(65001, 0, fd.name, -1, NULL, 0, NULL, NULL);
+            char *u = jw_checked_malloc((size_t)(n > 0 ? n : 1));
+            if (n <= 0) u[0] = 0;
+            else WideCharToMultiByte(65001, 0, fd.name, -1, u, n, NULL, NULL);
+            push_str(out, jw_str_new(u, (int64_t)strlen(u)));
+            free(u);
+        }} while (_wfindnext64(h, &fd) == 0);
+        _findclose(h);
+    }}
+#else
+    DIR *d = res_fail("list") ? NULL : opendir(cp);
+    if (!d) {{
+        ok = 0;
+    }} else {{
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {{
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            int64_t n = (int64_t)strlen(e->d_name);
+            // UTF-8 でない名前は str にできないので、読めないとする
+            if (!valid_utf8((const unsigned char *)e->d_name, n)) {{ ok = 0; break; }}
+            push_str(out, jw_str_new(e->d_name, n));
+        }}
+        closedir(d);
+    }}
+#endif
+    free(cp);
+    if (!ok) {{
+        for (int64_t i = 0; i < out->len; i++) jw_str_release(((WStr **)out->data)[i]);
+        if (out->data) jw_list_free(out, sizeof(WStr *), NULL);
+        *err = message("ディレクトリを読めません: ", path);
+        return 0;
+    }}
+    if (out->len > 1) qsort(out->data, (size_t)out->len, sizeof(WStr *), name_cmp);
+    return 1;
+}}
+
+int32_t jw_fs_make_dir(WStr *path, WStr **err) {{
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    int ok = !res_fail("make_dir") && _wmkdir(w) == 0;
+    free(w);
+#else
+    int ok = !res_fail("make_dir") && mkdir(cp, 0777) == 0;
+#endif
+    free(cp);
+    if (!ok) *err = message("ディレクトリを作れません: ", path);
+    return ok;
+}}
+
+#ifdef _WIN32
+__declspec(dllimport) unsigned long __stdcall GetFileAttributesW(const wchar_t *);
+#endif
+
+// 情報: out に [種類（0 ファイル・1 ディレクトリ・2 そのほか）, 大きさ（バイト）, 更新時刻（1970 年からのミリ秒）, リンクか（1 か 0）]。
+// リンクはたどった先の情報（先がなければ種類は 2、大きさは 0）
+int32_t jw_fs_stat(WStr *path, WList *out, WStr **err) {{
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+    int64_t kind = 2, size = 0, mtime = 0, link = 0;
+    int ok = !res_fail("stat");
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    unsigned long attr = ok ? GetFileAttributesW(w) : 0xFFFFFFFFUL;
+    if (attr == 0xFFFFFFFFUL) {{
+        ok = 0;
+    }} else {{
+        link = (attr & 0x400UL) != 0; // FILE_ATTRIBUTE_REPARSE_POINT
+        struct _stat64 st;
+        if (_wstat64(w, &st) == 0) {{
+            kind = (st.st_mode & _S_IFMT) == _S_IFDIR ? 1 : (st.st_mode & _S_IFMT) == _S_IFREG ? 0 : 2;
+            size = kind == 0 ? (int64_t)st.st_size : 0;
+            mtime = (int64_t)st.st_mtime * 1000;
+        }} else if (!link) {{
+            ok = 0;
+        }}
+    }}
+    free(w);
+#else
+    struct stat st;
+    if (!ok || lstat(cp, &st) != 0) {{
+        ok = 0;
+    }} else {{
+        link = S_ISLNK(st.st_mode) ? 1 : 0;
+        if (!link || stat(cp, &st) == 0) {{
+            kind = S_ISDIR(st.st_mode) ? 1 : S_ISREG(st.st_mode) ? 0 : 2;
+            size = kind == 0 ? (int64_t)st.st_size : 0;
+#ifdef __APPLE__
+            mtime = (int64_t)st.st_mtimespec.tv_sec * 1000 + st.st_mtimespec.tv_nsec / 1000000;
+#else
+            mtime = (int64_t)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
+#endif
+        }}
+    }}
+#endif
+    free(cp);
+    if (!ok) {{
+        *err = message("情報を読めません: ", path);
+        return 0;
+    }}
+    int64_t v[4] = {{kind, size, mtime, link}};
+    jw_list_reserve(out, 8, 4);
+    memcpy(out->data, v, sizeof v);
+    out->len = 4;
+    return 1;
+}}
+
+// ファイルか、空のディレクトリを消す
+int32_t jw_fs_remove(WStr *path, WStr **err) {{
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    int ok = !res_fail("remove") && (_wremove(w) == 0 || _wrmdir(w) == 0);
+    free(w);
+#else
+    int ok = !res_fail("remove") && remove(cp) == 0;
+#endif
+    free(cp);
+    if (!ok) *err = message("消せません: ", path);
+    return ok;
+}}
+
+// 名前を変える。to があれば置き換える（同じファイルシステムの中なら、読む側には古いか新しいかのどちらかが見える）
+int32_t jw_fs_rename(WStr *from, WStr *to, WStr **err) {{
+    if (!path_ok(from, err) || !path_ok(to, err)) return 0;
+    char *cf = c_str(from);
+    char *ct = c_str(to);
+#ifdef _WIN32
+    wchar_t *wf = to_wide(cf);
+    wchar_t *wt = to_wide(ct);
+    int ok = !res_fail("rename") && MoveFileExW(wf, wt, 0x1 | 0x8) != 0 /* REPLACE_EXISTING | WRITE_THROUGH */;
+    free(wf);
+    free(wt);
+#else
+    int ok = !res_fail("rename") && rename(cf, ct) == 0;
+#endif
+    free(cf);
+    free(ct);
+    if (!ok) *err = message("名前を変えられません: ", from);
+    return ok;
+}}
+
 void jw_exit(int64_t code) {{
     jw_flush();
-    exit((int)code);
+    quit((int)code);
 }}
 
 // ---------------------------------------------------------------- 入口
@@ -2369,10 +4842,10 @@ static void win_setup(int *argc, char ***argv) {{
     int n = 0;
     wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);
     if (!w) return;
-    char **a = malloc(sizeof(char *) * (size_t)(n + 1));
+    char **a = jw_checked_malloc(sizeof(char *) * (size_t)(n + 1));
     for (int i = 0; i < n; i++) {{
         int len = WideCharToMultiByte(65001, 0, w[i], -1, NULL, 0, NULL, NULL);
-        a[i] = malloc((size_t)len);
+        a[i] = jw_checked_malloc((size_t)len);
         WideCharToMultiByte(65001, 0, w[i], -1, a[i], len, NULL, NULL);
     }}
     a[n] = NULL;
@@ -2390,6 +4863,7 @@ int main(int argc, char **argv) {{
     jw_main();
     jw_flush();
     if (getenv("JW_LEAKS")) fprintf(stderr, "[live] %lld\\n", (long long)(jw_live + g_live_done));
+    if (getenv("JW_RETIREMENTS")) fprintf(stderr, "[retired] %llu\\n", (unsigned long long)retired_count());
     return 0;
 }}
 """

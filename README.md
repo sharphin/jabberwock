@@ -26,6 +26,31 @@ alice build --release         # target/release/app を作る（変わってい�
 alice test                    # tests/*.jw を動かし、tests/名前.out があれば出力と比べる
 ```
 
+ライブラリ開発の現状・設計書一覧・jwc対応の順序は [ライブラリシステム](docs/library-system.md) にまとめています。
+
+## 安全性テスト・形式検証
+
+リポジトリ直下から実行する。Windows:
+
+```powershell
+.\scripts\safety_windows.cmd
+py -3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-report.json
+py -3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
+```
+
+Linux:
+
+```sh
+python3 scripts/safety_linux.py
+python3 scripts/formal_report.py --compiler jwc --output target/formal-jwc-report.json
+python3 scripts/formal_report.py --compiler rust --output target/formal-rust-report.json
+```
+
+言語機能として保証を目指す安全性と、アプリケーション側の責任範囲は [言語安全性契約](docs/language-safety-contract.md) に定義する。
+形式検証は実装済みの局所定理を検査する。全コンパイラの安全性を証明済みとはしない。
+必要環境・一括実行・終了コードは [形式検証コマンド](docs/formal-commands.md)、
+実用12項目×コンパイラ＋5目標は [検査構成](docs/compiler-safety-matrix.md) を参照。
+
 ## 言語の見た目
 
 ```
@@ -290,3 +315,7 @@ cargo run --release -- build -o jwc1 jwc/main.jw   # Rust 版で 1 代目の jwc
 1. 実行時に見つけているエラーの一部を、型検査で実行前に見つけるようにする
 2. ベンチマークの残りの項目（[bench/README.md](bench/README.md) の「まだやっていないこと」）
 3. パッケージ（`alice`）: 手元の依存先だけはできた（docs/packages.md）。ネットからの取得・版の指定と、標準ライブラリ
+
+Windows ASanの起動エラーは [DLL診断](docs/windows-asan-diagnostics.md) を参照。診断情報は通常の安全性JSONにも含まれる。
+
+項目3・4・6には [既存ツールによる暫定検出器](docs/provisional-detectors.md) を接続。後で専用検出器を実装して置き換える方針。未導入や検出能力未確認を合格にはしない。

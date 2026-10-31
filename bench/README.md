@@ -1,8 +1,56 @@
-# ベンチマーク（jabberwock build・Go・C++・Rust）
+# ベンチマーク（セルフホストjwc・Rust・C++・Goのみ）
 
-同じ処理を `jabberwock/`・`go/`・`cpp/`・`rust/` に書いたもの。`./bench/run.sh [名前...]` で、全部を作って走らせ、Markdown の表を出す（`$BENCH_OUT/results.md` にも書く）。
-`RUNS=回数`（既定 5）・`JW=jabberwock の場所`・`BENCH_OUT=作業フォルダ`。出力が C++ と違えば `!!` の行が出る。
-要るもの: `cargo build --release` 済みの jabberwock・clang（clang++）・cc・go・rustc。時間と最大メモリは `measure.c`（fork して `wait4` の rusage を読む。Linux 用）で取る。
+## 一括コマンド
+
+Linux / WSL2で、リポジトリ直下から実行する。Windowsネイティブも対応するが、Clang/LLVMとRust/Goのリンク環境が必要。
+
+```sh
+# 5種類の簡易計測（既定8反復）
+python3 scripts/benchmark_report.py
+
+# 全21種類 × 8回（4者比較。各言語が先頭を2回ずつ担当）
+python3 scripts/benchmark_report.py --full
+
+# 既存のセルフホストjwcを指定する場合（ブートストラップ省略）
+python3 scripts/benchmark_report.py --full --jwc path/to/jwc
+
+# 個別ケース・実行回数
+python3 scripts/benchmark_report.py --cases fib sort --runs 7
+
+# 同一環境・同一入力の過去結果と比較
+python3 scripts/benchmark_report.py --full --baseline path/to/previous-benchmark-report.json
+```
+
+Windows（PowerShell、構築済みjwcを指定する場合）:
+
+```powershell
+.\scripts\benchmark_windows.cmd --full --jwc .\target\release\jwc-local.exe
+# Visual Studio/Clang x64環境が初期化済みの場合は直接でも可
+py scripts/benchmark_report.py --full --jwc .\target\release\jwc-local.exe
+```
+
+`benchmark_windows.cmd` はWindows x64のVisual Studio環境を初期化し、
+Clang、Rust、Go、Pythonの存在を確認してから `py -3` でベンチマークを起動する。
+GitHub Actionsは使用しない。
+
+Windowsでは実行時間を`perf_counter`、メモリをWindows APIの`PeakWorkingSetSize`で計測する。
+Linuxの`wait4`最大RSSとWindowsのピークワーキングセットは厳密に同じ指標ではない。
+OSをまたぐ比較は同一環境のベースライン比較とみなさない。
+Windows側でのコンパイル・実行完走はまだ実機確認していない。
+
+計測対象は **jwcが生成した実行ファイル、rustcが生成した実行ファイル、clang++が生成した実行ファイル、go buildが生成した実行ファイルの4つだけ**。Rust製Jabberwockコンパイラはデフォルトではセルフホストjwcの初回ビルドのために使用するが、ベンチマーク結果に含めない。`--no-elide`、`--unchecked` は含めない。
+
+同一ケースの測定は4者の実行順をラウンドごとに入れ替え、既定の8反復では先頭を担当する回数が各言語2回ずつとなる。任意の`--runs`で4の倍数以外を指定した場合は完全均衡ではない旨をJSONに記録する。すべての反復の標準出力が同一であることを要求する。**1回でも出力が変動するか、空の出力、非有限値・ゼロ時間など無効な測定値があればFAIL**。ただし順序の交互化でCPU負荷や周波数変動が完全に消えるわけではない。
+
+出力は `target/benchmark-report.json`。各ケースについて4者すべての標準出力SHA-256が一致した場合にのみPASSとし、実行時間の中央値、最大RSS、jwc対Rust・C++・Goの比率を記録する。正の速度低下率は `(jwcの中央値 / 比較対象の中央値 - 1) × 100%`。機械環境、ビルドフラグ、ソース入力のSHA-256、生成に用いたjwcのSHA-256も保存する。
+
+**旧計測の注意:** 以下に残す2026-10-25のベンチマーク表と従来の`bench/run.sh`はRust製Jabberwockコンパイラ・Go等を含む**旧方式**であり、セルフホストjwcの実測結果ではない。現在のjwc性能の主比較へ流用しない。
+
+Linuxの計測は`wait4`、Windowsの計測はWindowsプロセスAPIを利用する。依存はPython 3、cargo/rustc（構築済みjwcを使う場合cargo不要）、clang/clang++、Go、Linuxではさらにlld、cc。コンパイラの最適化器やアルゴリズムの差は残るので、数値は個々のケースの比較であり言語全体の優劣を証明しない。
+
+## 旧スイート・履歴資料
+
+従来の`bench/run.sh`はGo、複数のJabberwock検査設定などを含む。互換・履歴用として残し、新しい`scripts/benchmark_report.py`からは呼び出さない。
 
 解析の変更前後だけを比べる実験は `experiments/` に置く。`experiments/scalar-call.jw` は数値の補助関数の呼び出し後に残る要素 ref の検査を測るもの。
 通常の言語間比較には混ぜない。再現手順・結果・限界は [docs/scalar-call-handoff.md](../docs/scalar-call-handoff.md) にある。

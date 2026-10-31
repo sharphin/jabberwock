@@ -42,6 +42,28 @@ fn manifest() {
 }
 
 #[test]
+fn package_map_exports_existing_resolution() {
+    let d = tmp("package-map");
+    let dep = d.with_extension("dep");
+    write(&d.join("alice.toml"), &format!("[package]\nname = \"app\"\n[dependencies]\nmathx = {{ path = \"../{}\" }}\n", dep.file_name().unwrap().to_str().unwrap()));
+    write(&d.join("src/main.jw"), "use mathx; fn main() { print(mathx.one()); }");
+    write(&dep.join("alice.toml"), "[package]\nname = \"mathx\"\n");
+    write(&dep.join("src/lib.jw"), "pub fn i64 one() { 1 }");
+    let p = Project::load(&d).unwrap();
+    let want = p.package_map(&p.main_file()).unwrap();
+    let (code, out, err) = jw(&d, &["package-map"]);
+    assert_eq!(code, 0, "{}", err);
+    assert_eq!(out, want);
+    assert!(out.contains("allow\t\tmathx\n"));
+    let (code, _, err) = jw(&d, &["package-map", "-o", "deps.map"]);
+    assert_eq!(code, 0, "{}", err);
+    assert_eq!(fs::read_to_string(d.join("deps.map")).unwrap(), want);
+    assert!(p.package_map(&dep.join("src/lib.jw")).is_err());
+    let _ = fs::remove_dir_all(d);
+    let _ = fs::remove_dir_all(dep);
+}
+
+#[test]
 fn modules_come_from_src_and_dependencies() {
     let d = tmp("load");
     write(&d.join("app/alice.toml"), "[package]\nname = \"app\"\n[dependencies]\nshapes = { path = \"../shapes\" }\n");
@@ -155,7 +177,7 @@ fn new_run_and_test_commands() {
     // ライブラリの tests は最初から通る
     let (c, out, _) = jw(&d.join("mathx"), &["test"]);
     assert_eq!(c, 0, "{}", out);
-    assert!(out.contains("test tests/add.jw::test_add ... ok") && out.contains("2 本成功・0 本失敗"), "{}", out);
+    assert!(out.replace('\\', "/").contains("test tests/add.jw::test_add ... ok") && out.contains("2 本成功・0 本失敗"), "{}", out);
 
     // 依存先を足して、引数も渡す
     write(&app.join("alice.toml"), "[package]\nname = \"app\"\n\n[dependencies]\nmathx = { path = \"../mathx\" }\n");
@@ -178,6 +200,7 @@ fn new_run_and_test_commands() {
     write(&app.join("tests/boom.jw"), "fn main() { let v = [1]; let i = 3; print(v[i]); }\n");
     let (c, out, _) = jw(&app, &["test"]);
     assert_eq!(c, 1);
+    let out = out.replace('\\', "/");
     assert!(out.contains("test tests/good.jw ... ok"), "{}", out);
     assert!(out.contains("test tests/wrong.jw ... 失敗") && out.contains("出力が違います"), "{}", out);
     assert!(out.contains("test tests/boom.jw ... 失敗") && out.contains("tests/boom.jw:1:"), "{}", out);
@@ -193,6 +216,7 @@ fn new_run_and_test_commands() {
     );
     let (c, out, _) = jw(&app, &["test"]);
     assert_eq!(c, 1);
+    let out = out.replace('\\', "/");
     assert!(out.contains("test tests/fns.jw::test_ok ... ok"), "{}", out);
     assert!(out.contains("test tests/fns.jw::test_ng ... 失敗") && out.contains("assert に失敗しました") && out.contains("tests/fns.jw:10:"), "{}", out);
     assert!(out.contains("test tests/fns.jw::test_exit ... 失敗") && out.contains("exit(3)"), "{}", out);

@@ -73,6 +73,23 @@ fn main() {{
     assert_eq!(o.live_objects, 0);
 }
 
+/// 項目10: Debug での AST/IR 差分検証が外部効果を二重実行しない。
+/// 一回目の read_file -> write_file で x、二回実行なら xx になる。
+#[test]
+fn external_file_effect_runs_exactly_once() {
+    let dir = scratch("effect-once");
+    let path = format!("{dir}/effect.txt");
+    std::fs::write(&path, "").unwrap();
+    let o = ok(&format!(r#"
+fn main() {{
+    let before = read_file("{path}").unwrap_or("");
+    write_file("{path}", before + "x");
+}}
+"#));
+    assert_eq!(o.live_objects, 0);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "x");
+}
+
 #[test]
 fn file_errors_are_values() {
     let dir = scratch("errs");

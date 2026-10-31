@@ -23,7 +23,7 @@ fn bool is_ref_slot(i64 f) { f >= 4 && f % 3 == 1 }
 
 fn bool is_ref_elem(i64 f) { f >= 5 && f % 3 == 2 }
 
-fn i64 target(i64 f) { (f - 3) / 3 }
+fn i64 ref_target(i64 f) { (f - 3) / 3 }
 
 /// 分かっている事実（変数の番号の小さい順）
 struct Facts {
@@ -159,6 +159,23 @@ fn bool scalar_call(ref ir.Func f) {
     true
 }
 
+/// リストの中身を動かさない組み込み（数と文字列の計算・表示）。名前を 1 つずつ書く。
+/// ここにない組み込みは要素を動かしうるものとして扱う（新しく足した組み込みは、ここに足すまで安全側）。
+/// 足すときは、引数が数・真偽・文字列だけで、呼び出し元のリストに届かないことを確かめる（docs/elision-proof.md の前提 3）。
+/// src/ir/analyze.rs の pure_builtin と同じ一覧にする
+fn bool pure_builtin(str n) {
+    let names = ["print", "eprint", "concat", "append", "assert",
+        "int.abs", "int.max", "int.min",
+        "f64.abs", "f64.max", "f64.min", "f64.sqrt", "f64.to_bits",
+        "str.len", "str.byte_len", "str.chars", "str.bytes", "str.code", "str.lines", "str.split",
+        "str.trim", "str.to_upper", "str.to_lower", "str.contains", "str.starts_with", "str.ends_with",
+        "str.find", "str.slice", "str.replace", "str.repeat", "str.to_int", "str.to_float"];
+    for m in names {
+        if m == n { return true; }
+    }
+    false
+}
+
 /// 変数 x に入れ直した。古い own は解放されるが、変数の場所はそのまま
 fn kill_value(ref mut Facts facts, i64 x) {
     remove(ref mut facts, x);
@@ -168,7 +185,7 @@ fn kill_value(ref mut Facts facts, i64 x) {
 /// この事実を持つ値は、今、借りた先が生きている ref か
 fn bool is_live(ref Facts facts, i64 f) {
     if f == PINNED || is_ref_slot(f) { return true; }
-    if is_ref_to(f) { return get(facts, target(f)) == OWN; }
+    if is_ref_to(f) { return get(facts, ref_target(f)) == OWN; }
     false
 }
 
@@ -223,7 +240,7 @@ struct Cx {
                         default -> false;
                     };
                     if l_own[x] && !copied { f = OWN; }
-                    let self_ref = (is_ref_to(f) || is_ref_slot(f)) && target(f) == x;
+                    let self_ref = (is_ref_to(f) || is_ref_slot(f)) && ref_target(f) == x;
                     if f != 0 && !self_ref { put(ref mut facts, x, f); }
                 }
             }
@@ -281,7 +298,10 @@ struct Cx {
     /// 場所をたどる。先頭の `*` の検査を決める（ほかの `*` は実行時に検査する）
     fn mut place(ref mut ir.Place p, ref mut Facts facts) {
         let f = get(facts, p.local);
-        let safe = f == OWN || is_ref_elem(f) || is_live(facts, f);
+        // RefElem is safe to dereference within this function while its fact survives.
+        // Operations that may move list elements remove RefElem facts via kill_elems.
+        // Keep it out of is_live: passing an element ref to a callee is not pinned.
+        let safe = f == OWN || is_live(facts, f) || is_ref_elem(f);
         for i in range(p.proj.len()) {
             let mut is_deref = false;
             let mut sp = 0;
@@ -326,23 +346,23 @@ struct Cx {
         }
     }
 
-    /// 値を順に読む。呼び出しの引数として安全か（読む前の事実で決める）も返す
+    /// 値を順に読む。呼び出しの引数として安全か（すべて読み終えたあとの事実で決める）も返す
     fn mut bool[] operands(ref mut ir.Operand[] os, ref mut Facts facts) {
-        let i64[] mut fs = [];
-        for o in os {
-            fs.push(match ref o {
-                case Copy(p) -> if p.proj.len() == 0 { get(facts, p.local) } else { 0 };
-                case Move(l, s) -> get(facts, l);
-                case Read(l, s) -> get(facts, l);
-                default -> 0;
-            });
+        // 読んだ値は、関数へ渡るまで名前のない変数（ここでは変数の数より後の番号）に置いたものとして扱う。
+        // `f(ref a, a)` のように後の引数で a がムーブされると、kill_all が先の引数の事実（RefTo(a)・RefSlot(a)）も消す
+        // （読む前の事実を取っておいて is_live で見るだけだと、RefSlot は消えたことに気づけない）
+        let base = l_own.len();
+        for j in range(os.len()) {
+            let f = operand(ref mut os[j], ref mut facts);
+            if f != 0 { put(ref mut facts, base + j, f); }
         }
-        // `f(ref a, a)` のように後の引数でムーブされるものは、前の命令で事実が消えている
+        let i64[] mut fs = [];
+        for j in range(os.len()) {
+            fs.push(get(facts, base + j));
+            remove(ref mut facts, base + j);
+        }
         let bool[] mut safe = [];
         for f in fs { safe.push(is_live(facts, f)); }
-        for j in range(os.len()) {
-            operand(ref mut os[j], ref mut facts);
-        }
         safe
     }
 
@@ -468,9 +488,7 @@ struct Cx {
             }
             case Builtin(n, ops, s) -> {
                 operands(ops, ref mut facts);
-                // 数と文字列の計算・表示のほかは、何が起きるか個別に見ない（スレッド・入出力など）
-                let pure = n == "print" || n == "eprint" || n == "concat" || n == "append" || n == "assert";
-                if !(pure || n.starts_with("f64.") || n.starts_with("int.") || n.starts_with("str.")) { kill_elems(ref mut facts); }
+                if !pure_builtin(n) { kill_elems(ref mut facts); }
                 0
             }
             case Map(ks, vs, s) -> {

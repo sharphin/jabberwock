@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -20,17 +21,32 @@ int main(int argc, char **argv) {
         fprintf(stderr, "使い方: measure N 出力ファイル コマンド [引数...]\n");
         return 2;
     }
-    int n = atoi(argv[1]);
-    if (n < 1) n = 1;
+    char *end = NULL;
+    long count = strtol(argv[1], &end, 10);
+    if (!end || *end != 0 || count < 1 || count > 100000) {
+        fprintf(stderr, "measure: invalid repetition count\n");
+        return 2;
+    }
+    int n = (int)count;
     double *t = malloc(sizeof(double) * (size_t)n);
+    if (!t) { perror("malloc"); return 2; }
     long rss = 0;
     for (int i = 0; i < n; i++) {
         struct timespec s, e;
         clock_gettime(CLOCK_MONOTONIC, &s);
         pid_t p = fork();
+        if (p < 0) { perror("fork"); free(t); return 1; }
         if (p == 0) {
-            int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            // Retain every run output for deterministic cross-run checks.
+            size_t cap = strlen(argv[2]) + 48;
+            char *destination = malloc(cap);
+            if (!destination) _exit(127);
+            if (i == n - 1) snprintf(destination, cap, "%s", argv[2]);
+            else snprintf(destination, cap, "%s.run%d", argv[2], i);
+            int fd = open(destination, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            free(destination);
             if (fd < 0 || dup2(fd, 1) < 0) _exit(127);
+            close(fd);
             execvp(argv[3], argv + 3);
             _exit(127);
         }

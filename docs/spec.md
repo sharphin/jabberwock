@@ -5,6 +5,8 @@
 
 - 対象: 最新の main（言語を変えたら、同じコミットでここも直す）
 - 「未実装」と書いたものは、決めてあってもまだ動かない
+- 所有権・参照の形式化の範囲と世代上限での退役規則は [formal-semantics.md](formal-semantics.md)。機械証明は抽象モデルの一部で、実装全体の証明ではない。
+- [形式検証の到達目標と責任範囲](formal-semantics.md#到達目標と責任範囲) は、意味保存・メモリ安全性・型安全性・所有権/参照・実行時チェックの5項目。到達目標と現在の保証済み範囲を区別する。
 
 ## 1. プログラムの形
 
@@ -50,16 +52,379 @@ fn main() {
 
 - 1 ファイルが 1 モジュール。`use 名前;` で、最初のファイルと同じフォルダの `名前.jw` を使う。
   パッケージ（alice.toml のあるフォルダ。`alice` コマンド）では、src の `名前.jw` と依存先のライブラリ（依存先の src/lib.jw がパッケージの名前のモジュール）を使う（[docs/packages.md](packages.md)）。
+  jwcは `alice package-map` が出力するローカル依存情報を `--package-map` で読み、同じ規則で名前を解決する。aliceのbuild/run/testからのjwc呼び出しはまだ未対応。
   名前の空間はパッケージごと: 依存先の src のほかのファイルはそのパッケージの中からだけ見え、`use 名前;` は自分のパッケージ → 依存先の順に探す。
   使えるパッケージは alice.toml に直接書いた依存先だけ。
 - ほかのモジュールの名前は、いつも `モジュール名.名前` と書く（関数・構造体・enum・interface・静的メソッド `geom.Point.at(1, 2)`・enum の値 `geom.Shape.Box(1, 2)`・型 `geom.Point[]`）。
 - ほかのファイルから使えるのは `pub` をつけた定義だけ。構造体のメソッド・フィールド、enum の種類は、型が `pub` なら使える。
 - モジュールの中では、自分の定義は名前だけで書ける。`use` は書いたファイルの中でだけ効く（使うモジュールが使っているモジュールは見えない）。
+- モジュールの中から、最初のファイル（main）の関数と型（構造体・enum・interface）は使えない（関数は値としても使えない）。
+  使うものはモジュールの中に置くか、別のモジュールに分けて use する（関数なら、関数の値として引数で渡してもよい）。
+  どのプログラムにも最初からある `Option`・`Result`・`ok_or` は使える。jwc だけ（Rust 版は使えてしまう。凍結のため直さない）。
 - 違うモジュールに同じ名前の定義があってよい。
 - `use` が輪になる（a が b を使い、b が a を使う）のはエラー。
-- 変数や引数に、モジュールと同じ名前はつけられない。構造体のフィールドにはつけてよい（`b.geom.x` の `geom` はフィールド）。
+- 変数や引数に、そのファイルで `use` したモジュールと同じ名前はつけられない。構造体のフィールドにはつけてよい（`b.geom.x` の `geom` はフィールド）。
+  ほかのファイルが use しているだけのモジュールの名前はつけてよい（jwc だけ。Rust 版はプログラムのどこかで use したモジュールの名前を全部禁じる）。
 - 構造体の値を print すると、型の名前はモジュール名つきで出る（`geom.Point { x: 3, y: 4 }`）。
 - エラーの位置は、そのモジュールのファイルの中で示す。
+
+### 1.2 標準ライブラリ（jwc だけ）
+
+```
+use std.math;
+use std.text;
+fn main() {
+    print(math.gcd(12, 18), text.pad_left("7", 3, "0"));   // 6 007
+}
+```
+
+- `use std.名前;` で標準ライブラリのモジュールを使う。使う側では末尾の名前で `math.gcd(...)` と書く（ほかのモジュールと同じ規則）。
+- 標準ライブラリは jwc に埋め込まれている（ソースはリポジトリの `std/*.jw`）。ファイルを探さないので、jwc の置き場所によらず使える。
+- 同じフォルダやパッケージの `math.jw` は標準の math を置き換えない。`use math;` と `use std.math;` を同じファイルに書くとエラー（別名の `as` はまだない）。
+  `use std;` は今までどおり同じフォルダの std.jw を使う。
+- 標準ライブラリの中では `use std.名前;` だけ使える。ない名前はエラー（使える名前を示す）。エラーの位置は `std/math.jw` のように示す。
+- Rust 版（`jabberwock`）は対応しない（凍結。[design-decisions.md](design-decisions.md)）。
+
+| モジュール | 関数 |
+|---|---|
+| `std.math` | `gcd(a, b)`・`lcm(a, b)`・`pow(base, exp)`（exp は 0 以上）・`clamp(x, lo, hi)`（どれも i64）、`pi()`・`floor(x)`・`ceil(x)`・`round(x)`（f64。round はちょうど半分なら 0 から遠い方） |
+| `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9）・`from_utf8(ref bytes)`（`Option<str>`。正しい UTF-8 でなければ None） |
+| `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`・`rename(from, to)`・`write_atomic(path, bytes)`・`write_text_atomic(path, s)`・`stat(path)` と `Info`・`is_file(path)`・`is_dir(path)`・`copy(from, to)`・`remove_all(path)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
+| `std.env` | `get(name)`（`Option<str>`）（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
+| `std.time` | `now()`・`sleep(ms)`・`unix_ms()`・`local_offset_ms(t)` と `Instant`（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
+| `std.json` | `parse(s)`・`stringify(ref v)`・`quote(s)` と `Json`（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
+| `std.http` | `get(url)`・`post(url, content_type, body)` と `Response`、サーバーの `listen(host, port)`・`stop(srv)` と `Server`・`Request`（[1.5](#15-stdhttpjwc-だけ)） |
+| `std.url` | `parse(s)`・`encode(s)`・`decode(s, plus)` と `Url`（[1.7](#17-stdurljwc-だけ)） |
+| `std.browser` | `open(cfg)`・`close(e)` と `Engine`・`Config`・`Event`・`KeyCode`・`Info`（[1.8](#18-stdbrowserjwc-だけ)） |
+| `std.net` | `connect(host, port)`・`listen(host, port)`・`close(s)`・`stop(l)`・`bind_udp(host, port)`・`recv_from(s, n)`・`unbind(s)` と資源の型 `TcpStream`・`TcpListener`・`UdpSocket`（[1.4](#14-stdnetjwc-だけ)） |
+| `std.tls` | `connect(host, port)`・`upgrade(s, host)`・`close(s)` と資源の型 `TlsStream`（[1.9](#19-stdtlsjwc-だけ)） |
+| `std.gzip` | `decompress(ref data, limit)`・`compress(ref data)`・`crc32(ref data)`（[1.10](#110-stdgzipjwc-だけ)） |
+| `std.pg` | `connect(cfg)`・`close(db)` と `Config`・`Conn`・`Rows`（[1.11](#111-stdpgjwc-だけ)） |
+| `std.hash` | `sha256(ref data)`・`hmac_sha256(ref key, ref msg)`・`pbkdf2_sha256(ref password, ref salt, iters)`・`hex(ref data)`・`equal(ref a, ref b)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
+| `std.base64` | `encode(ref data)`・`decode(s)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
+| `std.random` | `bytes(n)`・`int(lo, hi)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
+| `std.date` | `now()`・`from_unix_ms(t)`・`make(...)`・`parse(s)`・`is_leap(y)`・`days_in_month(y, m)` と `DateTime`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
+| `std.csv` | `parse(s)`・`format(ref rows)`・`quote(v)`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
+| `std.regex` | `compile(pattern)`・`escape(s)` と `Regex`・`Match`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
+
+- 詳しい動き（一周・実行時エラーになる条件）は `std/*.jw` の各関数の説明に書いてある。
+
+### 1.3 資源と std.fs（jwc だけ）
+
+```
+use std.fs;
+fn Result<(), str> save() {
+    let mut f = fs.create("out.txt")?;   // fs.File
+    f.write_text("こんにちは\n")?;
+    f.write([65, 66])?;                  // u8[]（ムーブ）
+    fs.close(f)?;                        // 閉じた結果を受け取る
+    let mut r = fs.open("out.txt")?;
+    print(r.read(3)?, r.read_text()?);  // 最大 3 バイト（終わりなら []）、残り全部
+    Ok(())
+}
+```
+
+- **資源**は外のもの（今は開いたファイルだけ）を持つ値。`resource 名前;` で決めるが、書けるのは標準ライブラリの中だけで、
+  コンパイラが知っている種類（`std.fs` の `File`、`std.net` の `TcpStream`・`TcpListener`・`UdpSocket`、`std.tls` の `TlsStream`、`std.browser` の `Handle`）に限る。数や文字列から作る方法はない（作るのは `fs.open` などだけ）。
+- 値として読むといつもムーブ（2 つ目の持ち主はできない）。`ref` / `ref mut` で借りられる。`for x in` の x などの読むだけの写しは、閉じない。
+- 持ち主がいなくなると黙って閉じる（構造体・リストの中でも）。閉じたときの失敗を知りたいときは `fs.close(f)`（`Result<(), str>`。失敗しても f はもう使えない）。
+  `exit` と実行時エラーでは閉じない（ほかの後片づけと同じ。書いた内容は close で確かめる）。
+- ほかのスレッドへは渡せない（構造体などに包んでも）。`==` などで比べられない。print すると `<fs.File>`。
+- メソッド（どれも `Result<_, str>` を返し、持ち主が mut であること）: `read(n)`（`u8[]`。n が負なら実行時エラー）・`read_text()`（`str`。UTF-8 でなければ Err）・
+  `write(bytes)`（`u8[]` をムーブして全部書く）・`write_text(s)`。
+- 開く: `fs.open(path)`（読む）・`fs.create(path)`（書く。なければ作り、あれば空にする）・`fs.append(path)`（後ろに足す）。パスに NUL 文字があれば Err。
+- 書いた内容は、close するか持ち主がいなくなるまで、ほかの開き方からは見えないことがある（まとめて書くため）。
+- ディレクトリ: `fs.exists(path)`（`bool`。ファイルでもディレクトリでも）・`fs.list_dir(path)`（`Result<str[], str>`。`.` と `..` を除き、名前の順。UTF-8 でない名前があれば Err）・
+  `fs.make_dir(path)`（親はあること。もうあれば Err）・`fs.remove(path)`（ファイルか空のディレクトリ）。
+- `fs.rename(from, to)`: 名前を変える。to があれば置き換える。
+- 情報: `fs.stat(path)`（`Result<Info, str>`。なければ Err）。`Info` は `size`（中身のバイト数。ファイルでなければ 0）・`is_file`・`is_dir`・
+  `is_link`（path そのものがシンボリックリンクか。Windows ではリパースポイント）・`modified_ms`（更新時刻。1970-01-01 UTC からのミリ秒。Windows は秒の単位）。
+  リンクなら is_link 以外はたどった先のもの（先がなければ is_file も is_dir も false で、size は 0）。
+  `fs.is_file(path)`・`fs.is_dir(path)`（`bool`。なければ false）。
+- `fs.copy(from, to)`: ファイルを写す（to があれば上書き。安全な上書きではない）。from と to が同じ文字列、または from がファイルでなければ Err。
+- `fs.remove_all(path)`: ファイルか、ディレクトリを中身ごと消す。リンクはたどらず、リンクそのものを消す（リンクの先は残る）。なければ Err。途中で失敗すると、そこまでに消したものは戻らない。
+- 安全な上書き: `fs.write_atomic(path, bytes)`・`fs.write_text_atomic(path, s)`。`path + ".tmp"` に全部書いて閉じてから path へ名前を変える。
+  途中で失敗すれば path は元のまま（一時ファイルは消す）。読む側には古い中身か新しい中身のどちらかが見える。電源断まで耐えるとは約束しない。
+- 実行時ライブラリは資源を表で持ち、値は「札」（場所の番号と世代）。閉じた札を使うと実行時エラー（型検査を通ったプログラムでは起きないはずの、念のための検査）。
+  場所を使い回すときは世代を進め、世代が上限に達した場所は退役させる。
+- テスト用: 環境変数 `JW_RES_FAIL=open` / `read` / `write` / `close` / `list` / `make_dir` / `remove` / `rename`（std.net は `connect` / `listen` / `accept` も）で、
+  その操作をわざと失敗させる（`--release` で作った実行ファイルでは効かない）。
+
+### 1.4 std.net（jwc だけ）
+
+```
+use std.net;
+let mut l = net.listen("127.0.0.1", 0)?;   // 0 なら OS が番号を選ぶ（l.port()）
+let mut c = l.accept()?;                   // TcpStream
+c.set_timeout(2000)?;                      // ミリ秒（0 なら待ち続ける）
+let got = c.read(4096)?;                   // 最大 4096 バイト。相手が閉じたら []
+c.write_text("ok\n")?;
+net.close(c)?;
+
+let mut u = net.bind_udp("127.0.0.1", 0)?;          // UDP。0 なら OS が番号を選ぶ（u.port()）
+u.send_to("ping".bytes(), "127.0.0.1", 9000)?;       // 1 回が 1 つのまとまり
+let d = net.recv_from(ref mut u, 2048)?;                    // net.Datagram { data, host, port }
+```
+
+- 同期だけ。TLS は std.tls、HTTP は std.http。`TcpStream`・`TcpListener`・`UdpSocket` は資源で、規則は 1.3 と同じ（ムーブだけ・送れない・持ち主がいなくなると閉じる）。
+- `net.connect(host, port)`・`net.listen(host, port)`（`Result`）。host は名前か番号。port が 0〜65535 の外なら Err。
+- TcpStream: `read(n)`（`u8[]`）・`write(bytes)`・`write_text(s)`・`set_timeout(ms)`。時間切れは `Err("時間切れです")`。相手が閉じた接続へ書くと Err（プログラムは止まらない）。
+- TcpListener: `accept()`（`Result<TcpStream, str>`）・`port()`（`i64`）。やめるのは `net.stop(l)`。
+- UDP: `net.bind_udp(host, port)`（`Result<UdpSocket, str>`。host が `"0.0.0.0"` ならどこからでも受ける）。
+  UdpSocket: `send_to(bytes, host, port)`（`Result<(), str>`。送り先はソケットと同じ種類の IPv4・IPv6 に解決する）・`set_timeout(ms)`・`port()`。
+  受け取りは `net.recv_from(s, n)`（`Result<Datagram, str>`。`Datagram` は `data: u8[]`・`host: str`（数字の形）・`port: i64`）。
+  1 回の送り・受け取りが 1 つのまとまりで、届くことも順番も保証されない。n バイトより長いまとまりは、n バイトまで受け取って残りを捨てる。
+  まとまりの大きさ（send_to のデータ・recv_from の n）が 0〜65507 の外なら、プログラムが止まる（範囲のエラー）。やめるのは `net.unbind(s)`。
+- Linux・macOS・Windows で使える。Windows は Winsock（ws2_32.dll）を初めて使うときに読み込む（リンクの指定は要らない。読み込めなければ connect / listen が Err）。
+
+### 1.5 std.http（jwc だけ）
+
+```
+use std.http;
+let r = http.get("http://127.0.0.1:8080/a?b=1")?;          // http.Response
+print(r.status, r.headers["content-type"], r.text()?);
+let p = http.post("http://127.0.0.1:8080/p", "application/json", "{{}}")?;
+```
+
+- HTTP/1.1 のクライアント。std.net・std.tls の上に .jw だけで書いている（`std/http.jw`）。http:// と https://（[1.9](#19-stdtlsjwc-だけ) の規則で証明書を確かめる）。ほかの scheme は Err。
+  Host ヘッダーは、port がその scheme の決まりの番号（http は 80、https は 443）なら port を書かない。
+- 1 回ごとにつなぎ、`Connection: close` を送って、相手が閉じるまで読む。本文は chunked なら読み解き、`Content-Length` があればその長さにする（足りなければ Err）。
+  状態の番号が 404 などでも Ok（`status` を見る）。
+- `Accept-Encoding: gzip` を送る。`Content-Encoding: gzip` の本文は std.gzip で展開し（展開して 256 MiB を超えれば Err）、
+  `headers` から `content-encoding` と `content-length` を除く。
+- リダイレクト（301・302・303・307・308 で `Location` があるもの）は 10 回までたどる（超えたら Err）。303 と、POST への 301・302 は、本文なしの GET でたどる。
+  Location は、`scheme://` で始まればそのまま、`//` で始まれば同じ scheme、`/` で始まれば同じ host と port、ほかは今の path の最後の `/` のあとにつなぐ。
+  https から http へのリダイレクトもたどる。
+- `Response`: `status`（`i64`）・`url`（たどったあとの URL。たどらなければ頼んだ URL）・`headers`（`str[str]`。名前は小文字。同じ名前が二つ以上なら `", "` でつなぐ）・`body`（`u8[]`）・`text()`（本文を `str` に。UTF-8 でなければ Err）。
+- URL は std.url の `parse` で分ける（同じ規則で Err）。URL に空白・改行、content_type に改行があれば Err（ヘッダーを足されないように）。
+
+サーバー（HTTP/1.1。1 度に 1 つの要求を順に扱う）:
+
+```
+let mut srv = http.listen("127.0.0.1", 8080)?;      // http.Server（port が 0 なら OS が選ぶ。番号は srv.port()）
+loop {
+    let mut req = srv.next()?;                       // http.Request
+    req.respond(200, "text/plain; charset=utf-8", "こんにちは {req.path}")?;
+}
+```
+
+- `srv.next()`（`Result<Request, str>`）: 次のつながりを受け、要求を 1 つ読む。読めない要求にはここで答えて（本文は理由の文）、次のつながりを待つ:
+  要求の行の形が違う・ヘッダーが UTF-8 でない・HTTP/1.1 で Host がない・target が `/` で始まらない（`OPTIONS *` はよい）・%XX が壊れている・Content-Length が数でない（二つあるときも）なら 400、
+  `Transfer-Encoding` があれば 411（chunked の要求は受けない）、ヘッダーが 64 KiB を超えれば 431、本文が 16 MiB を超えれば 413、HTTP/1.0・1.1 でなければ 505。
+  1 つの要求を読み終えるまでの上限は 30 秒（受け取るたびに残りの時間だけ待つ）で、超えたり相手が途中で閉じたりしたら、答えずに閉じる。Err は待ち受けそのものが失敗したときだけ。
+  `Expect: 100-continue` には本文を読む前に `100 Continue` を送る。
+- `Request`: `method`（送られたまま）・`target`（要求の行のまま）・`path`（target の `?` の前を %XX から戻したもの。`..` や `/` も入りうる）・
+  `query`（`str[str]`。`?` のあとを `&` と `=` で分け、%XX と `+` を戻したもの。同じ名前は後のもの）・`headers`（名前は小文字。同じ名前は `", "` でつなぐ）・`body`（`u8[]`）・`text()`。
+  資源の TcpStream を持つ（ムーブだけ。持ち主がいなくなるとつながりを閉じる）。
+- `req.respond(status, content_type, body)`（本文は str）・`req.respond_bytes(status, headers, body)`（`str[str]` と `u8[]`）: 答えを送る。
+  いつも `Content-Length` と `Connection: close` を付ける（1 つのつながりで 1 つの要求）。HEAD の要求には本文を送らない（Content-Length は本文の長さ）。
+  答えるのは 1 回だけ（2 回目は Err）。status が 100〜599 でない・ヘッダーの名前がトークンでない・値に改行か NUL がある・`Content-Length`・`Connection`・`Transfer-Encoding` を渡したなら、送らずに Err。
+- `http.stop(srv)`: 待ち受けをやめる。TLS（https）の待ち受けはまだない。
+
+### 1.6 std.env・std.time・std.json（jwc だけ）
+
+```
+use std.env;
+use std.time;
+use std.json;
+print(env.get("HOME"));                         // Some(/home/...)。なければ None
+let t = time.now();                             // time.Instant
+time.sleep(100);                                // ミリ秒待つ
+print(t.elapsed_ms());                          // 100 くらい
+let v = json.parse("{{\"a\": [1, \"x\"]}}")?;     // json.Json
+print(v.get("a").at(1).as_str(), json.stringify(ref v));   // Some(x) {"a":[1,"x"]}
+```
+
+- `env.get(name)`: 環境変数（名前が空・`=` や NUL を含む・値が UTF-8 でないなら None）。設定する関数はまだない。
+- `time.now()`: 単調な時計の読み（`Instant { ns }`）。壁時計の修正に影響されず、差だけに意味がある。`t.elapsed_ns()`・`t.elapsed_ms()`。
+  `time.sleep(ms)`（負なら実行時エラー。待つ前に print の出力を書き出す）。
+- `time.unix_ms()`: 壁時計（1970-01-01 UTC からのミリ秒）。時刻の修正で戻ることがあるので、かかった時間は now で測る。暦（年月日）への直しは std.date（1.13）。
+- `time.local_offset_ms(t)`（`Result<i64, str>`）: OS に設定したタイムゾーンが、t（unix_ms と同じミリ秒）の時点で UTC からどれだけずれているか（ミリ秒。東が正。夏時間もその時点のもの）。OS の localtime（Windows は _localtime64_s）で求め、答えがなければ Err（Windows は 1970 年より前に答えないので Err。環境変数 TZ を設定していればそれに従う）。
+- `Json` は enum: `Null`・`Bool(b)`・`Num(n)`（いつも f64）・`Str(s)`・`Arr(own Json[] items)`・`Obj(own Json[str] fields)`（キーは書いた順。同じキーは後ろの値）。
+  メソッド: `get(key)`・`at(i)`（写しを返す。なければ Null）・`len()`・`keys()`・`is_null()`・`as_bool()`・`as_num()`・`as_str()`（`Option`）・`clone()`。
+  中を借りて読むなら `match ref v { case Obj(fields) -> ... }`。
+- `json.parse(s)`（`Result<Json, str>`）: RFC 8259 のとおり（前後の空白はよい。余分な文字・先頭の 0・制御文字・対になっていないサロゲートは Err）。
+  入れ子は 512 段まで。Err の文には何文字目かが入る。
+- `json.stringify(ref v)`: 空白なしで書く。整数の値（2^53 未満）は `3`、ほかは小数の表示。NaN・inf は `null`。`json.quote(s)` は文字列 1 つ。
+
+### 1.7 std.url（jwc だけ）
+
+```
+use std.url;
+let u = url.parse("http://example.com:8080/a?q=1#top")?;   // url.Url
+print(u.scheme, u.host, u.port, u.path, u.query, u.fragment, u.target());
+// http example.com 8080 /a q=1 top /a?q=1
+print(url.encode("a b&日"));                               // a%20b%26%E6%97%A5
+print(url.decode("a%20b+c", true)?);                       // a b c
+```
+
+- `url.parse(s)`（`Result<Url, str>`）: `scheme://host[:port]/path?query#fragment` の形だけ分ける。scheme は小文字にする。path がなければ `/`。
+  port を書いていなければ http は 80、https は 443、ほかは 0。`[::1]` の書き方の host は角かっこを外す。
+  空白・改行・タブ、利用者情報（`user@`）、0〜65535 でない port、空の host（`file:///...` も）は Err。
+- `Url`: `scheme`・`host`・`port`（`i64`）・`path`・`query`・`fragment`（なければ空の文字列）と `target()`（path と、あれば `?query`）。
+- `url.encode(s)`: 英数字と `-` `.` `_` `~` のほかは、UTF-8 のバイトごとに `%XX`（大文字）にする。
+- `url.decode(s, plus)`: `%XX` を戻す（plus が true なら `+` を空白にする）。`%` のあとが 2 桁の 16 進数でない・戻した結果が UTF-8 でないなら Err。
+
+### 1.8 std.browser（jwc だけ）
+
+```
+use std.browser;
+let mut e = browser.open(browser.Config { title: "試し", data_dir: "data", width: 1024, height: 768, ephemeral: true })?;
+let tab = e.tab_new()?;
+e.navigate(tab, "https://example.com/")?;
+loop {
+    match e.wait(-1) {                    // Option<browser.Event>
+        case Some(CloseRequested) -> break;
+        case Some(ev) -> print(ev);       // NavStarted(1, https://example.com/) など
+        case None -> {}
+    }
+}
+browser.close(e);
+```
+
+- ブラウザのエンジン（ページを表示する部品）を使う。エンジンとの境目は `runtime/engine/jw_engine.h`（C の関数だけ。版 1）。
+  エンジンの実装は jabberwock の外にあり、`jwc build --link エンジン.c`（`.o`・`-lole32` なども。何度でも書ける）で一緒にリンクする。
+  std.browser を使うプログラムで `--link` がなければ、作る前にエラー。試験用の偽エンジンは `runtime/engine/mock/jwe_mock.c`（画面なし）。
+- 呼び返しはしない。エンジンがイベントを溜め、`e.poll()`（待たない）・`e.wait(ms)`（-1 は無期限。-1 より小さいと実行時エラー。待つ前に print の出力を書き出す）で 1 つずつ取る。
+  エンジンは開いたスレッドだけで使う（`Engine` は資源 `Handle` を持つので、ほかのスレッドへ渡せない）。
+- `browser.open(cfg)`（`Result<Engine, str>`）: width・height は 1〜100000。エンジンが使えない・境目の版が違うなら Err。
+  持ち主がいなくなるか `browser.close(e)` で閉じる（タブも全部。ephemeral なら置き場所の中も消す）。
+- `Engine` のメソッド（持ち主が mut であること）: `info()`（`Info { name, script, chrome_view, persist }`）・`poll()`・`wait(ms)`・
+  `tab_new()`（`Result<i64, str>`。タブの番号は 1 から、使い回さない）・`tab_close(tab)`・`tab_show(tab)`・`navigate(tab, url)`・`back(tab)`・`forward(tab)`・
+  `reload(tab)`・`stop(tab)`・`chrome_load(html, height)`・`chrome_post(msg)`（外枠の HTML。`chrome_view` のときだけ）・`set_title(s)`・`clear_site_data()`。
+  操作は `Result<(), str>`（ないタブ・できない操作は Err）。
+- `Event`: `Ready`・`CloseRequested`・`NavStarted(tab, url)`・`NavFinished(tab, url, code)`（code 0 は成功）・`UrlChanged(tab, url)`・`TitleChanged(tab, title)`・
+  `HistoryChanged(tab, back, forward)`・`NewTabRequested(tab, url)`・`ChromeMessage(text)`・`Key(code)`（`KeyCode.of(code)` で読む）・`PermissionDenied(tab, what)`・`Failed(code, text)`。
+  エンジンが UTF-8 でない文字列を返したら `Failed` にする。
+
+### 1.9 std.tls（jwc だけ）
+
+```
+use std.tls;
+let mut s = tls.connect("example.com", 443)?;   // TlsStream。証明書と名前を確かめてから Ok
+s.write_text("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?;
+let got = s.read(4096)?;                         // 相手が終わりを知らせたら []
+tls.close(s)?;
+```
+
+- TLS のクライアントだけ（待ち受けはまだ）。版は TLS 1.2 以上（Windows は 1.2）。`TlsStream` は資源で、規則は 1.3 と同じ。メソッドは TcpStream と同じ（`read(n)`・`write(bytes)`・`write_text(s)`・`set_timeout(ms)`）。
+- `tls.connect(host, port)`: TCP でつなぎ、TLS の握手をして、相手の証明書を OS の信頼の置き場所までたどれるか・`host` と名前が合うかを確かめる。
+  どちらかがだめなら `Err("TLS の証明書を確かめられません（理由）: host")`。理由の文は OS の部品による（下）。host が IP の番号なら、証明書の IP と照らす。
+  確かめるのをやめる指定はない。`tls.close(s)` は終わりの知らせ（close_notify）を送ってから閉じる。持ち主がいなくなったときも同じ。
+- OS の部品は初めて使うときに読み込む（リンクの指定は要らない。読み込めなければ connect が Err）。
+  - Linux など: OpenSSL 3（`libssl.so.3`、なければ `libssl.so`）。信頼の置き場所は OpenSSL の決まりのもの（環境変数 `SSL_CERT_FILE`・`SSL_CERT_DIR` で変えられる）。理由の文は OpenSSL のもの（英語）。
+  - Windows: Schannel（secur32.dll）と crypt32.dll。信頼の置き場所は Windows のもの。理由の文は「信頼できる発行元につながりません」「名前が合いません」「期限が切れています」「取り消されています」か、番号（`0x...`）。
+- `tls.upgrade(s, host)`（`Result<TlsStream, str>`）: すでにつないだ `net.TcpStream`（ムーブ）の上で握手をする（平文で少しやりとりしてから TLS にする手順のため。std.pg が使う）。
+  確かめ方とエラーは connect と同じ（host は照らす名前か IP）。だめなら Err で、TcpStream は閉じる。
+- 取り消し（失効）は調べない。
+
+### 1.10 std.gzip（jwc だけ）
+
+```
+use std.gzip;
+let packed = gzip.compress(ref data);                  // u8[]（gzip の形）
+let back = gzip.decompress(ref packed, 10000000)?;     // 展開して 10000000 バイトを超えるなら Err
+print(gzip.crc32(ref data));                           // i64（0〜4294967295）
+```
+
+- gzip（RFC 1952）と、その中身の deflate（RFC 1951）。.jw だけで書いている（`std/gzip.jw`）。
+- `decompress(ref data, limit)`（`Result<u8[], str>`）: deflate の 3 種類のブロック（圧縮しない・固定の符号・動的な符号）を読む。
+  gzip の頭の名前・注釈・追加の欄は読み飛ばす。最後に CRC32 と長さを確かめる。続けてつないだ gzip は、順につなげて返す。
+  limit は展開した大きさの上限（バイト）で、超えたら Err（小さなデータが大きく広がる攻撃を防ぐため）。limit が負なら実行時エラー。
+  壊れた・途中で切れた・gzip でないデータは Err。
+- `compress(ref data)`（`u8[]`）: 固定の符号のブロック 1 つにする（同じ並びは後ろ 32768 バイトまでから探す）。縮まないデータは圧縮しないブロックにする。
+  頭の時刻は 0、OS は 255（不明）。同じ入力からはいつも同じ出力。
+- `crc32(ref data)`: gzip と同じ CRC32。
+
+### 1.11 std.pg（jwc だけ）
+
+```
+use std.pg;
+let mut db = pg.connect(pg.Config { host: "localhost", port: 5432, user: "app", password: "secret", database: "mydb", tls: false })?;
+let r = db.query("SELECT id, name FROM t WHERE id = $1", ["1"])?;   // Rows
+for row in r.rows { print(row[0], row[1]); }                         // 値は Option<str>（NULL なら None）
+let n = db.exec("UPDATE t SET name = $1 WHERE id = $2", ["a", "1"])?; // 変わった行の数
+db.exec_opt("INSERT INTO t VALUES ($1, $2)", [Some("2"), None])?;     // None は NULL
+pg.close(db)?;
+```
+
+- PostgreSQL のクライアント（フロントエンド・バックエンドの手順の版 3.0）。std.net の上に .jw だけで書いている（`std/pg.jw`）。同期だけ。
+- `pg.connect(cfg)`（`Result<Conn, str>`）: `Config` の host・port・user・password・database でつなぎ、ログインする。database が空なら user と同じ名前（サーバーの決まり）。
+  文字の符号は UTF8 にする。ログインの方式は SCRAM-SHA-256（サーバーの署名も確かめ、合わなければ Err。チャネルバインディングは使わない）・md5・パスワードなし（trust）・
+  パスワードをそのまま送る方式（password）。password は TLS のときだけで、平文のつながりでサーバーが求めたら Err。
+- `tls`（`bool`）が true なら、ログインの前に SSLRequest を送り、サーバーが受けたら `tls.upgrade` で TLS にする（1.9。証明書と host の名前を確かめる）。
+  サーバーが断ったら `Err("PostgreSQL のサーバーが TLS を使えません（…）")` で、平文には戻らない。false なら平文でつなぐ。サーバーのエラーは `Err("PostgreSQL のエラー（重さ SQLSTATE）: 本文")`。
+  設定に NUL 文字があるか、user が空なら Err。
+- `Conn` は資源の TcpStream か TlsStream を持つ構造体（ムーブだけ。ほかのスレッドへは渡せない。持ち主がいなくなると黙って閉じる）。メソッドは持ち主が mut であること。
+  - `query(sql, params)`（`Result<Rows, str>`）: params（`str[]`）を `$1`・`$2`… の値として SQL とは別に送る（拡張問い合わせ。SQL に埋め込まない）。
+    値は文字列で送り、型はサーバーが決める。結果の値も文字列（テキスト形式）で、NULL は None。文は 1 つだけ。
+    サーバーのエラー（構文・制約など）は Err で、そのあとも同じ Conn を使える。トランザクションは `exec("BEGIN", [])` などで書く。
+  - `exec(sql, params)`（`Result<i64, str>`）: query と同じで、変わった行の数を返す。
+  - `query_opt(sql, params)`・`exec_opt(sql, params)`: params が `Option<str>[]` で、None を NULL として送る。ほかは query・exec と同じ。
+- `Rows`: `columns`（`str[]`。列の名前）・`rows`（`Option<str>[][]`）・`affected`（INSERT・UPDATE・DELETE・SELECT などの行の数。数のない命令なら 0）。
+  `get(row, col)`（`Option<str>`）は row 行目の名前が col の列の値（その列がなければ None）。
+- `pg.close(db)`（`Result<(), str>`）: 終わりの知らせ（Terminate）を送ってから閉じる。送れなければ Err だが、どちらでも閉じる。
+- `tls: false` のつながりは暗号にしない（同じ機械か、信頼できるネットワークの中で使う）。パスワードは SASLprep（Unicode の正規化）をせずにそのまま使う。
+
+### 1.12 std.hash・std.base64・std.random（jwc だけ）
+
+```
+use std.hash;
+use std.base64;
+use std.random;
+let d = hash.sha256(ref data);                    // u8[]（32 バイト）
+print(hash.hex(ref d), base64.encode(ref d));
+let back = base64.decode("aGk=")?;                 // [104, 105]
+let key = random.bytes(32);                        // OS の乱数
+let die = random.int(1, 7);                        // 1〜6
+```
+
+- `std.hash`（.jw だけで書いている）: `sha256(ref data)`（SHA-256。32 バイト）・`hmac_sha256(ref key, ref msg)`（HMAC-SHA-256。key は何バイトでもよい）・
+  `pbkdf2_sha256(ref password, ref salt, iters)`（PBKDF2-HMAC-SHA-256 の最初の 32 バイト。iters が 1 未満なら実行時エラー）・
+  `hex(ref data)`（小文字の 16 進の `str`）・`equal(ref a, ref b)`（`bool`。長さが同じなら、どこで違っても同じだけ時間をかけて比べる）。
+- `std.base64`: `encode(ref data)`（標準の文字と `=` の埋め）・`decode(s)`（`Result<u8[], str>`）。decode は、長さが 4 の倍数でない・
+  ほかの文字（空白や改行も）がある・`=` が終わり以外にある・終わりの余りのビットが 0 でないなら Err。
+- `std.random`（暗号に使える OS の乱数。Linux・macOS は getentropy、Windows は BCryptGenRandom。取り出せなければ実行時エラー）:
+  `bytes(n)`（`u8[]`。n が負なら実行時エラー）・`int(lo, hi)`（lo 以上 hi 未満の i64 を同じ確からしさで。hi <= lo か、hi - lo があふれるなら実行時エラー）。
+  種を決めて同じ並びを出す乱数はない。
+
+### 1.13 std.date・std.csv・std.regex（jwc だけ）
+
+```
+use std.date;
+use std.csv;
+use std.regex;
+let d = date.parse("2026-10-31T19:37:52+09:00")?;    // DateTime（UTC に直す）
+print(d.format(), d.weekday(), d.unix_ms());          // 2026-10-31T10:37:52Z 6 1793443072000
+let rows = csv.parse("a,\"b,c\"\r\n1,2\r\n")?;      // [[a, b,c], [1, 2]]
+let re = regex.compile("(\\d+)-(\\d+)")?;
+print(re.replace_all("1-2 3-4", "$2-$1"));            // 2-1 4-3
+```
+
+- `std.date`（.jw だけ。地域の時刻のずれだけ std.time で OS に聞く）: DateTime はいつも UTC で、グレゴリオ暦を過去にも延ばす。年は 0〜9999。うるう秒は扱わない。タイムゾーンの名前（Asia/Tokyo など）からは引けない。
+  - `DateTime`: `year`・`month`（1〜12）・`day`・`hour`・`minute`・`second`（0〜59）・`ms`（0〜999）。メソッドは `unix_ms()`（1970-01-01T00:00:00Z からのミリ秒。前なら負）・
+    `weekday()`（ISO 8601 の 1＝月〜7＝日）・`day_of_year()`（1 月 1 日が 1）・`format()`（`2026-10-31T10:37:52Z`。ミリ秒が 0 でなければ `.123` を付ける）・`format_date()`（`2026-10-31`）・
+    `format_at(offset_ms)`（時差 offset_ms の地域で見た形。`2026-10-31T19:37:52+09:00`。0 なら `+00:00`）・`format_local()`（`Result<str, str>`。OS のタイムゾーンで format_at）・
+    `wall(offset_ms)`（その地域の時計の年月日と時刻を入れた DateTime。UTC ではないので unix_ms や format には使わない）。
+    offset_ms は分の倍数で -23:59〜+23:59、結果が 0〜9999 年に入ること（でなければ実行時エラー）。
+  - `now()`（今の UTC）・`from_unix_ms(t)`（0〜9999 年に入らなければ実行時エラー）・`make(year, month, day, hour, minute, second, ms)`（`Result`。ない日付・範囲の外なら Err）・
+    `is_leap(year)`・`days_in_month(year, month)`（month が 1〜12 でなければ実行時エラー）。
+  - `parse(s)`（`Result<DateTime, str>`）: `2026-10-31`（0 時 UTC）か `2026-10-31T10:37:52`＋秒の小数（1〜9 桁。ミリ秒より細かい分は切り捨て）＋`Z` か `±HH:MM`。
+    `T` と `Z` は小文字でもよく、`T` の代わりに空白でもよい。時差は UTC に直す（直して範囲を出れば Err）。時差のない日時・ほかの形・ない日付は Err。
+- `std.csv`（.jw だけ。RFC 4180）: 区切りは `,`、行の終わりは CRLF か LF、値はどれも文字列。
+  - `parse(s)`（`Result<str[][], str>`）: `"` で囲んだ値の中には `,`・改行・`""`（`"` 1 つ）を書ける。終わりの改行のあとに空の行は作らない（空の行は `[""]` の 1 行）。
+    囲んでいない値の中の `"`・閉じた `"` のあとの余計な文字・閉じていない `"` は Err（何行目かを書く）。
+  - `format(ref rows)`: `,`・`"`・改行を含む値は `"` で囲み `"` を `""` にして、どの行も CRLF で終える。値のない行（`[]`）は空の行になり、読み直すと `[""]` になる。`quote(v)` は値 1 つ分。
+- `std.regex`（.jw だけ）: 後戻りしない方式（Pike の VM）で、かかる時間はいつも「文字列の長さ × パターンの大きさ」に比べた程度。位置は文字単位（`slice` と同じ）。
+  - 書ける形: 文字・`.`（改行のほかの 1 文字）・`[abc]` `[a-z]` `[^...]`（先頭の `]` と端の `-` はその文字）・`\d` `\w` `\s`（ASCII の数字・英数字と `_`・空白と \t〜\r）と `\D` `\W` `\S`（`[...]` の中には書けない）・
+    `^` `$`（文字列の始めと終わり。行ごとではない）・`\b` `\B`（単語の境目。単語の文字は `\w`）・`(...)`・`(?:...)`・`|`・
+    `*` `+` `?` `{m}` `{m,}` `{m,n}`（回数は 1000 まで。後ろに `?` で短い方を選ぶ）・`\n` `\t` `\r`・`\` と記号。後方参照・先読み・フラグはない。
+    形が違う・繰り返しが重なる（`a**`）・組み立てた命令が 20000 を超えるなら、compile が Err（何文字目かを書く）。
+  - 合うところは、いちばん左から始まるもの。同じ位置なら、`|` は左、繰り返しは長い方（`?` を付けたものは短い方）を先に選ぶ（Perl と同じ選び方）。
+    ただし、空に合いうる中身の繰り返しの中の組が何を受け取るかは、Perl・Python と違うことがある。
+  - `Regex` のメソッド: `is_match(s)`・`find(s)`（`Option<Match>`）・`find_all(s)`（重ならずに左から。空に合ったら 1 文字進める）・
+    `replace_all(s, rep)`（rep の `$0`〜`$9` は全体と組の中身、`$$` は `$`。ない組・合わなかった組は空）・`split(s)`（空に合うところでは分けない）。
+  - `Match`: `start`・`end`・`text`・`groups`（`Option<str>[]`。[0] は全体）・`group(k)`。`regex.escape(s)` は記号に `\` を付ける。
 
 ## 2. 字句
 
@@ -101,6 +466,7 @@ fn main() {
 | `task<R>` | `spawn` で動かしたスレッド。`join()` で R を受け取る（[9.1](#91-スレッド)）。値を返さないスレッドは `task<()>` |
 | `()` | 値なし。型の引数に書くときに使う（`task<()>`・`Result<(), str>`）。値も `()` と書く（`Ok(())`）。値なしの変数は作れない |
 | `chan<T>` | スレッドのあいだで T を送るチャンネル（[9.1](#91-スレッド)） |
+| 資源（`fs.File`） | 開いたファイルなど、外のものを持つ値。標準ライブラリだけが作れる（[1.3](#13-資源と-stdfsjwc-だけ)） |
 
 - `own` / `ref` は右側の型全体にかかる（`ref i64[5]` は配列を借りた ref、`own i64[]` はリストの own）。
   要素にかけるときはかっこでまとめる（`(own Node)[]` は own を要素に持つリスト）。
@@ -217,7 +583,9 @@ add(ref mut v, 3);
 print(sum(v));          // 借りて渡す。v はそのまま使える
 ```
 - 呼び出しの深さが 5000 を超えると実行時エラー。
-- 変数や引数に、関数・組み込み関数と同じ名前はつけられない。
+- 変数や引数に、関数・組み込み関数と同じ名前はつけられない。比べる関数は、同じファイル（モジュール）の関数だけ
+  （ほかのモジュールの関数の名前はつけてよい。いつも `モジュール名.名前` と書くので紛れない）。
+  jwc だけ。Rust 版は、モジュールの中でも最初のファイルの関数の名前を禁じる（凍結のため直さない）。
 
 ### 5.1 関数の値とクロージャ
 
@@ -432,11 +800,19 @@ let w = ref mut a;      // 書き換えてよい
 - 辞書の値の中は借りられない（キーを取り除くと値の場所が詰まるため）。値を借りたいときは、値を own にする（`(own T)[K]`）。
 - 変数を借りた ref は、その変数がスコープを抜けるか、ムーブされると無効になる。
 - ref の型に寿命は書かない。借りた先が解放されたあとに ref を使うと、**必ず**実行時エラーになる。エラーは「借りた → 解放された → 使った」の時系列で出る。
+  - エラーは捕まえられず、プログラムはその場で止まる（終了コード 1。[10](#10-エラーと警告)）。`--release` で作った実行ファイルは、使った位置だけを出す。
+  - 実行ファイルは「解放された」の位置を、区画を使い回したあとも直近 4096 回分だけ覚えている。それより古いと「解放された」の行は出ない（止まり方と残りの表示は同じ。[native.md](native.md)）。
 - 安全と証明できた箇所の検査は、静的解析が実行前に消す（速さのため）。
 - `ref mut` はいくつ同時にあってもよい。同じ場所を指す `ref` と `ref mut` も共存できる。
   `ref mut` は書き換えの許可であり、その場所をほかの参照が指していないという保証ではない。
-- 世代は 64 ビットの数で、あふれたら 0 に戻る（退役はさせない）。同じ区画を 1 秒に 10 億回使い回しても 580 年かかるので、実際には起きない
-  （小さい区画は空いた順の逆に使い回すので、確保と解放をくり返すと同じ区画に集中するが、1 回の確保と解放に数ナノ秒かかるので、この見積もりが上限）。
+- **世代は周回させず、上限で区画を退役させる（2026-10-26実装）。** 論理世代は64ビットに収まる範囲で単調に進める。
+  状態bitを詰める実装は使用可能な上限を小さくしてよいが、加算・送信・リストの更新等であふれる前に確認する。0や過去の値へ戻してはならない。
+  退役した区画の識別子は再利用せず、世代値が一致してもそこへのrefは無効とする。
+  生きた値の使用を続ける必要があれば新しい区画へ所有責任を移し、安全に移せない場合は資源エラーで停止する。
+  古いrefが読む検査用metadataは、そのrefを使用できる間は安全に保持する。詳細と証明範囲は [退役の規則](formal-semantics.md#有限世代と退役の規則)。
+  Rust/IR/C/native/jwcへ反映した。[実装と検証範囲](generation-retirement.md) を参照する。
+  生きたC区画の上限では今回は資源エラーで停止し、移し替えて継続する処理は実装していない。
+  これは言語全体・コンパイラ全体の形式検証の完了ではない。
 - 今は ref と own を比べたり、辞書のキーにしたり、文字にしたりできない。将来足すときは、読むだけの写しの印（実行ファイルではポインタの下の 1 ビット）を落として本物と同じに扱うこと。
 
 ### 7.3 書き換えてよいか
@@ -853,7 +1229,7 @@ let (own Node)[i64] mut nodes = [];  // own を値に持つ辞書
 
 | 関数 | 動き |
 |---|---|
-| `print(a, b, ...)` | 値を空白区切りで 1 行に出す。引数はムーブしない。own と ref は指している中身を出す（無効な ref なら実行時エラー） |
+| `print(a, b, ...)` | 値を空白区切りで 1 行に出す。引数はムーブしない。own と ref は指している中身を出す（無効な ref なら実行時エラー）。実行ファイルでは、標準出力が端末なら 1 行ごとに書き出し、端末でなければためてまとめて書き出す（`eprint`・`read_line`・終わるときにも書き出す） |
 | `eprint(a, b, ...)` | print と同じだが、標準エラーへ出す |
 | `chr(n)` | 番号 n（Unicode）の文字 1 つの文字列。`chr(97)` は `"a"`。文字の番号でなければ実行時エラー |
 | `exit(n)` | プログラムをすぐ終わらせる（`i64` の終了コード。0〜255 にすること）。ほかのスレッドも止まる。後片づけはしない。型は「戻らない」なので、値が要る場所（match の case など）にも書ける |
@@ -914,9 +1290,10 @@ loop {
 |---|---|
 | 実行前のエラー（構文・型） | `;` がない、型が合わない、mut でない変数への代入、match の書き忘れ、入らない数、入れ子が深すぎる（式・ブロック・型・形と、演算子や `.` の鎖を合わせて 256 段まで） |
 | 実行前の警告（実行は続く） | 数だけの計算のあふれ、数だけの計算での 0 割り、else のある for の本体の break |
-| 実行時のエラー | ダングリングした ref の使用、ムーブ済みの変数の使用、0 割り、assert の失敗、呼び出しが深すぎる、デッドロック |
+| 実行時のエラー | ダングリングした ref の使用、ムーブ済みの変数の使用、0 割り、assert の失敗、呼び出しが深すぎる、デッドロック、世代番号の上限（[7.2](#72-ref世代つき参照)） |
 
 - 型や mut のエラーがあるプログラムは、1 行も実行されない。
+- 実行時のエラーは捕まえられない。エラーを出してプログラム全体が止まり、終了コードは 1（ほかのスレッドも止まる。[9.1](#91-スレッド)）。
 
 ## 11. 未実装（決定済みのもの）
 
@@ -925,7 +1302,7 @@ loop {
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | interface の値から元の構造体を取り出す（型で分岐） | これから |
 | `f32`・文字型 | これから |
-| フォルダを分けたモジュール（`use a.b;`）・メソッドやフィールドごとの `pub` | これから |
+| フォルダを分けたモジュール（`use a.b;`。`use std.名前;` は 1.2）・メソッドやフィールドごとの `pub`・`use ... as 別名` | これから |
 | 辞書のキーに構造体を使う | これから |
 | 写しの中の own を取り出すのを、実行前（型検査）のエラーにする | これから（今は実行時エラー。7.1） |
 | 構造体のフィールドに関数の値を置く・メソッドを値にする | これから |

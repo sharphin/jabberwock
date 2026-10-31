@@ -543,10 +543,20 @@ impl<'a> Checker<'a> {
                         .primary(t.span, format!("{} 個必要ですが {} 個書かれています", want, args.len())));
                 }
                 let args = args.iter().map(|a| self.resolve(a)).collect::<R<Vec<_>>>()?;
-                if self.structs.contains_key(n.as_str()) {
+                // Recheck fixed arrays after substituting concrete generic arguments.
+                // Checking T[N] at its definition cannot determine the size of T.
+                if let Some((def, fields)) = self.structs.get(n.as_str()) {
+                    let map = Self::targs(&def.tparams, &args);
+                    for field in fields { self.check_size(&subst(field, &map), t.span)?; }
                     Ty::Struct(n.clone(), args)
                 } else {
-                    Ty::Enum(n.clone(), args)
+                    let result = Ty::Enum(n.clone(), args);
+                    if let Some(variants) = self.variants_of(&result) {
+                        for (_, fields) in variants {
+                            for field in fields { self.check_size(&field, t.span)?; }
+                        }
+                    }
+                    result
                 }
             }
             TypeKind::Ref(inner, m) => Ty::Ref(Box::new(self.resolve_pointee(inner)?), *m),

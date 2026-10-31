@@ -235,6 +235,8 @@ impl Value {
 pub(crate) struct Slot {
     pub(crate) generation: u64,
     pub(crate) value: Option<Value>,
+    /// 世代の上限で退役した識別子。再利用せず、世代が一致するrefも拒否する。
+    retired: bool,
 }
 
 struct Freed {
@@ -247,25 +249,48 @@ pub(crate) struct Heap {
     free_list: Vec<usize>,
     /// (スロット, その世代) がいつ・なぜ解放されたか。古い参照のエラー報告に使う。
     history: HashMap<(usize, u64), Freed>,
+    #[cfg(test)]
+    generation_limit: u64,
 }
 
 impl Heap {
     fn new() -> Self {
-        Heap { slots: Vec::new(), free_list: Vec::new(), history: HashMap::new() }
+        Heap {
+            slots: Vec::new(), free_list: Vec::new(), history: HashMap::new(),
+            #[cfg(test)]
+            generation_limit: u64::MAX,
+        }
     }
 
     pub(crate) fn alloc(&mut self, v: Value) -> usize {
         if let Some(i) = self.free_list.pop() {
+            debug_assert!(!self.slots[i].retired && self.slots[i].value.is_none());
             self.slots[i].value = Some(v);
             i
         } else {
-            self.slots.push(Slot { generation: 0, value: Some(v) });
+            self.slots.push(Slot { generation: 0, value: Some(v), retired: false });
             self.slots.len() - 1
         }
     }
 
     fn live(&self) -> usize {
         self.slots.iter().filter(|s| s.value.is_some()).count()
+    }
+
+    /// 周回する前に退役する。退役したスロットのmetadataはHeapの終了まで保持する。
+    fn advance_generation(&mut self, slot: usize) -> bool {
+        #[cfg(test)]
+        let limit = self.generation_limit;
+        #[cfg(not(test))]
+        let limit = u64::MAX;
+        let cell = &mut self.slots[slot];
+        if !cell.retired && cell.generation < limit {
+            cell.generation += 1;
+            true
+        } else {
+            cell.retired = true;
+            false
+        }
     }
 }
 
@@ -802,9 +827,9 @@ impl Interp {
                 continue;
             };
             let g = self.heap.slots[s].generation;
-            self.heap.slots[s].generation = g.wrapping_add(1);
+            let reusable = self.heap.advance_generation(s);
             self.heap.history.insert((s, g), Freed { span, why: why.clone() });
-            self.heap.free_list.push(s);
+            if reusable { self.heap.free_list.push(s); }
             self.settle_tasks(&inner, span);
             let mut children = Vec::new();
             inner.collect_owns(&mut children);
@@ -874,9 +899,9 @@ impl Interp {
     pub(crate) fn vacate(&mut self, slot: usize, span: Span, why: &str) -> Value {
         let v = self.heap.slots[slot].value.take().expect("live slot");
         let g = self.heap.slots[slot].generation;
-        self.heap.slots[slot].generation = g.wrapping_add(1);
+        let reusable = self.heap.advance_generation(slot);
         self.heap.history.insert((slot, g), Freed { span, why: why.to_string() });
-        self.heap.free_list.push(slot);
+        if reusable { self.heap.free_list.push(slot); }
         v
     }
 
@@ -972,10 +997,15 @@ impl Interp {
     }
 
     /// リストの要素が動いた（長さが変わった・並べ替えた）。中身のスロットの世代を進め、要素を借りた ref を無効にする
-    pub(crate) fn list_moved(&mut self, slot: usize, span: Span, name: &str) {
+    pub(crate) fn list_moved(&mut self, slot: usize, span: Span, name: &str) -> R<()> {
         let g = self.heap.slots[slot].generation;
-        self.heap.slots[slot].generation = g.wrapping_add(1);
+        let advanced = self.heap.advance_generation(slot);
         self.heap.history.insert((slot, g), Freed { span, why: list_moved_why(name) });
+        if !advanced {
+            return Err(Diagnostic::new("世代番号の上限に達しました")
+                .primary(span, "これ以上この区画の参照を安全に無効化できません"));
+        }
+        Ok(())
     }
 
     /// print と埋め込みで出す文字。own と ref は先の中身を出す（ref が無効なら実行時エラー）
@@ -1176,7 +1206,7 @@ impl Interp {
             Value::Own(s) => Ok((*s, Vec::new())),
             Value::Ref(r) => {
                 let slot = &self.heap.slots[r.slot];
-                let valid = slot.generation == r.generation && slot.value.is_some();
+                let valid = !slot.retired && slot.generation == r.generation && slot.value.is_some();
                 if check == Check::Elided {
                     // 解析の誤りを見逃さないよう、デバッグビルドでだけ念のため確かめる
                     debug_assert!(valid, "static analysis elided the check of a dangling ref");
@@ -2552,7 +2582,7 @@ impl Interp {
                 let r = self.sort_list(loc.as_ref(), &mut rv, vals.into_iter().next(), !name.starts_with("sort_unstable"), recv, span);
                 if let (Ok(()), Some((s, p))) = (&r, &loc) {
                     if p.is_empty() && matches!(self.heap.slots[*s].value, Some(Value::Array(_, true))) {
-                        self.list_moved(*s, span, name);
+                        self.list_moved(*s, span, name)?;
                     }
                 }
                 if place.is_none() {
@@ -2651,7 +2681,7 @@ impl Interp {
                 _ => false,
             };
             if let (true, Some(s)) = (moved, list) {
-                self.list_moved(s, span, name);
+                self.list_moved(s, span, name)?;
             }
             if place.is_none() {
                 self.release(rv, span, "使い終わった一時的な値");
@@ -2788,7 +2818,7 @@ impl Interp {
                 let v = self.heap.slots[slot].value.replace(Value::Unit).expect("lent slot is live");
                 self.free(slot, span, &format!("メソッドの呼び出しが終わって `{}` に戻した", describe(recv)));
                 if let Some((s, g)) = owner {
-                    if self.heap.slots[s].generation != g || self.heap.slots[s].value.is_none() {
+                    if self.heap.slots[s].retired || self.heap.slots[s].generation != g || self.heap.slots[s].value.is_none() {
                         self.release(v, span, "戻す先が解放されていた");
                         return Err(Diagnostic::new("メソッドの呼び出し中に、呼び出し先の持ち主が解放されました")
                             .primary(recv.span, "この値を戻す場所がもうない"));
@@ -3453,5 +3483,111 @@ pub(crate) fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             span,
             format!("{} と {} にはこの演算を使えません", l.type_name(), r.type_name()),
         )),
+    }
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+
+    const AT: Span = Span { file: 0, line: 1, col: 1, len: 1 };
+
+    fn int() -> Value { Value::Int(9, IntTy::I64) }
+
+    fn reference(slot: usize, generation: u64) -> Value {
+        Value::Ref(RefVal {
+            slot, generation, path: Vec::new(), borrowed_at: AT,
+            what: "退役の境界".to_string(), mutable: true, view: false,
+        })
+    }
+
+    #[test]
+    fn released_generations_never_wrap_or_reenter_the_free_list() {
+        for limit in [0, 1, 3, u64::MAX] {
+            let mut it = Interp::new(false);
+            it.heap.generation_limit = limit;
+            let slot = it.heap.alloc(int());
+            it.heap.slots[slot].generation = limit;
+            let old = reference(slot, limit);
+            it.free(slot, AT, "解放した");
+            assert!(it.heap.slots[slot].retired);
+            assert_eq!(it.heap.slots[slot].generation, limit);
+            assert!(!it.heap.free_list.contains(&slot));
+            assert!(it.check_ptr(&old, AT, Check::Required).is_err());
+            for _ in 0..32 {
+                let fresh = it.heap.alloc(int());
+                assert_ne!(fresh, slot);
+                it.free(fresh, AT, "繰返し解放した");
+            }
+            assert!(it.heap.slots[slot].retired);
+            assert_eq!(it.heap.live(), 0);
+        }
+    }
+
+    #[test]
+    fn vacating_a_retired_identity_preserves_the_moved_owner() {
+        let mut it = Interp::new(false);
+        it.heap.generation_limit = 0;
+        let child = it.heap.alloc(int());
+        let outer = it.heap.alloc(Value::Own(child));
+        let old = reference(outer, 0);
+        let moved = it.vacate(outer, AT, "ほかのスレッドへ送られた");
+        assert!(matches!(moved, Value::Own(s) if s == child));
+        assert!(it.heap.slots[outer].retired && it.heap.slots[child].value.is_some());
+        assert!(it.check_ptr(&old, AT, Check::Required).is_err());
+        it.release(moved, AT, "移動先で解放した");
+        assert_eq!(it.heap.live(), 0);
+        assert!(it.heap.slots[child].retired);
+    }
+
+    #[test]
+    fn recursive_release_retires_each_identity_once() {
+        let mut it = Interp::new(false);
+        it.heap.generation_limit = 0;
+        let child = it.heap.alloc(int());
+        let parent = it.heap.alloc(Value::Array(vec![Value::Own(child)], false));
+        it.free(parent, AT, "親を解放した");
+        it.free(parent, AT, "再度の解放で世代を変えない");
+        assert!(it.heap.slots.iter().all(|slot| slot.retired && slot.value.is_none()));
+        assert!(it.heap.free_list.is_empty());
+        assert_eq!(it.heap.live(), 0);
+    }
+
+    #[test]
+    fn live_generation_exhaustion_rejects_even_a_matching_reference() {
+        for limit in [1, 3, u64::MAX] {
+            let mut it = Interp::new(false);
+            it.heap.generation_limit = limit;
+            let list = it.heap.alloc(Value::Array(vec![int()], true));
+            it.heap.slots[list].generation = limit - 1;
+            let before = reference(list, limit - 1);
+            it.list_moved(list, AT, "reverse").unwrap();
+            assert!(it.check_ptr(&before, AT, Check::Required).is_err());
+            let at_limit = reference(list, limit);
+            assert!(it.check_ptr(&at_limit, AT, Check::Required).is_ok());
+            let error = it.list_moved(list, AT, "reverse").unwrap_err();
+            assert_eq!(error.title, "世代番号の上限に達しました");
+            assert!(it.heap.slots[list].retired && it.heap.slots[list].value.is_some());
+            assert!(it.check_ptr(&at_limit, AT, Check::Required).is_err());
+            it.free(list, AT, "停止後の回収");
+            assert_eq!(it.heap.live(), 0);
+            assert!(!it.heap.free_list.contains(&list));
+        }
+    }
+
+    #[test]
+    fn ir_stops_when_a_list_generation_is_exhausted() {
+        let mut it = Interp::new(false);
+        it.heap.generation_limit = 0;
+        let list = it.heap.alloc(Value::Array(vec![int()], true));
+        let variable = it.heap.alloc(Value::List(list));
+        let prog = crate::ir::Program {
+            fns: Vec::new(), by_name: HashMap::new(), structs: HashMap::new(),
+            struct_tys: HashMap::new(), enums: HashMap::new(),
+        };
+        let error = crate::ir::exec::retirement_probe(&prog, &mut it, variable, AT).unwrap_err();
+        assert_eq!(error.title, "世代番号の上限に達しました");
+        assert!(it.heap.slots[list].retired);
+        assert!(it.check_ptr(&reference(list, 0), AT, Check::Required).is_err());
     }
 }

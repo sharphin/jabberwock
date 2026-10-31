@@ -185,6 +185,23 @@ pub enum Rvalue {
 }
 
 impl Program {
+    /// 外部状態にアクセスする組み込みを使うか。
+    ///
+    /// Debug の AST/IR 差分実行はプログラムを二度実行するため、ファイルの
+    /// 読み書きや外部コマンドを含む場合は通常の実行経路から再実行しない。
+    /// 新しい外部効果を持つ組み込みを追加する際はここも更新すること。
+    pub fn uses_external_system(&self) -> bool {
+        self.fns.iter().any(|f| {
+            f.blocks.iter().any(|b| {
+                b.insts.iter().any(|i| {
+                    matches!(i, Inst::Assign {
+                        value: Rvalue::Builtin(n, ..), ..
+                    } if matches!(n.as_str(), "read_file" | "write_file" | "run_command"))
+                })
+            })
+        })
+    }
+
     /// 入力（`read_line`）を使うか
     pub fn uses_input(&self) -> bool {
         self.fns.iter().any(|f| {

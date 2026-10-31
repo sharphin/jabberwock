@@ -57,7 +57,7 @@ pub struct Opts {
     pub gen: bool,
     /// 添字の範囲を確かめる（false なら安全でない）
     pub bounds: bool,
-    /// 実行時に通った検査の数を数え、終わるときに標準エラーへ `[checks] ...` と出す（Linux の dprintf を使う）
+    /// 実行時に通った検査の数を数え、終わるときに標準エラーへ `[checks] ...` と出す
     pub count: bool,
 }
 
@@ -91,8 +91,8 @@ pub fn emit_with(prog: &Program, files: &[String], sources: &[String], opts: Opt
     let site = m.site(mf.span, "");
     let _ = write!(
         m.code,
-        "define void @jw_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @jw_wait_all(ptr {})\n  ret void\n}}\n\n",
-        ret, main, site
+        "define void @jw_main() {{\n  %r = call {} @f{}(i64 1)\n  call void @jw_wait_all(ptr {})\n{}  ret void\n}}\n\n",
+        ret, main, site, if opts.count { "  call void @jw.count.report()\n" } else { "" }
     );
     m.finish_helpers()?;
     let mut entries = Vec::new();
@@ -109,16 +109,13 @@ pub fn emit_with(prog: &Program, files: &[String], sources: &[String], opts: Opt
         entries.len()
     );
     if opts.count {
-        // 終わるとき（exit でも）に数を出す
-        let fmt = m.cstr("[checks] gen %lld elided %lld bounds %lld\n");
+        // 正常終了時に数を出す（exit と実行時エラーは _Exit で終わるため対象外）
         let _ = writeln!(
             m.globals,
             "@jw.count.gen = global i64 0\n@jw.count.elided = global i64 0\n@jw.count.bounds = global i64 0\n\
-             declare i32 @dprintf(i32, ptr, ...)\n\
+             declare void @jw_report_checks(i64, i64, i64)\n\
              define internal void @jw.count.report() {{\n  %g = load i64, ptr @jw.count.gen\n  %e = load i64, ptr @jw.count.elided\n  \
-             %b = load i64, ptr @jw.count.bounds\n  call i32 (i32, ptr, ...) @dprintf(i32 2, ptr {}, i64 %g, i64 %e, i64 %b)\n  ret void\n}}\n\
-             @llvm.global_dtors = appending global [1 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 65535, ptr @jw.count.report, ptr null }}]",
-            fmt
+             %b = load i64, ptr @jw.count.bounds\n  call void @jw_report_checks(i64 %g, i64 %e, i64 %b)\n  ret void\n}}"
         );
     }
     let stats = m.stats;
@@ -524,7 +521,8 @@ impl<'p> Module<'p> {
             Ty::Fn(..) => (16, 8),
             Ty::Array(x, n) => {
                 let (s, a) = self.size_align(x)?;
-                (ceil_div(s, a) * a * n, a)
+                (ceil_div(s, a).checked_mul(a).and_then(|v| v.checked_mul(*n))
+                    .ok_or_else(|| format!("配列型 `{}` のサイズがオーバーフローしました", t.show()))?, a)
             }
             Ty::Struct(name, fs) if name.is_empty() => self.layout(fs)?,
             Ty::Struct(..) => {
@@ -538,7 +536,8 @@ impl<'p> Module<'p> {
                     let (s, _) = self.layout(&fs)?;
                     k = k.max(ceil_div(s, 8));
                 }
-                (8 + 8 * k, 8)
+                (k.checked_mul(8).and_then(|v| v.checked_add(8))
+                    .ok_or_else(|| format!("enum `{}` のサイズがオーバーフローしました", t.show()))?, 8)
             }
             _ => return Err(format!("型 {} の大きさ", t.show())),
         })
@@ -548,10 +547,13 @@ impl<'p> Module<'p> {
         let (mut off, mut al) = (0u64, 1u64);
         for f in fs {
             let (s, a) = self.size_align(f)?;
-            off = ceil_div(off, a) * a + s;
+            off = ceil_div(off, a).checked_mul(a)
+                .and_then(|v| v.checked_add(s))
+                .ok_or_else(|| "構造体のサイズがオーバーフローしました".to_string())?;
             al = al.max(a);
         }
-        Ok((ceil_div(off, al) * al, al))
+        Ok((ceil_div(off, al).checked_mul(al)
+            .ok_or_else(|| "構造体のアラインメント計算がオーバーフローしました".to_string())?, al))
     }
 
     /// 型の大きさ（LLVM の定数式）
@@ -1876,8 +1878,10 @@ fn check_ref(b: &mut B, rt: &str, r: &str, use_site: &str, o: &Opts) -> String {
     let gen = b.val(format!("extractvalue {} {}, 2", rt, r));
     let site = b.val(format!("extractvalue {} {}, 3", rt, r));
     let hp = b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
-    let g = b.val(format!("load i64, ptr {}", hp));
+    let g = b.val(format!("load atomic i64, ptr {} unordered, align 8", hp));
     let bad = b.val(format!("icmp ne i64 {}, {}", g, gen));
+    let retired = b.val(format!("icmp eq i64 {}, -1", g));
+    let bad = b.val(format!("or i1 {}, {}", bad, retired));
     let (_, ok) = b.if_true(&bad);
     b.op(format!("call void @jw_fail_dangling(ptr {}, ptr {}, ptr {}, i64 {})", use_site, site, blk, gen));
     b.op("unreachable");
@@ -2730,12 +2734,12 @@ impl<'m, 'p> FnGen<'m, 'p> {
     /// 区画を借りるときの世代。リストの中身の区画なら「借りられた」「借りられたことがある」の印を立てる（jw_rt.c の `LIST_SHARED`）
     fn borrow_gen(&mut self, blk: &str, list_block: bool) -> String {
         let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
-        let g = self.b.val(format!("load i64, ptr {}", hp));
+        let g = self.b.val(format!("load atomic i64, ptr {} unordered, align 8", hp));
         if !list_block {
             return g;
         }
         let g2 = self.b.val(format!("or i64 {}, {}", g, (1u64 << 62) | 2));
-        self.b.op(format!("store i64 {}, ptr {}", g2, hp));
+        self.b.op(format!("store atomic i64 {}, ptr {} unordered, align 8", g2, hp));
         g2
     }
 
@@ -2811,7 +2815,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         self.b.br(&join);
                         self.b.label(&no);
                         let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", raw));
-                        let g2 = self.b.val(format!("load i64, ptr {}", hp));
+                        let g2 = self.b.val(format!("load atomic i64, ptr {} unordered, align 8", hp));
                         self.b.op(format!("store i64 {}, ptr {}", g2, vg));
                         self.b.op(format!("store ptr {}, ptr {}", site, vs));
                         self.b.br(&join);
@@ -3273,7 +3277,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
             let blk = self.b.val(format!("call ptr @jw_alloc(i64 {})", xsize));
             self.b.op(format!("call void {}(ptr {}, ptr {}, ptr {})", view, src, blk, site));
             let hp = self.b.val(format!("getelementptr i8, ptr {}, i64 -8", blk));
-            let g = self.b.val(format!("load i64, ptr {}", hp));
+            let g = self.b.val(format!("load atomic i64, ptr {} unordered, align 8", hp));
             let r = self.make_ref(&blk, &blk, &g, &site);
             self.b.op(format!("store %ref {}, ptr {}", r, dst));
         } else {
@@ -4147,9 +4151,9 @@ impl<'m, 'p> FnGen<'m, 'p> {
 }
 
 // u64::div_ceil は Rust 1.73 から（1.65 で動かすため自前）
-#[allow(clippy::manual_div_ceil)]
+#[allow(clippy::manual_div_ceil, clippy::manual_is_multiple_of)]
 fn ceil_div(a: u64, b: u64) -> u64 {
-    (a + b - 1) / b
+    a / b + u64::from(a % b != 0)
 }
 
 fn ext(t: IntTy) -> &'static str {

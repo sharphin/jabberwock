@@ -175,28 +175,9 @@ fn seeds() -> Vec<String> {
     out
 }
 
-/// 秘密の値。攻撃のプログラムは、解放した区画やリストの外にこれを置いてから、古い ref や範囲の外を読もうとする
-const SECRET: &str = "4242424242";
-
-/// (名前, プログラム, 止まるときのエラーの題に含まれる文)
-const ATTACKS: &[(&str, &str, &str)] = &[
-    ("drop_then_reuse", "fn main() {\n    let mut a = own 1;\n    let r = ref a;\n    drop(a);\n    let b = own 4242424242;\n    print(*r);\n    print(*b);\n}", "無効になった参照"),
-    ("reassign_then_reuse", "fn main() {\n    let mut a = own 1;\n    let r = ref a;\n    a = own 4242424242;\n    print(*r);\n}", "無効になった参照"),
-    ("moved_into_call", "fn eat(own i64 x) {}\nfn main() {\n    let a = own 1;\n    let r = ref a;\n    eat(a);\n    let b = own 4242424242;\n    print(*r, *b);\n}", "無効になった参照"),
-    ("field_after_drop", "struct P { i64 x; i64 y; }\nfn main() {\n    let mut p = own P { x: 1, y: 2 };\n    let r = ref p.y;\n    drop(p);\n    let q = own P { x: 4242424242, y: 4242424242 };\n    print(*r, q.x);\n}", "無効になった参照"),
-    ("local_escapes", "struct H { ref i64 r; }\nfn H keep() {\n    let x = 7;\n    H { r: ref x }\n}\nfn main() {\n    let h = keep();\n    let s = own 4242424242;\n    print(*h.r, *s);\n}", "無効になった参照"),
-    ("block_ends", "fn main() {\n    let z = 0;\n    let mut r = ref z;\n    if true {\n        let a = own 1;\n        r = ref a;\n    }\n    let b = own 4242424242;\n    print(*r, *b);\n}", "無効になった参照"),
-    ("push_moves_elements", "struct P { i64 x; }\nfn main() {\n    let P[] mut ps = [P { x: 1 }];\n    let r = ref ps[0];\n    for i in range(100) { ps.push(P { x: 4242424242 }); }\n    print(r.x);\n}", "無効になった参照"),
-    ("remove_shifts", "fn main() {\n    let i64[] mut l = [1, 4242424242];\n    let r = ref l[0];\n    l.remove(0);\n    print(*r);\n}", "無効になった参照"),
-    ("sort_moves", "fn main() {\n    let i64[] mut l = [3, 1, 2];\n    let r = ref l[0];\n    l.sort();\n    l.push(4242424242);\n    print(*r);\n}", "無効になった参照"),
-    ("drain_frees", "fn main() {\n    let (own i64)[] mut l = [own 1, own 2];\n    let r = ref l[0];\n    for x in l.drain() { drop(x); }\n    let k = own 4242424242;\n    print(*r, *k);\n}", "無効になった参照"),
-    ("match_ref_then_replace", "struct P { i64 x; }\nfn main() {\n    let mut o = Some(own P { x: 1 });\n    let r = match ref o { case Some(p) -> p; case None -> return; };\n    o = Some(own P { x: 4242424242 });\n    print(r.x);\n}", "無効になった参照"),
-    ("sent_to_thread", "fn main() {\n    let mut a = own 4242424242;\n    let r = ref a;\n    let t = spawn(() -> *a);\n    t.join();\n    print(*r);\n}", "無効になった参照"),
-    ("pop_then_read", "fn main() {\n    let i64[] mut l = [1];\n    l.push(4242424242);\n    l.pop();\n    let i = 1;\n    print(l[i]);\n}", "範囲の外"),
-    ("index_wraps", "fn main() {\n    let a = [1, 2, 3];\n    let i = 9223372036854775807;\n    print(a[i + 1]);\n}", "範囲の外"),
-    ("negative_index", "fn main() {\n    let i64[] l = [4242424242];\n    let i = 0 - 1;\n    print(l[i]);\n}", "範囲の外"),
-    ("slice_past_end", "fn main() {\n    let s = \"4242424242\";\n    let t = s.slice(0, 2);\n    print(t.slice(1, 5));\n}", "範囲の外"),
-];
+#[path = "support/attacks.rs"]
+mod attacks;
+use attacks::{ATTACKS, SECRET};
 
 /// 落ちたか（落ちたならその様子）。時間切れは、打ち切ってよしとする
 fn crashed(cmd: &mut Command) -> Option<String> {
@@ -343,7 +324,9 @@ fn memory_attacks_stop_with_an_error() {
     std::fs::create_dir_all(&dir).unwrap();
     let native = have_clang();
     let mut bad = Vec::new();
-    for (name, src, want) in ATTACKS {
+    let mut cases: Vec<(String, String, &str)> = ATTACKS.iter().map(|(n, s, w)| (n.to_string(), s.to_string(), *w)).collect();
+    cases.extend(attacks::generated(env_u64("JW_ROBUST_SEED", 1)));
+    for (name, src, want) in &cases {
         // interp（デバッグビルドでは IR でも動かして突き合わせる）。解析あり・なしの両方
         for elide in [true, false] {
             let o = jabberwock::run_source_with(src, false, elide);
@@ -416,4 +399,111 @@ fn the_detector_sees_crashes() {
     assert!(sh("echo '内部エラー: メモリが足りません' >&2; exit 2").is_some());
     assert!(sh("echo 'error: 型が合いません' >&2; exit 1").is_none());
     assert!(sh("sleep 10").is_none());
+}
+
+/// 書き出した LLVM の中の、LLVM では未定義になりうる命令（0 や -1 での割り算・幅以上のずらし）の前に、
+/// 守りの計算があるかを見る。UBSan は C から作るときに足す検査なので、書き出した LLVM には効かない。その代わり。
+/// 守りの形は llvm.rs の `binary` / `shift` が書くもの（割る数は 0 と比べてから、符号つきは -1 を 1 に置き換える `select`、
+/// ずらす数は幅 - 1 で頭打ちにする `select`）。新しく危ない命令を書き出したら、ここにも形を足す
+const DANGER: [&str; 7] = ["sdiv", "srem", "udiv", "urem", "shl", "lshr", "ashr"];
+
+#[test]
+fn generated_code_guards_undefined_operations() {
+    let mut seen: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut bad = Vec::new();
+    let mut extra: Vec<String> = Vec::new();
+    // 型ごとに、変数と定数で割る・ずらす
+    for t in ["i8", "i16", "i32", "i64", "u8", "u32", "u64"] {
+        extra.push(format!(
+            "fn f({t} a, {t} b) {{ print(a / b, a % b, a << b, a >> b, a / 3, a % 7, a << 3, a >> 2); }}\nfn main() {{ f(100, 3); }}"
+        ));
+    }
+    for (n, src) in seeds().iter().chain(extra.iter()).enumerate() {
+        let Ok(ll) = jabberwock::llvm_build(src, &jabberwock::no_modules, "main.jw", false) else { continue };
+        for f in ll.split("\ndefine ").skip(1) {
+            let lines: Vec<&str> = f.lines().map(|l| l.trim()).collect();
+            let def = |v: &str| lines.iter().find_map(|l| l.strip_prefix(&format!("{} = ", v)));
+            for (i, l) in lines.iter().enumerate() {
+                let Some((_, rhs)) = l.split_once(" = ") else { continue };
+                let mut w = rhs.split_whitespace();
+                let word = w.next().unwrap_or("");
+                let Some(&op) = DANGER.iter().find(|&&d| d == word) else { continue };
+                let (Some(ty), Some(_), Some(y)) = (w.next(), w.next(), w.next()) else { continue };
+                let bits: i128 = ty[1..].parse().unwrap_or(0);
+                *seen.entry(op).or_default() += 1;
+                let before = &lines[..i];
+                let has = |s: &str| before.iter().any(|b| b.ends_with(s));
+                let ok = match op {
+                    "udiv" | "urem" => y.parse::<i128>().map(|c| c != 0).unwrap_or(false) || has(&format!("icmp eq {} {}, 0", ty, y)),
+                    "sdiv" | "srem" => {
+                        // %s = select i1 %m, T 1, T %y0  かつ  %m = icmp eq T %y0, -1  かつ  %y0 を 0 と比べてある
+                        let s = def(y).unwrap_or("");
+                        let p: Vec<&str> = s.split([' ', ',']).filter(|p| !p.is_empty()).collect();
+                        p.len() == 7 && p[0] == "select" && p[4] == "1" && {
+                            let y0 = p[6];
+                            def(p[2]) == Some(&format!("icmp eq {} {}, -1", ty, y0))
+                                && (y0.parse::<i128>().map(|c| c != 0).unwrap_or(false) || has(&format!("icmp eq {} {}, 0", ty, y0)))
+                        }
+                    }
+                    _ => {
+                        // 定数なら幅より小さい。変数なら（trunc を通した）幅 - 1 で頭打ちにする select
+                        let small = |c: &str| c.parse::<i128>().map(|c| (0..bits).contains(&c)).unwrap_or(false);
+                        let mut s = def(y).unwrap_or("");
+                        if let Some(r) = s.strip_prefix("trunc i64 ") {
+                            s = def(r.split_whitespace().next().unwrap_or("")).unwrap_or("");
+                        }
+                        let p: Vec<&str> = s.split([' ', ',']).filter(|p| !p.is_empty()).collect();
+                        small(y) || (p.len() == 7 && p[0] == "select" && p[4] == (bits - 1).to_string())
+                    }
+                };
+                if !ok {
+                    bad.push(format!("種 {}: 守りのない {}: {}", n, op, l));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+    // 調べる命令が本当に出ていること（形が変わって何も見なくなっていないか）
+    for op in DANGER {
+        assert!(seen.get(op).copied().unwrap_or(0) > 0, "{} を 1 つも見ていません: {:?}", op, seen);
+    }
+}
+
+/// GEP は範囲を調べる前でも poison にせず、整数は一周するという言語の規則を守る。
+/// 範囲の検査自体は typed attacks（負の数・最大値・read/write/ref）で実行して確かめる。
+#[test]
+fn generated_llvm_does_not_assume_unproved_address_or_integer_properties() {
+    let mut checked = 0;
+    let dir = std::env::temp_dir().join(format!("jw-llvm-verify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let verify = have_clang();
+    for src in seeds().into_iter().chain(ATTACKS.iter().map(|(_, src, _)| src.to_string())).chain(attacks::generated(1).into_iter().map(|(_, src, _)| src)) {
+        let Ok(ll) = jabberwock::llvm_build(&src, &jabberwock::no_modules, "main.jw", false) else { continue };
+        for line in ll.lines().filter(|l| !l.trim_start().starts_with(';')) {
+            for forbidden in ["getelementptr inbounds", " nsw ", " nuw ", " exact ", " = fptosi ", " = fptoui "] {
+                assert!(!line.contains(forbidden), "未証明の LLVM の前提 {}: {}", forbidden, line);
+            }
+        }
+        // 送信元の古い ref が読むため、区画ヘッダーは読み手も書き手も atomic にする。
+        for function in ll.split("\ndefine ").skip(1) {
+            let lines: Vec<&str> = function.lines().collect();
+            for header in lines.iter().filter(|l| l.contains(" = getelementptr i8, ptr ") && l.ends_with(", i64 -8")) {
+                let ptr = header.split_once(" = ").unwrap().0.trim();
+                for access in lines.iter().filter(|l| l.split(|c: char| c.is_whitespace() || c == ',').any(|v| v == ptr) && (l.contains("load ") || l.trim_start().starts_with("store "))) {
+                    assert!(access.contains("load atomic ") || access.contains("store atomic "), "世代番号の非atomicアクセス: {}", access);
+                }
+            }
+        }
+        if verify {
+            let input = dir.join("case.ll");
+            std::fs::write(&input, &ll).unwrap();
+            let output = Command::new(jabberwock::native::clang()).args(["-c", "-O0", "-Xclang", "-llvm-verify-each"])
+                .arg(&input).arg("-o").arg(dir.join("case.o")).output().unwrap();
+            assert!(output.status.success(), "LLVM verifier: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        checked += 1;
+    }
+    assert!(checked >= 50, "LLVMの監査対象が足りません: {}", checked);
+    eprintln!("LLVM audit: {} modules, verifier enabled: {}", checked, verify);
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -174,11 +174,16 @@ pub struct Program {
     i64[] use_spans;
     str[] public;
     str[] modules;
+    // モジュールごとに use したモジュールの名前（書いたとおりの名前を空白でつなぐ。最初のファイルは ""）
+    str[str] mod_uses;
     str[] consts;
     // 関数・メソッドの引数にその場で書いたクロージャ（ムーブする外の変数を借りて取り込む）の位置
     i64[] borrow_lambdas;
     // 式の数（`number` が書く。番号は 1〜nodes）
     i64 nodes;
+    // 資源の型（`resource File;`。標準ライブラリの中だけで書ける）と、その位置
+    str[] resources;
+    i64[] resource_spans;
 }
 
 // ---------------------------------------------------------------- 作る
