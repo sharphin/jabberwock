@@ -2,12 +2,14 @@
 <!--
 外枠（タブ列・アドレス欄・ブックマーク）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
 - 外枠 → 本体（ChromeMessage）: "go <打った文字>" / "back" / "forward" / "reload" / "stop" /
-  "newtab" / "select <タブ>" / "close <タブ>" / "bookmark" / "open <URL>" / "clear"
+  "newtab" / "select <タブ>" / "close <タブ>" / "bookmark" / "open <URL>" / "clear" /
+  "window drag" / "window min" / "window max" / "window close"（窓を動かす・最小化・最大化と戻す・閉じる）
 - 本体 → 外枠（chrome_post）: "focus"（アドレス欄へ）か、状態を 1 行ずつ書いたもの（区切りはタブ文字）:
     state
     url  今の URL
     nav  戻れる 0/1  進める 0/1  読み込み中 0/1  ブックマーク済み 0/1
     tab  番号  今のタブなら 1  題
+    frame 1（外枠が窓の一番上まで来ている。右端に ー □ × を出し、空いたところで窓を動かす）
     bm   URL  題
     note 知らせ
 -->
@@ -17,8 +19,15 @@
 @media (prefers-color-scheme: dark) { :root { --bg: #202124; --fg: #e8e8e8; --tab: #2b2c2f; --cur: #35363a; --line: #444; } }
 * { box-sizing: border-box; }
 body { margin: 0; font: 13px system-ui, sans-serif; background: var(--bg); color: var(--fg); overflow: hidden; user-select: none; }
-#tabs { display: flex; height: 28px; gap: 2px; padding: 2px 4px 0; }
-.tab { display: flex; align-items: center; max-width: 200px; min-width: 60px; flex: 1; padding: 0 6px; background: var(--tab); border-radius: 6px 6px 0 0; cursor: default; }
+#top { display: flex; height: 36px; }
+#tabs { display: flex; gap: 2px; padding: 6px 0 0 6px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+#plus { width: 30px; height: 26px; margin: 7px 2px 0; font-size: 16px; }
+#drag { flex: 1; }
+#win { display: none; }
+#win.on { display: flex; }
+#win button { width: 46px; height: 32px; border-radius: 0; font-size: 14px; }
+#win #wclose:hover { background: #c42b1c; color: #fff; }
+.tab { display: flex; align-items: center; width: 200px; min-width: 60px; flex: 0 1 auto; padding: 0 6px 0 10px; background: var(--tab); border-radius: 8px 8px 0 0; cursor: default; }
 .tab.cur { background: var(--cur); }
 .tab span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .tab b { font-weight: normal; padding: 0 4px; opacity: .6; }
@@ -32,14 +41,18 @@ button:disabled { opacity: .35; }
 #bms a { color: inherit; text-decoration: none; opacity: .8; }
 #note { margin-left: auto; opacity: .7; }
 </style>
-<div id="tabs"></div>
+<div id="top">
+  <div id="tabs"></div>
+  <button id="plus" title="新しいタブ (Ctrl+T)">＋</button>
+  <div id="drag"></div>
+  <div id="win"><button id="wmin" title="最小化">─</button><button id="wmax" title="最大化">□</button><button id="wclose" title="閉じる">✕</button></div>
+</div>
 <div id="bar">
   <button id="back" title="戻る (Alt+←)">←</button>
   <button id="fwd" title="進む (Alt+→)">→</button>
   <button id="rel" title="再読み込み (F5)">↻</button>
   <input id="addr" spellcheck="false" placeholder="URL か検索語">
   <button id="star" title="ブックマーク">☆</button>
-  <button id="add" title="新しいタブ (Ctrl+T)">＋</button>
 </div>
 <div id="bms"></div>
 <script>
@@ -50,7 +63,15 @@ $("back").onclick = () => send("back");
 $("fwd").onclick = () => send("forward");
 $("rel").onclick = () => send(loading ? "stop" : "reload");
 $("star").onclick = () => send("bookmark");
-$("add").onclick = () => send("newtab");
+$("plus").onclick = () => send("newtab");
+$("wmin").onclick = () => send("window min");
+$("wmax").onclick = () => send("window max");
+$("wclose").onclick = () => send("window close");
+// タブ列の空いたところを押したまま動かすと窓が動く。ダブルクリックで最大化と戻す
+for (const id of ["drag", "tabs"]) {
+  $(id).onmousedown = (e) => { if (e.button === 0 && e.target === $(id) && e.detail === 1) send("window drag"); };
+  $(id).ondblclick = (e) => { if (e.target === $(id)) send("window max"); };
+}
 $("addr").onfocus = () => { editing = true; $("addr").select(); };
 $("addr").onblur = () => { editing = false; };
 $("addr").onkeydown = (e) => {
@@ -87,6 +108,7 @@ chrome.webview.addEventListener("message", (ev) => {
       bms.append(a);
     }
     if (f[0] === "note") note = f[1];
+    if (f[0] === "frame") $("win").classList.toggle("on", f[1] === "1");
   }
   if (note) { const n = el("span", "", note); n.id = "note"; bms.append(n); }
 });

@@ -5,5 +5,8 @@ key 4
 key 3
 key 3
 chrome what
+chrome window drag
+chrome window max
+chrome window spin
 close
 chrome go never.example

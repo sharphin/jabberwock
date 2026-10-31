@@ -70,6 +70,22 @@ pub struct Info {
     bool script;      // ページの JavaScript が動く
     bool chrome_view; // 外枠を HTML で出せる
     bool persist;     // Cookie などを残せる
+    bool frameless;   // OS のタイトルバーがなく、外枠が窓の一番上まで来る（外枠が ー □ × を出す）
+}
+
+// 窓の操作（jw_engine.h の JWE_WINDOW_*）
+pub enum WindowOp {
+    Drag;
+    Minimize;
+    ToggleMaximize;
+
+    fn i64 code() {
+        match this {
+            case Drag -> 1;
+            case Minimize -> 2;
+            case ToggleMaximize -> 3;
+        }
+    }
 }
 
 struct FakeTab {
@@ -81,6 +97,8 @@ struct FakeTab {
 
 pub struct Engine {
     bool piped;
+    str name;         // エンジンの名前（パイプなら最初の info 行で知る）
+    i64 caps;         // jw_engine.h の JWE_CAP_* の和
     i64 next_id;
     FakeTab[] tabs;
     Event[] queue;
@@ -93,11 +111,24 @@ pub struct Engine {
 
     static fn Engine open(Config cfg) {
         let mut e = Engine {
-            piped: !cfg.fake, next_id: 1, tabs: [], queue: [], script: cfg.fake_script.map((l) -> l), script_pos: 0,
+            piped: !cfg.fake, name: "mock", caps: 2, next_id: 1, tabs: [], queue: [], script: cfg.fake_script.map((l) -> l), script_pos: 0,
             close_sent: false, chrome: false, ephemeral: cfg.ephemeral, log: [],
         };
         e.log.push("open " + cfg.title);
         if e.piped {
+            // 最初の行は「info 名前 caps」
+            match read_line() {
+                case Some(line) -> {
+                    let f = line.split("\t");
+                    if f.len() >= 3 && f[0] == "info" {
+                        e.name = f[1];
+                        e.caps = f[2].to_int().unwrap_or(0);
+                    } else {
+                        e.queue.push(parse(line));
+                    }
+                }
+                case None -> e.queue.push(Event.CloseRequested);
+            }
             e.send("set_title\t" + escape(cfg.title));   // Ready はエンジンから届く
         } else {
             e.queue.push(Event.Ready);
@@ -162,10 +193,10 @@ pub struct Engine {
     }
 
     fn Info info() {
-        if piped {
-            return Info { name: "pipe", script: true, chrome_view: true, persist: !ephemeral };
+        Info {
+            name: name, script: (caps & 1) != 0, chrome_view: (caps & 2) != 0,
+            persist: (caps & 4) != 0, frameless: (caps & 8) != 0,
         }
-        Info { name: "mock", script: false, chrome_view: true, persist: !ephemeral }
     }
 
     fn mut close() {
@@ -440,6 +471,15 @@ pub struct Engine {
             return Ok(());
         }
         log.push("set_title " + title);
+        Ok(())
+    }
+
+    fn mut Result<(), str> window(WindowOp op) {
+        let n = op.code();
+        log.push("window {n}");
+        if piped {
+            send("window\t{n}");
+        }
         Ok(())
     }
 

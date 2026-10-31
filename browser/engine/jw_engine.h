@@ -30,7 +30,8 @@ typedef struct JweEngine JweEngine;
 enum {
     JWE_CAP_SCRIPT = 1u << 0,      /* ページの JavaScript が動く */
     JWE_CAP_CHROME_VIEW = 1u << 1, /* 外枠（アドレスバーなど）を HTML で表示できる（jwe_chrome_*） */
-    JWE_CAP_PERSIST = 1u << 2      /* Cookie などをディスクに残せる */
+    JWE_CAP_PERSIST = 1u << 2,     /* Cookie などをディスクに残せる */
+    JWE_CAP_FRAMELESS = 1u << 3    /* OS のタイトルバーがなく、外枠が窓の一番上まで来る（外枠が ー □ × を出し、jwe_window を呼ぶ） */
 };
 
 typedef struct {
@@ -108,6 +109,13 @@ JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len);
 
 /* 窓 */
 JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len);
+
+enum {
+    JWE_WINDOW_DRAG = 1,        /* 押している間、マウスで窓を動かす（外枠の空いたところが押されたとき） */
+    JWE_WINDOW_MINIMIZE = 2,
+    JWE_WINDOW_TOGGLE_MAXIMIZE = 3
+};
+JweStatus jwe_window(JweEngine *e, uint32_t op);
 
 /* Cookie・キャッシュ・サイトのデータを全部消す */
 JweStatus jwe_clear_site_data(JweEngine *e);

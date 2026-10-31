@@ -426,6 +426,21 @@ LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CLOSE:
         if (e) e->push(JWE_EV_CLOSE_REQUESTED, 0, 0);
         return 0; // 閉じるかどうかは呼ぶ側が決める（jwe_close）
+    case WM_NCCALCSIZE:
+        // OS のタイトルバーをなくし、外枠（タブ列）を窓の一番上まで広げる。左右と下の縁（大きさを変えるところ）は残す
+        if (wp) {
+            NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *)lp;
+            LONG top = p->rgrc[0].top;
+            LRESULT r = DefWindowProcW(h, msg, wp, lp);
+            p->rgrc[0].top = top;
+            if (IsZoomed(h)) {
+                // 最大化すると窓は画面の外へ縁の分だけはみ出すので、その分下げる
+                UINT dpi = GetDpiForWindow(h);
+                p->rgrc[0].top += GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            }
+            return r;
+        }
+        break;
     case WM_SIZE:
         if (e) e->layout();
         return 0;
@@ -534,6 +549,7 @@ JweStatus jwe_open(const JweConfig *cfg, JweEngine **out) {
         double s = e->scale();
         SetWindowPos(e->hwnd, nullptr, 0, 0, (int)(cfg->width * s), (int)(cfg->height * s), SWP_NOMOVE | SWP_NOZORDER);
     }
+    SetWindowPos(e->hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER); // WM_NCCALCSIZE を効かせる
     ShowWindow(e->hwnd, SW_SHOW);
 
     std::wstring base = widen(cfg->data_dir, cfg->data_dir_len);
@@ -591,7 +607,7 @@ void jwe_close(JweEngine *e) {
 
 void jwe_info(const JweEngine *e, JweInfo *out) {
     out->abi_version = JWE_ABI_VERSION;
-    out->caps = JWE_CAP_SCRIPT | JWE_CAP_CHROME_VIEW | (e && !e->ephemeral ? JWE_CAP_PERSIST : 0);
+    out->caps = JWE_CAP_SCRIPT | JWE_CAP_CHROME_VIEW | JWE_CAP_FRAMELESS | (e && !e->ephemeral ? JWE_CAP_PERSIST : 0);
     out->name = "webview2";
     out->version = "1";
 }
@@ -699,6 +715,28 @@ JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len) {
     // アドレス欄へ移すときは、キーボードの入力先も外枠へ移す
     if (w == L"focus" && e->chrome_ctl) e->chrome_ctl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
     return SUCCEEDED(e->chrome->PostWebMessageAsString(w.c_str())) ? JWE_OK : JWE_ERR_FAILED;
+}
+
+JweStatus jwe_window(JweEngine *e, uint32_t op) {
+    switch (op) {
+    case JWE_WINDOW_DRAG:
+        // 外枠の中で押されたボタンを、タイトルバーを押したことにして OS に窓を動かさせる
+        // （wry / Tauri の窓を動かす方法と同じ）
+        {
+            POINT pt;
+            GetCursorPos(&pt);
+            ReleaseCapture();
+            PostMessageW(e->hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(pt.x, pt.y));
+        }
+        return JWE_OK;
+    case JWE_WINDOW_MINIMIZE:
+        ShowWindow(e->hwnd, SW_MINIMIZE);
+        return JWE_OK;
+    case JWE_WINDOW_TOGGLE_MAXIMIZE:
+        ShowWindow(e->hwnd, IsZoomed(e->hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+        return JWE_OK;
+    }
+    return JWE_ERR_BAD_ARG;
 }
 
 JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len) {

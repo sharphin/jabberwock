@@ -1,5 +1,5 @@
 open jabberwock
-chrome_load 76
+chrome_load 84
 tab_new 1
 tab_show 1
 set_title jabberwock
@@ -56,6 +56,21 @@ url
 nav	0	0	0	0
 tab	3	1	
 note	知らない命令: what
+window 1
+chrome_post state
+url	
+nav	0	0	0	0
+tab	3	1	
+window 3
+chrome_post state
+url	
+nav	0	0	0	0
+tab	3	1	
+chrome_post state
+url	
+nav	0	0	0	0
+tab	3	1	
+note	知らない窓の操作: spin
 chrome_post state
 url	
 nav	0	0	0	0

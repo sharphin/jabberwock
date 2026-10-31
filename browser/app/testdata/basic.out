@@ -1,5 +1,5 @@
 open jabberwock
-chrome_load 76
+chrome_load 84
 tab_new 1
 tab_show 1
 set_title jabberwock

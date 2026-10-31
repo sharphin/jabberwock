@@ -304,6 +304,13 @@ JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len) {
     return JWE_OK;
 }
 
+JweStatus jwe_window(JweEngine *e, uint32_t op) {
+    char n[16];
+    snprintf(n, sizeof n, "%u", op);
+    logf_(e, "window", 0, n, (uint32_t)strlen(n));
+    return JWE_OK;
+}
+
 JweStatus jwe_clear_site_data(JweEngine *e) {
     logf_(e, "clear_site_data", 0, NULL, 0);
     return JWE_OK;

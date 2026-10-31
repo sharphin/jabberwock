@@ -407,6 +407,8 @@ static int apply(JweEngine *e, char *line) {
     } else if (strcmp(op, "set_title") == 0) {
         size_t len = unescape(f[1]);
         jwe_set_title(e, f[1], (uint32_t)len);
+    } else if (strcmp(op, "window") == 0) {
+        jwe_window(e, (uint32_t)strtoul(f[1], NULL, 10));
     } else if (strcmp(op, "clear_site_data") == 0) {
         jwe_clear_site_data(e);
     } else {
@@ -498,6 +500,12 @@ int main(int argc, char **argv) {
     if (!start_app(dir)) {
         jwe_close(e);
         return 1;
+    }
+    {
+        /* 最初の行でエンジンの名前とできることを知らせる */
+        char first[128];
+        snprintf(first, sizeof first, "info\t%s\t%u\n", info.name, info.caps);
+        fd_write(to_app, first, strlen(first));
     }
     int running = 1;
     if (sync) wait_for_app(); /* 起動したときの操作を出し切るまで */

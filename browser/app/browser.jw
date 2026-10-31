@@ -25,13 +25,15 @@ pub struct Browser {
     bool done;
     str note;        // 外枠に出す短い知らせ
     bool chrome_view;
+    bool frameless;
 
     static fn Browser open(engine.Config cfg, str data_dir) {
         let eng = engine.Engine.open(cfg);
         let chrome_view = eng.info().chrome_view;
+        let frameless = eng.info().frameless;
         let mut b = Browser {
             eng: eng, data: store.Store.open(data_dir), tabs: [], current: 0,
-            done: false, note: "", chrome_view: chrome_view,
+            done: false, note: "", chrome_view: chrome_view, frameless: frameless,
         };
         if chrome_view {
             b.check(b.eng.chrome_load(chrome.html(), chrome.height()));
@@ -227,6 +229,13 @@ pub struct Browser {
             case "select" -> select(arg.to_int().unwrap_or(0));
             case "close" -> close_tab(arg.to_int().unwrap_or(0));
             case "bookmark" -> toggle_bookmark();
+            case "window" -> match arg {
+                case "drag" -> check(eng.window(engine.WindowOp.Drag));
+                case "min" -> check(eng.window(engine.WindowOp.Minimize));
+                case "max" -> check(eng.window(engine.WindowOp.ToggleMaximize));
+                case "close" -> done = true;
+                default -> note = "知らない窓の操作: " + arg;
+            };
             case "clear" -> {
                 check(eng.clear_site_data());
                 data.clear_history();
@@ -268,6 +277,9 @@ pub struct Browser {
         for t in tabs {
             let title = if t.url == HOME { "" } else { clean(t.title) };   // 空なら外枠が「新しいタブ」と出す
             s += "\ntab\t{t.id}\t" + flag(t.id == current) + "\t" + title;
+        }
+        if frameless {
+            s += "\nframe\t1";
         }
         for b in data.bookmarks {
             s += "\nbm\t" + clean(b.url) + "\t" + clean(b.title);
