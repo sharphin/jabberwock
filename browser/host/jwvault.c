@@ -1,18 +1,18 @@
-/* jwbrowser: エンジン（jw_engine.h）を動かし、jabberwock で書いた本体（browser/app。実行ファイルは jwbrowser-app）を
- * 子プロセスとして起動して、標準入出力の 1 行ずつでつなぐ。
+/* jwvault: パスワードの金庫の窓。エンジン（jw_engine.h）を動かし、jabberwock で書いた金庫の本体
+ * （browser/app/vault_main.jw。実行ファイルは jwvault-app）を子プロセスとして起動して、標準入出力の 1 行ずつでつなぐ。
  *
- * jabberwock からはまだ C の関数を呼べないので、そのあいだのつなぎ。std.browser ができたら要らなくなる。
- * 行の形は README.md。どのエンジンともリンクできる（WebView2・偽エンジン）。
+ * ブラウザ本体はもう std.browser でエンジンを直接使う。金庫は、クリップボード・ブラウザとのやりとりがまだ std にないので、
+ * そのあいだのつなぎとしてこれを使う。行の形は README.md。どのエンジンともリンクできる（WebView2・偽エンジン）。
  *
- * --vault で起動すると、パスワードの金庫（jabberwock の本体は jwvault-app）として別の窓で動く。
- * 金庫はページを開かず（タブを作らない）、WebView2 の置き場所もブラウザと分ける。ブラウザとは Windows のメッセージ（WM_COPYDATA）だけで
- * 話す: 金庫 → ブラウザ「fill サイト ユーザー パスワード」「site?」、ブラウザ → 金庫「site URL」「filled 結果」「show」。
+ * 金庫はページを開かず（タブを作らない）、WebView2 の置き場所もブラウザと分ける（<置き場所>/vault）。ブラウザとは
+ * Windows のメッセージ（WM_COPYDATA）だけで話す: 金庫 → ブラウザ「fill サイト ユーザー パスワード」「site?」、
+ * ブラウザ → 金庫「site URL」「filled 結果」「show」。ブラウザ側は engine/webview2/vault_link.c。
  * ブラウザは今のタブの出どころがサイトと完全に同じときだけ入れる（jwe_fill_login）。
  *
  * 偽エンジン（名前が "mock"）のときは、本体が "wait" を出す（次のイベントを待ち始めた）まで次のイベントを渡さない。
  * そうすると、何回動かしても同じ順になる（テスト用）。
  */
-#include "../engine/jw_engine.h"
+#include "../../runtime/engine/jw_engine.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +20,6 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <bcrypt.h>
 typedef HANDLE Fd;
 #else
 #include <fcntl.h>
@@ -146,7 +145,6 @@ static Line *q_pop(void) {
 }
 
 static Fd from_app, to_app;
-static int vault_mode; /* --vault: パスワードの金庫として動く */
 
 static long fd_read(Fd f, char *p, size_t n) {
 #ifdef _WIN32
@@ -206,7 +204,7 @@ static void *reader(void *arg)
 /* ---- 本体の起動 ---- */
 
 static void fail(const char *msg) {
-    fprintf(stderr, "jwbrowser: %s\n", msg);
+    fprintf(stderr, "jwvault: %s\n", msg);
 #ifdef _WIN32
     int n = MultiByteToWideChar(CP_UTF8, 0, msg, -1, NULL, 0);
     wchar_t *w = (wchar_t *)malloc(sizeof(wchar_t) * (size_t)n);
@@ -230,10 +228,9 @@ static void beside_exe(wchar_t *out, size_t cap, const wchar_t *name) {
 
 static int start_app(const char *data_dir) {
     wchar_t exe[MAX_PATH];
-    beside_exe(exe, MAX_PATH, vault_mode ? L"jwvault-app.exe" : L"jwbrowser-app.exe");
+    beside_exe(exe, MAX_PATH, L"jwvault-app.exe");
     if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) {
-        fail(vault_mode ? "jwvault-app.exe が見つかりません（jwbrowser.exe と同じフォルダに置いてください）"
-                        : "jwbrowser-app.exe が見つかりません（jwbrowser.exe と同じフォルダに置いてください）");
+        fail("jwvault-app.exe が見つかりません（jwvault.exe と同じフォルダに置いてください）");
         return 0;
     }
     wchar_t dir[MAX_PATH];
@@ -256,7 +253,7 @@ static int start_app(const char *data_dir) {
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION pi;
     if (!CreateProcessW(exe, cmd, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        fail("本体（jwbrowser-app.exe / jwvault-app.exe）を起動できません");
+        fail("金庫の本体（jwvault-app.exe）を起動できません");
         return 0;
     }
     CloseHandle(pi.hThread);
@@ -283,8 +280,8 @@ static pid_t app_pid;
 
 static int start_app(const char *data_dir) {
     /* 例: "jabberwock main.jw" は使えないので、実行ファイルを指す */
-    const char *exe = getenv(vault_mode ? "JWVAULT_APP" : "JWBROWSER_APP");
-    if (!exe || !*exe) exe = vault_mode ? "./jwvault-app" : "./jwbrowser-app";
+    const char *exe = getenv("JWVAULT_APP");
+    if (!exe || !*exe) exe = "./jwvault-app";
     int in[2], out[2];
     if (pipe(in) || pipe(out)) return 0;
     app_pid = fork();
@@ -312,28 +309,9 @@ static void stop_app(void) {
 }
 #endif
 
-/* ---- タブの番号の対応（本体の番号 ↔ エンジンの番号） ---- */
-
-#define MAX_TABS 4096
-static uint32_t eng_of[MAX_TABS]; /* 本体の番号 → エンジンの番号 */
-
-static uint32_t app_of(uint32_t eng) {
-    if (eng == 0) return 0;
-    for (uint32_t i = 1; i < MAX_TABS; i++)
-        if (eng_of[i] == eng) return i;
-    return 0;
-}
-
-static uint32_t tab_arg(const char *s) {
-    unsigned long n = strtoul(s, NULL, 10);
-    return n < MAX_TABS ? eng_of[n] : 0;
-}
-
 /* ---- 金庫とブラウザのあいだ ---- */
 
-static uint32_t shown_tab;          /* 本体の番号で、見えているタブ */
-static char *url_of[MAX_TABS];      /* 本体の番号 → 今の URL */
-static char *data_arg;              /* --data で渡されたもの（金庫を起動するときに渡す） */
+static char *data_arg; /* --data で渡されたもの */
 
 static void send_app(const char *s) { fd_write(to_app, s, strlen(s)); }
 
@@ -349,24 +327,6 @@ static void send_app_text(const char *kind, const char *text, size_t n) {
     free(b.p);
 }
 #endif
-
-/* OS の乱数 */
-static int os_random(unsigned char *p, size_t n) {
-#ifdef _WIN32
-    return BCryptGenRandom(NULL, p, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
-#else
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd < 0) return 0;
-    size_t got = 0;
-    while (got < n) {
-        long r = (long)read(fd, p + got, n - got);
-        if (r <= 0) break;
-        got += (size_t)r;
-    }
-    close(fd);
-    return got == n;
-#endif
-}
 
 static unsigned long long now_ms(void) {
 #ifdef _WIN32
@@ -413,7 +373,7 @@ static void clip_copy(const char *s, size_t n) {
     clip_seq = GetClipboardSequenceNumber();
 #else
     (void)s;
-    fprintf(stderr, "jwbrowser: クリップボードへ %u バイト（この OS ではまだ置かない）\n", (unsigned)n);
+    fprintf(stderr, "jwvault: クリップボードへ %u バイト（この OS ではまだ置かない）\n", (unsigned)n);
 #endif
     clip_at = now_ms();
     if (!clip_at) clip_at = 1;
@@ -471,7 +431,7 @@ static void ipc_open(void) {
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = ipc_proc;
     wc.hInstance = GetModuleHandleW(NULL);
-    wc.lpszClassName = vault_mode ? IPC_VAULT : IPC_BROWSER;
+    wc.lpszClassName = IPC_VAULT;
     RegisterClassExW(&wc);
     ipc_hwnd = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
 }
@@ -495,62 +455,6 @@ static int to_browser(const char *s) {
 #endif
 }
 
-static void to_vault(const char *s) {
-#ifdef _WIN32
-    ipc_send(IPC_VAULT, s, strlen(s));
-#else
-    (void)s;
-#endif
-}
-
-/* 見えているタブの URL を金庫に知らせる */
-static void tell_site(void) {
-    const char *u = shown_tab < MAX_TABS && url_of[shown_tab] ? url_of[shown_tab] : "";
-    Buf b = {0};
-    buf_str(&b, "site\t");
-    buf_str(&b, u);
-    to_vault(b.p);
-    free(b.p);
-}
-
-static void set_url(uint32_t app_tab, const char *s, uint32_t n) {
-    if (app_tab == 0 || app_tab >= MAX_TABS) return;
-    free(url_of[app_tab]);
-    url_of[app_tab] = (char *)malloc((size_t)n + 1);
-    if (!url_of[app_tab]) return;
-    memcpy(url_of[app_tab], s, n);
-    url_of[app_tab][n] = 0;
-    if (app_tab == shown_tab) tell_site();
-}
-
-/* 金庫の窓を出す（なければ起動する） */
-static void open_vault(void) {
-#ifdef _WIN32
-    if (ipc_send(IPC_VAULT, "show", 4)) return;
-    wchar_t exe[MAX_PATH];
-    GetModuleFileNameW(NULL, exe, MAX_PATH);
-    wchar_t cmd[3 * MAX_PATH];
-    if (data_arg) {
-        wchar_t d[MAX_PATH];
-        MultiByteToWideChar(CP_UTF8, 0, data_arg, -1, d, MAX_PATH);
-        _snwprintf(cmd, 3 * MAX_PATH, L"\"%ls\" --data \"%ls\" --vault", exe, d);
-    } else {
-        _snwprintf(cmd, 3 * MAX_PATH, L"\"%ls\" --vault", exe);
-    }
-    cmd[3 * MAX_PATH - 1] = 0;
-    STARTUPINFOW si;
-    memset(&si, 0, sizeof si);
-    si.cb = sizeof si;
-    PROCESS_INFORMATION pi;
-    if (CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-    }
-#else
-    fprintf(stderr, "jwbrowser: 金庫はこの OS ではまだ別の窓で開けません\n");
-#endif
-}
-
 /* ---- イベント → 本体 ---- */
 
 static const char *KIND[] = {"none", "ready", "close", "nav_started", "nav_finished", "url", "title",
@@ -558,7 +462,6 @@ static const char *KIND[] = {"none", "ready", "close", "nav_started", "nav_finis
 
 static int forward_event(const JweEvent *ev) {
     if (ev->kind == JWE_EV_NONE || ev->kind >= sizeof KIND / sizeof *KIND) return 1;
-    if (ev->kind == JWE_EV_URL_CHANGED || ev->kind == JWE_EV_NAV_FINISHED) set_url(app_of(ev->tab), ev->text, ev->text_len);
     if (ev->kind == JWE_EV_CHROME_MESSAGE) last_use = now_ms();
     Buf b = {0};
     char num[32];
@@ -582,7 +485,7 @@ static int forward_event(const JweEvent *ev) {
         break;
     case JWE_EV_NAV_FINISHED:
     case JWE_EV_HISTORY_CHANGED:
-        snprintf(num, sizeof num, "\t%u\t%lld", app_of(ev->tab), (long long)ev->code);
+        snprintf(num, sizeof num, "\t%u\t%lld", ev->tab, (long long)ev->code);
         buf_str(&b, num);
         if (ev->kind == JWE_EV_NAV_FINISHED) {
             buf_str(&b, "\t");
@@ -590,7 +493,7 @@ static int forward_event(const JweEvent *ev) {
         }
         break;
     default: /* タブと文字 */
-        snprintf(num, sizeof num, "\t%u\t", app_of(ev->tab));
+        snprintf(num, sizeof num, "\t%u\t", ev->tab);
         buf_str(&b, num);
         buf_escaped(&b, ev->text, ev->text_len);
         break;
@@ -614,29 +517,7 @@ static int apply(JweEngine *e, char *line) {
     }
     const char *op = f[0];
     if (strcmp(op, "close") == 0) return 0;
-    if (strcmp(op, "tab_new") == 0) {
-        unsigned long id = strtoul(f[1], NULL, 10);
-        uint32_t t = 0;
-        if (id > 0 && id < MAX_TABS && jwe_tab_new(e, &t) == JWE_OK) eng_of[id] = t;
-    } else if (strcmp(op, "tab_close") == 0) {
-        jwe_tab_close(e, tab_arg(f[1]));
-    } else if (strcmp(op, "tab_show") == 0) {
-        unsigned long n = strtoul(f[1], NULL, 10);
-        shown_tab = n < MAX_TABS ? (uint32_t)n : 0;
-        tell_site();
-        jwe_tab_show(e, tab_arg(f[1]));
-    } else if (strcmp(op, "navigate") == 0) {
-        size_t len = unescape(f[2]);
-        jwe_navigate(e, tab_arg(f[1]), f[2], (uint32_t)len);
-    } else if (strcmp(op, "back") == 0) {
-        jwe_back(e, tab_arg(f[1]));
-    } else if (strcmp(op, "forward") == 0) {
-        jwe_forward(e, tab_arg(f[1]));
-    } else if (strcmp(op, "reload") == 0) {
-        jwe_reload(e, tab_arg(f[1]));
-    } else if (strcmp(op, "stop") == 0) {
-        jwe_stop(e, tab_arg(f[1]));
-    } else if (strcmp(op, "chrome_load") == 0) {
+    if (strcmp(op, "chrome_load") == 0) {
         size_t len = unescape(f[2]);
         jwe_chrome_load(e, f[2], (uint32_t)len, (uint32_t)strtoul(f[1], NULL, 10));
     } else if (strcmp(op, "chrome_post") == 0) {
@@ -652,20 +533,6 @@ static int apply(JweEngine *e, char *line) {
         jwe_window(e, (uint32_t)strtoul(f[1], NULL, 10));
     } else if (strcmp(op, "clear_site_data") == 0) {
         jwe_clear_site_data(e);
-    } else if (strcmp(op, "open_vault") == 0) {
-        open_vault();
-    } else if (strcmp(op, "random") == 0) {
-        /* 金庫の本体が乱数を求めた（jabberwock にはまだ乱数がない）。16 進で返す */
-        unsigned long n = strtoul(f[1], NULL, 10);
-        if (n > 4096) n = 4096;
-        unsigned char r[4096];
-        char line[16 + 2 * 4096];
-        size_t o = (size_t)snprintf(line, sizeof line, "random\t");
-        if (!os_random(r, n)) n = 0; /* 取れなければ空。本体がエラーにする */
-        for (unsigned long i = 0; i < n; i++) o += (size_t)snprintf(line + o, sizeof line - o, "%02x", r[i]);
-        snprintf(line + o, sizeof line - o, "\n");
-        send_app(line);
-        memset(r, 0, sizeof r);
     } else if (strcmp(op, "copy") == 0) {
         size_t len = unescape(f[1]);
         clip_copy(f[1], len);
@@ -688,7 +555,7 @@ static int apply(JweEngine *e, char *line) {
     } else if (strcmp(op, "ask_site") == 0) {
         to_browser("site?");
     } else {
-        fprintf(stderr, "jwbrowser: 知らない操作: %s\n", op);
+        fprintf(stderr, "jwvault: 知らない操作: %s\n", op);
     }
     return 1;
 }
@@ -756,31 +623,13 @@ static void ipc_apply(JweEngine *e) {
     while ((l = ipc_pop()) != NULL) {
         char *t = l->text;
         size_t n = strlen(t);
-        if (!vault_mode && strncmp(t, "fill\t", 5) == 0) {
-            /* 金庫から: 見えているタブに入れる（エンジンが出どころを確かめる） */
-            char *f[3] = {t + 5, "", ""};
-            int k = 1;
-            for (char *p = t + 5; *p && k < 3; p++)
-                if (*p == '\t') {
-                    *p = 0;
-                    f[k++] = p + 1;
-                }
-            size_t a = unescape(f[0]), b = unescape(f[1]), c = unescape(f[2]);
-            uint32_t tab = shown_tab < MAX_TABS ? eng_of[shown_tab] : 0;
-            JweStatus st = jwe_fill_login(e, tab, f[0], (uint32_t)a, f[1], (uint32_t)b, f[2], (uint32_t)c);
-            if (st == JWE_OK) jwe_window(e, JWE_WINDOW_FOCUS);
-            char r[32];
-            snprintf(r, sizeof r, "filled\t%d", (int)st);
-            to_vault(r);
-        } else if (!vault_mode && strcmp(t, "site?") == 0) {
-            tell_site();
-        } else if (vault_mode && strncmp(t, "site\t", 5) == 0) {
+        if (strncmp(t, "site\t", 5) == 0) {
             send_app_text("site", t + 5, n - 5);
-        } else if (vault_mode && strncmp(t, "filled\t", 7) == 0) {
+        } else if (strncmp(t, "filled\t", 7) == 0) {
             char r[48];
             snprintf(r, sizeof r, "filled\t%ld\n", strtol(t + 7, NULL, 10));
             send_app(r);
-        } else if (vault_mode && strcmp(t, "show") == 0) {
+        } else if (strcmp(t, "show") == 0) {
             jwe_window(e, JWE_WINDOW_FOCUS);
         }
         memset(l->text, 0, n);
@@ -790,7 +639,7 @@ static void ipc_apply(JweEngine *e) {
     (void)e;
 #endif
     clip_tick();
-    if (vault_mode && last_use && now_ms() - last_use >= VAULT_IDLE_MS) {
+    if (last_use && now_ms() - last_use >= VAULT_IDLE_MS) {
         last_use = 0;
         send_app("lock\n"); /* しばらく触らなければ閉じる */
     }
@@ -799,29 +648,31 @@ static void ipc_apply(JweEngine *e) {
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--data") == 0 && i + 1 < argc) data_arg = argv[++i];
-        else if (strcmp(argv[i], "--vault") == 0) vault_mode = 1;
+        /* --vault は前の版の名残り（読み飛ばす） */
     }
     char dir[1024], engine_dir[1100];
     data_dir(dir, sizeof dir);
     /* 金庫の WebView2 の置き場所はブラウザと分ける */
-    snprintf(engine_dir, sizeof engine_dir, "%s%s", dir, vault_mode ? "/vault" : "");
+    snprintf(engine_dir, sizeof engine_dir, "%s/vault", dir);
 #ifdef _WIN32
-    if (vault_mode) {
-        if (ipc_send(IPC_VAULT, "show", 4)) return 0; /* もう開いている */
-        for (char *p = engine_dir; *p; p++)
-            if (*p == '/') *p = '\\';
-        CreateDirectoryA(engine_dir, NULL);
+    if (ipc_send(IPC_VAULT, "show", 4)) return 0; /* もう開いている */
+    for (char *p = engine_dir; *p; p++)
+        if (*p == '/') *p = '\\';
+    {
+        wchar_t w[1100];
+        MultiByteToWideChar(CP_UTF8, 0, engine_dir, -1, w, 1100);
+        CreateDirectoryW(w, NULL);
     }
     ipc_open();
 #endif
     JweConfig cfg;
     memset(&cfg, 0, sizeof cfg);
-    cfg.title = vault_mode ? "jabberwock 金庫" : "jabberwock";
+    cfg.title = "jabberwock 金庫";
     cfg.title_len = (uint32_t)strlen(cfg.title);
     cfg.data_dir = engine_dir;
     cfg.data_dir_len = (uint32_t)strlen(engine_dir);
-    cfg.width = vault_mode ? 520 : 1100;
-    cfg.height = vault_mode ? 640 : 760;
+    cfg.width = 520;
+    cfg.height = 640;
     JweEngine *e = NULL;
     JweStatus st = jwe_open(&cfg, &e);
     if (st == JWE_ERR_UNAVAILABLE) {

@@ -7,9 +7,11 @@
 // マスターパスワードから PBKDF2-HMAC-SHA256 で 32 バイトの鍵を作り、中身を ChaCha20-Poly1305 で暗号化する。
 // 1・2 行目は印（AEAD の付け足しデータ）に入れるので、回数や塩を書き換えると開けなくなる。
 // 中身は 1 行 1 件「サイト<タブ>ユーザー名<タブ>パスワード<タブ>メモ」（\ タブ 改行は \\ \t \n）。
-// 乱数（塩・nonce）は呼ぶ側が渡す（jabberwock にはまだ乱数がないので、つなぎの jwbrowser が OS から取る）。
+// 乱数（塩・nonce）は呼ぶ側が渡す（std.random。テストでは決まった並び）。暗号は std.hash と std.crypto。
 
-use crypto;
+use std.crypto;
+use std.hash;
+use std.text;
 
 // 鍵を作るときの回数。OWASP の勧め（2023）。実行ファイルで 1 秒ほど
 pub fn i64 iterations() {
@@ -48,7 +50,8 @@ pub struct Vault {
         if master.len() < 8 {
             return Err("マスターパスワードは 8 文字以上にしてください");
         }
-        key = crypto.pbkdf2_sha256(master.bytes(), new_salt, rounds);
+        let pw = master.bytes();
+        key = hash.pbkdf2_sha256(ref pw, ref new_salt, rounds);
         salt = new_salt.map((x) -> x);
         iterations = rounds;
         logins = [];
@@ -57,16 +60,16 @@ pub struct Vault {
     }
 
     fn str header() {
-        "jwvault 1\nkdf pbkdf2-sha256 {iterations} " + crypto.hex(salt)
+        "jwvault 1\nkdf pbkdf2-sha256 {iterations} " + hash.hex(ref salt)
     }
 
     // 開ける。マスターパスワードが違う・ファイルが壊れていれば Err
     fn mut Result<(), str> unlock(str master) {
-        let text = match read_file(file) {
+        let content = match read_file(file) {
             case Ok(t) -> t;
             case Err(_) -> return Err("金庫のファイルを読めません");
         };
-        let lines = text.lines();
+        let lines = content.lines();
         if lines.len() < 3 || lines[0] != "jwvault 1" {
             return Err("金庫のファイルの形が違います");
         }
@@ -79,19 +82,20 @@ pub struct Vault {
         if n < 1 || n > 100000000 {
             return Err("金庫のファイルの形が違います");
         }
-        let s = match crypto.unhex(k[3]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
-        let nonce = match crypto.unhex(d[1]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
-        let sealed = match crypto.unhex(d[2]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
+        let s = match hash.unhex(k[3]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
+        let nonce = match hash.unhex(d[1]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
+        let sealed = match hash.unhex(d[2]) { case Some(b) -> b; case None -> return Err("金庫のファイルの形が違います"); };
         if nonce.len() != 12 {
             return Err("金庫のファイルの形が違います");
         }
-        let kk = crypto.pbkdf2_sha256(master.bytes(), s, n);
+        let pw = master.bytes();
+        let kk = hash.pbkdf2_sha256(ref pw, ref s, n);
         let aad = (lines[0] + "\n" + lines[1]).bytes();
-        let plain = match crypto.open(kk, nonce, aad, sealed) {
+        let plain = match crypto.open(ref kk, ref nonce, ref aad, ref sealed) {
             case Some(p) -> p;
             case None -> return Err("マスターパスワードが違います（またはファイルが書き換えられています）");
         };
-        let body = match crypto.utf8(plain) { case Some(t) -> t; case None -> return Err("金庫の中身が読めません"); };
+        let body = match text.from_utf8(ref plain) { case Some(t) -> t; case None -> return Err("金庫の中身が読めません"); };
         let Login[] mut ls = [];
         for line in body.lines() {
             if line == "" {
@@ -131,9 +135,11 @@ pub struct Vault {
             body += escape(l.site) + "\t" + escape(l.user) + "\t" + escape(l.password) + "\t" + escape(l.note) + "\n";
         }
         let h = header();
-        let sealed = crypto.seal(key, nonce, h.bytes(), body.bytes());
-        let text = h + "\ndata " + crypto.hex(nonce) + " " + crypto.hex(sealed) + "\n";
-        match write_file(file, text) {
+        let aad = h.bytes();
+        let plain = body.bytes();
+        let sealed = crypto.seal(ref key, ref nonce, ref aad, ref plain);
+        let out = h + "\ndata " + hash.hex(ref nonce) + " " + hash.hex(ref sealed) + "\n";
+        match write_file(file, out) {
             case Ok(_) -> Ok(());
             case Err(e) -> Err("vault.dat を書けません: " + e);
         }
@@ -147,7 +153,8 @@ pub struct Vault {
         if master.len() < 8 {
             return Err("マスターパスワードは 8 文字以上にしてください");
         }
-        key = crypto.pbkdf2_sha256(master.bytes(), new_salt, iterations);
+        let pw = master.bytes();
+        key = hash.pbkdf2_sha256(ref pw, ref new_salt, iterations);
         salt = new_salt.map((x) -> x);
         save(nonce)
     }

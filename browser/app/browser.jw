@@ -1,7 +1,7 @@
 // ブラウザ本体: タブ・アドレス欄・戻る/進む・履歴・ブックマーク。
-// エンジンとは engine モジュール（jw_engine.h と同じ形）だけで話す。
+// エンジンとは std.browser（runtime/engine/jw_engine.h の境目）だけで話す。エンジンの実装はビルドのときに --link で渡す。
 
-use engine;
+use std.browser;
 use address;
 use store;
 use chrome;
@@ -22,7 +22,7 @@ pub struct Tab {
 }
 
 pub struct Browser {
-    engine.Engine eng;
+    browser.Engine eng;
     store.Store data;
     settings.Settings prefs;
     Tab[] tabs;
@@ -33,9 +33,12 @@ pub struct Browser {
     bool frameless;
     bool covered;    // 外枠が窓全体を覆っている（設定のタブを見せている）
 
-    static fn Browser open(engine.Config cfg, str data_dir) {
-        let prefs = settings.Settings.open(cfg.data_dir, data_dir);
-        let eng = engine.Engine.open(cfg);
+    // data: 置き場所。ephemeral なら何も残さない（設定は読むだけ）。エンジンを開けなければ Err
+    static fn Result<Browser, str> open(str data, bool ephemeral) {
+        let data_dir = if ephemeral { "" } else { data };
+        let prefs = settings.Settings.open(data, data_dir);
+        let cfg = browser.Config { title: "jabberwock", data_dir: data, width: 1100, height: 760, ephemeral: ephemeral };
+        let eng = browser.open(cfg)?;
         let chrome_view = eng.info().chrome_view;
         let frameless = eng.info().frameless;
         let mut b = Browser {
@@ -46,7 +49,7 @@ pub struct Browser {
             let h = b.bar_height();
             b.check(b.eng.chrome_load(chrome.html(), h));
         }
-        b
+        Ok(b)
     }
 
     // エンジンの操作が失敗したら知らせに出す（止めない）
@@ -80,7 +83,13 @@ pub struct Browser {
     // ---- 操作 ----
 
     fn mut i64 new_tab(str url) {
-        let id = eng.tab_new();
+        let id = match eng.tab_new() {
+            case Ok(n) -> n;
+            case Err(e) -> {
+                note = e;
+                return 0;
+            }
+        };
         tabs.push(Tab { id: id, url: url, title: "", loading: false, back: false, forward: false, settings: false });
         select(id);
         check(eng.navigate(id, url));
@@ -224,7 +233,13 @@ pub struct Browser {
                     new_tab(u);
                 } else if tabs[i].settings {
                     // 設定のタブの場所でページを開く
-                    let id = eng.tab_new();
+                    let id = match eng.tab_new() {
+                        case Ok(n) -> n;
+                        case Err(e) -> {
+                            note = e;
+                            return;
+                        }
+                    };
                     tabs[i] = Tab { id: id, url: u, title: "", loading: false, back: false, forward: false, settings: false };
                     select(id);
                     check(eng.navigate(id, u));
@@ -252,7 +267,7 @@ pub struct Browser {
 
     // ---- エンジンからのイベント ----
 
-    fn mut handle(engine.Event ev) {
+    fn mut handle(browser.Event ev) {
         match ev {
             case Ready -> {
                 if tabs.len() == 0 {
@@ -305,16 +320,13 @@ pub struct Browser {
             }
             case NewTabRequested(_, u) -> new_tab(u);
             case ChromeMessage(m) -> command(m);
-            case Key(k) -> key(engine.KeyCode.of(k));
+            case Key(k) -> key(browser.KeyCode.of(k));
             case PermissionDenied(_, what) -> note = "断りました: " + what;
             case Failed(_, text) -> note = text;
-            case Site(_) -> {}       // 金庫だけ
-            case Filled(_) -> {}
-            case Lock -> {}
         }
     }
 
-    fn mut key(engine.KeyCode k) {
+    fn mut key(browser.KeyCode k) {
         match k {
             case FocusAddress -> check(eng.chrome_post("focus"));
             case NewTab -> {
@@ -358,7 +370,7 @@ pub struct Browser {
             case "reload" -> nav(name);
             case "stop" -> nav(name);
             case "settings" -> open_settings();
-            case "vault" -> eng.open_vault();
+            case "vault" -> {}   // 金庫の窓は Windows 版のつなぎ（engine/webview2/vault_link.c）が出す
             case "set" -> apply_setting(arg);
             case "act" -> act(arg);
             case "newtab" -> {
@@ -369,9 +381,9 @@ pub struct Browser {
             case "close" -> close_tab(arg.to_int().unwrap_or(0));
             case "bookmark" -> toggle_bookmark();
             case "window" -> match arg {
-                case "drag" -> check(eng.window(engine.WindowOp.Drag));
-                case "min" -> check(eng.window(engine.WindowOp.Minimize));
-                case "max" -> check(eng.window(engine.WindowOp.ToggleMaximize));
+                case "drag" -> check(eng.window(1));
+                case "min" -> check(eng.window(2));
+                case "max" -> check(eng.window(3));
                 case "close" -> done = true;
                 default -> note = "知らない窓の操作: " + arg;
             };
@@ -456,6 +468,5 @@ pub struct Browser {
             }
         }
         save_session();
-        eng.close();
     }
 }

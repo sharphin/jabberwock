@@ -1,30 +1,31 @@
-// jabberwock の軽量ブラウザ。
-//   jabberwock browser/app/main.jw [--data フォルダ] [--ephemeral] [--fake 台本] [--log]
-// --data: 履歴・ブックマーク・Cookie の置き場所（あるフォルダ。既定は今のフォルダ）
+// jabberwock の軽量ブラウザ。jwc でエンジンの実装とリンクして実行ファイルにする:
+//   jwc build --link <エンジン> -o jabberwock-browser browser/app/main.jw
+//   エンジンは Windows なら WebView2 版（browser/build-windows.sh）、試験なら runtime/engine/mock/jwe_mock.c
+// 動かし方: jabberwock-browser [--data フォルダ] [--ephemeral]
+// --data: 履歴・ブックマーク・設定・Cookie の置き場所（既定は Windows なら %LOCALAPPDATA%\jabberwock-browser、ほかは ./browser-data）
 // --ephemeral: 何も残さない
-// --fake / --log: 偽エンジンの台本と、呼ばれた操作の表示（テスト用）
-// --fake がなければ、エンジンは標準入出力の向こう（jwbrowser.exe が起動する。browser/host）
 
 use browser;
-use engine;
+use std.env;
+use std.fs;
 
-fn str read_lines_or_exit(str path) {
-    match read_file(path) {
-        case Ok(t) -> t;
-        case Err(e) -> {
-            eprint("台本を読めません:", path, e);
-            exit(1)
+// 置き場所の既定
+fn str default_data() {
+    match env.get("LOCALAPPDATA") {
+        case Some(d) -> {
+            if d != "" {
+                return d + "\\jabberwock-browser";
+            }
         }
+        case None -> {}
     }
+    "browser-data"
 }
 
 fn main() {
     let a = args();
-    let mut data = ".";
+    let mut data = "";
     let mut ephemeral = false;
-    let mut script = "";
-    let mut show_log = false;
-    let mut fake = false;
     let mut i = 0;
     while i < a.len() {
         match a[i] {
@@ -33,12 +34,6 @@ fn main() {
                 if i < a.len() { data = a[i]; }
             }
             case "--ephemeral" -> ephemeral = true;
-            case "--fake" -> {
-                i++;
-                fake = true;
-                if i < a.len() { script = read_lines_or_exit(a[i]); }
-            }
-            case "--log" -> show_log = true;
             default -> {
                 eprint("知らない引数:", a[i]);
                 exit(2);
@@ -46,15 +41,24 @@ fn main() {
         }
         i++;
     }
-    let cfg = engine.Config {
-        title: "jabberwock", data_dir: data, width: 1100, height: 760,
-        ephemeral: ephemeral, fake: fake, fake_script: script.lines(),
-    };
-    let mut b = browser.Browser.open(cfg, if ephemeral { "" } else { data });
-    b.run();
-    if show_log {
-        for l in b.eng.log {
-            print(l);
+    if data == "" {
+        data = default_data();
+    }
+    if !ephemeral && !fs.exists(data) {
+        match fs.make_dir(data) {
+            case Ok(_) -> {}
+            case Err(e) -> {
+                eprint("置き場所を作れません:", data, e);
+                exit(1);
+            }
         }
     }
+    let mut b = match browser.Browser.open(data, ephemeral) {
+        case Ok(x) -> x;
+        case Err(e) -> {
+            eprint("エンジンを開けません:", e);
+            exit(1)
+        }
+    };
+    b.run();
 }

@@ -1,0 +1,284 @@
+// 金庫（vault_main.jw）とエンジンのあいだ。金庫はまだ C のつなぎ（browser/host/jwvault.c）の子プロセスとして動き、
+// 操作は 1 行ずつ標準出力へ書き、イベントは標準入力から 1 行ずつ読む（行の形は browser/host/README.md。
+// 区切りはタブ文字。文字の中の \ タブ 改行は \\ \t \n）。
+// クリップボード・ブラウザへの入力の頼み・ブラウザとのやりとりがまだ std にないので、そのあいだのつなぎ。
+// std にそろったら std.browser と std の機能を呼ぶ形に置き換える（ブラウザ本体はもう std.browser を使う）。
+//
+// Config.fake が true なら偽エンジン（テスト用）。利用者の操作は Config.fake_script の行から作る
+// （イベントが空のときに wait が 1 行ずつ出す）:
+//   chrome <文字列> / close / site <URL>（ブラウザの今のページ）/ filled <番号>（入力の結果）/ lock（しばらく触らなかった）
+// 台本が終わったら CloseRequested を 1 回出す。呼ばれた操作は log に残す（テストで見る）。
+
+use std.hash;
+use std.random;
+
+pub struct Config {
+    str title;
+    str data_dir;
+    i64 width;
+    i64 height;
+    bool fake;        // true なら偽エンジン（テスト用）
+    str[] fake_script; // 偽エンジンだけが使う
+}
+
+pub enum Event {
+    Ready;
+    CloseRequested;
+    ChromeMessage(str text);
+    Failed(i64 code, str text);
+    Site(str url);        // ブラウザの見えているタブの URL
+    Filled(i64 code);     // 入力の結果（0 は入れた。2 はタブがない、3 はサイトが違う、-1 はブラウザがない）
+    Lock;                 // しばらく触らなかった
+    Other;                // 金庫には関係のないイベント
+}
+
+// 窓の操作（jw_engine.h の JWE_WINDOW_*）
+pub enum WindowOp {
+    Drag;
+    Minimize;
+
+    fn i64 code() {
+        match this {
+            case Drag -> 1;
+            case Minimize -> 2;
+        }
+    }
+}
+
+pub struct Engine {
+    bool piped;
+    Event[] queue;
+    str[] script;
+    i64 script_pos;
+    bool close_sent;
+    bool chrome;
+    str[] log;          // 呼ばれた操作（偽エンジンだけ）
+    i64 random_count;   // 偽エンジンの乱数の番号
+
+    static fn Engine open(Config cfg) {
+        let mut e = Engine {
+            piped: !cfg.fake, queue: [], script: cfg.fake_script.map((l) -> l), script_pos: 0,
+            close_sent: false, chrome: false, log: [], random_count: 0,
+        };
+        e.log.push("open " + cfg.title);
+        if e.piped {
+            // 最初の行は「info 名前 caps」（金庫は使わない）
+            match read_line() {
+                case Some(line) -> {
+                    if !line.starts_with("info\t") {
+                        e.queue.push(parse(line));
+                    }
+                }
+                case None -> e.queue.push(Event.CloseRequested);
+            }
+            e.send("set_title\t" + escape(cfg.title));   // Ready はエンジンから届く
+        } else {
+            e.queue.push(Event.Ready);
+        }
+        e
+    }
+
+    static fn str escape(str s) {
+        s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "")
+    }
+
+    static fn str unescape(str s) {
+        if !s.contains("\\") {
+            return s;
+        }
+        let mut out = "";
+        let mut esc = false;
+        for c in s.chars() {
+            if esc {
+                out += match c { case "t" -> "\t"; case "n" -> "\n"; default -> c; };
+                esc = false;
+            } else if c == "\\" {
+                esc = true;
+            } else {
+                out += c;
+            }
+        }
+        out
+    }
+
+    fn send(str line) {
+        print(line);
+    }
+
+    // つなぎから届いた 1 行をイベントにする
+    static fn Event parse(str line) {
+        let f = line.split("\t");
+        let n = f.len();
+        let kind = f[0];
+        let a = if n > 1 { unescape(f[1]) } else { "" };
+        let b = if n > 2 { unescape(f[2]) } else { "" };
+        let ai = a.to_int().unwrap_or(0);
+        match kind {
+            case "ready" -> Event.Ready;
+            case "close" -> Event.CloseRequested;
+            case "chrome" -> Event.ChromeMessage(a);
+            case "error" -> Event.Failed(ai, b);
+            case "site" -> Event.Site(a);
+            case "filled" -> Event.Filled(ai);
+            case "lock" -> Event.Lock;
+            default -> Event.Other;
+        }
+    }
+
+    fn mut close() {
+        log.push("close");
+        if piped {
+            send("close");
+            read_line();   // 出した行を送り切る（read_line の前に出力がまとめて書き出される）。つなぎは返事をせずに閉じる
+        }
+    }
+
+    // イベントがあれば取り出す（待たない）
+    fn mut Option<Event> poll() {
+        if queue.len() == 0 {
+            return None;
+        }
+        Some(queue.remove(0))
+    }
+
+    // イベントが来るまで待つ
+    fn mut Option<Event> wait() {
+        if piped {
+            if queue.len() == 0 {
+                send("wait");   // 次のイベントを待ち始めた（偽エンジンにつないだとき、順番をそろえるのに使う）
+                match read_line() {
+                    case Some(line) -> queue.push(parse(line));
+                    case None -> {
+                        // つなぎがいなくなった
+                        if !close_sent {
+                            close_sent = true;
+                            queue.push(Event.CloseRequested);
+                        }
+                    }
+                }
+            }
+            return poll();
+        }
+        if queue.len() == 0 && !script_step() && !close_sent {
+            close_sent = true;
+            queue.push(Event.CloseRequested);
+        }
+        poll()
+    }
+
+    fn mut bool script_step() {
+        while script_pos < script.len() {
+            let line = script[script_pos];
+            script_pos++;
+            if line.trim() == "" || line.starts_with("#") {
+                continue;
+            }
+            if line.starts_with("chrome ") {
+                queue.push(Event.ChromeMessage(line.slice(7, line.len())));
+            } else if line == "close" {
+                queue.push(Event.CloseRequested);
+            } else if line.starts_with("site ") {
+                queue.push(Event.Site(line.slice(5, line.len())));
+            } else if line.starts_with("filled ") {
+                queue.push(Event.Filled(line.slice(7, line.len()).to_int().unwrap_or(0)));
+            } else if line == "lock" {
+                queue.push(Event.Lock);
+            } else {
+                queue.push(Event.Failed(3, "台本の行が読めません: " + line));
+            }
+            return true;
+        }
+        false
+    }
+
+    fn mut Result<(), str> chrome_load(str html) {
+        chrome = true;
+        if piped {
+            send("chrome_load\t0\t" + escape(html));
+        } else {
+            log.push("chrome_load 0");
+        }
+        Ok(())
+    }
+
+    fn mut Result<(), str> chrome_post(str msg) {
+        if piped {
+            send("chrome_post\t" + escape(msg));
+            return Ok(());
+        }
+        if !chrome {
+            return Err("外枠がまだありません");
+        }
+        log.push("chrome_post " + msg);
+        Ok(())
+    }
+
+    // 外枠が窓全体を覆う（金庫はページを開かない）
+    fn mut Result<(), str> chrome_full() {
+        if piped {
+            send("chrome_height\tfull");
+            return Ok(());
+        }
+        if !chrome {
+            return Err("外枠がまだありません");
+        }
+        log.push("chrome_height full");
+        Ok(())
+    }
+
+    fn mut Result<(), str> window(WindowOp op) {
+        let n = op.code();
+        log.push("window {n}");
+        if piped {
+            send("window\t{n}");
+        }
+        Ok(())
+    }
+
+    // OS の乱数を n バイト（偽エンジンは毎回同じ並び。テスト用）
+    fn mut u8[] random(i64 n) {
+        if piped {
+            return random.bytes(n);
+        }
+        let u8[] mut out = [];
+        while out.len() < n {
+            let seed = "random {random_count}".bytes();
+            let block = hash.sha256(ref seed);
+            random_count++;
+            for b in block {
+                if out.len() < n {
+                    out.push(b);
+                }
+            }
+        }
+        log.push("random {n}");
+        out
+    }
+
+    // クリップボードに置く（つなぎが 30 秒で消す。クリップボードの履歴には残さない）
+    fn mut copy_text(str text) {
+        if piped {
+            send("copy\t" + escape(text));
+        } else {
+            log.push("copy ({text.len()} 文字)");
+        }
+    }
+
+    // ブラウザの見えているタブのログイン欄に入れるよう頼む。結果は Filled で届く
+    fn mut fill(str site, str user, str password) {
+        if piped {
+            send("fill\t" + escape(site) + "\t" + escape(user) + "\t" + escape(password));
+        } else {
+            log.push("fill " + site + " " + user + " ({password.len()} 文字)");
+        }
+    }
+
+    // ブラウザに今の URL を聞く。答えは Site で届く
+    fn mut ask_site() {
+        if piped {
+            send("ask_site");
+        } else {
+            log.push("ask_site");
+        }
+    }
+}

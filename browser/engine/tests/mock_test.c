@@ -1,6 +1,6 @@
 /* 偽エンジンが jw_engine.h の決まりどおりに動くかを確かめる（cc tests/mock_test.c mock/jwe_mock.c） */
-#include "../jw_engine.h"
-#include "../site.h"
+#include "../../../runtime/engine/jw_engine.h"
+#include "../../../runtime/engine/site.h"
 
 #include <stdio.h>
 #include <stdlib.h>

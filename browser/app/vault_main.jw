@@ -1,18 +1,18 @@
-// パスワードの金庫（ブラウザとは別のプログラム。jwbrowser --vault が別の窓で起動する）。
-//   jabberwock browser/app/vault_main.jw [--data フォルダ] [--fake 台本] [--log] [--iterations 回数]
+// パスワードの金庫（ブラウザとは別のプログラム。つなぎの jwvault.exe が別の窓で起動する。ブラウザの 🔑 からも開く）。
+//   jwc build -o jwvault-app browser/app/vault_main.jw → jwvault-app [--data フォルダ] [--fake 台本] [--log] [--iterations 回数]
 // --data: vault.dat の置き場所（既定は今のフォルダ）
-// --fake / --log: 偽エンジンの台本と、呼ばれた操作の表示（テスト用。台本の書き方は engine.jw の先頭）
+// --fake / --log: 偽エンジンの台本と、呼ばれた操作の表示（テスト用。台本の書き方は vault_engine.jw の先頭）
 // --iterations: 新しく作る金庫の鍵を作る回数（テスト用。ふだんは vault.iterations()）
 //
 // 画面（vault.html）はページを開かない別の WebView に出す。パスワードは画面に送らない（「見る」「編集」を押したときだけ 1 回送る）。
 // ブラウザへの入力は、ブラウザ側が今のページの出どころを確かめてから入れる（jw_engine.h の jwe_fill_login）。
 
-use engine;
+use vault_engine;
 use vault;
 use vault_ui;
 
 struct App {
-    engine.Engine eng;
+    vault_engine.Engine eng;
     vault.Vault v;
     i64 rounds;
     str site;        // ブラウザの今のページの出どころ
@@ -63,8 +63,8 @@ struct App {
         let arg = match sp { case Some(i) -> m.slice(i + 1, m.len()); case None -> ""; };
         match name {
             case "window" -> match arg {
-                case "drag" -> { eng.window(engine.WindowOp.Drag).unwrap_or(()); }
-                case "min" -> { eng.window(engine.WindowOp.Minimize).unwrap_or(()); }
+                case "drag" -> { eng.window(vault_engine.WindowOp.Drag).unwrap_or(()); }
+                case "min" -> { eng.window(vault_engine.WindowOp.Minimize).unwrap_or(()); }
                 case "close" -> done = true;
                 default -> {}
             };
@@ -220,7 +220,7 @@ struct App {
         }
     }
 
-    fn mut handle(engine.Event ev) {
+    fn mut handle(vault_engine.Event ev) {
         match ev {
             case CloseRequested -> done = true;
             case ChromeMessage(m) -> command(m);
@@ -267,11 +267,11 @@ struct App {
     }
 
     fn mut run() {
-        eng.chrome_load(vault_ui.html(), 0).unwrap_or(());
-        eng.chrome_height(-1).unwrap_or(());
+        eng.chrome_load(vault_ui.html()).unwrap_or(());
+        eng.chrome_full().unwrap_or(());
         sync();
         while !done {
-            match eng.wait(-1) {
+            match eng.wait() {
                 case Some(ev) -> {
                     handle(ev);
                     loop {
@@ -330,12 +330,12 @@ fn main() {
         i++;
     }
     let file = if data.ends_with("/") || data.ends_with("\\") { data + "vault.dat" } else { data + "/vault.dat" };
-    let cfg = engine.Config {
+    let cfg = vault_engine.Config {
         title: "jabberwock 金庫", data_dir: data, width: 520, height: 640,
-        ephemeral: false, fake: fake, fake_script: script.lines(),
+        fake: fake, fake_script: script.lines(),
     };
     let mut app = App {
-        eng: engine.Engine.open(cfg), v: vault.Vault.at(file), rounds: rounds, site: "", msg: "", msg_err: false,
+        eng: vault_engine.Engine.open(cfg), v: vault.Vault.at(file), rounds: rounds, site: "", msg: "", msg_err: false,
         reveal: "", gen: "", done: false,
     };
     app.run();

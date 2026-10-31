@@ -834,3 +834,8 @@ let x = pick(true, 1, 2);
   形はブラウザのスレッド（browser/engine/jw_engine.h）で WebView2 版と偽エンジンで動いていたものをそのまま runtime/engine に移した（境目の版は 1 のまま。足しただけで、今ある関数は変えていない）。
   fill_login の出どころの確かめはエンジン（C）の中で、入れる直前にページの中でもう一度する。std.browser は 3 つの文字列を「長さ:長さ:」のあとに続けて 1 つにして渡す（境目の呼び出しの形を増やさないため）。
   パスワードは今は str で渡すので、使い終わったあとメモリから消せない（消せるバイト列は別に作る）。
+- ブラウザを jwc と std.browser に移した（2026-10-31、まつさんの決定）: browser/ の本体は jwc で作り、WebView2 版を `--link` で直接リンクする。
+  エンジンの境目・偽エンジン・出どころの規則は runtime/engine のものだけを使い、browser/engine の写しは消した。金庫の暗号は std.hash・std.crypto・std.random。
+  金庫の窓は、std にクリップボードとプロセスどうしのやりとりがないあいだ、C のつなぎ（browser/host/jwvault.c）の子プロセスのまま。
+  ブラウザ側で金庫とやりとりする部分は、本体（jabberwock）に入れられないので、Windows 版のエンジンの 5 つの関数を包む C のつなぎ
+  （browser/engine/webview2/vault_link.c）に置いた（std.process ができたら本体へ移して消す）。

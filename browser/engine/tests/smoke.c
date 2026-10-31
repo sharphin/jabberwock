@@ -1,7 +1,7 @@
 /* 手で動かして確かめる小さなブラウザ（jabberwock を使わない）。エンジンが届けるイベントを全部表示する。
  *   smoke [URL]
  * 外枠はアドレス入力欄だけ。Enter で今のタブをその URL へ移す。窓の × で終わる。 */
-#include "../jw_engine.h"
+#include "../../../runtime/engine/jw_engine.h"
 
 #include <stdio.h>
 #include <string.h>

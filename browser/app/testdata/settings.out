@@ -1,19 +1,19 @@
-open jabberwock
+open 0 jabberwock
 chrome_load 114
 tab_new 1
 tab_show 1
-set_title jabberwock
+set_title 0 jabberwock
 navigate 1 about:blank
-set_title title:about:blank - jabberwock
-chrome_post state
+set_title 0 title:about:blank - jabberwock
+chrome_post 0 state
 url	
 nav	0	0	0	0
 tab	1	1		
 bmbar	1
 icons	1
-chrome_height full
-set_title 設定 - jabberwock
-chrome_post state
+chrome_height 0 full
+set_title 0 設定 - jabberwock
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -31,7 +31,7 @@ opt	bookmarks_bar	toggle	1	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -49,7 +49,7 @@ opt	bookmarks_bar	toggle	0	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -67,7 +67,7 @@ opt	bookmarks_bar	toggle	0	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -85,7 +85,7 @@ opt	bookmarks_bar	toggle	0	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -104,7 +104,7 @@ opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出�
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 note	知らない設定の操作: nothing
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -122,7 +122,7 @@ opt	bookmarks_bar	toggle	0	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -141,13 +141,13 @@ opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出�
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 tab_new 2
-chrome_height 84
+chrome_height 0 84
 tab_show 2
-set_title jabberwock
+set_title 0 jabberwock
 navigate 2 about:blank
-chrome_post focus
-set_title title:about:blank - jabberwock
-chrome_post state
+chrome_post 0 focus
+set_title 0 title:about:blank - jabberwock
+chrome_post 0 state
 url	
 nav	0	0	0	0
 tab	1	0		
@@ -155,9 +155,9 @@ tab	-1	0	設定	jw://settings
 tab	2	1		
 bmbar	0
 icons	1
-chrome_height full
-set_title 設定 - jabberwock
-chrome_post state
+chrome_height 0 full
+set_title 0 設定 - jabberwock
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -177,12 +177,12 @@ opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出�
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 tab_new 3
-chrome_height 84
+chrome_height 0 84
 tab_show 3
-set_title jabberwock
+set_title 0 jabberwock
 navigate 3 https://www.google.com/search?q=a+b
-set_title title:https://www.google.com/search?q=a+b - jabberwock
-chrome_post state
+set_title 0 title:https://www.google.com/search?q=a+b - jabberwock
+chrome_post 0 state
 url	https://www.google.com/search?q=a+b
 nav	0	0	0	0
 tab	1	0		
@@ -190,9 +190,9 @@ tab	3	1	title:https://www.google.com/search?q=a+b	https://www.google.com/search?
 tab	2	0		
 bmbar	0
 icons	1
-chrome_height full
-set_title 設定 - jabberwock
-chrome_post state
+chrome_height 0 full
+set_title 0 設定 - jabberwock
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -212,7 +212,7 @@ opt	bookmarks_bar	toggle	0	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_post state
+chrome_post 0 state
 url	jw://settings
 nav	0	0	0	0
 tab	1	0		
@@ -232,10 +232,10 @@ opt	bookmarks_bar	toggle	1	ブックマークバーを出す
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
-chrome_height 114
+chrome_height 0 114
 tab_show 2
-set_title title:about:blank - jabberwock
-chrome_post state
+set_title 0 title:about:blank - jabberwock
+chrome_post 0 state
 url	
 nav	0	0	0	0
 tab	1	0		
@@ -243,7 +243,7 @@ tab	3	0	title:https://www.google.com/search?q=a+b	https://www.google.com/search?
 tab	2	1		
 bmbar	1
 icons	1
-chrome_post state
+chrome_post 0 state
 url	
 nav	0	0	0	0
 tab	1	0		
@@ -251,4 +251,4 @@ tab	3	0	title:https://www.google.com/search?q=a+b	https://www.google.com/search?
 tab	2	1		
 bmbar	1
 icons	1
-close
+close 0

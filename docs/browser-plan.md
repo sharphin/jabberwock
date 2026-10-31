@@ -8,7 +8,7 @@
 - エンジンは **WebView2**（Windows に入っている Edge のエンジン）で始める。Rust 製（Servo / Blitz）も比べたが、
   Servo は崩れるサイトが残り、Blitz は JavaScript が動かないため見送った。
 - ただし **エンジンを差し替えやすくする**のが条件。ブラウザ本体（jabberwock）とエンジンの間に
-  C の関数だけの境目 `browser/engine/jw_engine.h` を置き、本体はこれ以外に触らない。
+  C の関数だけの境目 `runtime/engine/jw_engine.h`（std.browser と共通）を置き、本体はこれ以外に触らない。
   WebView2・試験用の偽エンジン・あとで Servo や jabberwock 製のエンジンは、それぞれこの関数を 1 組実装するだけ。
 - 今の jabberwock には C の部品を呼ぶ手段がないので、そこを足す必要がある。標準ライブラリ側の方針（2026-10-30）:
   任意の extern は入れず、`std.browser` の資源型 `Engine`（世代つきの札。ムーブだけ・送れない）と std の中だけで呼べる内部の操作を足し、
@@ -57,10 +57,10 @@ jabberwock のプログラム（browser.jw）
 
 | 決まり | 中身 |
 |---|---|
-| 別のプログラム | `jwbrowser.exe --vault` が別の窓で動き、jabberwock の本体 `jwvault-app.exe`（browser/app/vault_main.jw）を子プロセスにする。ブラウザ本体（jwbrowser-app）はパスワードを一切持たない |
+| 別のプログラム | `jwvault.exe` が別の窓で動き、jabberwock の本体 `jwvault-app.exe`（browser/app/vault_main.jw）を子プロセスにする。ブラウザ本体（jabberwock-browser.exe）はパスワードを一切持たない |
 | ページとは別の WebView | 金庫の画面（vault.html）はタブを作らない WebView に出し、WebView2 の置き場所も分ける（`<データ>\vault\webview2`）。CSP で外への読み込みを全部止める |
-| 暗号 | マスターパスワード → PBKDF2-HMAC-SHA256（60 万回）→ 32 バイトの鍵 → ChaCha20-Poly1305。すべて jabberwock で書き（crypto.jw）、RFC / NIST の値で確かめる。ファイルの 1・2 行目（回数・塩）も印に入れる |
-| 乱数 | jabberwock にまだないので、つなぎが OS から取る（Windows は BCryptGenRandom）。塩 16 バイト・nonce 12 バイト（保存のたびに新しく） |
+| 暗号 | マスターパスワード → PBKDF2-HMAC-SHA256（60 万回）→ 32 バイトの鍵 → ChaCha20-Poly1305。std.hash・std.crypto（jabberwock で書いたもの。RFC の値と Python の暗号ライブラリとの突き合わせで確かめてある）を使う。ファイルの 1・2 行目（回数・塩）も印に入れる |
+| 乱数 | std.random（OS の乱数。Windows は BCryptGenRandom）。塩 16 バイト・nonce 12 バイト（保存のたびに新しく） |
 | 画面に出さない | パスワードは「見る」「編集」を押したときだけ 1 回画面に送る |
 | 入力 | 利用者が「入力」を押したときだけ。金庫 → ブラウザは Windows のメッセージ（WM_COPYDATA）。ブラウザは見えているタブの出どころ（scheme://host[:port]）が保存したサイトと完全に同じときだけ `jwe_fill_login` で入れ、ページの中でも入れる直前に `location.origin` を確かめる |
 | コピー | クリップボードの履歴・クラウドには残さない印を付け、30 秒たって変わっていなければ消す |
@@ -79,7 +79,7 @@ jabberwock のプログラム（browser.jw）
 | 時刻 | 今の時刻（履歴の日時）・待つ | std.time（単調時計・Duration・Deadline）で入れる予定。履歴には壁時計の時刻も要る |
 | ファイル | 安全な上書き（一時ファイル → rename） | std.fs に exists・list_dir・make_dir・remove は実装済み（jwc、safety-ci-resume）。安全な上書きはまだ |
 | 環境 | 環境変数（`LOCALAPPDATA`）・アプリ用フォルダの場所 | ない。設計になく、入れるか未定 |
-| 乱数 | OS の乱数（金庫の塩・nonce・パスワード作り） | ない。今はつなぎ（jwbrowser.c）から 1 行でもらう |
+| 乱数 | OS の乱数（金庫の塩・nonce・パスワード作り） | ✓ std.random |
 | データ形式 | JSON の読み書き（外枠の HTML とのやりとり・保存ファイル） | ない。設計にもない（推測: 追加が要る） |
 | 文字列 | URL の分解・%エンコード、検索語か URL かの判定 | URL の分解は std.http の中にあるが非公開。%エンコードはない |
 
@@ -99,11 +99,11 @@ jabberwock のプログラム（browser.jw）
 1. ✓ 境目 `jw_engine.h`、偽エンジンとそのテスト、WebView2 版。2026-10-31 に Windows で起動し、example.com の読み込みとイベント（ready・nav_started・url・history・title・nav_finished）を確認した。
 2. ✓ WebView2 版を Windows で動かして確かめる（smoke。WebView2Loader.dll なしで起動）。
 3. jabberwock から境目の関数を呼べるようにする（標準ライブラリ側で std.browser として。時期は相談）。
-   それまでのつなぎとして、browser/host/jwbrowser.c がエンジンを動かし、本体を子プロセスにして標準入出力の 1 行ずつでつなぐ（2026-10-31）。
-   これでタブ型の本体が WebView2 で動く（jwbrowser.exe + jwbrowser-app.exe）。
-   できたら browser/app/engine.jw を std.browser を呼ぶものに置き換える。
+   ✓ 2026-10-31 にブラウザ本体を std.browser に移した（jwc で作り、WebView2 版を `--link` で直接リンク。jabberwock-browser.exe 1 つ）。
+   それまでのつなぎ（C の jwbrowser が本体を子プロセスにして 1 行ずつつなぐ）は、金庫の窓（host/jwvault.c）にだけ残した。
+   金庫は std.process（子プロセスとのパイプ）と std.clipboard ができたら同じように移し、ブラウザ側のつなぎ（engine/webview2/vault_link.c）も消す。
 4. ✓ 本体（browser/app）: アドレス入力・検索・戻る/進む・再読み込み・タブ・キー操作・履歴・ブックマーク。
-   今は jabberwock で書いた偽エンジンにつなぎ、台本でテストする（`cargo test --test browser`）。
+   C の偽エンジン（runtime/engine/mock）にリンクし、台本でテストする（`cargo test --test browser`）。
 5. ✓ 設定のタブ（2026-10-31）。外枠が窓全体を覆って設定の画面を出す（`jwe_chrome_height` の `JWE_CHROME_FULL`）。
    項目は browser/app/settings.jw の `items()` の一覧で、外枠はそこから画面を作る（項目を足すのに HTML は直さない）。
    今の項目: 起動したときのページ（新しいタブ / ホームページ / 前回のタブ）・ホームページ・検索エンジン・ブックマークバー・サイトのアイコン・Cookie と履歴を消す。

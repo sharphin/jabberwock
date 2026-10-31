@@ -4,56 +4,59 @@
 
 ```
 browser/
-  host/jwbrowser.c              エンジンを動かし、本体（jwbrowser-app）を子プロセスにして 1 行ずつつなぐ（説明は host/README.md）
-  app/main.jw                   本体の入口（引数を読んで Browser を動かす）
-  app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり
+  app/main.jw                   ブラウザの入口（引数を読んで Browser を動かす）
+  app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり。エンジンとは std.browser だけで話す
   app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
   app/store.jw                  履歴・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
-  app/vault_main.jw             パスワードの金庫（別のプログラム。jwbrowser --vault が起動する）
-  app/vault.jw                  金庫のファイル vault.dat（作る・開ける・足す・消す・マスターパスワードの変更・パスワード作り）
-  app/crypto.jw                 暗号（SHA-256・HMAC・PBKDF2・ChaCha20-Poly1305）。jabberwock だけで書いた
-  app/vault.html                金庫の画面。vault_ui.jw は gen_chrome.jw がここから作る
   app/settings.jw               設定の項目の一覧と値（settings.tsv）。項目は items() に 1 行足すだけで増やせる
   app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。chrome.jw は gen_chrome.jw がここから作る
-  app/engine.jw                 エンジンとの境目の jabberwock 側。今は jabberwock で書いた偽エンジン
+  app/vault_main.jw             パスワードの金庫（別のプログラム。host/jwvault が起動する）
+  app/vault.jw                  金庫のファイル vault.dat（作る・開ける・足す・消す・マスターパスワードの変更・パスワード作り）。暗号は std.hash・std.crypto
+  app/vault_engine.jw           金庫とつなぎ（jwvault）のあいだの 1 行ずつのやりとりと、テスト用の偽エンジン
+  app/vault.html                金庫の画面。vault_ui.jw は gen_chrome.jw がここから作る
   app/test_*.jw, app/testdata/  テスト（cargo test --test browser）
-  engine/site.h                 URL の出どころ（ログイン欄に入れてよいかの判定。エンジンどうしで同じ規則）
-  engine/jw_engine.h            エンジンとの境目（C の関数だけ）。ブラウザ本体はこれだけを使う
-  engine/webview2/              WebView2（Windows）での実装
-  engine/mock/                  試験用の偽エンジン（画面なし。どの OS でも動く）
+  host/jwvault.c                金庫の窓のつなぎ（エンジンを動かし、金庫の本体を子プロセスにして 1 行ずつつなぐ。説明は host/README.md）
+  engine/webview2/              WebView2（Windows）での実装（jw_engine.h の関数）
+  engine/webview2/vault_link.c  Windows 版のブラウザで、エンジンと金庫の窓をつなぐ（std にプロセスどうしのやりとりができるまで）
   engine/tests/mock_test.c      偽エンジンが決まりどおりに動くかのテスト
   engine/tests/smoke.c          手で動かして確かめる小さなブラウザ（jabberwock なし）
+  build-windows.sh              Windows 版を Linux から作る
 ```
 
-エンジンを差し替えるときは、`jw_engine.h` の関数を実装したファイルを 1 つ足し、リンクするファイルを替えるだけ。
+エンジンとの境目（C の関数だけ）は `runtime/engine/jw_engine.h`、試験用の偽エンジンは `runtime/engine/mock/jwe_mock.c`、
+出どころの規則は `runtime/engine/site.h`（どれも std.browser と共通）。エンジンを差し替えるときは、
+`jw_engine.h` の関数を実装したファイルを 1 つ足し、`jwc build --link` で渡すファイルを替えるだけ。
 
-## 本体を偽エンジンで動かす（どの OS でも）
+## 偽エンジンで動かす（どの OS でも）
 
-今は jabberwock から C の関数を呼べないので、本体の app/engine.jw は 2 通りに動く。
-ふつうは標準入出力の向こうのエンジン（host/jwbrowser が起動する。WebView2 で動くのはこちら）、`--fake` なら jabberwock で書いた偽エンジン。
-std.browser ができたら engine.jw だけを置き換える（ほかのファイルは変えない）。
+ブラウザは jwc で実行ファイルにする（std.browser は jwc だけにある）。偽エンジンは環境変数の台本で操作を受け、呼ばれた操作を記録する。
 
 ```
-cd browser/app
-jabberwock main.jw --ephemeral --fake testdata/basic.txt --log
+jwc build --link runtime/engine/mock/jwe_mock.c -o /tmp/jb browser/app/main.jw
+JWE_MOCK_SCRIPT=browser/app/testdata/basic.txt JWE_MOCK_LOG=/tmp/mock.log /tmp/jb --data /tmp/jbdata --ephemeral
 ```
 
-- `--fake 台本`: 利用者の操作の代わり（`chrome go example.com`・`key 7` など。書き方は engine.jw の先頭）
-- `--log`: エンジンに出した操作を表示する
-- `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）・設定（settings.tsv）・前回のタブ（session.tsv）の置き場所。あるフォルダを指定する（既定は今のフォルダ）
+- 台本の書き方は runtime/engine/mock/jwe_mock.c の先頭（`chrome go example.com`・`key 7` など）
+- `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）・設定（settings.tsv）・前回のタブ（session.tsv）・Cookie の置き場所
+  （既定は Windows なら `%LOCALAPPDATA%\jabberwock-browser`、ほかは `./browser-data`）
 - `--ephemeral`: 何も残さない
 
-金庫も同じように動かせる: `jabberwock vault_main.jw --data /tmp/v --iterations 2 --fake testdata/vault.txt --log`
-（`--iterations` は鍵を作る回数。テストを速くするためだけ）。
+金庫は jabberwock で書いた偽エンジンを持つ: `jwc build -o /tmp/jv browser/app/vault_main.jw` のあと
+`/tmp/jv --data /tmp/v --iterations 2 --fake browser/app/testdata/vault.txt --log`（`--iterations` は鍵を作る回数。テストを速くするためだけ）。
 
-`jabberwock build main.jw` で実行ファイルにしても同じ動き。テストは `cargo test --test browser`
-（出力を直したときは `JW_BLESS=1 cargo test --test browser` で testdata/*.out を作り直す）。
-外枠を直したら `jabberwock gen_chrome.jw .`（browser/app で）で chrome.jw を作り直す。
+テストは `cargo test --test browser`（jwc を作るので数分かかる。作ってある jwc を使うなら `JW_SAFETY_JWC=jwc の場所`）。
+出力を直したときは `JW_BLESS=1 cargo test --test browser` で testdata/*.out を作り直す。
+外枠を直したら gen_chrome.jw を jwc で作って `gen_chrome browser/app` を動かし、chrome.jw / vault_ui.jw を作り直す。
+
+## Windows 版を作る
+
+Linux から: `WV2_EXTRA_INC="-I <足りないヘッダー>" browser/build-windows.sh <jwc> <WebView2.h のフォルダ> <出力フォルダ>`。
+jabberwock-browser.exe・jwvault.exe・jwvault-app.exe ができる。3 つを同じフォルダに置き、jabberwock-browser.exe を起動する。
 
 ## 偽エンジンのテスト（C。Linux / macOS / Windows）
 
 ```
-cc -Wall -o mock_test browser/engine/tests/mock_test.c browser/engine/mock/jwe_mock.c
+cc -Wall -o mock_test browser/engine/tests/mock_test.c runtime/engine/mock/jwe_mock.c
 ./mock_test                      # ok と出れば合格
 ```
 

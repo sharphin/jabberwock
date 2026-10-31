@@ -1,13 +1,15 @@
 // vault.jw: 作る・開ける・違うパスワード・書き換え・出どころ・パスワード作り
 use vault;
-use crypto;
+use std.hash;
 
 // テスト用の決まった「乱数」
 fn u8[] fake_random(str seed, i64 n) {
-    let mut out = crypto.sha256(seed.bytes());
+    let first = seed.bytes();
+    let mut out = hash.sha256(ref first);
     let mut i = 0;
     while out.len() < n {
-        let more = crypto.sha256((seed + "{i}").bytes());
+        let next = (seed + "{i}").bytes();
+        let more = hash.sha256(ref next);
         for b in more {
             out.push(b);
         }

@@ -29,8 +29,8 @@
 #include <vector>
 
 #include "WebView2.h"
-#include "../jw_engine.h"
-#include "../site.h"
+#include "../../../runtime/engine/jw_engine.h"
+#include "../../../runtime/engine/site.h"
 
 namespace {
 
