@@ -8,8 +8,9 @@ browser/
   app/main.jw                   本体の入口（引数を読んで Browser を動かす）
   app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり
   app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
-  app/store.jw                  履歴・ブックマークをファイルに残す（1 か所だけ）
-  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク）。chrome.jw は gen_chrome.jw がここから作る
+  app/store.jw                  履歴・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
+  app/settings.jw               設定の項目の一覧と値（settings.tsv）。項目は items() に 1 行足すだけで増やせる
+  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。chrome.jw は gen_chrome.jw がここから作る
   app/engine.jw                 エンジンとの境目の jabberwock 側。今は jabberwock で書いた偽エンジン
   app/test_*.jw, app/testdata/  テスト（cargo test --test browser）
   engine/jw_engine.h            エンジンとの境目（C の関数だけ）。ブラウザ本体はこれだけを使う
@@ -34,7 +35,7 @@ jabberwock main.jw --ephemeral --fake testdata/basic.txt --log
 
 - `--fake 台本`: 利用者の操作の代わり（`chrome go example.com`・`key 7` など。書き方は engine.jw の先頭）
 - `--log`: エンジンに出した操作を表示する
-- `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）の置き場所。あるフォルダを指定する（既定は今のフォルダ）
+- `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）・設定（settings.tsv）・前回のタブ（session.tsv）の置き場所。あるフォルダを指定する（既定は今のフォルダ）
 - `--ephemeral`: 何も残さない
 
 `jabberwock build main.jw` で実行ファイルにしても同じ動き。テストは `cargo test --test browser`

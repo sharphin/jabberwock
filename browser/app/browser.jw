@@ -5,8 +5,11 @@ use engine;
 use address;
 use store;
 use chrome;
+use settings;
 
 const HOME = "about:blank";
+const SETTINGS_URL = "jw://settings";
+const SETTINGS_ID = -1;   // 設定のタブの番号（エンジンのタブではない。外枠が窓全体を覆って画面を出す）
 
 pub struct Tab {
     i64 id;
@@ -15,28 +18,33 @@ pub struct Tab {
     bool loading;
     bool back;
     bool forward;
+    bool settings;   // 設定のタブ
 }
 
 pub struct Browser {
     engine.Engine eng;
     store.Store data;
+    settings.Settings prefs;
     Tab[] tabs;
     i64 current;     // 今のタブの番号（0 はなし）
     bool done;
     str note;        // 外枠に出す短い知らせ
     bool chrome_view;
     bool frameless;
+    bool covered;    // 外枠が窓全体を覆っている（設定のタブを見せている）
 
     static fn Browser open(engine.Config cfg, str data_dir) {
+        let prefs = settings.Settings.open(cfg.data_dir, data_dir);
         let eng = engine.Engine.open(cfg);
         let chrome_view = eng.info().chrome_view;
         let frameless = eng.info().frameless;
         let mut b = Browser {
-            eng: eng, data: store.Store.open(data_dir), tabs: [], current: 0,
-            done: false, note: "", chrome_view: chrome_view, frameless: frameless,
+            eng: eng, data: store.Store.open(data_dir), prefs: prefs,
+            tabs: [], current: 0, done: false, note: "", chrome_view: chrome_view, frameless: frameless, covered: false,
         };
         if chrome_view {
-            b.check(b.eng.chrome_load(chrome.html(), chrome.height()));
+            let h = b.bar_height();
+            b.check(b.eng.chrome_load(chrome.html(), h));
         }
         b
     }
@@ -47,6 +55,17 @@ pub struct Browser {
             case Ok(_) -> {}
             case Err(e) -> note = e;
         }
+    }
+
+    // 外枠の高さ（ブックマークバーを出すかで変わる）
+    fn i64 bar_height() {
+        chrome.height(prefs.on("bookmarks_bar"))
+    }
+
+    // 今のタブがページなら番号、設定のタブかタブがないなら 0
+    fn i64 page() {
+        let i = index_of(current);
+        if i < 0 || tabs[i].settings { 0 } else { current }
     }
 
     fn i64 index_of(i64 id) {
@@ -62,19 +81,104 @@ pub struct Browser {
 
     fn mut i64 new_tab(str url) {
         let id = eng.tab_new();
-        tabs.push(Tab { id: id, url: url, title: "", loading: false, back: false, forward: false });
+        tabs.push(Tab { id: id, url: url, title: "", loading: false, back: false, forward: false, settings: false });
         select(id);
         check(eng.navigate(id, url));
         id
     }
 
     fn mut select(i64 id) {
-        if index_of(id) < 0 {
+        let i = index_of(id);
+        if i < 0 {
             return;
         }
         current = id;
-        check(eng.tab_show(id));
+        if tabs[i].settings {
+            if !covered {
+                covered = true;
+                check(eng.chrome_height(-1));
+            }
+        } else {
+            if covered {
+                covered = false;
+                let h = bar_height();
+                check(eng.chrome_height(h));
+            }
+            check(eng.tab_show(id));
+        }
         update_title();
+    }
+
+    // 設定のタブを開く（もうあればそこへ移る）
+    fn mut open_settings() {
+        if index_of(SETTINGS_ID) < 0 {
+            tabs.push(Tab { id: SETTINGS_ID, url: SETTINGS_URL, title: "設定", loading: false, back: false, forward: false, settings: true });
+        }
+        select(SETTINGS_ID);
+    }
+
+    // 起動したときのタブ（設定の「起動したときに開くページ」）
+    fn mut start() {
+        match prefs.get("startup") {
+            case "home" -> {
+                let u = address.from_input(prefs.get("home")).unwrap_or(HOME);
+                new_tab(u);
+            }
+            case "last" -> {
+                let urls = data.session.map((e) -> e.url);
+                if urls.len() == 0 {
+                    new_tab(HOME);
+                } else {
+                    for u in urls {
+                        new_tab(u);
+                    }
+                    let first = tabs[0].id;
+                    select(first);
+                }
+            }
+            default -> new_tab(HOME);
+        }
+    }
+
+    // 「前回開いていたタブ」のときだけ、終わるときに開いているページを覚える
+    fn mut save_session() {
+        if prefs.get("startup") != "last" {
+            return;
+        }
+        let store.Entry[] mut es = [];
+        for t in tabs {
+            if !t.settings && t.url != HOME {
+                es.push(store.Entry { url: t.url, title: t.title });
+            }
+        }
+        data.save_session(es);
+    }
+
+    fn mut apply_setting(str arg) {
+        let sp = arg.find(" ");
+        let key = match sp { case Some(i) -> arg.slice(0, i); case None -> arg; };
+        let value = match sp { case Some(i) -> arg.slice(i + 1, arg.len()); case None -> ""; };
+        if !prefs.set(key, value) {
+            return;
+        }
+        if key == "bookmarks_bar" && !covered {
+            let h = bar_height();
+            check(eng.chrome_height(h));
+        }
+    }
+
+    // 設定の画面のボタン
+    fn mut act(str key) {
+        match key {
+            case "clear_data" -> clear_data();
+            default -> note = "知らない設定の操作: " + key;
+        }
+    }
+
+    fn mut clear_data() {
+        check(eng.clear_site_data());
+        data.clear_history();
+        note = "Cookie と履歴を消しました";
     }
 
     fn mut close_tab(i64 id) {
@@ -82,7 +186,9 @@ pub struct Browser {
         if i < 0 {
             return;
         }
-        check(eng.tab_close(id));
+        if !tabs[i].settings {
+            check(eng.tab_close(id));
+        }
         tabs.remove(i);
         if tabs.len() == 0 {
             // 最後のタブを閉じたら、空のタブを 1 つ残す
@@ -106,10 +212,22 @@ pub struct Browser {
     }
 
     fn mut go(str input) {
-        match address.from_input(input) {
+        if input.trim() == SETTINGS_URL {
+            open_settings();
+            return;
+        }
+        let search = settings.search_prefix(prefs.get("search"));
+        match address.from_input_with(input, search) {
             case Some(u) -> {
-                if current == 0 {
+                let i = index_of(current);
+                if i < 0 {
                     new_tab(u);
+                } else if tabs[i].settings {
+                    // 設定のタブの場所でページを開く
+                    let id = eng.tab_new();
+                    tabs[i] = Tab { id: id, url: u, title: "", loading: false, back: false, forward: false, settings: false };
+                    select(id);
+                    check(eng.navigate(id, u));
                 } else {
                     check(eng.navigate(current, u));
                 }
@@ -119,7 +237,7 @@ pub struct Browser {
     }
 
     fn mut toggle_bookmark() {
-        let i = index_of(current);
+        let i = index_of(page());
         if i < 0 {
             return;
         }
@@ -138,7 +256,7 @@ pub struct Browser {
         match ev {
             case Ready -> {
                 if tabs.len() == 0 {
-                    new_tab(HOME);
+                    start();
                 }
             }
             case CloseRequested -> done = true;
@@ -203,10 +321,24 @@ pub struct Browser {
             case CloseTab -> close_tab(current);
             case NextTab -> step_tab(1);
             case PrevTab -> step_tab(-1);
-            case Reload -> check(eng.reload(current));
-            case Back -> check(eng.back(current));
-            case Forward -> check(eng.forward(current));
+            case Reload -> nav("reload");
+            case Back -> nav("back");
+            case Forward -> nav("forward");
             case Unknown -> {}
+        }
+    }
+
+    // 今のページの戻る・進む・再読み込み・止める（設定のタブでは何もしない）
+    fn mut nav(str op) {
+        let id = page();
+        if id == 0 {
+            return;
+        }
+        match op {
+            case "back" -> check(eng.back(id));
+            case "forward" -> check(eng.forward(id));
+            case "reload" -> check(eng.reload(id));
+            default -> check(eng.stop(id));
         }
     }
 
@@ -218,10 +350,13 @@ pub struct Browser {
         match name {
             case "go" -> go(arg);
             case "open" -> go(arg);
-            case "back" -> check(eng.back(current));
-            case "forward" -> check(eng.forward(current));
-            case "reload" -> check(eng.reload(current));
-            case "stop" -> check(eng.stop(current));
+            case "back" -> nav(name);
+            case "forward" -> nav(name);
+            case "reload" -> nav(name);
+            case "stop" -> nav(name);
+            case "settings" -> open_settings();
+            case "set" -> apply_setting(arg);
+            case "act" -> act(arg);
             case "newtab" -> {
                 new_tab(HOME);
                 check(eng.chrome_post("focus"));
@@ -236,11 +371,7 @@ pub struct Browser {
                 case "close" -> done = true;
                 default -> note = "知らない窓の操作: " + arg;
             };
-            case "clear" -> {
-                check(eng.clear_site_data());
-                data.clear_history();
-                note = "Cookie と履歴を消しました";
-            }
+            case "clear" -> clear_data();
             default -> note = "知らない命令: " + name;
         }
     }
@@ -276,15 +407,23 @@ pub struct Browser {
         }
         for t in tabs {
             let title = if t.url == HOME { "" } else { clean(t.title) };   // 空なら外枠が「新しいタブ」と出す
-            s += "\ntab\t{t.id}\t" + flag(t.id == current) + "\t" + title;
+            let u = if t.url == HOME { "" } else { clean(t.url) };          // アイコンを決める
+            s += "\ntab\t{t.id}\t" + flag(t.id == current) + "\t" + title + "\t" + u;
         }
         if frameless {
             s += "\nframe\t1";
+        }
+        s += "\nbmbar\t" + flag(prefs.on("bookmarks_bar")) + "\nicons\t" + flag(prefs.on("icons"));
+        if covered {
+            s += "\npage\tsettings" + prefs.to_chrome();
         }
         for b in data.bookmarks {
             s += "\nbm\t" + clean(b.url) + "\t" + clean(b.title);
         }
         for e in data.errors {
+            note = e;
+        }
+        for e in prefs.errors {
             note = e;
         }
         if note != "" {
@@ -312,6 +451,7 @@ pub struct Browser {
                 case None -> {}
             }
         }
+        save_session();
         eng.close();
     }
 }

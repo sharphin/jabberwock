@@ -299,6 +299,15 @@ JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len) {
     return JWE_OK;
 }
 
+JweStatus jwe_chrome_height(JweEngine *e, uint32_t height) {
+    char n[16];
+    if (!e->chrome) return JWE_ERR_FAILED;
+    if (height == JWE_CHROME_FULL) snprintf(n, sizeof n, "full");
+    else snprintf(n, sizeof n, "%u", height);
+    logf_(e, "chrome_height", 0, n, (uint32_t)strlen(n));
+    return JWE_OK;
+}
+
 JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len) {
     logf_(e, "set_title", 0, title, title_len);
     return JWE_OK;

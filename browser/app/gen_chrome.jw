@@ -16,7 +16,8 @@ fn main() {
     let body = html.replace("\\", "\\\\").replace("{{", "{{{{").replace("}}", "}}}}").replace("\"\"\"", "\\\"\\\"\\\"");
     let mut out = "// このファイルは gen_chrome.jw が chrome.html から作る。手で直さない。\n";
     out += "// 外枠とのやりとりの決まりは chrome.html の先頭にある。\n\n";
-    out += "// 外枠の高さ（論理ピクセル）\npub fn i64 height() {{ 84 }}\n\n";
+    // 高さは chrome.html の #top（40）+ #bar（44）+ #bms（30）
+    out += "// 外枠の高さ（論理ピクセル）。bookmarks: ブックマークバーを出すか\npub fn i64 height(bool bookmarks) {{ if bookmarks {{ 114 }} else {{ 84 }} }}\n\n";
     out += "pub fn str html() {{\n    \"\"\"" + body + "\"\"\"\n}}\n";
     match write_file(dir + "/chrome.jw", out) {
         case Ok(_) -> print("chrome.jw を作りました");

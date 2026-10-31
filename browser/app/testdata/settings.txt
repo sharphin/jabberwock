@@ -1,0 +1,15 @@
+# 設定のタブ（外枠が窓全体を覆う）・設定を変える・設定のタブの場所でページを開く
+chrome settings
+chrome set bookmarks_bar 0
+chrome set search google
+chrome set startup nope
+chrome act nothing
+chrome reload
+chrome bookmark
+chrome newtab
+chrome settings
+chrome go a b
+chrome go jw://settings
+chrome set bookmarks_bar 1
+chrome close -1
+close

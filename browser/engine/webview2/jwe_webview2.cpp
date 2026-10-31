@@ -168,7 +168,8 @@ struct JweEngine {
     void layout() {
         RECT rc;
         GetClientRect(hwnd, &rc);
-        LONG top = chrome_ctl ? (LONG)(chrome_height * scale()) : 0;
+        bool full = chrome_ctl && chrome_height == JWE_CHROME_FULL; // 外枠が窓全体を覆う
+        LONG top = !chrome_ctl ? 0 : full ? rc.bottom - rc.top : (LONG)(chrome_height * scale());
         if (chrome_ctl) {
             RECT c = rc;
             c.bottom = rc.top + top;
@@ -179,7 +180,7 @@ struct JweEngine {
         for (auto &t : tabs) {
             if (t.closed || !t.ctl) continue;
             t.ctl->put_Bounds(b);
-            t.ctl->put_IsVisible(t.id == shown ? TRUE : FALSE);
+            t.ctl->put_IsVisible(t.id == shown && !full ? TRUE : FALSE);
         }
     }
 
@@ -715,6 +716,13 @@ JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len) {
     // アドレス欄へ移すときは、キーボードの入力先も外枠へ移す
     if (w == L"focus" && e->chrome_ctl) e->chrome_ctl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
     return SUCCEEDED(e->chrome->PostWebMessageAsString(w.c_str())) ? JWE_OK : JWE_ERR_FAILED;
+}
+
+JweStatus jwe_chrome_height(JweEngine *e, uint32_t height) {
+    if (!e->chrome_wanted) return JWE_ERR_FAILED; // jwe_chrome_load がまだ
+    e->chrome_height = height;
+    e->layout();
+    return JWE_OK;
 }
 
 JweStatus jwe_window(JweEngine *e, uint32_t op) {

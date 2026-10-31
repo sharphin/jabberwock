@@ -1,45 +1,78 @@
 <!doctype html>
 <!--
-外枠（タブ列・アドレス欄・ブックマーク）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
+外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
 - 外枠 → 本体（ChromeMessage）: "go <打った文字>" / "back" / "forward" / "reload" / "stop" /
   "newtab" / "select <タブ>" / "close <タブ>" / "bookmark" / "open <URL>" / "clear" /
+  "settings"（設定のタブを開く）/ "set <キー> <値>"（設定を変える）/ "act <キー>"（設定の画面のボタン）/
   "window drag" / "window min" / "window max" / "window close"（窓を動かす・最小化・最大化と戻す・閉じる）
 - 本体 → 外枠（chrome_post）: "focus"（アドレス欄へ）か、状態を 1 行ずつ書いたもの（区切りはタブ文字）:
     state
     url  今の URL
     nav  戻れる 0/1  進める 0/1  読み込み中 0/1  ブックマーク済み 0/1
-    tab  番号  今のタブなら 1  題
+    tab  番号  今のタブなら 1  題  URL（アイコンを決める。jw: は設定）
     frame 1（外枠が窓の一番上まで来ている。右端に ー □ × を出し、空いたところで窓を動かす）
+    bmbar 0/1（ブックマークバーを出すか）
+    icons 0/1（サイトのアイコン（/favicon.ico）を出すか。0 なら頭文字）
     bm   URL  題
     note 知らせ
+    page settings（外枠が窓全体を覆っている。下に設定の画面を出す）
+    sec  見出し
+    opt  キー  種類（choice / text / toggle / action）  値  表示  選択肢（値=表示|値=表示）
+  高さは #top 40 + #bar 44 + #bms 30（gen_chrome.jw の height と合わせる）
 -->
 <meta charset="utf-8">
 <style>
-:root { color-scheme: light dark; --bg: #f3f3f3; --fg: #222; --tab: #e4e4e4; --cur: #fff; --line: #ccc; }
-@media (prefers-color-scheme: dark) { :root { --bg: #202124; --fg: #e8e8e8; --tab: #2b2c2f; --cur: #35363a; --line: #444; } }
+:root { color-scheme: light dark; --bg: #dee1e6; --fg: #1f1f1f; --tab: #d3d6db; --cur: #fff; --line: #c7c7c7; --field: #f1f3f4; --card: #fff; --accent: #1a73e8; --page: #f8f9fa; }
+@media (prefers-color-scheme: dark) { :root { --bg: #202124; --fg: #e8eaed; --tab: #2b2c2f; --cur: #35363a; --line: #4a4c50; --field: #202124; --card: #2d2e31; --accent: #8ab4f8; --page: #202124; } }
 * { box-sizing: border-box; }
-body { margin: 0; font: 13px system-ui, sans-serif; background: var(--bg); color: var(--fg); overflow: hidden; user-select: none; }
-#top { display: flex; height: 36px; }
-#tabs { display: flex; gap: 2px; padding: 6px 0 0 6px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
-#plus { width: 30px; height: 26px; margin: 7px 2px 0; font-size: 16px; }
+html, body { height: 100%; }
+body { margin: 0; font: 13px "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--fg); overflow: hidden; user-select: none; display: flex; flex-direction: column; }
+#top { display: flex; height: 40px; flex: none; }
+#tabs { display: flex; gap: 2px; padding: 8px 0 0 8px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+#plus { width: 28px; height: 28px; margin: 8px 4px 0; font-size: 18px; border-radius: 50%; }
 #drag { flex: 1; }
 #win { display: none; }
 #win.on { display: flex; }
 #win button { width: 46px; height: 32px; border-radius: 0; font-size: 14px; }
 #win #wclose:hover { background: #c42b1c; color: #fff; }
-.tab { display: flex; align-items: center; width: 200px; min-width: 60px; flex: 0 1 auto; padding: 0 6px 0 10px; background: var(--tab); border-radius: 8px 8px 0 0; cursor: default; }
+.tab { display: flex; align-items: center; gap: 8px; width: 220px; min-width: 60px; height: 32px; flex: 0 1 auto; padding: 0 6px 0 12px; border-radius: 8px 8px 0 0; cursor: default; }
+.tab:hover { background: var(--tab); }
 .tab.cur { background: var(--cur); }
-.tab span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.tab b { font-weight: normal; padding: 0 4px; opacity: .6; }
-.tab b:hover { opacity: 1; }
-#bar { display: flex; gap: 4px; padding: 3px 4px; background: var(--cur); height: 30px; }
-button { background: none; border: 0; color: inherit; font: inherit; width: 26px; border-radius: 4px; }
+.tab span.t { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tab b { font-weight: normal; width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 50%; opacity: .7; }
+.tab b:hover { opacity: 1; background: var(--tab); }
+.ico { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; font-size: 11px; line-height: 16px; border-radius: 3px; }
+.ico img { width: 16px; height: 16px; }
+.ico.letter { color: #fff; font-weight: 600; font-size: 10px; border-radius: 50%; }
+#bar { display: flex; align-items: center; gap: 4px; padding: 0 8px; background: var(--cur); height: 44px; flex: none; }
+button { background: none; border: 0; color: inherit; font: inherit; width: 32px; height: 32px; border-radius: 50%; font-size: 16px; flex: none; }
 button:hover:not(:disabled) { background: var(--tab); }
 button:disabled { opacity: .35; }
-#addr { flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 0 10px; background: var(--bg); color: inherit; font: inherit; }
-#bms { display: flex; gap: 8px; padding: 0 6px; height: 18px; background: var(--cur); border-bottom: 1px solid var(--line); overflow: hidden; white-space: nowrap; font-size: 12px; }
-#bms a { color: inherit; text-decoration: none; opacity: .8; }
-#note { margin-left: auto; opacity: .7; }
+#addr { flex: 1; min-width: 0; height: 34px; border: 1px solid transparent; border-radius: 17px; padding: 0 14px; background: var(--field); color: inherit; font: 14px "Segoe UI", system-ui, sans-serif; outline: none; }
+#addr:focus { border-color: var(--accent); background: var(--cur); }
+#note { max-width: 30%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .75; font-size: 12px; padding: 0 4px; }
+#bms { display: flex; align-items: center; gap: 2px; padding: 0 8px; height: 30px; flex: none; background: var(--cur); border-bottom: 1px solid var(--line); overflow: hidden; white-space: nowrap; font-size: 12px; }
+#bms.off { display: none; }
+#bms a { display: inline-flex; align-items: center; gap: 6px; max-width: 180px; padding: 3px 8px; border-radius: 12px; color: inherit; text-decoration: none; }
+#bms a:hover { background: var(--tab); }
+#bms a span { overflow: hidden; text-overflow: ellipsis; }
+#bms i { opacity: .6; font-style: normal; padding: 0 6px; }
+#page { display: none; flex: 1; overflow: auto; background: var(--page); user-select: text; }
+#page.on { display: block; }
+#set { max-width: 680px; margin: 0 auto; padding: 24px 16px 48px; }
+#set h1 { font-size: 22px; font-weight: 400; margin: 0 0 16px; }
+#set h2 { font-size: 14px; font-weight: 600; margin: 24px 0 8px; opacity: .85; }
+.card { background: var(--card); border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.row { display: flex; align-items: center; gap: 16px; min-height: 52px; padding: 8px 20px; border-top: 1px solid var(--line); font-size: 14px; }
+.row:first-child { border-top: 0; }
+.row label { flex: 1; }
+.row select, .row input[type=text] { font: inherit; color: inherit; background: var(--field); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; }
+.row input[type=text] { width: 300px; }
+.row button.act { width: auto; height: auto; border-radius: 4px; padding: 6px 14px; font-size: 13px; border: 1px solid var(--line); color: var(--accent); }
+.sw { position: relative; width: 34px; height: 14px; border-radius: 7px; background: var(--line); cursor: pointer; flex: none; }
+.sw::after { content: ""; position: absolute; top: -3px; left: -2px; width: 20px; height: 20px; border-radius: 50%; background: #bbb; box-shadow: 0 1px 3px rgba(0,0,0,.4); transition: left .1s; }
+.sw.on { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+.sw.on::after { left: 16px; background: var(--accent); }
 </style>
 <div id="top">
   <div id="tabs"></div>
@@ -52,17 +85,21 @@ button:disabled { opacity: .35; }
   <button id="fwd" title="進む (Alt+→)">→</button>
   <button id="rel" title="再読み込み (F5)">↻</button>
   <input id="addr" spellcheck="false" placeholder="URL か検索語">
+  <span id="note"></span>
   <button id="star" title="ブックマーク">☆</button>
+  <button id="gear" title="設定">⚙</button>
 </div>
 <div id="bms"></div>
+<div id="page"><div id="set"></div></div>
 <script>
 const send = (s) => chrome.webview.postMessage(s);
 const $ = (id) => document.getElementById(id);
-let loading = false, editing = false;
+let loading = false, editing = false, showIcons = true, setKey = "";
 $("back").onclick = () => send("back");
 $("fwd").onclick = () => send("forward");
 $("rel").onclick = () => send(loading ? "stop" : "reload");
 $("star").onclick = () => send("bookmark");
+$("gear").onclick = () => send("settings");
 $("plus").onclick = () => send("newtab");
 $("wmin").onclick = () => send("window min");
 $("wmax").onclick = () => send("window max");
@@ -79,37 +116,120 @@ $("addr").onkeydown = (e) => {
   if (e.key === "Escape") { $("addr").blur(); }
 };
 function el(tag, cls, text) { const x = document.createElement(tag); if (cls) x.className = cls; if (text !== undefined) x.textContent = text; return x; }
+
+// サイトのアイコン。/favicon.ico が読めなければ、色のついた頭文字にする
+const iconOk = new Map(); // origin → true / false（読めたか）
+function icon(url) {
+  const box = el("span", "ico");
+  if (!url) return box;
+  if (url.startsWith("jw:")) { box.textContent = "⚙"; return box; }
+  let u = null;
+  try { u = new URL(url); } catch (_) {}
+  const host = u ? u.hostname.replace(/^www\./, "") : "";
+  const letter = () => {
+    box.textContent = (host[0] || "•").toUpperCase();
+    box.classList.add("letter");
+    let h = 0; for (const c of host) h = (h * 31 + c.charCodeAt(0)) % 360;
+    box.style.background = "hsl(" + h + " 45% 45%)";
+  };
+  if (!showIcons || !u || !/^https?:$/.test(u.protocol) || iconOk.get(u.origin) === false) { letter(); return box; }
+  const img = new Image();
+  img.onload = () => iconOk.set(u.origin, true);
+  img.onerror = () => { iconOk.set(u.origin, false); img.remove(); letter(); };
+  img.src = u.origin + "/favicon.ico";
+  box.append(img);
+  return box;
+}
+
+// 設定の画面（本体から届いた sec / opt の行で作る）
+function settings(rows) {
+  const key = JSON.stringify(rows) + showIcons;
+  if (key === setKey) return;
+  // 打っている途中の欄は作り直さない
+  const a = document.activeElement;
+  if (a && a.closest && a.closest("#set") && a.type === "text") return;
+  setKey = key;
+  const set = $("set");
+  set.textContent = "";
+  set.append(el("h1", "", "設定"));
+  let card = null;
+  for (const f of rows) {
+    if (f[0] === "sec") { set.append(el("h2", "", f[1])); card = el("div", "card"); set.append(card); continue; }
+    const [, k, kind, value, label, choices] = f;
+    const row = el("div", "row");
+    const name = el("label", "", label);
+    row.append(name);
+    if (kind === "choice") {
+      const s = el("select");
+      for (const c of (choices || "").split("|")) {
+        const i = c.indexOf("=");
+        const o = el("option", "", c.slice(i + 1)); o.value = c.slice(0, i);
+        s.append(o);
+      }
+      s.value = value;
+      s.onchange = () => send("set " + k + " " + s.value);
+      row.append(s);
+    } else if (kind === "text") {
+      const t = el("input"); t.type = "text"; t.value = value; t.spellcheck = false;
+      const done = () => { if (t.value !== value) send("set " + k + " " + t.value.replace(/[\t\r\n]/g, " ")); };
+      t.onchange = done;
+      t.onkeydown = (e) => { if (e.key === "Enter") t.blur(); };
+      row.append(t);
+    } else if (kind === "toggle") {
+      const sw = el("div", value === "1" ? "sw on" : "sw");
+      sw.setAttribute("role", "switch");
+      row.onclick = () => send("set " + k + " " + (value === "1" ? "0" : "1"));
+      row.style.cursor = "pointer";
+      row.append(sw);
+    } else if (kind === "action") {
+      const b = el("button", "act", "実行");
+      b.onclick = () => send("act " + k);
+      row.append(b);
+    }
+    (card || set).append(row);
+  }
+}
+
 chrome.webview.addEventListener("message", (ev) => {
   const lines = String(ev.data).split("\n");
   if (lines[0] === "focus") { $("addr").focus(); return; }
   if (lines[0] !== "state") return;
   const tabs = $("tabs"), bms = $("bms");
   tabs.textContent = ""; bms.textContent = "";
-  let note = "";
-  for (const line of lines.slice(1)) {
-    const f = line.split("\t");
+  let note = "", page = "";
+  const rows = [], fields = lines.slice(1).map((l) => l.split("\t"));
+  for (const f of fields) if (f[0] === "icons") showIcons = f[1] === "1";
+  for (const f of fields) {
     if (f[0] === "url" && !editing) $("addr").value = f[1];
     if (f[0] === "nav") {
       $("back").disabled = f[1] !== "1"; $("fwd").disabled = f[2] !== "1";
-      loading = f[3] === "1"; $("rel").textContent = loading ? "×" : "↻";
+      loading = f[3] === "1"; $("rel").textContent = loading ? "✕" : "↻";
       $("star").textContent = f[4] === "1" ? "★" : "☆";
     }
     if (f[0] === "tab") {
       const t = el("div", f[2] === "1" ? "tab cur" : "tab");
-      const name = el("span", "", f[3] || "新しいタブ"); name.title = f[3];
+      const name = el("span", "t", f[3] || "新しいタブ"); name.title = f[3] || "";
       const x = el("b", "", "×");
       t.onclick = () => send("select " + f[1]);
+      t.onauxclick = (e) => { if (e.button === 1) send("close " + f[1]); };
       x.onclick = (e) => { e.stopPropagation(); send("close " + f[1]); };
-      t.append(name, x); tabs.append(t);
+      t.append(icon(f[4] || ""), name, x); tabs.append(t);
     }
     if (f[0] === "bm") {
-      const a = el("a", "", f[2] || f[1]); a.href = "#"; a.title = f[1];
+      const a = el("a"); a.href = "#"; a.title = f[1];
+      a.append(icon(f[1]), el("span", "", f[2] || f[1]));
       a.onclick = (e) => { e.preventDefault(); send("open " + f[1]); };
       bms.append(a);
     }
+    if (f[0] === "bmbar") bms.classList.toggle("off", f[1] !== "1");
     if (f[0] === "note") note = f[1];
     if (f[0] === "frame") $("win").classList.toggle("on", f[1] === "1");
+    if (f[0] === "page") page = f[1];
+    if (f[0] === "sec" || f[0] === "opt") rows.push(f);
   }
-  if (note) { const n = el("span", "", note); n.id = "note"; bms.append(n); }
+  if (!bms.firstChild) bms.append(el("i", "", "☆ を押すとここにブックマークが並びます"));
+  $("note").textContent = note; $("note").title = note;
+  $("page").classList.toggle("on", page === "settings");
+  if (page === "settings") settings(rows); else setKey = "";
 });
 </script>

@@ -12,13 +12,15 @@ pub struct Store {
     str dir;          // 空なら何も残さない
     Entry[] history;  // 古い順
     Entry[] bookmarks;
+    Entry[] session;  // 前回閉じたときに開いていたタブ（設定で「前回開いていたタブ」のときだけ書く）
     str[] errors;     // 書けなかったときの説明（同じものは 1 回だけ）
 
     static fn Store open(str dir) {
-        let mut s = Store { dir: dir, history: [], bookmarks: [], errors: [] };
+        let mut s = Store { dir: dir, history: [], bookmarks: [], session: [], errors: [] };
         if dir != "" {
             s.history = load(path(dir, "history.tsv"));
             s.bookmarks = load(path(dir, "bookmarks.tsv"));
+            s.session = load(path(dir, "session.tsv"));
         }
         s
     }
@@ -131,6 +133,12 @@ pub struct Store {
         let text = to_text(bookmarks);
         save("bookmarks.tsv", text);
         added
+    }
+
+    // 開いているタブを覚える（次の起動で開き直す）
+    fn mut save_session(ref Entry[] tabs) {
+        let text = to_text(tabs);
+        save("session.tsv", text);
     }
 
     fn mut clear_history() {

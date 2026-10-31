@@ -465,6 +465,20 @@ pub struct Engine {
         Ok(())
     }
 
+    // 外枠の高さを変える。負なら外枠が窓全体を覆い、タブのページは隠れる（jw_engine.h の JWE_CHROME_FULL）
+    fn mut Result<(), str> chrome_height(i64 height) {
+        let h = if height < 0 { "full" } else { "{height}" };
+        if piped {
+            send("chrome_height\t" + h);
+            return Ok(());
+        }
+        if !chrome {
+            return Err("外枠がまだありません");
+        }
+        log.push("chrome_height " + h);
+        Ok(())
+    }
+
     fn mut Result<(), str> set_title(str title) {
         if piped {
             send("set_title\t" + escape(title));

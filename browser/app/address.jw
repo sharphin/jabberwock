@@ -2,8 +2,13 @@
 
 const SEARCH = "https://duckduckgo.com/?q=";
 
-// 打った文字を開く URL にする。空なら None
+// 打った文字を開く URL にする。空なら None。検索は DuckDuckGo
 pub fn Option<str> from_input(str input) {
+    from_input_with(input, SEARCH)
+}
+
+// search: 検索語の前に付ける URL（settings.search_prefix）
+pub fn Option<str> from_input_with(str input, str search) {
     let s = input.trim();
     if s == "" {
         return None;
@@ -18,7 +23,7 @@ pub fn Option<str> from_input(str input) {
         }
         return Some("https://" + s);
     }
-    Some(SEARCH + encode(s))
+    Some(search + encode(s))
 }
 
 // "https:" "about:" のように、英字で始まる名前と ":" で始まるか（"localhost:8080" は除く）

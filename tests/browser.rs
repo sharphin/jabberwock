@@ -44,7 +44,7 @@ fn parts() {
 
 #[test]
 fn scripts() {
-    for name in ["basic", "tabs"] {
+    for name in ["basic", "tabs", "settings"] {
         let script = format!("testdata/{}.txt", name);
         let out = run(&["main.jw", "--ephemeral", "--fake", &script, "--log"]);
         same_as_file(&out, &format!("{}.out", name));
@@ -70,6 +70,36 @@ fn keeps_history_and_bookmarks_in_one_folder() {
     let e = eph.to_str().unwrap().replace('\\', "/");
     run(&["main.jw", "--data", &e, "--ephemeral", "--fake", "testdata/basic.txt"]);
     assert_eq!(std::fs::read_dir(&eph).unwrap().count(), 0);
+}
+
+/// 設定の「起動したときに開くページ」と、settings.tsv の読み書き
+#[test]
+fn startup_page_and_settings_file() {
+    // ホームページ（打った形のまま書いてあっても URL にする）
+    let dir = scratch("home");
+    let d = dir.to_str().unwrap().replace('\\', "/");
+    std::fs::write(dir.join("settings.tsv"), "startup\thome\nhome\texample.org\nbogus\tx\n").unwrap();
+    let out = run(&["main.jw", "--data", &d, "--fake", "testdata/basic.txt", "--log"]);
+    assert!(out.contains("tab_new 1\ntab_show 1\nset_title jabberwock\nnavigate 1 https://example.org\n"), "{}", out);
+    // 設定を変えると settings.tsv に書く（項目の順。既定から変えたものだけ。読めない行は捨てる）
+    run(&["main.jw", "--data", &d, "--fake", "testdata/settings.txt"]);
+    let text = std::fs::read_to_string(dir.join("settings.tsv")).unwrap();
+    assert_eq!(text, "startup\thome\nhome\texample.org\nsearch\tgoogle\n");
+
+    // 前回開いていたタブ
+    let dir = scratch("last");
+    let d = dir.to_str().unwrap().replace('\\', "/");
+    std::fs::write(dir.join("settings.tsv"), "startup\tlast\n").unwrap();
+    std::fs::write(dir.join("session.tsv"), "https://a.example/\tA\nhttps://b.example/\tB\n").unwrap();
+    let out = run(&["main.jw", "--data", &d, "--fake", "testdata/tabs.txt", "--log"]);
+    assert!(
+        out.contains("navigate 1 https://a.example/\n") && out.contains("navigate 2 https://b.example/\n") && out.contains("tab_show 1\n"),
+        "{}",
+        out
+    );
+    // 終わるときに開いていたタブを書く（tabs.txt は最後に b.example... を閉じて空のタブだけ残す）
+    let session = std::fs::read_to_string(dir.join("session.tsv")).unwrap();
+    assert!(!session.contains("about:blank"), "{}", session);
 }
 
 #[test]

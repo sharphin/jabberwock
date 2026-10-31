@@ -404,6 +404,9 @@ static int apply(JweEngine *e, char *line) {
     } else if (strcmp(op, "chrome_post") == 0) {
         size_t len = unescape(f[1]);
         jwe_chrome_post(e, f[1], (uint32_t)len);
+    } else if (strcmp(op, "chrome_height") == 0) {
+        /* "full" は外枠が窓全体を覆う */
+        jwe_chrome_height(e, strcmp(f[1], "full") == 0 ? JWE_CHROME_FULL : (uint32_t)strtoul(f[1], NULL, 10));
     } else if (strcmp(op, "set_title") == 0) {
         size_t len = unescape(f[1]);
         jwe_set_title(e, f[1], (uint32_t)len);

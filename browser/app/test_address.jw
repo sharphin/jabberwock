@@ -20,5 +20,10 @@ fn main() {
     check("rust 言語", "https://duckduckgo.com/?q=rust+%E8%A8%80%E8%AA%9E");
     check("a&b=c", "https://duckduckgo.com/?q=a%26b%3Dc");
     check("hello", "https://duckduckgo.com/?q=hello");
+    let g = address.from_input_with("a b", "https://www.google.com/search?q=").unwrap_or("");
+    if g != "https://www.google.com/search?q=a+b" {
+        print("NG", g);
+        exit(1);
+    }
     print("ok");
 }

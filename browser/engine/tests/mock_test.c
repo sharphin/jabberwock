@@ -66,6 +66,7 @@ int main(void) {
     uint32_t t2;
     CHECK(jwe_tab_new(e, &t2) == JWE_OK && t2 == 2); /* 番号は使い回さない */
     CHECK(jwe_chrome_post(e, "x", 1) == JWE_ERR_FAILED);
+    CHECK(jwe_chrome_height(e, JWE_CHROME_FULL) == JWE_ERR_FAILED); /* jwe_chrome_load がまだ */
 
     /* 台本がなければ CLOSE_REQUESTED を 1 回だけ */
     CHECK(jwe_wait(e, -1, &ev) && ev.kind == JWE_EV_CLOSE_REQUESTED);

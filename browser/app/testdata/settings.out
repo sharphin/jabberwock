@@ -1,0 +1,254 @@
+open jabberwock
+chrome_load 114
+tab_new 1
+tab_show 1
+set_title jabberwock
+navigate 1 about:blank
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	1		
+bmbar	1
+icons	1
+chrome_height full
+set_title 設定 - jabberwock
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	1
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	duckduckgo	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	1	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	duckduckgo	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+note	知らない設定の操作: nothing
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+tab_new 2
+chrome_height 84
+tab_show 2
+set_title jabberwock
+navigate 2 about:blank
+chrome_post focus
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	0		
+tab	-1	0	設定	jw://settings
+tab	2	1		
+bmbar	0
+icons	1
+chrome_height full
+set_title 設定 - jabberwock
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	-1	1	設定	jw://settings
+tab	2	0		
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+tab_new 3
+chrome_height 84
+tab_show 3
+set_title jabberwock
+navigate 3 https://www.google.com/search?q=a+b
+set_title title:https://www.google.com/search?q=a+b - jabberwock
+chrome_post state
+url	https://www.google.com/search?q=a+b
+nav	0	0	0	0
+tab	1	0		
+tab	3	1	title:https://www.google.com/search?q=a+b	https://www.google.com/search?q=a+b
+tab	2	0		
+bmbar	0
+icons	1
+chrome_height full
+set_title 設定 - jabberwock
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	3	0	title:https://www.google.com/search?q=a+b	https://www.google.com/search?q=a+b
+tab	2	0		
+tab	-1	1	設定	jw://settings
+bmbar	0
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_post state
+url	jw://settings
+nav	0	0	0	0
+tab	1	0		
+tab	3	0	title:https://www.google.com/search?q=a+b	https://www.google.com/search?q=a+b
+tab	2	0		
+tab	-1	1	設定	jw://settings
+bmbar	1
+icons	1
+page	settings
+sec	起動時
+opt	startup	choice	newtab	起動したときに開くページ	newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ
+opt	home	text	https://duckduckgo.com/	ホームページ	
+sec	検索
+opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=DuckDuckGo|google=Google|bing=Bing
+sec	表示
+opt	bookmarks_bar	toggle	1	ブックマークバーを出す	
+opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	プライバシー
+opt	clear_data	action		Cookie と履歴を消す	
+chrome_height 114
+tab_show 2
+set_title title:about:blank - jabberwock
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	0		
+tab	3	0	title:https://www.google.com/search?q=a+b	https://www.google.com/search?q=a+b
+tab	2	1		
+bmbar	1
+icons	1
+chrome_post state
+url	
+nav	0	0	0	0
+tab	1	0		
+tab	3	0	title:https://www.google.com/search?q=a+b	https://www.google.com/search?q=a+b
+tab	2	1		
+bmbar	1
+icons	1
+close

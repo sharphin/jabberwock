@@ -106,6 +106,9 @@ JweStatus jwe_stop(JweEngine *e, uint32_t tab);
  * jwe_chrome_post は jwe_chrome_load のあとなら、外枠の準備ができる前でも受け付ける（準備ができたら送る） */
 JweStatus jwe_chrome_load(JweEngine *e, const char *html, uint32_t html_len, uint32_t height);
 JweStatus jwe_chrome_post(JweEngine *e, const char *msg, uint32_t msg_len);
+/* 外枠の高さを変える。JWE_CHROME_FULL なら外枠が窓全体を覆い、タブのページは隠れる（設定画面など） */
+#define JWE_CHROME_FULL 0xFFFFFFFFu
+JweStatus jwe_chrome_height(JweEngine *e, uint32_t height);
 
 /* 窓 */
 JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len);

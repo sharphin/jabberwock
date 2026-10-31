@@ -1,0 +1,165 @@
+// 設定。項目の一覧（items）と、選んだ値（settings.tsv。1 行 1 項目「キー<タブ>値」）。
+// 項目を足すときは items() に 1 行足す。外枠（chrome.html）は一覧から設定の画面を作るので、HTML は直さなくてよい。
+// 値を使う側（browser.jw）は get("キー") で読む。
+
+// 項目の種類:
+//   choice  いくつかから 1 つ選ぶ。choices は「値=表示|値=表示」
+//   text    文字を打つ
+//   toggle  入れる / 切る（値は "1" / "0"）
+//   action  押すと命令を出すボタン（値は持たない。browser.jw の act で動く）
+pub struct Item {
+    str section;  // 画面の見出し（同じ見出しは続けて並べる）
+    str key;
+    str label;
+    str kind;
+    str initial;   // 既定の値
+    str choices;
+}
+
+fn Item item(str section, str key, str label, str kind, str initial, str choices) {
+    Item { section: section, key: key, label: label, kind: kind, initial: initial, choices: choices }
+}
+
+pub fn Item[] items() {
+    [
+        item("起動時", "startup", "起動したときに開くページ", "choice", "newtab",
+            "newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ"),
+        item("起動時", "home", "ホームページ", "text", "https://duckduckgo.com/", ""),
+        item("検索", "search", "アドレス欄で使う検索エンジン", "choice", "duckduckgo",
+            "duckduckgo=DuckDuckGo|google=Google|bing=Bing"),
+        item("表示", "bookmarks_bar", "ブックマークバーを出す", "toggle", "1", ""),
+        item("表示", "icons", "タブとブックマークにサイトのアイコンを出す", "toggle", "1", ""),
+        item("プライバシー", "clear_data", "Cookie と履歴を消す", "action", "", ""),
+    ]
+}
+
+// 検索エンジンの URL（検索語をうしろに足す）
+pub fn str search_prefix(str name) {
+    match name {
+        case "google" -> "https://www.google.com/search?q=";
+        case "bing" -> "https://www.bing.com/search?q=";
+        default -> "https://duckduckgo.com/?q=";
+    }
+}
+
+pub struct Settings {
+    str dir;              // 書く場所（空なら書かない）
+    str[str] values;      // 既定から変えた値だけ
+    str[] errors;
+
+    // read_dir から読み、write_dir に書く（--ephemeral では読むだけ）
+    static fn Settings open(str read_dir, str write_dir) {
+        let mut s = Settings { dir: write_dir, values: [], errors: [] };
+        if read_dir == "" {
+            return s;
+        }
+        match read_file(path(read_dir)) {
+            case Ok(text) -> {
+                for line in text.lines() {
+                    match line.find("\t") {
+                        case Some(i) -> {
+                            let k = line.slice(0, i);
+                            let v = line.slice(i + 1, line.len());
+                            if valid(k, v) {
+                                s.values[k] = v;
+                            }
+                        }
+                        case None -> {}
+                    }
+                }
+            }
+            case Err(_) -> {}   // まだないなら全部既定
+        }
+        s
+    }
+
+    static fn str path(str dir) {
+        if dir.ends_with("/") || dir.ends_with("\\") { dir + "settings.tsv" } else { dir + "/settings.tsv" }
+    }
+
+    // その項目にその値を入れてよいか
+    static fn bool valid(str key, str value) {
+        if value.contains("\t") || value.contains("\n") || value.contains("\r") {
+            return false;
+        }
+        for it in items() {
+            if it.key == key {
+                if it.kind == "toggle" {
+                    return value == "0" || value == "1";
+                }
+                if it.kind == "choice" {
+                    for c in it.choices.split("|") {
+                        if c.starts_with(value + "=") {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                return it.kind == "text";
+            }
+        }
+        false
+    }
+
+    fn str get(str key) {
+        match values.get(key) {
+            case Some(v) -> v;
+            case None -> initial_of(key);
+        }
+    }
+
+    static fn str initial_of(str key) {
+        for it in items() {
+            if it.key == key {
+                return it.initial;
+            }
+        }
+        ""
+    }
+
+    fn bool on(str key) {
+        get(key) == "1"
+    }
+
+    // 値を変えて書き出す（既定から変えたものだけ）。変えたら true（項目がない・値が合わないなら false）
+    fn mut bool set(str key, str value) {
+        if !valid(key, value) || get(key) == value {
+            return false;
+        }
+        if value == initial_of(key) {
+            values.remove(key);   // 既定に戻したら書かない
+        } else {
+            values[key] = value;
+        }
+        if dir == "" {
+            return true;
+        }
+        // 項目の順に書く（ファイルを見て分かりやすいように）
+        let mut text = "";
+        for it in items() {
+            match values.get(it.key) {
+                case Some(v) -> text += it.key + "\t" + v + "\n";
+                case None -> {}
+            }
+        }
+        match write_file(path(dir), text) {
+            case Ok(_) -> {}
+            case Err(e) -> errors.push("settings.tsv を書けません: " + e);
+        }
+        true
+    }
+
+    // 外枠に送る設定の画面の行（sec 見出し / opt キー 種類 値 表示 選択肢）
+    fn str to_chrome() {
+        let mut s = "";
+        let mut last = "";
+        for it in items() {
+            if it.section != last {
+                s += "\nsec\t" + it.section;
+                last = it.section;
+            }
+            s += "\nopt\t" + it.key + "\t" + it.kind + "\t" + get(it.key) + "\t" + it.label + "\t" + it.choices;
+        }
+        s
+    }
+}
