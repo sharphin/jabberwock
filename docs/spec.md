@@ -110,7 +110,7 @@ fn main() {
 | `std.process` | `start(cmd, argv)` と資源の型 `Child`（[1.14](#114-stdprocessjwc-だけ)） |
 | `std.io` | `read_line_for(ms)`（[1.16](#116-stdiojwc-だけ)） |
 | `std.clipboard` | `set_text(s, secret)`・`get_text()`・`clear_if(n)`・`clear()`（[1.15](#115-stdclipboardjwc-だけwindows-だけ)） |
-| `std.secret` | `protect(ref data)`・`unprotect(ref blob)`（[1.17](#117-stdsecretjwc-だけwindows-だけ)） |
+| `std.keystore` | `protect(ref data)`・`unprotect(ref blob)`（[1.17](#117-stdkeystorejwc-だけwindows-だけ)） |
 
 - 詳しい動き（一周・実行時エラーになる条件）は `std/*.jw` の各関数の説明に書いてある。
 
@@ -488,12 +488,12 @@ match io.read_line_for(50) {        // 50 ミリ秒まで待って 1 行
   行の切り方は read_line と同じ（終わりの改行と、その前の \r を取る。最後の行に改行がなくてもよい）。read_line と同じ入れ物から読むので、まぜて使ってよい。
   読む前に print の出力を書き出す。Windows の端末から読むときは、キーのほかの出来事（マウスなど）でも読みに行くので、ms より長く待つことがある。
 
-### 1.17 std.secret（jwc だけ。Windows だけ）
+### 1.17 std.keystore（jwc だけ。Windows だけ）
 
 ```
-use std.secret;
-let blob = secret.protect(ref key)?;     // 今ログインしている利用者だけがほどける形に包む
-let key2 = secret.unprotect(ref blob)?;  // ほどく
+use std.keystore;
+let blob = keystore.protect(ref key)?;     // 今ログインしている利用者だけがほどける形に包む
+let key2 = keystore.unprotect(ref blob)?;  // ほどく
 ```
 
 - `protect(ref data)`・`unprotect(ref blob)`（どちらも `Result<u8[], str>`）。渡したバイト列の写しを使い、使い終わった写しは 0 で上書きして解放する（元のリストは変えない）。

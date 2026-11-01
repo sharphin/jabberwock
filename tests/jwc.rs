@@ -790,14 +790,14 @@ fn jwc_std_clipboard_unix() {
     assert_eq!(String::from_utf8_lossy(&got.stdout), format!("{e} {e} {e}\n"));
 }
 
-// std.secret は Windows だけ。ほかの OS では Err（渡したバイト列は使い終わりに消す）
+// std.keystore は Windows だけ。ほかの OS では Err（渡したバイト列は使い終わりに消す）
 #[test]
-fn jwc_std_secret_unix() {
+fn jwc_std_keystore_unix() {
     if !have_clang() { return; }
-    let dir = std::env::temp_dir().join(format!("jw-jwc-secret-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("jw-jwc-keystore-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("main.jw");
-    std::fs::write(&path, "use std.secret;\nfn main() { let k = \"key\".bytes(); print(secret.protect(ref k), secret.unprotect(ref k), k.len()); }\n").unwrap();
+    std::fs::write(&path, "use std.keystore;\nfn main() { let k = \"key\".bytes(); print(keystore.protect(ref k), keystore.unprotect(ref k), k.len()); }\n").unwrap();
     let exe = dir.join("main");
     let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));

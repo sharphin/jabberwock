@@ -14,7 +14,7 @@ use vault_ui;
 use settings;
 use std.env;
 use std.hash;
-use std.secret;
+use std.keystore;
 use std.fs;
 
 struct App {
@@ -128,7 +128,7 @@ struct App {
             return;
         }
         let k = v.key.map((x) -> x);
-        match secret.protect(ref k) {
+        match keystore.protect(ref k) {
             case Ok(b) -> {
                 match write_file(key_file(), hash.hex(ref b)) {
                     case Ok(_) -> {}
@@ -150,7 +150,7 @@ struct App {
             case Some(b) -> blob = b;
             case None -> {}
         }
-        let r = match secret.unprotect(ref blob) {
+        let r = match keystore.unprotect(ref blob) {
             case Ok(k) -> v.unlock_key(k);
             case Err(e) -> Err(e);
         };

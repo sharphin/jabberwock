@@ -220,7 +220,7 @@ fn vault_script() {
     let keep = scratch("vault-keep");
     let out = run("vault_main", &["--data", &slash(&keep), "--iterations", "2", "--fake", "testdata/vault_keep.txt", "--log"]);
     same_as_file(&out, "vault_keep.out");
-    // この PC で覚える（Linux・macOS では std.secret が Err なので、覚えられないと知らせて、鍵のファイルは作らない）
+    // この PC で覚える（Linux・macOS では std.keystore が Err なので、覚えられないと知らせて、鍵のファイルは作らない）
     if !cfg!(windows) {
         let pc = scratch("vault-pc");
         std::fs::write(pc.join("settings.tsv"), "vault_remember\tpc\n").unwrap();

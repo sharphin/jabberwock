@@ -3528,7 +3528,7 @@ int32_t jw_clip_clear(int64_t seq, int64_t *out, WStr **err) {{
 }}
 #endif
 
-// ---------------------------------------------------------------- 秘密を OS に守らせる（std.secret）
+// ---------------------------------------------------------------- 秘密を OS に守らせる（std.keystore）
 //
 // protect はバイト列を、今ログインしている利用者だけがほどける形に包む。unprotect はそれをほどく。
 // Windows は DPAPI（crypt32.dll の CryptProtectData / CryptUnprotectData。初めて使うときに読み込む）。
@@ -3566,7 +3566,7 @@ static int dpapi_ready(void) {{
     return ok;
 }}
 
-static int32_t secret_call(int protect, WList *data, WList *out, WStr **err) {{
+static int32_t keystore_call(int protect, WList *data, WList *out, WStr **err) {{
     if (data->len > 0x7fffffff) {{
         jw_list_wipe(data, 1, NULL);
         jw_list_free(data, 1, NULL);
@@ -3598,7 +3598,7 @@ static int32_t secret_call(int protect, WList *data, WList *out, WStr **err) {{
     return 1;
 }}
 #else
-static int32_t secret_call(int protect, WList *data, WList *out, WStr **err) {{
+static int32_t keystore_call(int protect, WList *data, WList *out, WStr **err) {{
     (void)protect, (void)out;
     jw_list_wipe(data, 1, NULL);
     jw_list_free(data, 1, NULL);
@@ -3607,8 +3607,8 @@ static int32_t secret_call(int protect, WList *data, WList *out, WStr **err) {{
 }}
 #endif
 
-int32_t jw_secret_protect(WList *data, WList *out, WStr **err) {{ return secret_call(1, data, out, err); }}
-int32_t jw_secret_unprotect(WList *data, WList *out, WStr **err) {{ return secret_call(0, data, out, err); }}
+int32_t jw_keystore_protect(WList *data, WList *out, WStr **err) {{ return keystore_call(1, data, out, err); }}
+int32_t jw_keystore_unprotect(WList *data, WList *out, WStr **err) {{ return keystore_call(0, data, out, err); }}
 
 // ---------------------------------------------------------------- ブラウザのエンジン（std.browser）
 //

@@ -15,13 +15,13 @@ pub fn str[] names() {
     out.push("http");
     out.push("io");
     out.push("json");
+    out.push("keystore");
     out.push("math");
     out.push("net");
     out.push("pg");
     out.push("process");
     out.push("random");
     out.push("regex");
-    out.push("secret");
     out.push("text");
     out.push("time");
     out.push("tls");
@@ -2558,6 +2558,21 @@ pub fn str stringify(ref Json v) {{
 }}
 """);
     }
+    if name == "keystore" {
+        return Some("""
+// 標準ライブラリ std.keystore（OS の鍵の保管庫）: 秘密のバイト列を OS に守らせる。`use std.keystore;` と書いて使う。今は Windows だけ（ほかの OS では Err）
+//   let blob = keystore.protect(ref key)?;      // 今ログインしている利用者だけがほどける形に包む（ファイルに書いてよい）
+//   let key2 = keystore.unprotect(ref blob)?;   // ほどく。別の利用者・別の PC・壊れたものは Err
+// Windows は DPAPI（CryptProtectData）。包んだものは、同じ利用者でログインしていれば、その人として動くどのプログラムでもほどける
+// （ファイルを持ち出す・別の利用者から読むことへの守り。同じ利用者として動く悪いプログラムへの守りではない）。
+
+/// 今ログインしている利用者だけがほどける形に包む
+pub fn Result<u8[], str> protect(ref u8[] data) {{ __keystore_protect(data.map((x) -> x)) }}
+
+/// protect で包んだものをほどく
+pub fn Result<u8[], str> unprotect(ref u8[] blob) {{ __keystore_unprotect(blob.map((x) -> x)) }}
+""");
+    }
     if name == "math" {
         return Some("""
 // 標準ライブラリ std.math: 数の計算の補助。`use std.math;` と書いて `math.gcd(12, 18)` のように使う
@@ -3990,21 +4005,6 @@ fn shorthand(str e, ref mut i64[] lo, ref mut i64[] hi) {{
 
 fn bool is_word(i64 c) {{ (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 }}
 
-""");
-    }
-    if name == "secret" {
-        return Some("""
-// 標準ライブラリ std.secret: 秘密のバイト列を OS に守らせる。`use std.secret;` と書いて使う。今は Windows だけ（ほかの OS では Err）
-//   let blob = secret.protect(ref key)?;      // 今ログインしている利用者だけがほどける形に包む（ファイルに書いてよい）
-//   let key2 = secret.unprotect(ref blob)?;   // ほどく。別の利用者・別の PC・壊れたものは Err
-// Windows は DPAPI（CryptProtectData）。包んだものは、同じ利用者でログインしていれば、その人として動くどのプログラムでもほどける
-// （ファイルを持ち出す・別の利用者から読むことへの守り。同じ利用者として動く悪いプログラムへの守りではない）。
-
-/// 今ログインしている利用者だけがほどける形に包む
-pub fn Result<u8[], str> protect(ref u8[] data) {{ __secret_protect(data.map((x) -> x)) }}
-
-/// protect で包んだものをほどく
-pub fn Result<u8[], str> unprotect(ref u8[] blob) {{ __secret_unprotect(blob.map((x) -> x)) }}
 """);
     }
     if name == "text" {
