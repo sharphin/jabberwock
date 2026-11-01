@@ -6,6 +6,7 @@
 //   金庫 → ブラウザ: fill <サイト> <ユーザー> <パスワード>（見えているタブのログイン欄に入れる）/ ask_site
 // 入れてよいかの確かめ（出どころが完全に同じか）はエンジンの fill_login がする。
 
+use std.env;
 use std.process;
 use std.text;
 
@@ -37,7 +38,12 @@ pub struct Link {
             argv.push("--data");
             argv.push(data);
         }
-        let mut c = match process.start("jwvault-app", argv) {
+        // 名前だけで起こすと作業フォルダや PATH の偽物が起きうるので、ブラウザと同じフォルダのものを場所を決めて起こす
+        let cmd = match beside_me("jwvault-app") {
+            case Some(x) -> x;
+            case None -> return Err("金庫（jwvault-app）を起こせません: ブラウザの場所が分かりません");
+        };
+        let mut c = match process.start(cmd, argv) {
             case Ok(x) -> x;
             case Err(e) -> return Err("金庫（jwvault-app）を起こせません: " + e);
         };
@@ -130,3 +136,18 @@ pub fn str unescape(str s) {
     }
     out
 }
+
+// いま動いている実行ファイルと同じフォルダにある name の絶対パス（Windows では起こすときに .exe が付く）
+fn Option<str> beside_me(str name) {
+    let me = env.exe_path()?;
+    let b = me.bytes();
+    let mut i = b.len() - 1;
+    while i >= 0 {
+        if b[i] == 47 || b[i] == 92 {
+            return Some(me.slice(0, i + 1) + name);
+        }
+        i = i - 1;
+    }
+    None
+}
+

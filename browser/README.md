@@ -75,7 +75,7 @@ clang は docs/native.md の「Windows で clang を入れる」の A（llvm-min
    clang -O2 -c browser\engine\tests\smoke.c -o smoke.o
    clang++ -o smoke.exe smoke.o jwe_webview2.o -lole32 -luser32 -lshell32
    ```
-   WebView2Loader.dll は要らない（なければ、入っている WebView2 の実行環境を直接探して使う。横に置けばそちらを使う）。
+   WebView2Loader.dll は要らない（入っている WebView2 の実行環境を直接探して使う。横に置いても使わない。名前で探すと偽物を拾うため）。
    （ARM の PC なら `x64` を `arm64` に）
 3. `.\smoke.exe` で窓が開き、example.com が出る。上の欄に URL を入れて Enter で移動。Alt+← / Alt+→ で戻る・進む、F5 で再読み込み。
    PowerShell にはエンジンから届いたイベントが 1 行ずつ出る。

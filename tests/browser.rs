@@ -258,7 +258,7 @@ fn c_mock_engine() {
 }
 
 /// ブラウザが金庫（子プロセス）とやりとりする。金庫の代わりに、決まった行を出して届いた行を書き留める小さなシェルの台本を
-/// PATH の jwvault-app に置く。ブラウザは偽エンジンなので、台本の後ろに何もしない行を並べて、金庫の返事が届くまで回す
+/// ブラウザと同じフォルダの jwvault-app に置く。ブラウザは偽エンジンなので、台本の後ろに何もしない行を並べて、金庫の返事が届くまで回す
 #[cfg(unix)]
 #[test]
 fn browser_talks_to_vault() {
@@ -289,10 +289,12 @@ fn browser_talks_to_vault() {
     let data = dir.join("data");
     std::fs::create_dir_all(&data).unwrap();
     let log = dir.join("mock.log");
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
-    let o = Command::new(build("main", true))
+    // 金庫はブラウザと同じフォルダから起こす（PATH は探さない）ので、ブラウザを台本の横へハードリンクで置く
+    // （写すと、書き込み中の口がほかのテストの子プロセスに受け継がれ、起こすときに "Text file busy" になることがある）
+    let main = bin.join("main");
+    std::fs::hard_link(build("main", true), &main).unwrap();
+    let o = Command::new(&main)
         .args(["--data", data.to_str().unwrap()])
-        .env("PATH", path)
         .env("JWE_MOCK_SCRIPT", &script)
         .env("JWE_MOCK_LOG", &log)
         .output()

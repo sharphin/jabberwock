@@ -5,7 +5,7 @@
 //   タブごとに WebView を 1 つ作り、見えないタブは IsVisible = FALSE にする。
 // - WebView2 の呼び返しはすべてイベントを溜めるだけ（jabberwock の関数は呼ばない）。
 //   jwe_poll / jwe_wait が OS のメッセージを処理し、溜まったイベントを 1 つずつ渡す。
-// - WebView2Loader.dll を実行時に読み込む（実行ファイルと同じフォルダに置く）。
+// - 入っている WebView2 の実行環境の DLL を絶対パスで読む（WebView2Loader.dll は使わない。名前で探すと偽物を拾うため）。
 // - アカウント・同期・パスワード保存は使わない。権限の要求（カメラ・位置など）はいつも断る。
 //
 // ビルド（llvm-mingw の例）:
@@ -105,9 +105,7 @@ JWE_HANDLER(AccelKey, ICoreWebView2AcceleratorKeyPressedEventHandler, (IID{0xb29
 JWE_HANDLER(ScriptDone, ICoreWebView2ExecuteScriptCompletedHandler, (IID{0x49511172, 0xcc67, 0x4bca, {0x99, 0x23, 0x13, 0x71, 0x12, 0xf4, 0xc4, 0xcc}}), HRESULT, LPCWSTR)
 JWE_HANDLER(DevToolsDone, ICoreWebView2CallDevToolsProtocolMethodCompletedHandler, (IID{0x5c4889f0, 0x5ef6, 0x4c5a, {0x95, 0x2c, 0xd8, 0xf1, 0xb9, 0x2d, 0x05, 0x74}}), HRESULT, LPCWSTR)
 
-typedef HRESULT(STDAPICALLTYPE *CreateEnvFn)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions *,
-                                              ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
-// WebView2Loader.dll がないときに、入っている実行環境の DLL を直接呼ぶための入口
+// 入っている実行環境の DLL を直接呼ぶための入口
 // （WebView2Loader.dll が中でしていることと同じ。webview/webview の組み込みの loader と同じ方法）
 typedef HRESULT(STDMETHODCALLTYPE *CreateInternalFn)(bool, int, PCWSTR, IUnknown *,
                                                      ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler *);
@@ -515,19 +513,17 @@ JweStatus jwe_open(const JweConfig *cfg, JweEngine **out) {
     e->com = SUCCEEDED(hr);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    // WebView2Loader.dll が実行ファイルの横にあればそれを使い、なければ実行環境の DLL を直接呼ぶ
-    CreateEnvFn create = nullptr;
+    // Windows に入っている WebView2 の実行環境（Program Files の中）の DLL を、絶対パスで直接読む。
+    // WebView2Loader.dll は名前で探すと、実行ファイルの横（ダウンロードのフォルダなど）に置かれた偽物を拾うので使わない
     CreateInternalFn create_internal = nullptr;
-    e->loader = LoadLibraryW(L"WebView2Loader.dll");
-    if (e->loader) create = (CreateEnvFn)(void *)GetProcAddress(e->loader, "CreateCoreWebView2EnvironmentWithOptions");
-    if (!create) {
-        if (e->loader) FreeLibrary(e->loader);
-        e->loader = nullptr;
-        std::wstring dll = find_runtime_dll();
-        if (!dll.empty()) e->loader = LoadLibraryW(dll.c_str());
-        if (e->loader) create_internal = (CreateInternalFn)(void *)GetProcAddress(e->loader, "CreateWebViewEnvironmentWithOptionsInternal");
+    std::wstring dll = find_runtime_dll();
+    if (!dll.empty()) {
+        // その DLL が頼る DLL も、DLL のフォルダと System32 からだけ探す
+        e->loader = LoadLibraryExW(dll.c_str(), nullptr, 0x100 /* LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR */ | 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+        if (!e->loader) e->loader = LoadLibraryW(dll.c_str());
     }
-    if (!create && !create_internal) {
+    if (e->loader) create_internal = (CreateInternalFn)(void *)GetProcAddress(e->loader, "CreateWebViewEnvironmentWithOptionsInternal");
+    if (!create_internal) {
         jwe_close(e);
         // 呼ぶ側は窓を持たない（コンソールもない）ことが多いので、ここで知らせる
         MessageBoxW(nullptr, L"WebView2 の実行環境が見つかりません。https://developer.microsoft.com/microsoft-edge/webview2/ から入れてください",
@@ -575,8 +571,7 @@ JweStatus jwe_open(const JweConfig *cfg, JweEngine **out) {
         e->on_env(env);
         return S_OK;
     });
-    if (create) hr = create(nullptr, e->data_dir.c_str(), nullptr, done);
-    else hr = create_internal(true, 0 /* 入っている実行環境 */, e->data_dir.c_str(), nullptr, done);
+    hr = create_internal(true, 0 /* 入っている実行環境 */, e->data_dir.c_str(), nullptr, done);
     if (FAILED(hr)) {
         jwe_close(e);
         return JWE_ERR_UNAVAILABLE;

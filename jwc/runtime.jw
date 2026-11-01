@@ -3360,7 +3360,8 @@ int32_t jw_child_kill(void *h, WStr **err, const WSite *at) {{
 // clear(番号) は、そのあとだれもクリップボードを変えていなければ消す（秘密をもう一度読まずに消すため）。Linux・macOS は今は Err。
 
 #ifdef _WIN32
-__declspec(dllimport) void *__stdcall LoadLibraryW(const wchar_t *);
+// システムの DLL は System32 からだけ読む（実行ファイルの横や作業フォルダに置かれた偽物を拾わない）
+__declspec(dllimport) void *__stdcall LoadLibraryExW(const wchar_t *, void *, unsigned long);
 __declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
 __declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
 __declspec(dllimport) void *__stdcall GlobalAlloc(unsigned, size_t);
@@ -3382,7 +3383,7 @@ static struct {{
 static int clip_ready(void) {{
     lock(&g_lock);
     if (g_clip.ready == 0) {{
-        void *m = LoadLibraryW(L"user32.dll");
+        void *m = LoadLibraryExW(L"user32.dll", NULL, 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
         g_clip.ready = -1;
         if (m) {{
             *(void **)&g_clip.open = GetProcAddress(m, "OpenClipboard");
@@ -3535,7 +3536,8 @@ int32_t jw_clip_clear(int64_t seq, int64_t *out, WStr **err) {{
 // 渡されたリストはムーブされてくるので、ここで 0 で上書きしてから解放する。Linux・macOS は今は Err。
 
 #ifdef _WIN32
-__declspec(dllimport) void *__stdcall LoadLibraryW(const wchar_t *);
+// システムの DLL は System32 からだけ読む（実行ファイルの横や作業フォルダに置かれた偽物を拾わない）
+__declspec(dllimport) void *__stdcall LoadLibraryExW(const wchar_t *, void *, unsigned long);
 __declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
 __declspec(dllimport) void *__stdcall LocalFree(void *);
 
@@ -3553,7 +3555,7 @@ static struct {{
 static int dpapi_ready(void) {{
     lock(&g_lock);
     if (g_dpapi.ready == 0) {{
-        void *m = LoadLibraryW(L"crypt32.dll");
+        void *m = LoadLibraryExW(L"crypt32.dll", NULL, 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
         g_dpapi.ready = -1;
         if (m) {{
             *(void **)&g_dpapi.protect = GetProcAddress(m, "CryptProtectData");
@@ -3979,6 +3981,55 @@ int32_t jw_env_get(WStr *name, WStr **out) {{
     return ok;
 }}
 
+// いま動いている実行ファイルの絶対パス。分からなければ 0（同じフォルダの仲間を、PATH や作業フォルダを探さずに起こすため）
+#ifdef _WIN32
+__declspec(dllimport) unsigned long __stdcall GetModuleFileNameW(void *, wchar_t *, unsigned long);
+#elif defined(__APPLE__)
+int _NSGetExecutablePath(char *, uint32_t *);
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
+int32_t jw_env_exe_path(WStr **out) {{
+    char *val = NULL;
+#ifdef _WIN32
+    enum {{ CAP = 32768 }};
+    wchar_t *w = jw_checked_malloc(CAP * sizeof(wchar_t));
+    unsigned long got = GetModuleFileNameW(NULL, w, CAP);
+    if (got > 0 && got < CAP) {{
+        int k = WideCharToMultiByte(65001, 0, w, (int)got, NULL, 0, NULL, NULL);
+        if (k > 0) {{
+            val = jw_checked_malloc((size_t)k + 1);
+            WideCharToMultiByte(65001, 0, w, (int)got, val, k, NULL, NULL);
+            val[k] = 0;
+        }}
+    }}
+    free(w);
+#elif defined(__APPLE__)
+    uint32_t cap = 0;
+    _NSGetExecutablePath(NULL, &cap);
+    char *raw = jw_checked_malloc((size_t)cap + 1);
+    if (_NSGetExecutablePath(raw, &cap) == 0) val = realpath(raw, NULL);
+    free(raw);
+#elif defined(__linux__)
+    size_t cap = 4096;
+    for (;;) {{
+        char *b = jw_checked_malloc(cap);
+        ssize_t n = readlink("/proc/self/exe", b, cap);
+        if (n < 0) {{ free(b); break; }}
+        if ((size_t)n < cap) {{ b[n] = 0; val = b; break; }}
+        free(b);
+        if (cap > (1 << 20)) break;
+        cap *= 2;
+    }}
+#endif
+    if (!val) return 0;
+    int64_t n = (int64_t)strlen(val);
+    int ok = n > 0 && valid_utf8((const unsigned char *)val, n);
+    if (ok) *out = jw_str_new(val, n);
+    free(val);
+    return ok;
+}}
+
 // 単調な時計（ナノ秒。始まりの位置は決めない。壁時計の修正に影響されない）
 int64_t jw_time_now_ns(void) {{
 #ifdef _WIN32
@@ -4073,7 +4124,8 @@ struct w_addrinfo {{
     void *ai_addr;
     struct w_addrinfo *ai_next;
 }};
-__declspec(dllimport) void *__stdcall LoadLibraryW(const wchar_t *);
+// システムの DLL は System32 からだけ読む（実行ファイルの横や作業フォルダに置かれた偽物を拾わない）
+__declspec(dllimport) void *__stdcall LoadLibraryExW(const wchar_t *, void *, unsigned long);
 __declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
 
 static struct {{
@@ -4101,7 +4153,7 @@ static struct {{
 static int ws_ready(void) {{
     lock(&g_lock);
     if (g_ws.ready == 0) {{
-        void *m = LoadLibraryW(L"ws2_32.dll");
+        void *m = LoadLibraryExW(L"ws2_32.dll", NULL, 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
         g_ws.ready = -1;
         if (m) {{
 #define WS_GET(f, n) *(void **)&g_ws.f = GetProcAddress(m, n)
@@ -5120,8 +5172,8 @@ static int tls_ready(void) {{
     lock(&g_lock);
     if (g_tls.ready == 0) {{
         g_tls.ready = -1;
-        void *m = LoadLibraryW(L"secur32.dll");
-        void *c = LoadLibraryW(L"crypt32.dll");
+        void *m = LoadLibraryExW(L"secur32.dll", NULL, 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+        void *c = LoadLibraryExW(L"crypt32.dll", NULL, 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
         if (m && c) {{
 #define TLS_GET(f, n) *(void **)&g_tls.f = GetProcAddress(m, n)
             TLS_GET(acquire, "AcquireCredentialsHandleW");
@@ -5503,7 +5555,7 @@ void jw_random_bytes(int64_t n, WList *out, const WSite *at) {{
 #ifdef _WIN32
     lock(&g_lock);
     if (!g_gen_random) {{
-        void *m = LoadLibraryW(L"bcrypt.dll");
+        void *m = LoadLibraryExW(L"bcrypt.dll", NULL, 0x800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
         if (m) *(void **)&g_gen_random = GetProcAddress(m, "BCryptGenRandom");
     }}
     unlock(&g_lock);

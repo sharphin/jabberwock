@@ -2047,9 +2047,9 @@ struct FnGen {
             let ok = b.val("call i32 @jw_" + name.slice(0, name.len() - 12) + "_set_timeout(ptr " + vals[0].v + ", i64 " + vals[1].v + ", ptr " + err + ", ptr " + site + ")");
             return result_of(m, want, ok, err, "unit", "");
         }
-        if name == "__env_get" {
+        if name == "__env_get" || name == "__env_exe_path" {
             let out = b.alloca("ptr");
-            let ok = b.val("call i32 @jw_env_get(ptr " + vals[0].v + ", ptr " + out + ")");
+            let ok = if name == "__env_get" { b.val("call i32 @jw_env_get(ptr " + vals[0].v + ", ptr " + out + ")") } else { b.val("call i32 @jw_env_exe_path(ptr " + out + ")") };
             release(vals, all);
             let none = b.val("icmp eq i32 " + ok + ", 0");
             let lt = m.lt(want)?;

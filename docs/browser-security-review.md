@@ -44,12 +44,12 @@
 金庫の自動入力は出どころ（`http://` と `https://` は別）で比べるので、http 版へは入らない点は良い。
 **直し方**: http なら「保護されていない通信」と出す。証明書エラーは WebView2 の既定（エラー画面で止める）のままで良いが、「進む」を出さないことを確かめる。
 
-### 3. `WebView2Loader.dll` を名前だけで読む（中）
+### 3. `WebView2Loader.dll` を名前だけで読む（中）→ 直した（WebView2 本体を絶対パスで読む。システムの DLL は System32 からだけ）
 `LoadLibraryW(L"WebView2Loader.dll")`。Windows はまず exe と同じフォルダを探すので、
 **ダウンロードフォルダで exe を開いた時、そこに偽の DLL があると読まれる**（DLL の差し替え）。
 **直し方**: exe のフォルダの絶対パスで読む、または `LoadLibraryExW(..., LOAD_LIBRARY_SEARCH_APPLICATION_DIR | ...SYSTEM32)`。ほかの DLL 読み込み（crypt32.dll など）も `SetDefaultDllDirectories` でまとめて絞ると安心。
 
-### 4. 金庫を名前だけで起こす（中）
+### 4. 金庫を名前だけで起こす（中）→ 直した（ブラウザと同じフォルダから絶対パスで起こす）
 `process.start("jwvault-app", ...)` は `CreateProcessW(NULL, ...)` になり、exe のフォルダ → 作業フォルダ → システム → PATH の順に探す。
 同じフォルダに本物があれば本物が起きるが、無い・消された時は**偽の金庫が起き、マスターパスワードを盗まれる**。
 **直し方**: ブラウザの exe と同じフォルダの絶対パスで起こし、無ければ起こさずにエラーにする。

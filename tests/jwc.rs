@@ -1131,7 +1131,7 @@ fn jwc_std_env_time_json() {
     let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let got = Command::new(&exe).env("JW_TEST_X", "はい").env_remove("NO_SUCH_VAR_123").output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&got.stdout), "Some(はい) None None\ntrue true\nSome(上書き) Some(-125.0) Some(3.0) 5 [name, n, ok, o, a]\n{\"name\":\"上書き\",\"n\":-125,\"ok\":[true,false,null,3,0.1],\"o\":{},\"a\":[]}\ntrue true\nJSON が読めません（1 文字目）: 値がありません\nJSON が読めません（4 文字目）: 値がありません\nJSON が読めません（6 文字目）: キーのあとに `:` がありません\nJSON が読めません（2 文字目）: 値のあとに余分な文字があります\nJSON が読めません（3 文字目）: 小数点のあとに数字が必要です\nJSON が読めません（8 文字目）: 対になっていないサロゲートです\nJSON が読めません（5 文字目）: 値のあとに余分な文字があります\nJSON が読めません（4 文字目）: `true` のつもりの書き方が違います\nJSON が読めません（4 文字目）: 文字列の中に制御文字があります（\\n などと書きます）\nJSON が読めません（2 文字目）: 数の書き方が違います\nok [100000,0.002,null]\nJSON が読めません（513 文字目）: 入れ子が深すぎます\n\"a\\\"b\\\\c\\u0001\"\n");
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "Some(はい) None None\ntrue\ntrue true\nSome(上書き) Some(-125.0) Some(3.0) 5 [name, n, ok, o, a]\n{\"name\":\"上書き\",\"n\":-125,\"ok\":[true,false,null,3,0.1],\"o\":{},\"a\":[]}\ntrue true\nJSON が読めません（1 文字目）: 値がありません\nJSON が読めません（4 文字目）: 値がありません\nJSON が読めません（6 文字目）: キーのあとに `:` がありません\nJSON が読めません（2 文字目）: 値のあとに余分な文字があります\nJSON が読めません（3 文字目）: 小数点のあとに数字が必要です\nJSON が読めません（8 文字目）: 対になっていないサロゲートです\nJSON が読めません（5 文字目）: 値のあとに余分な文字があります\nJSON が読めません（4 文字目）: `true` のつもりの書き方が違います\nJSON が読めません（4 文字目）: 文字列の中に制御文字があります（\\n などと書きます）\nJSON が読めません（2 文字目）: 数の書き方が違います\nok [100000,0.002,null]\nJSON が読めません（513 文字目）: 入れ子が深すぎます\n\"a\\\"b\\\\c\\u0001\"\n");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1141,6 +1141,7 @@ use std.json;
 
 fn main() {
     print(env.get("JW_TEST_X"), env.get(""), env.get("NO_SUCH_VAR_123"));
+    match env.exe_path() { case Some(p) -> print(p.ends_with("main") || p.ends_with("main.exe")); case None -> print("None"); }
     let t = time.now();
     time.sleep(30);
     print(t.elapsed_ms() >= 30, t.elapsed_ns() > 0);

@@ -33,7 +33,7 @@ jabberwock のプログラム（browser.jw）
   ├─ タブ・URL の補完・履歴・ブックマーク・設定 … ここを jabberwock で書く
   ├─ 外枠（アドレスバー・タブ列）… 小さな HTML。エンジンで表示し、操作は CHROME_MESSAGE で届く
   └─ jw_engine.h（境目）
-        ├─ webview2/jwe_webview2.cpp（WebView2。WebView2Loader.dll を実行時に読む）
+        ├─ webview2/jwe_webview2.cpp（WebView2。入っている実行環境の DLL を絶対パスで読む）
         ├─ mock/jwe_mock.c（試験用）
         └─ （あとで）Servo / Blitz / jabberwock 製
 ```

@@ -90,7 +90,7 @@ fn main() {
 | `std.math` | `gcd(a, b)`・`lcm(a, b)`・`pow(base, exp)`（exp は 0 以上）・`clamp(x, lo, hi)`（どれも i64）、`pi()`・`floor(x)`・`ceil(x)`・`round(x)`（f64。round はちょうど半分なら 0 から遠い方） |
 | `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9）・`from_utf8(ref bytes)`（`Option<str>`。正しい UTF-8 でなければ None） |
 | `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`・`rename(from, to)`・`write_atomic(path, bytes)`・`write_text_atomic(path, s)`・`stat(path)` と `Info`・`is_file(path)`・`is_dir(path)`・`copy(from, to)`・`remove_all(path)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
-| `std.env` | `get(name)`（`Option<str>`）（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
+| `std.env` | `get(name)`（`Option<str>`）・`exe_path()`（`Option<str>`）（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
 | `std.time` | `now()`・`sleep(ms)`・`unix_ms()`・`local_offset_ms(t)` と `Instant`（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
 | `std.json` | `parse(s)`・`stringify(ref v)`・`quote(s)` と `Json`（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
 | `std.http` | `get(url)`・`post(url, content_type, body)` と `Response`、サーバーの `listen(host, port)`・`stop(srv)` と `Server`・`Request`（[1.5](#15-stdhttpjwc-だけ)） |
@@ -241,6 +241,7 @@ print(v.get("a").at(1).as_str(), json.stringify(ref v));   // Some(x) {"a":[1,"x
 ```
 
 - `env.get(name)`: 環境変数（名前が空・`=` や NUL を含む・値が UTF-8 でないなら None）。設定する関数はまだない。
+- `env.exe_path()`: いま動いている実行ファイルの絶対パス（Windows・Linux・macOS。分からない・UTF-8 でないなら None）。同じフォルダに置いた仲間のプログラムを、PATH や作業フォルダを探さずに起こすために使う。
 - `time.now()`: 単調な時計の読み（`Instant { ns }`）。壁時計の修正に影響されず、差だけに意味がある。`t.elapsed_ns()`・`t.elapsed_ms()`。
   `time.sleep(ms)`（負なら実行時エラー。待つ前に print の出力を書き出す）。
 - `time.unix_ms()`: 壁時計（1970-01-01 UTC からのミリ秒）。時刻の修正で戻ることがあるので、かかった時間は now で測る。暦（年月日）への直しは std.date（1.13）。
