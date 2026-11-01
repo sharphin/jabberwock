@@ -44,6 +44,8 @@ const RES_DECLS = "declare i32 @jw_fs_open(ptr, i64, ptr, ptr)\n" +
     "declare i32 @jw_clip_set(ptr, i64, ptr, ptr)\n" +
     "declare i32 @jw_clip_get(ptr, ptr)\n" +
     "declare i32 @jw_clip_clear(i64, ptr, ptr)\n" +
+    "declare i32 @jw_secret_protect(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_secret_unprotect(ptr, ptr, ptr)\n" +
     "declare i32 @jw_child_read(ptr, i64, ptr, ptr, ptr)\n" +
     "declare i32 @jw_child_write(ptr, ptr, ptr, ptr)\n" +
     "declare i32 @jw_child_write_text(ptr, ptr, ptr, ptr)\n" +
@@ -514,7 +516,7 @@ pub struct Module {
     fn str output() {
         let body = code.join("");
         let res = if body.contains("@jw_res_") || body.contains("@jw_fs_") || body.contains("@jw_file_") || body.contains("@jw_net_")
-            || body.contains("@jw_tcp_") || body.contains("@jw_listener_") || body.contains("@jw_udp_") || body.contains("@jw_process_") || body.contains("@jw_child_") || body.contains("@jw_clip_") || body.contains("@jw_env_get(") || body.contains("@jw_time_") || body.contains("@jw_browser_") || body.contains("@jw_tls_") || body.contains("@jw_random_") { RES_DECLS } else { "" };
+            || body.contains("@jw_tcp_") || body.contains("@jw_listener_") || body.contains("@jw_udp_") || body.contains("@jw_process_") || body.contains("@jw_child_") || body.contains("@jw_clip_") || body.contains("@jw_secret_") || body.contains("@jw_env_get(") || body.contains("@jw_time_") || body.contains("@jw_browser_") || body.contains("@jw_tls_") || body.contains("@jw_random_") { RES_DECLS } else { "" };
         // jwc だけの関数（Rust 版と突き合わせる出力を変えないよう、使ったときだけ宣言する）
         let mut only = "";
         if body.contains("@jw_list_wipe(") { only += "declare void @jw_list_wipe(ptr, i64, ptr)\n"; }

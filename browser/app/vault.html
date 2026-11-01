@@ -88,7 +88,7 @@ function el(tag, cls, text) { const x = document.createElement(tag); if (cls) x.
 function input(type, ph) { const i = el("input"); i.type = type; i.placeholder = ph || ""; i.spellcheck = false; i.autocomplete = "off"; return i; }
 function button(text, cls, f) { const b = el("button", cls, text); b.type = "button"; b.onclick = f; return b; }
 
-let S = { mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "", keep: false, pin: false };
+let S = { mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "", keep: false, pin: false, pc: false };
 let editing = null;   // 編集中のもの（{site, user} か "new"）
 let shown = {};       // 見せているパスワード（サイト\tユーザー → パスワード）
 let filter = "";
@@ -242,6 +242,7 @@ function renderMain(main, focused) {
   main.append(el("h3", "", "PIN で開け直す"));
   const pc = el("div", "card");
   const pf = el("form", "edit");
+  if (S.pc) pf.append(el("p", "", "この PC で鍵を覚えています（OS が守ります）。パソコンを再起動しても、打たずに開きます。やめるときはブラウザの設定で変えてください。"));
   if (!S.keep) {
     pf.append(el("p", "", "ブラウザの設定で「金庫を開けたままにする」を「ブラウザを開いている間」にすると使えます。"));
   } else if (S.pin) {
@@ -298,7 +299,7 @@ function editForm(l) {
 chrome.webview.addEventListener("message", (ev) => {
   const lines = String(ev.data).split("\n");
   if (lines[0] !== "state") return;
-  const next = { mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "", keep: false, pin: false };
+  const next = { mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "", keep: false, pin: false, pc: false };
   for (const line of lines.slice(1)) {
     const f = line.split("\t").map(unesc);
     if (f[0] === "mode") next.mode = f[1];
@@ -309,6 +310,7 @@ chrome.webview.addEventListener("message", (ev) => {
     if (f[0] === "gen") next.gen = f[1];
     if (f[0] === "keep") next.keep = f[1] === "1";
     if (f[0] === "pin") next.pin = f[1] === "1";
+    if (f[0] === "pc") next.pc = f[1] === "1";
   }
   if (next.mode !== "open") { shown = {}; editing = null; draft = null; }
   if (next.mode !== S.mode || next.msg[1]) busy = false;

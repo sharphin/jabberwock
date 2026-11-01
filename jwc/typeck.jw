@@ -43,7 +43,7 @@ fn bool is_builtin(str n) {
     n == "print" || n == "eprint" || n == "drop" || n == "assert" || n == "read_line" || n == "args" || n == "spawn"
         || n == "chan" || n == "exit" || n == "read_file" || n == "write_file" || n == "run_command" || n == "chr"
         || n == "__fs_open" || n == "__res_close" || n == "__fs_exists" || n == "__fs_list" || n == "__fs_make_dir" || n == "__fs_remove" || n == "__fs_rename" || n == "__fs_stat"
-        || n == "__net_connect" || n == "__net_listen" || n == "__net_udp_bind" || n == "__process_start" || n == "__read_line_for" || n == "__stdin_ended" || n == "__clip_set" || n == "__clip_get" || n == "__clip_clear" || n == "__env_get" || n == "__time_now_ns" || n == "__time_unix_ms" || n == "__time_sleep_ms" || n == "__time_local_offset" || n == "__browser_open" || n == "__tls_connect" || n == "__tls_upgrade" || n == "__random_bytes"
+        || n == "__net_connect" || n == "__net_listen" || n == "__net_udp_bind" || n == "__process_start" || n == "__read_line_for" || n == "__stdin_ended" || n == "__clip_set" || n == "__clip_get" || n == "__clip_clear" || n == "__secret_protect" || n == "__secret_unprotect" || n == "__env_get" || n == "__time_now_ns" || n == "__time_unix_ms" || n == "__time_sleep_ms" || n == "__time_local_offset" || n == "__browser_open" || n == "__tls_connect" || n == "__tls_upgrade" || n == "__random_bytes"
 }
 
 /// コンパイラが知っている資源の型（`resource` で書けるのはこれだけ）
@@ -3019,6 +3019,15 @@ pub struct Checker {
             if argv.len() != params.len() { return Err(arity_error(name, params.len(), argv.len(), span)); }
             for (i, a) in argv { expect(a, params[i])?; }
             return Ok(ty.Ty.Enum("Result", own [if name == "__clip_get" { ty.Ty.Str } else { ty.i64t() }, ty.Ty.Str]));
+        }
+        if name == "__secret_protect" || name == "__secret_unprotect" {
+            // 標準ライブラリ std.secret の中だけで使う（バイト列をムーブして渡し、包んだ・ほどいたバイト列が返る）
+            if cur_mod != "std:secret" {
+                return Err(diag.make("`{name}` は標準ライブラリの中だけで使えます").at(span, "std.secret の関数を使ってください"));
+            }
+            if argv.len() != 1 { return Err(arity_error(name, 1, argv.len(), span)); }
+            expect(argv[0], ty.Ty.List(own ty.Ty.Int("u8")))?;
+            return Ok(ty.Ty.Enum("Result", own [ty.Ty.List(own ty.Ty.Int("u8")), ty.Ty.Str]));
         }
         if name == "__process_start" {
             // 標準ライブラリ std.process の中だけで使う（子のプロセスを起こす内部の操作）

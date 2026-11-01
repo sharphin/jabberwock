@@ -3528,6 +3528,88 @@ int32_t jw_clip_clear(int64_t seq, int64_t *out, WStr **err) {{
 }}
 #endif
 
+// ---------------------------------------------------------------- 秘密を OS に守らせる（std.secret）
+//
+// protect はバイト列を、今ログインしている利用者だけがほどける形に包む。unprotect はそれをほどく。
+// Windows は DPAPI（crypt32.dll の CryptProtectData / CryptUnprotectData。初めて使うときに読み込む）。
+// 渡されたリストはムーブされてくるので、ここで 0 で上書きしてから解放する。Linux・macOS は今は Err。
+
+#ifdef _WIN32
+__declspec(dllimport) void *__stdcall LoadLibraryW(const wchar_t *);
+__declspec(dllimport) void *__stdcall GetProcAddress(void *, const char *);
+__declspec(dllimport) void *__stdcall LocalFree(void *);
+
+typedef struct {{
+    unsigned long n;
+    unsigned char *p;
+}} JwBlob;
+
+static struct {{
+    int ready; // 0: まだ、1: 使える、-1: 使えない
+    int(__stdcall *protect)(JwBlob *, const wchar_t *, JwBlob *, void *, void *, unsigned long, JwBlob *);
+    int(__stdcall *unprotect)(JwBlob *, wchar_t **, JwBlob *, void *, void *, unsigned long, JwBlob *);
+}} g_dpapi;
+
+static int dpapi_ready(void) {{
+    lock(&g_lock);
+    if (g_dpapi.ready == 0) {{
+        void *m = LoadLibraryW(L"crypt32.dll");
+        g_dpapi.ready = -1;
+        if (m) {{
+            *(void **)&g_dpapi.protect = GetProcAddress(m, "CryptProtectData");
+            *(void **)&g_dpapi.unprotect = GetProcAddress(m, "CryptUnprotectData");
+            if (g_dpapi.protect && g_dpapi.unprotect) g_dpapi.ready = 1;
+        }}
+    }}
+    int ok = g_dpapi.ready == 1;
+    unlock(&g_lock);
+    return ok;
+}}
+
+static int32_t secret_call(int protect, WList *data, WList *out, WStr **err) {{
+    if (data->len > 0x7fffffff) {{
+        jw_list_wipe(data, 1, NULL);
+        jw_list_free(data, 1, NULL);
+        *err = err_text("大きすぎます");
+        return 0;
+    }}
+    if (!dpapi_ready()) {{
+        jw_list_wipe(data, 1, NULL);
+        jw_list_free(data, 1, NULL);
+        *err = err_text("OS の守る仕組み（crypt32.dll）を使えません");
+        return 0;
+    }}
+    JwBlob in = {{(unsigned long)data->len, (unsigned char *)data->data}}, res = {{0, NULL}};
+    // 1 は CRYPTPROTECT_UI_FORBIDDEN（画面を出さない）
+    int ok = protect ? g_dpapi.protect(&in, L"jabberwock", NULL, NULL, NULL, 1, &res)
+                     : g_dpapi.unprotect(&in, NULL, NULL, NULL, NULL, 1, &res);
+    jw_list_wipe(data, 1, NULL);
+    jw_list_free(data, 1, NULL);
+    if (!ok) {{
+        *err = err_text(protect ? "OS に守らせられませんでした" : "ほどけません（別の利用者か別の PC で包んだか、壊れています）");
+        return 0;
+    }}
+    jw_list_reserve(out, 1, (int64_t)res.n);
+    memcpy(out->data, res.p, res.n);
+    out->len = (int64_t)res.n;
+    volatile unsigned char *z = res.p;
+    for (unsigned long i = 0; i < res.n; i++) z[i] = 0;
+    LocalFree(res.p);
+    return 1;
+}}
+#else
+static int32_t secret_call(int protect, WList *data, WList *out, WStr **err) {{
+    (void)protect, (void)out;
+    jw_list_wipe(data, 1, NULL);
+    jw_list_free(data, 1, NULL);
+    *err = err_text("この OS ではまだ秘密を OS に守らせられません（Windows だけ）");
+    return 0;
+}}
+#endif
+
+int32_t jw_secret_protect(WList *data, WList *out, WStr **err) {{ return secret_call(1, data, out, err); }}
+int32_t jw_secret_unprotect(WList *data, WList *out, WStr **err) {{ return secret_call(0, data, out, err); }}
+
 // ---------------------------------------------------------------- ブラウザのエンジン（std.browser）
 //
 // エンジンとの境目は runtime/engine/jw_engine.h（C の関数だけ。呼び返しなし）。下にそのまま写してある（テストで同じか確かめる）。

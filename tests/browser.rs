@@ -220,6 +220,14 @@ fn vault_script() {
     let keep = scratch("vault-keep");
     let out = run("vault_main", &["--data", &slash(&keep), "--iterations", "2", "--fake", "testdata/vault_keep.txt", "--log"]);
     same_as_file(&out, "vault_keep.out");
+    // この PC で覚える（Linux・macOS では std.secret が Err なので、覚えられないと知らせて、鍵のファイルは作らない）
+    if !cfg!(windows) {
+        let pc = scratch("vault-pc");
+        std::fs::write(pc.join("settings.tsv"), "vault_remember\tpc\n").unwrap();
+        let out = run("vault_main", &["--data", &slash(&pc), "--iterations", "2", "--fake", "testdata/vault_pc.txt", "--log"]);
+        assert!(out.contains("この PC で覚えられませんでした: この OS ではまだ秘密を OS に守らせられません"), "{}", out);
+        assert!(!pc.join("vault.key").exists());
+    }
     let text = std::fs::read_to_string(dir.join("vault.dat")).unwrap();
     assert!(text.starts_with("jwvault 1\nkdf pbkdf2-sha256 2 "), "{}", text);
     // パスワード・ユーザー名・サイトは平文で残さない

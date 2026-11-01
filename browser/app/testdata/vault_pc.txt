@@ -1,0 +1,2 @@
+# この PC で覚える（Linux では OS に守らせられないので、その知らせを出す。Windows では tests の外で Wine で確かめる）
+chrome create correct horse

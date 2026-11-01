@@ -790,6 +790,23 @@ fn jwc_std_clipboard_unix() {
     assert_eq!(String::from_utf8_lossy(&got.stdout), format!("{e} {e} {e}\n"));
 }
 
+// std.secret は Windows だけ。ほかの OS では Err（渡したバイト列は使い終わりに消す）
+#[test]
+fn jwc_std_secret_unix() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-secret-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "use std.secret;\nfn main() { let k = \"key\".bytes(); print(secret.protect(ref k), secret.unprotect(ref k), k.len()); }\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    let e = "Err(この OS ではまだ秘密を OS に守らせられません（Windows だけ）)";
+    assert_eq!(String::from_utf8_lossy(&got.stdout), format!("{e} {e} 3\n"));
+}
+
 // std.process: 子を起こして読む・書く・時間切れ・終了コード・入力を閉じる・止める・起こせないコマンド（子も jwc で作る）。std.io も
 #[test]
 fn jwc_std_process() {

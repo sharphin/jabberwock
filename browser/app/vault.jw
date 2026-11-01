@@ -88,7 +88,18 @@ pub struct Vault {
     }
 
     // 開ける。マスターパスワードが違う・ファイルが壊れていれば Err
-    fn mut Result<(), str> unlock(str master) {
+    fn mut Result<(), str> unlock(str master) { unlock_by(master, []) }
+
+    // 覚えておいた鍵（unlock のあとの key。32 バイト）で開ける。合わなければ Err（マスターパスワードを変えたあとなど）
+    fn mut Result<(), str> unlock_key(u8[] given) {
+        if given.len() != 32 {
+            return Err("覚えていた鍵の形が違います");
+        }
+        unlock_by("", given)
+    }
+
+    // given が空ならマスターパスワードから鍵を作る
+    fn mut Result<(), str> unlock_by(str master, u8[] given) {
         let content = match read_file(file) {
             case Ok(t) -> t;
             case Err(_) -> return Err("金庫のファイルを読めません");
@@ -112,12 +123,16 @@ pub struct Vault {
         if nonce.len() != 12 {
             return Err("金庫のファイルの形が違います");
         }
-        let pw = master.bytes();
-        let kk = hash.pbkdf2_sha256(ref pw, ref s, n);
+        let kk = if given.len() > 0 {
+            given
+        } else {
+            let pw = master.bytes();
+            hash.pbkdf2_sha256(ref pw, ref s, n)
+        };
         let aad = (lines[0] + "\n" + lines[1]).bytes();
         let plain = match crypto.open(ref kk, ref nonce, ref aad, ref sealed) {
             case Some(p) -> p;
-            case None -> return Err("マスターパスワードが違います（またはファイルが書き換えられています）");
+            case None -> return Err(if master == "" { "覚えていた鍵では開けません（マスターパスワードを変えたか、ファイルが書き換えられています）" } else { "マスターパスワードが違います（またはファイルが書き換えられています）" });
         };
         let body = match text.from_utf8(ref plain) { case Some(t) -> t; case None -> return Err("金庫の中身が読めません"); };
         let Login[] mut ls = [];

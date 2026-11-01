@@ -14,6 +14,7 @@ use vault_ui;
 use settings;
 use std.env;
 use std.hash;
+use std.secret;
 use std.fs;
 
 struct App {
@@ -100,7 +101,7 @@ struct App {
         }
     }
 
-    // ブラウザの設定「金庫を開けたままにする」（off / session）
+    // ブラウザの設定「金庫を開けたままにする」（off / session / pc）
     fn str remember() {
         settings.Settings.open(data, "").get("vault_remember")
     }
@@ -108,6 +109,61 @@ struct App {
     // 窓を閉じても鍵を覚えておくか（設定が off でなく、ブラウザが動いている）
     fn bool keep() {
         browser && remember() != "off"
+    }
+
+    // 「この PC で覚える」の鍵のファイル（OS に包ませた鍵。16 進）
+    fn str key_file() {
+        if data.ends_with("/") || data.ends_with("\\") { data + "vault.key" } else { data + "/vault.key" }
+    }
+
+    // 開けたあと: 「この PC で覚える」なら鍵を OS に包ませて置く。ほかの設定なら置いてある鍵を消す
+    fn mut remember_pc() {
+        if remember() != "pc" {
+            if fs.exists(key_file()) {
+                fs.remove(key_file()).unwrap_or(());
+            }
+            return;
+        }
+        if !v.unlocked {
+            return;
+        }
+        let k = v.key.map((x) -> x);
+        match secret.protect(ref k) {
+            case Ok(b) -> {
+                match write_file(key_file(), hash.hex(ref b)) {
+                    case Ok(_) -> {}
+                    case Err(e) -> fail("この PC で覚えられませんでした: " + e);
+                }
+            }
+            case Err(e) -> fail("この PC で覚えられませんでした: " + e);
+        }
+    }
+
+    // 「この PC で覚える」の鍵で開ける（なければ何もしない）。開けなければ鍵のファイルを消す
+    fn mut pc_unlock() {
+        if v.unlocked || remember() != "pc" || !fs.exists(key_file()) {
+            return;
+        }
+        let text = read_file(key_file()).unwrap_or("");
+        let u8[] mut blob = [];
+        match hash.unhex(text.trim()) {
+            case Some(b) -> blob = b;
+            case None -> {}
+        }
+        let r = match secret.unprotect(ref blob) {
+            case Ok(k) -> v.unlock_key(k);
+            case Err(e) -> Err(e);
+        };
+        match r {
+            case Ok(_) -> {
+                say("");
+                eng.ask_site();
+            }
+            case Err(e) -> {
+                fs.remove(key_file()).unwrap_or(());
+                fail("この PC で覚えていた鍵で開けませんでした（" + e + "）。マスターパスワードで開けてください");
+            }
+        }
     }
 
     // 鍵も PIN も忘れる
@@ -190,6 +246,7 @@ struct App {
             case Ok(_) -> {
                 say("金庫を作りました");
                 eng.ask_site();
+                remember_pc();
             }
             case Err(e) -> fail(e);
         }
@@ -204,6 +261,7 @@ struct App {
             case Ok(_) -> {
                 say("");
                 eng.ask_site();
+                remember_pc();
             }
             case Err(e) -> fail(e);
         }
@@ -311,7 +369,10 @@ struct App {
                     return;
                 }
                 match v.change_master(nw, salt, nonce) {
-                    case Ok(_) -> say("マスターパスワードを変えました");
+                    case Ok(_) -> {
+                        say("マスターパスワードを変えました");
+                        remember_pc();
+                    }
                     case Err(e) -> fail(e);
                 }
             }
@@ -331,6 +392,7 @@ struct App {
             case Show -> {
                 hidden = false;
                 eng.window(vault_engine.WindowOp.Focus).unwrap_or(());
+                pc_unlock();
             }
             case BrowserGone -> {
                 browser = false;
@@ -372,7 +434,7 @@ struct App {
             msg_err = false;
         }
         if v.unlocked && !pin_locked {
-            s += "\nkeep\t" + (if keep() { "1" } else { "0" }) + "\npin\t" + (if pin_hash.len() > 0 { "1" } else { "0" });
+            s += "\nkeep\t" + (if keep() { "1" } else { "0" }) + "\npin\t" + (if pin_hash.len() > 0 { "1" } else { "0" }) + "\npc\t" + (if remember() == "pc" { "1" } else { "0" });
             for l in v.logins {
                 s += "\nlogin\t" + vault.escape(l.site) + "\t" + vault.escape(l.user) + "\t" + vault.escape(l.note);
             }
@@ -391,6 +453,11 @@ struct App {
     fn mut run() {
         eng.chrome_load(vault_ui.html()).unwrap_or(());
         eng.chrome_full().unwrap_or(());
+        if remember() == "pc" {
+            pc_unlock();
+        } else {
+            remember_pc();   // 設定を変えたあとに残っている鍵を消す
+        }
         sync();
         while !done {
             match eng.wait() {

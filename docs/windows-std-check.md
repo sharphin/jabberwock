@@ -169,6 +169,15 @@ random 16 true
 - 想定どおりなら `get Ok(ひみつ pass)`・`clear_if Ok(true)`・`get after Ok()`・`clear_if old Ok(false)`・`get Ok(上書き)`・`clear Ok(())`・`get Ok()`。
 - 動かしたあと Windows キー + V でクリップボードの履歴を開き、`ひみつ pass` が載っていなければ、秘密の印も効いている（`ふつう` と `上書き` は載ってよい）。
 
+**secret_check**（std.secret）:
+
+```
+.\jwc.exe build -o secret_check.exe samples\windows\secret_check.jw
+.\secret_check.exe
+```
+
+- 想定どおりなら `wrapped true`・`same true`・`broken Err(ほどけません（別の利用者か別の PC で包んだか、壊れています）)`。
+
 **pg_check**（std.pg。PostgreSQL のサーバーがあるときだけ）:
 
 ```

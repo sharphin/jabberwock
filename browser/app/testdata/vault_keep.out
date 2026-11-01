@@ -16,12 +16,14 @@ site
 msg	ok	金庫を作りました
 keep	1
 pin	0
+pc	0
 chrome_post state
 mode	open
 site	
 msg	err	PIN は 4 文字以上にしてください
 keep	1
 pin	0
+pc	0
 random 16
 chrome_post state
 mode	open
@@ -29,6 +31,7 @@ site
 msg	ok	PIN を決めました。ブラウザを閉じるまで、金庫の窓を閉じても PIN で開け直せます
 keep	1
 pin	1
+pc	0
 window 5
 chrome_post state
 mode	pin
@@ -47,6 +50,7 @@ mode	open
 site	
 keep	1
 pin	1
+pc	0
 chrome_post state
 mode	pin
 site	
@@ -65,20 +69,24 @@ mode	open
 site	
 keep	1
 pin	0
+pc	0
 chrome_post state
 mode	open
 site	
 keep	1
 pin	0
+pc	0
 window 5
 chrome_post state
 mode	open
 site	
 keep	1
 pin	0
+pc	0
 chrome_post state
 mode	open
 site	
 keep	0
 pin	0
+pc	0
 close

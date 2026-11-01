@@ -1948,6 +1948,17 @@ struct FnGen {
             let ok = b.val("call i32 @jw_clip_clear(i64 " + vals[0].v + ", ptr " + out + ", ptr " + err + ")");
             return result_of(m, want, ok, err, "int", out);
         }
+        // 渡すリストはムーブされてきたので、jw_secret_* が 0 で上書きしてから解放する
+        if name == "__secret_protect" || name == "__secret_unprotect" {
+            let lst = b.alloca("%list");
+            b.op("store %list " + vals[0].v + ", ptr " + lst);
+            let out = b.alloca("%list");
+            b.op("store %list zeroinitializer, ptr " + out);
+            let err = b.alloca("ptr");
+            let f = if name == "__secret_protect" { "jw_secret_protect" } else { "jw_secret_unprotect" };
+            let ok = b.val("call i32 @" + f + "(ptr " + lst + ", ptr " + out + ", ptr " + err + ")");
+            return result_of(m, want, ok, err, "bytes", out);
+        }
         if name == "__process_start" {
             let lst = b.alloca("%list");
             b.op("store %list " + vals[1].v + ", ptr " + lst);

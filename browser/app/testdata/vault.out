@@ -26,17 +26,20 @@ site
 msg	ok	金庫を作りました
 keep	0
 pin	0
+pc	0
 chrome_post state
 mode	open
 site	
 msg	err	金庫はもうあります
 keep	0
 pin	0
+pc	0
 chrome_post state
 mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 random 12
 chrome_post state
 mode	open
@@ -44,6 +47,7 @@ site	https://example.com
 msg	ok	保存しました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 chrome_post state
 mode	open
@@ -51,6 +55,7 @@ site	https://example.com
 msg	err	サイトは https://example.com のように書いてください
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 random 12
 chrome_post state
@@ -59,6 +64,7 @@ site	https://example.com
 msg	ok	保存しました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 random 256
@@ -67,6 +73,7 @@ mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 gen	PFaSAmABCYre?DKpN7y5
@@ -75,6 +82,7 @@ mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 pw	https://example.com	まつ	pw\t1
@@ -85,6 +93,7 @@ site	https://example.com
 msg	ok	パスワードをコピーしました（30 秒で消えます）
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 copy (2 文字)
@@ -94,6 +103,7 @@ site	https://example.com
 msg	ok	ユーザー名をコピーしました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 fill https://example.com まつ (4 文字)
@@ -103,6 +113,7 @@ site	https://example.com
 msg	ok	ブラウザに入力を頼みました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 chrome_post state
@@ -111,6 +122,7 @@ site	https://example.com
 msg	ok	入力しました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 chrome_post state
@@ -119,6 +131,7 @@ site	https://example.com
 msg	err	ブラウザの今のページは https://example.com です。入れられるのは同じサイトのときだけです
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 chrome_post state
@@ -127,6 +140,7 @@ site	https://example.com
 msg	err	ブラウザのページが変わったので入れませんでした
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 chrome_post state
@@ -135,6 +149,7 @@ site	https://example.com
 msg	err	ブラウザが開いていません
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 chrome_post state
@@ -155,6 +170,7 @@ mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ\n2 行
 login	https://other.example	bob	
 random 12
@@ -164,6 +180,7 @@ site	https://example.com
 msg	ok	保存しました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 login	https://other.example	bob	
 chrome_post state
@@ -171,6 +188,7 @@ mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 login	https://other.example	bob	
 pw	https://example.com	まつ	pw2
@@ -180,6 +198,7 @@ site	https://example.com
 msg	err	今のマスターパスワードが違います
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 login	https://other.example	bob	
 random 16
@@ -190,6 +209,7 @@ site	https://example.com
 msg	ok	マスターパスワードを変えました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 login	https://other.example	bob	
 chrome_post state
@@ -202,6 +222,7 @@ mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 login	https://other.example	bob	
 random 12
@@ -211,6 +232,7 @@ site	https://example.com
 msg	ok	消しました
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 window 1
 chrome_post state
@@ -218,11 +240,13 @@ mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 chrome_post state
 mode	open
 site	https://example.com
 keep	0
 pin	0
+pc	0
 login	https://example.com	まつ	メモ
 close
