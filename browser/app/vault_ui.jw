@@ -49,6 +49,9 @@ main {{ flex: 1; overflow: auto; padding: 18px; }}
 #msg {{ min-height: 20px; font-size: 13px; margin-bottom: 8px; }}
 #msg.err {{ color: var(--err); }}
 #msg.ok {{ color: var(--ok); }}
+.peek {{ display: flex; align-items: center; gap: 6px; width: 100%; font-size: 13px; opacity: .8; cursor: pointer; }}
+.peek input {{ width: auto; }}
+#caps {{ min-height: 18px; font-size: 13px; color: var(--err); }}
 .row {{ display: flex; gap: 8px; align-items: center; }}
 .row > input {{ flex: 1; }}
 #here {{ font-size: 12px; opacity: .8; margin: 0 0 10px; word-break: break-all; }}
@@ -110,6 +113,24 @@ function letter(site) {{
 // 画面は届くたびに作り直す。打っている途中のマスターパスワードの欄は、値とカーソルの位置を引き継ぐ
 // （ブラウザのページが変わったという知らせなどで作り直されても、打った文字が消えたり別の欄へ移ったりしないように）
 const KEEP = ["m1", "m2", "mu", "mo", "mn1", "mn2"];
+let peek = false;   // マスターパスワードの欄の文字を見せる
+let caps = false;   // Caps Lock が入っている
+document.addEventListener("keydown", (e) => capsCheck(e));
+document.addEventListener("keyup", (e) => capsCheck(e));
+function capsCheck(e) {{
+  if (!e.getModifierState) return;
+  const on = e.getModifierState("CapsLock");
+  if (on !== caps) {{ caps = on; const c = $("caps"); if (c) c.textContent = caps ? "Caps Lock が入っています" : ""; }}
+}}
+// マスターパスワードの欄の下に出す「文字を見せる」と Caps Lock の知らせ
+function masterHelp() {{
+  const l = el("label", "peek"), box = el("input");
+  box.type = "checkbox"; box.checked = peek;
+  box.onchange = () => {{ peek = box.checked; for (const id of ["m1", "m2", "mu"]) {{ const x = $(id); if (x) x.type = peek ? "text" : "password"; }} }};
+  l.append(box, document.createTextNode("打った文字を見せる"));
+  const c = el("div", "", caps ? "Caps Lock が入っています" : ""); c.id = "caps";
+  return [l, c];
+}}
 function render() {{
   const main = $("main");
   const focused = document.activeElement && document.activeElement.id;
@@ -130,7 +151,7 @@ function renderMain(main, focused) {{
     const c = el("div", "center");
     c.append(el("h2", "", "金庫を作る"));
     c.append(el("p", "", "マスターパスワードを決めてください（8 文字以上）。忘れると中身は二度と取り出せません。どこにも送らず、この PC の金庫のファイルだけに使います。"));
-    const a = input("password", "マスターパスワード"), b = input("password", "もう一度");
+    const a = input(peek ? "text" : "password", "マスターパスワード"), b = input(peek ? "text" : "password", "もう一度");
     a.id = "m1"; b.id = "m2";
     const go = button("作る", "main", () => {{
       if (a.value.length < 8) {{ S.msg = ["err", "8 文字以上にしてください"]; render(); return; }}
@@ -138,7 +159,7 @@ function renderMain(main, focused) {{
       busy = true; S.msg = ["", "作っています…"]; send("create " + esc(a.value)); render();
     }});
     b.onkeydown = (e) => {{ if (e.key === "Enter") go.click(); }};
-    c.append(a, b, go, msgLine());
+    c.append(a, b, ...masterHelp(), go, msgLine());
     main.append(c);
     a.focus();
     return;
@@ -146,7 +167,7 @@ function renderMain(main, focused) {{
   if (S.mode === "locked") {{
     const c = el("div", "center");
     c.append(el("h2", "", "金庫は閉じています"));
-    const a = input("password", "マスターパスワード");
+    const a = input(peek ? "text" : "password", "マスターパスワード");
     a.id = "mu";
     const go = button(busy ? "開けています…" : "開ける", "main", () => {{
       if (!a.value) return;
@@ -154,7 +175,7 @@ function renderMain(main, focused) {{
     }});
     go.disabled = busy;
     a.onkeydown = (e) => {{ if (e.key === "Enter") go.click(); }};
-    c.append(a, go, msgLine());
+    c.append(a, ...masterHelp(), go, msgLine());
     main.append(c);
     a.focus();
     return;
