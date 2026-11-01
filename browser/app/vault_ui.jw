@@ -107,15 +107,31 @@ function letter(site) {{
   return d;
 }}
 
+// 画面は届くたびに作り直す。打っている途中のマスターパスワードの欄は、値とカーソルの位置を引き継ぐ
+// （ブラウザのページが変わったという知らせなどで作り直されても、打った文字が消えたり別の欄へ移ったりしないように）
+const KEEP = ["m1", "m2", "mu", "mo", "mn1", "mn2"];
 function render() {{
   const main = $("main");
   const focused = document.activeElement && document.activeElement.id;
+  const kept = {{}};
+  for (const id of KEEP) {{ const x = $(id); if (x) kept[id] = [x.value, x.selectionStart, x.selectionEnd]; }}
   main.textContent = "";
+  renderMain(main, focused);
+  for (const id of KEEP) {{
+    const x = $(id);
+    if (!x || !kept[id]) continue;
+    x.value = kept[id][0];
+    if (focused === id) {{ x.focus(); x.setSelectionRange(kept[id][1], kept[id][2]); }}
+  }}
+}}
+
+function renderMain(main, focused) {{
   if (S.mode === "new") {{
     const c = el("div", "center");
     c.append(el("h2", "", "金庫を作る"));
     c.append(el("p", "", "マスターパスワードを決めてください（8 文字以上）。忘れると中身は二度と取り出せません。どこにも送らず、この PC の金庫のファイルだけに使います。"));
     const a = input("password", "マスターパスワード"), b = input("password", "もう一度");
+    a.id = "m1"; b.id = "m2";
     const go = button("作る", "main", () => {{
       if (a.value.length < 8) {{ S.msg = ["err", "8 文字以上にしてください"]; render(); return; }}
       if (a.value !== b.value) {{ S.msg = ["err", "2 つが違います"]; render(); return; }}
@@ -131,6 +147,7 @@ function render() {{
     const c = el("div", "center");
     c.append(el("h2", "", "金庫は閉じています"));
     const a = input("password", "マスターパスワード");
+    a.id = "mu";
     const go = button(busy ? "開けています…" : "開ける", "main", () => {{
       if (!a.value) return;
       busy = true; S.msg = ["", "開けています…"]; send("unlock " + esc(a.value)); a.value = ""; render();
@@ -190,10 +207,12 @@ function render() {{
   const mc = el("div", "card");
   const mf = el("form", "edit");
   const o = input("password", "今のマスターパスワード"), n1 = input("password", "新しいマスターパスワード（8 文字以上）"), n2 = input("password", "もう一度");
+  o.id = "mo"; n1.id = "mn1"; n2.id = "mn2";
   mf.append(o, n1, n2, button("変える", "line", () => {{
     if (n1.value.length < 8) {{ S.msg = ["err", "新しいマスターパスワードは 8 文字以上にしてください"]; render(); return; }}
     if (n1.value !== n2.value) {{ S.msg = ["err", "新しいマスターパスワードが 2 つで違います"]; render(); return; }}
     send("master " + esc(o.value) + "\\t" + esc(n1.value));
+    o.value = n1.value = n2.value = "";   // 作り直しで引き継がないよう、送ったら消す
   }}));
   mc.append(mf); main.append(mc);
   if (focused === "q") {{ $("q").focus(); }}
