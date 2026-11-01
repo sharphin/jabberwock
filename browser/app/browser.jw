@@ -393,7 +393,14 @@ pub struct Browser {
                     tabs[i].forward = f;
                 }
             }
-            case NewTabRequested(_, u) -> new_tab(u);
+            case NewTabRequested(_, u) -> {
+                // ページが開こうとしたタブは http と https だけ（data: の偽ログイン画面や file: を開かせない）
+                if web_url(u) {
+                    new_tab(u);
+                } else {
+                    note = "ページが開こうとしたタブを止めました（http と https だけ開きます）";
+                }
+            }
             case ChromeMessage(m) -> command(m);
             case Key(k) -> key(browser.KeyCode.of(k));
             case PermissionDenied(_, what) -> note = "断りました: " + what;
@@ -627,3 +634,10 @@ pub struct Browser {
         save_session();
     }
 }
+
+// ページから開いてよい URL か（http: か https:）
+fn bool web_url(str u) {
+    let s = u.trim().to_lower();
+    s.starts_with("https://") || s.starts_with("http://")
+}
+

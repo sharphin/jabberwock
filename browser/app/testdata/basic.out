@@ -56,6 +56,24 @@ tab	2	1	title:https://a.example/	https://a.example/
 bmbar	1
 icons	1
 bm	https://example.com	title:https://example.com
+chrome_post 0 state
+url	https://a.example/
+nav	0	0	0	0
+tab	1	0	title:https://example.com	https://example.com
+tab	2	1	title:https://a.example/	https://a.example/
+bmbar	1
+icons	1
+bm	https://example.com	title:https://example.com
+note	ページが開こうとしたタブを止めました（http と https だけ開きます）
+chrome_post 0 state
+url	https://a.example/
+nav	0	0	0	0
+tab	1	0	title:https://example.com	https://example.com
+tab	2	1	title:https://a.example/	https://a.example/
+bmbar	1
+icons	1
+bm	https://example.com	title:https://example.com
+note	ページが開こうとしたタブを止めました（http と https だけ開きます）
 tab_show 1
 set_title 0 title:https://example.com - jabberwock
 chrome_post 0 state
