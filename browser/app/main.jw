@@ -53,7 +53,12 @@ fn main() {
             }
         }
     }
-    let mut b = match browser.Browser.open(data, ephemeral) {
+    // 試験用: 履歴の時刻を決まった時計にする（unix のミリ秒。テストの出力を毎回同じにするため）
+    let clock = match env.get("JW_BROWSER_CLOCK") {
+        case Some(c) -> c.to_int().unwrap_or(0);
+        case None -> 0;
+    };
+    let mut b = match browser.Browser.open(data, ephemeral, clock) {
         case Ok(x) -> x;
         case Err(e) -> {
             eprint("エンジンを開けません:", e);

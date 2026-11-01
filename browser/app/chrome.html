@@ -1,23 +1,25 @@
 <!doctype html>
 <!--
-外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
+外枠（タブ列・アドレス欄・ブックマーク・設定と履歴の画面）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
 - 外枠 → 本体（ChromeMessage）: "go <打った文字>" / "back" / "forward" / "reload" / "stop" /
   "newtab" / "select <タブ>" / "close <タブ>" / "bookmark" / "open <URL>" / "clear" /
-  "settings"（設定のタブを開く）/ "vault"（パスワードの金庫の窓を出す）/ "set <キー> <値>"（設定を変える）/ "act <キー>"（設定の画面のボタン）/
+  "settings"（設定のタブを開く）/ "history"（履歴のタブを開く）/ "opentab <URL>"（新しいタブで開く）/
+  "hdel <時刻> <URL>"（履歴から 1 件消す）/ "hclear"（履歴をすべて消す）/ "vault"（パスワードの金庫の窓を出す）/ "set <キー> <値>"（設定を変える）/ "act <キー>"（設定の画面のボタン）/
   "window drag" / "window min" / "window max" / "window close"（窓を動かす・最小化・最大化と戻す・閉じる）
 - 本体 → 外枠（chrome_post）: "focus"（アドレス欄へ）か、状態を 1 行ずつ書いたもの（区切りはタブ文字）:
     state
     url  今の URL
     nav  戻れる 0/1  進める 0/1  読み込み中 0/1  ブックマーク済み 0/1
-    tab  番号  今のタブなら 1  題  URL（アイコンを決める。jw: は設定）
+    tab  番号  今のタブなら 1  題  URL（アイコンを決める。jw://settings は設定、jw://history は履歴）
     frame 1（外枠が窓の一番上まで来ている。右端に ー □ × を出し、空いたところで窓を動かす）
     bmbar 0/1（ブックマークバーを出すか）
     icons 0/1（サイトのアイコン（/favicon.ico）を出すか。0 なら頭文字）
     bm   URL  題
     note 知らせ
-    page settings（外枠が窓全体を覆っている。下に設定の画面を出す）
+    page settings か history（外枠が窓全体を覆っている。下に設定か履歴の画面を出す）
     sec  見出し
     opt  キー  種類（choice / text / toggle / action）  値  表示  選択肢（値=表示|値=表示）
+    hist 時刻（unix のミリ秒。0 はわからない）  URL  題（新しい順）
   高さは #top 40 + #bar 44 + #bms 30（gen_chrome.jw の height と合わせる）
 -->
 <meta charset="utf-8">
@@ -73,6 +75,25 @@ button:disabled { opacity: .35; }
 .sw::after { content: ""; position: absolute; top: -3px; left: -2px; width: 20px; height: 20px; border-radius: 50%; background: #bbb; box-shadow: 0 1px 3px rgba(0,0,0,.4); transition: left .1s; }
 .sw.on { background: color-mix(in srgb, var(--accent) 50%, transparent); }
 .sw.on::after { left: 16px; background: var(--accent); }
+#hist { display: none; max-width: 800px; margin: 0 auto; padding: 24px 16px 48px; }
+#page.history #set { display: none; }
+#page.history #hist { display: block; }
+#hist h1 { font-size: 22px; font-weight: 400; margin: 0 0 16px; }
+#hhead { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+#hq { flex: 1; height: 36px; border: 1px solid var(--line); border-radius: 18px; padding: 0 16px; background: var(--card); color: inherit; font: 14px "Segoe UI", system-ui, sans-serif; outline: none; }
+#hq:focus { border-color: var(--accent); }
+#hclear { width: auto; height: auto; border-radius: 4px; padding: 7px 14px; font-size: 13px; border: 1px solid var(--line); color: var(--accent); }
+#hist h2 { font-size: 14px; font-weight: 600; margin: 24px 0 8px; opacity: .85; }
+.hrow { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 4px 8px 4px 20px; border-top: 1px solid var(--line); font-size: 14px; }
+.hrow:first-child { border-top: 0; }
+.hrow time { width: 44px; flex: none; opacity: .65; font-size: 12px; font-variant-numeric: tabular-nums; }
+.hrow a { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: inherit; text-decoration: none; }
+.hrow a:hover { text-decoration: underline; }
+.hrow .host { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: .55; font-size: 12px; }
+.hrow b { font-weight: normal; width: 28px; height: 28px; line-height: 28px; text-align: center; border-radius: 50%; opacity: 0; flex: none; cursor: pointer; }
+.hrow:hover b { opacity: .7; }
+.hrow b:hover { opacity: 1; background: var(--tab); }
+#hnone { padding: 32px 0; text-align: center; opacity: .6; }
 </style>
 <div id="top">
   <div id="tabs"></div>
@@ -88,19 +109,25 @@ button:disabled { opacity: .35; }
   <span id="note"></span>
   <button id="star" title="ブックマーク">☆</button>
   <button id="key" title="パスワード（別の窓の金庫）">🔑</button>
+  <button id="clock" title="履歴 (Ctrl+H)">🕘</button>
   <button id="gear" title="設定">⚙</button>
 </div>
 <div id="bms"></div>
-<div id="page"><div id="set"></div></div>
+<div id="page"><div id="set"></div><div id="hist"><h1>履歴</h1><div id="hhead"><input id="hq" spellcheck="false" placeholder="履歴を検索"><button id="hclear">履歴をすべて消す</button></div><div id="hlist"></div></div></div>
 <script>
 const send = (s) => chrome.webview.postMessage(s);
 const $ = (id) => document.getElementById(id);
-let loading = false, editing = false, showIcons = true, setKey = "";
+let loading = false, editing = false, showIcons = true, setKey = "", histKey = "", histRows = [];
 $("back").onclick = () => send("back");
 $("fwd").onclick = () => send("forward");
 $("rel").onclick = () => send(loading ? "stop" : "reload");
 $("star").onclick = () => send("bookmark");
 $("gear").onclick = () => send("settings");
+$("clock").onclick = () => send("history");
+// 外枠に入力があるときの Ctrl+H（ページを見ているときのキーはエンジンが受ける）
+document.addEventListener("keydown", (e) => { if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === "h" || e.key === "H")) { e.preventDefault(); send("history"); } });
+$("hq").oninput = () => historyPage(null);
+$("hclear").onclick = () => { if (confirm("履歴をすべて消しますか？（Cookie は消しません）")) send("hclear"); };
 $("key").onclick = () => send("vault");
 $("plus").onclick = () => send("newtab");
 $("wmin").onclick = () => send("window min");
@@ -124,7 +151,7 @@ const iconOk = new Map(); // origin → true / false（読めたか）
 function icon(url) {
   const box = el("span", "ico");
   if (!url) return box;
-  if (url.startsWith("jw:")) { box.textContent = "⚙"; return box; }
+  if (url.startsWith("jw:")) { box.textContent = url === "jw://history" ? "🕘" : "⚙"; return box; }
   let u = null;
   try { u = new URL(url); } catch (_) {}
   const host = u ? u.hostname.replace(/^www\./, "") : "";
@@ -192,6 +219,52 @@ function settings(rows) {
   }
 }
 
+// 履歴の画面（本体から届いた hist の行で作る）。rows が null なら検索欄だけ変わった
+function historyPage(rows) {
+  if (rows) {
+    const key = JSON.stringify(rows) + showIcons;
+    if (key === histKey) return;
+    histKey = key; histRows = rows;
+  }
+  const q = $("hq").value.trim().toLowerCase();
+  const list = $("hlist");
+  list.textContent = "";
+  const pad = (n) => String(n).padStart(2, "0");
+  const dayOf = (d) => d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+  const today = new Date(), yest = new Date(Date.now() - 86400000);
+  const week = ["日", "月", "火", "水", "木", "金", "土"];
+  let day = null, card = null, shown = 0;
+  for (const [, at, url, title] of histRows) {
+    if (q && !(title || "").toLowerCase().includes(q) && !url.toLowerCase().includes(q)) continue;
+    const t = Number(at) || 0, d = new Date(t);
+    const k = t ? dayOf(d) : "none";
+    if (k !== day) {
+      day = k;
+      let label = "日時のわからない履歴";
+      if (t) {
+        label = d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日（" + week[d.getDay()] + "）";
+        if (k === dayOf(today)) label = "今日 - " + label;
+        else if (k === dayOf(yest)) label = "昨日 - " + label;
+      }
+      list.append(el("h2", "", label));
+      card = el("div", "card"); list.append(card);
+    }
+    const row = el("div", "hrow");
+    const a = el("a", "", title || url); a.href = "#"; a.title = url;
+    a.onclick = (e) => { e.preventDefault(); send((e.ctrlKey ? "opentab " : "open ") + url); };
+    a.onauxclick = (e) => { if (e.button === 1) { e.preventDefault(); send("opentab " + url); } };
+    let host = "";
+    try { host = new URL(url).hostname; } catch (_) {}
+    const x = el("b", "", "×"); x.title = "履歴から消す";
+    x.onclick = () => send("hdel " + at + " " + url);
+    row.append(el("time", "", t ? pad(d.getHours()) + ":" + pad(d.getMinutes()) : ""), icon(url), a, el("span", "host", host), x);
+    card.append(row);
+    shown++;
+  }
+  $("hclear").disabled = histRows.length === 0;
+  if (!shown) { const none = el("div", "", histRows.length ? "見つかりませんでした" : "まだ履歴はありません"); none.id = "hnone"; list.append(none); }
+}
+
 chrome.webview.addEventListener("message", (ev) => {
   const lines = String(ev.data).split("\n");
   if (lines[0] === "focus") { $("addr").focus(); return; }
@@ -199,7 +272,7 @@ chrome.webview.addEventListener("message", (ev) => {
   const tabs = $("tabs"), bms = $("bms");
   tabs.textContent = ""; bms.textContent = "";
   let note = "", page = "";
-  const rows = [], fields = lines.slice(1).map((l) => l.split("\t"));
+  const rows = [], hrows = [], fields = lines.slice(1).map((l) => l.split("\t"));
   for (const f of fields) if (f[0] === "icons") showIcons = f[1] === "1";
   for (const f of fields) {
     if (f[0] === "url" && !editing) $("addr").value = f[1];
@@ -228,10 +301,13 @@ chrome.webview.addEventListener("message", (ev) => {
     if (f[0] === "frame") $("win").classList.toggle("on", f[1] === "1");
     if (f[0] === "page") page = f[1];
     if (f[0] === "sec" || f[0] === "opt") rows.push(f);
+    if (f[0] === "hist") hrows.push(f);
   }
   if (!bms.firstChild) bms.append(el("i", "", "☆ を押すとここにブックマークが並びます"));
   $("note").textContent = note; $("note").title = note;
-  $("page").classList.toggle("on", page === "settings");
+  $("page").classList.toggle("on", page === "settings" || page === "history");
+  $("page").classList.toggle("history", page === "history");
   if (page === "settings") settings(rows); else setKey = "";
+  if (page === "history") historyPage(hrows); else { histKey = ""; $("hq").value = ""; }
 });
 </script>

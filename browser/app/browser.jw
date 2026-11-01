@@ -1,4 +1,4 @@
-// ブラウザ本体: タブ・アドレス欄・戻る/進む・履歴・ブックマーク。
+// ブラウザ本体: タブ・アドレス欄・戻る/進む・履歴・ブックマーク・設定と履歴の画面。
 // エンジンとは std.browser（runtime/engine/jw_engine.h の境目）だけで話す。エンジンの実装はビルドのときに --link で渡す。
 
 use std.browser;
@@ -11,6 +11,8 @@ use vault_link;
 const HOME = "about:blank";
 const SETTINGS_URL = "jw://settings";
 const SETTINGS_ID = -1;   // 設定のタブの番号（エンジンのタブではない。外枠が窓全体を覆って画面を出す）
+const HISTORY_URL = "jw://history";
+const HISTORY_ID = -2;    // 履歴のタブの番号（設定のタブと同じく外枠が出す）
 
 pub struct Tab {
     i64 id;
@@ -19,7 +21,7 @@ pub struct Tab {
     bool loading;
     bool back;
     bool forward;
-    bool settings;   // 設定のタブ
+    str inner;       // 外枠が出す画面のタブなら "settings" か "history"。ページなら ""
 }
 
 pub struct Browser {
@@ -32,11 +34,12 @@ pub struct Browser {
     str note;        // 外枠に出す短い知らせ
     bool chrome_view;
     bool frameless;
-    bool covered;    // 外枠が窓全体を覆っている（設定のタブを見せている）
+    bool covered;    // 外枠が窓全体を覆っている（設定か履歴のタブを見せている）
     vault_link.Link vault;   // パスワードの金庫（別のプログラム）とのやりとり
 
     // data: 置き場所。ephemeral なら何も残さない（設定は読むだけ）。エンジンを開けなければ Err
-    static fn Result<Browser, str> open(str data, bool ephemeral) {
+    // clock: 履歴の時刻に使う試験用の決まった時計（0 なら本当の時計）
+    static fn Result<Browser, str> open(str data, bool ephemeral, i64 clock) {
         let data_dir = if ephemeral { "" } else { data };
         let prefs = settings.Settings.open(data, data_dir);
         let cfg = browser.Config { title: "jabberwock", data_dir: data, width: 1100, height: 760, ephemeral: ephemeral };
@@ -44,7 +47,7 @@ pub struct Browser {
         let chrome_view = eng.info().chrome_view;
         let frameless = eng.info().frameless;
         let mut b = Browser {
-            eng: eng, data: store.Store.open(data_dir), prefs: prefs,
+            eng: eng, data: store.Store.open_at(data_dir, clock), prefs: prefs,
             tabs: [], current: 0, done: false, note: "", chrome_view: chrome_view, frameless: frameless, covered: false,
             vault: vault_link.Link.new(data),   // 金庫は --ephemeral でも同じ置き場所の vault.dat を使う
         };
@@ -68,10 +71,10 @@ pub struct Browser {
         chrome.height(prefs.on("bookmarks_bar"))
     }
 
-    // 今のタブがページなら番号、設定のタブかタブがないなら 0
+    // 今のタブがページなら番号、設定・履歴のタブかタブがないなら 0
     fn i64 page() {
         let i = index_of(current);
-        if i < 0 || tabs[i].settings { 0 } else { current }
+        if i < 0 || tabs[i].inner != "" { 0 } else { current }
     }
 
     fn i64 index_of(i64 id) {
@@ -93,7 +96,7 @@ pub struct Browser {
                 return 0;
             }
         };
-        tabs.push(Tab { id: id, url: url, title: "", loading: false, back: false, forward: false, settings: false });
+        tabs.push(Tab { id: id, url: url, title: "", loading: false, back: false, forward: false, inner: "" });
         select(id);
         check(eng.navigate(id, url));
         id
@@ -105,7 +108,7 @@ pub struct Browser {
             return;
         }
         current = id;
-        if tabs[i].settings {
+        if tabs[i].inner != "" {
             if !covered {
                 covered = true;
                 check(eng.chrome_height(-1));
@@ -123,10 +126,19 @@ pub struct Browser {
 
     // 設定のタブを開く（もうあればそこへ移る）
     fn mut open_settings() {
-        if index_of(SETTINGS_ID) < 0 {
-            tabs.push(Tab { id: SETTINGS_ID, url: SETTINGS_URL, title: "設定", loading: false, back: false, forward: false, settings: true });
+        open_inner(SETTINGS_ID, SETTINGS_URL, "設定", "settings");
+    }
+
+    // 履歴のタブを開く（もうあればそこへ移る）
+    fn mut open_history() {
+        open_inner(HISTORY_ID, HISTORY_URL, "履歴", "history");
+    }
+
+    fn mut open_inner(i64 id, str url, str title, str kind) {
+        if index_of(id) < 0 {
+            tabs.push(Tab { id: id, url: url, title: title, loading: false, back: false, forward: false, inner: kind });
         }
-        select(SETTINGS_ID);
+        select(id);
     }
 
     // 起動したときのタブ（設定の「起動したときに開くページ」）
@@ -159,8 +171,8 @@ pub struct Browser {
         }
         let store.Entry[] mut es = [];
         for t in tabs {
-            if !t.settings && t.url != HOME {
-                es.push(store.Entry { url: t.url, title: t.title });
+            if t.inner == "" && t.url != HOME {
+                es.push(store.Entry { url: t.url, title: t.title, at: 0 });
             }
         }
         data.save_session(es);
@@ -198,7 +210,7 @@ pub struct Browser {
         if i < 0 {
             return;
         }
-        if !tabs[i].settings {
+        if tabs[i].inner == "" {
             check(eng.tab_close(id));
         }
         tabs.remove(i);
@@ -228,14 +240,18 @@ pub struct Browser {
             open_settings();
             return;
         }
+        if input.trim() == HISTORY_URL {
+            open_history();
+            return;
+        }
         let search = settings.search_prefix(prefs.get("search"));
         match address.from_input_with(input, search) {
             case Some(u) -> {
                 let i = index_of(current);
                 if i < 0 {
                     new_tab(u);
-                } else if tabs[i].settings {
-                    // 設定のタブの場所でページを開く
+                } else if tabs[i].inner != "" {
+                    // 設定・履歴のタブの場所でページを開く
                     let id = match eng.tab_new() {
                         case Ok(n) -> n;
                         case Err(e) -> {
@@ -243,12 +259,36 @@ pub struct Browser {
                             return;
                         }
                     };
-                    tabs[i] = Tab { id: id, url: u, title: "", loading: false, back: false, forward: false, settings: false };
+                    tabs[i] = Tab { id: id, url: u, title: "", loading: false, back: false, forward: false, inner: "" };
                     select(id);
                     check(eng.navigate(id, u));
                 } else {
                     check(eng.navigate(current, u));
                 }
+            }
+            case None -> {}
+        }
+    }
+
+    // 新しいタブで開く（履歴の画面で中ボタンか Ctrl を押しながら押したとき）
+    fn mut go_new_tab(str input) {
+        let search = settings.search_prefix(prefs.get("search"));
+        match address.from_input_with(input, search) {
+            case Some(u) -> {
+                new_tab(u);
+            }
+            case None -> {}
+        }
+    }
+
+    // 履歴から 1 件消す。arg は「時刻 URL」
+    fn mut forget(str arg) {
+        let sp = arg.find(" ");
+        match sp {
+            case Some(i) -> {
+                let at = arg.slice(0, i).to_int().unwrap_or(0);
+                let u = arg.slice(i + 1, arg.len());
+                data.forget(at, u);
             }
             case None -> {}
         }
@@ -373,6 +413,13 @@ pub struct Browser {
             case "reload" -> nav(name);
             case "stop" -> nav(name);
             case "settings" -> open_settings();
+            case "history" -> open_history();
+            case "opentab" -> go_new_tab(arg);
+            case "hdel" -> forget(arg);
+            case "hclear" -> {
+                data.clear_history();
+                note = "履歴を消しました";
+            }
             case "vault" -> {
                 let u = shown_url();
                 match vault.open(u) {
@@ -439,8 +486,12 @@ pub struct Browser {
             s += "\nframe\t1";
         }
         s += "\nbmbar\t" + flag(prefs.on("bookmarks_bar")) + "\nicons\t" + flag(prefs.on("icons"));
-        if covered {
-            s += "\npage\tsettings" + prefs.to_chrome();
+        if covered && i >= 0 {
+            if tabs[i].inner == "history" {
+                s += "\npage\thistory" + history_lines();
+            } else {
+                s += "\npage\tsettings" + prefs.to_chrome();
+            }
         }
         for b in data.bookmarks {
             s += "\nbm\t" + clean(b.url) + "\t" + clean(b.title);
@@ -458,10 +509,21 @@ pub struct Browser {
         check(eng.chrome_post(s));
     }
 
-    // 見えているタブの URL（設定のタブなら空）
+    // 履歴の画面に出す行（新しい順）。hist 時刻 URL 題
+    fn str history_lines() {
+        let mut s = "";
+        let n = data.history.len();
+        for k in range(n) {
+            let e = ref data.history[n - 1 - k];
+            s += "\nhist\t{e.at}\t" + clean(e.url) + "\t" + clean(e.title);
+        }
+        s
+    }
+
+    // 見えているタブの URL（設定・履歴のタブなら空）
     fn str shown_url() {
         let i = index_of(current);
-        if i < 0 || tabs[i].settings {
+        if i < 0 || tabs[i].inner != "" {
             return "";
         }
         tabs[i].url

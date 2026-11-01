@@ -101,6 +101,7 @@ fn browse(script: &Path, args: &[&str]) -> String {
         .args(args)
         .env("JWE_MOCK_SCRIPT", script)
         .env("JWE_MOCK_LOG", &log)
+        .env("JW_BROWSER_CLOCK", "1793500000000") // 履歴の時刻を毎回同じにする（1 件ごとに 1 分進む）
         .output()
         .unwrap();
     assert!(o.status.success(), "{:?} が失敗した:\n{}", args, String::from_utf8_lossy(&o.stderr));
@@ -139,7 +140,7 @@ fn scripts() {
     if !have_clang() {
         return;
     }
-    for name in ["basic", "tabs", "settings"] {
+    for name in ["basic", "tabs", "settings", "history"] {
         let data = scratch(&format!("script-{}", name));
         let got = browse(&app().join(format!("testdata/{}.txt", name)), &["--data", &slash(&data), "--ephemeral"]);
         same_as_file(&got, &format!("{}.out", name));
@@ -154,11 +155,14 @@ fn keeps_history_and_bookmarks_in_one_folder() {
     let dir = scratch("data");
     let d = slash(&dir);
     std::fs::write(dir.join("bookmarks.tsv"), "https://saved.example/\t保存した\n").unwrap();
+    // 時刻のない前の形の履歴も読める（時刻は 0 として外枠に出す）
+    std::fs::write(dir.join("history.tsv"), "https://old.example/\t前の形\n").unwrap();
     let log = browse(&app().join("testdata/tabs.txt"), &["--data", &d]);
     assert!(log.contains("\nbm\thttps://saved.example/\t保存した\n"), "前のブックマークが外枠に出る:\n{}", log);
     browse(&app().join("testdata/basic.txt"), &["--data", &d]);
     let history = std::fs::read_to_string(dir.join("history.tsv")).unwrap();
-    assert!(history.contains("https://example.com\ttitle:https://example.com\n"), "{}", history);
+    assert!(history.starts_with("https://old.example/\t前の形\t0\n"), "{}", history);
+    assert!(history.contains("https://example.com\ttitle:https://example.com\t1793500000000\n"), "{}", history);
     assert!(!history.contains("fail://x"), "読み込めなかったページは残さない:\n{}", history);
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "置くのは history.tsv と bookmarks.tsv だけ");
     // --ephemeral なら何も書かない

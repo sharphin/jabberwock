@@ -1,0 +1,13 @@
+# 履歴のタブ（日付ごとの一覧は外枠が作る）・1 件消す・新しいタブで開く・すべて消す・履歴のタブの場所でページを開く
+chrome go a.example
+chrome go b.example
+chrome go a.example
+chrome history
+chrome hdel 1793500060000 https://b.example
+chrome hdel 5 https://a.example
+chrome hdel nonsense
+chrome opentab c.example
+chrome go jw://history
+chrome hclear
+chrome open d.example
+key 3

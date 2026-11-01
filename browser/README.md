@@ -7,9 +7,9 @@ browser/
   app/main.jw                   ブラウザの入口（引数を読んで Browser を動かす）
   app/browser.jw                タブ・アドレス欄・戻る/進む・キー操作・外枠とのやりとり。エンジンとは std.browser だけで話す
   app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
-  app/store.jw                  履歴・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
+  app/store.jw                  履歴（見た時刻つき）・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
   app/settings.jw               設定の項目の一覧と値（settings.tsv）。項目は items() に 1 行足すだけで増やせる
-  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定の画面）。chrome.jw は gen_chrome.jw がここから作る
+  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定と履歴の画面）。chrome.jw は gen_chrome.jw がここから作る
   app/vault_main.jw             パスワードの金庫（別のプログラム。ブラウザの 🔑 で、ブラウザが子プロセスとして起こす）
   app/vault.jw                  金庫のファイル vault.dat（作る・開ける・足す・消す・マスターパスワードの変更・パスワード作り）。暗号は std.hash・std.crypto
   app/vault_engine.jw           金庫の窓（std.browser）・ブラウザとの 1 行ずつのやりとり・クリップボード・自動で閉じる。テスト用の偽エンジンも
@@ -39,6 +39,7 @@ JWE_MOCK_SCRIPT=browser/app/testdata/basic.txt JWE_MOCK_LOG=/tmp/mock.log /tmp/j
 - `--data フォルダ`: 履歴（history.tsv）・ブックマーク（bookmarks.tsv）・設定（settings.tsv）・前回のタブ（session.tsv）・Cookie の置き場所
   （既定は Windows なら `%LOCALAPPDATA%\jabberwock-browser`、ほかは `./browser-data`）
 - `--ephemeral`: 何も残さない
+- 環境変数 `JW_BROWSER_CLOCK`（試験用）: 履歴の時刻を決まった時計にする（unix のミリ秒から始めて 1 件ごとに 1 分進む）
 
 金庫は jabberwock で書いた偽エンジンも持つ: `jwc build --link runtime/engine/mock/jwe_mock.c -o /tmp/jv browser/app/vault_main.jw` のあと
 `/tmp/jv --data /tmp/v --iterations 2 --fake browser/app/testdata/vault.txt --log`（`--iterations` は鍵を作る回数。テストを速くするためだけ）。

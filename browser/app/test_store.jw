@@ -1,7 +1,7 @@
 use store;
 
 fn main() {
-    let mut s = store.Store.open("");
+    let mut s = store.Store.open_at("", 1000);
     s.visit("a", "A");
     s.visit("a", "A2");            // 同じ URL が続いたら題だけ直す
     s.visit("b", "");
@@ -11,8 +11,13 @@ fn main() {
     assert(s.history[0].title == "A2" && s.history[1].title == "B");
     assert(s.toggle_bookmark("a", "A") && s.is_bookmarked("a"));
     assert(!s.toggle_bookmark("a", "A") && !s.is_bookmarked("a"));
+    assert(s.history[0].at == 61000 && s.history[1].at == 121000);   // 同じ URL が続いたら時刻も新しくする
     assert(store.Store.to_text(s.history) == "a\tA2\nb\tB\n");
-    assert(store.Store.to_text([store.Entry { url: "u", title: "x\ty\nz" }]) == "u\tx y z\n");
+    assert(store.Store.to_history_text(s.history) == "a\tA2\t61000\nb\tB\t121000\n");
+    assert(store.Store.to_text([store.Entry { url: "u", title: "x\ty\nz", at: 0 }]) == "u\tx y z\n");
+    // 1 件ずつ消す（時刻と URL が両方合うものだけ）
+    assert(!s.forget(61000, "b") && s.forget(61000, "a"));
+    assert(s.history.len() == 1 && s.history[0].url == "b");
     s.clear_history();
     assert(s.history.len() == 0);
     print("ok");
