@@ -22,9 +22,10 @@ fn Item item(str section, str key, str label, str kind, str initial, str choices
 
 pub fn Item[] items() {
     [
-        item("起動時", "startup", "起動したときに開くページ", "choice", "newtab",
-            "newtab=新しいタブ|home=ホームページ|last=前回開いていたタブ"),
-        item("起動時", "home", "ホームページ", "text", "https://duckduckgo.com/", ""),
+        item("起動時と新しいタブ", "startup", "起動したときに開くページ", "choice", "newtab",
+            "newtab=新しいタブ（下の「新しいタブで開くページ」）|home=ホームページ|last=前回開いていたタブ"),
+        item("起動時と新しいタブ", "home", "ホームページ", "text", "https://duckduckgo.com/", ""),
+        item("起動時と新しいタブ", "newtab", "新しいタブで開くページ", "choice", "home", "blank=空白のページ|home=ホームページ"),
         item("検索", "search", "アドレス欄で使う検索エンジン", "choice", "duckduckgo",
             "duckduckgo=DuckDuckGo|google=Google|bing=Bing"),
         item("表示", "bookmarks_bar", "ブックマークバーを出す", "toggle", "1", ""),

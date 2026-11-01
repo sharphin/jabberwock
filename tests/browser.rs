@@ -162,7 +162,7 @@ fn keeps_history_and_bookmarks_in_one_folder() {
     browse(&app().join("testdata/basic.txt"), &["--data", &d]);
     let history = std::fs::read_to_string(dir.join("history.tsv")).unwrap();
     assert!(history.starts_with("https://old.example/\t前の形\t0\n"), "{}", history);
-    assert!(history.contains("https://example.com\ttitle:https://example.com\t1793500000000\n"), "{}", history);
+    assert!(history.contains("https://example.com\ttitle:https://example.com\t1793500060000\n"), "{}", history);
     assert!(!history.contains("fail://x"), "読み込めなかったページは残さない:\n{}", history);
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "置くのは history.tsv と bookmarks.tsv だけ");
     // --ephemeral なら何も書かない
@@ -186,7 +186,7 @@ fn startup_page_and_settings_file() {
     // 設定を変えると settings.tsv に書く（項目の順。既定から変えたものだけ。読めない行は捨てる）
     browse(&app().join("testdata/settings.txt"), &["--data", &d]);
     let text = std::fs::read_to_string(dir.join("settings.tsv")).unwrap();
-    assert_eq!(text, "startup\thome\nhome\texample.org\nsearch\tgoogle\n");
+    assert_eq!(text, "startup\thome\nhome\texample.org\nnewtab\tblank\nsearch\tgoogle\n");
 
     // 前回開いていたタブ
     let dir = scratch("last");

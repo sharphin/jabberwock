@@ -3,12 +3,12 @@ chrome_load 114
 tab_new 1
 tab_show 1
 set_title 0 jabberwock
-navigate 1 about:blank
-set_title 0 title:about:blank - jabberwock
+navigate 1 https://duckduckgo.com/
+set_title 0 title:https://duckduckgo.com/ - jabberwock
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	1	1		
+tab	1	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 navigate 1 https://a.example
@@ -45,9 +45,10 @@ tab	-2	1	履歴	jw://history
 bmbar	1
 icons	1
 page	history
-hist	1793500120000	https://a.example	title:https://a.example
-hist	1793500060000	https://b.example	title:https://b.example
-hist	1793500000000	https://a.example	title:https://a.example
+hist	1793500180000	https://a.example	title:https://a.example
+hist	1793500120000	https://b.example	title:https://b.example
+hist	1793500060000	https://a.example	title:https://a.example
+hist	1793500000000	https://duckduckgo.com/	title:https://duckduckgo.com/
 chrome_post 0 state
 url	jw://history
 nav	0	0	0	0
@@ -56,8 +57,10 @@ tab	-2	1	履歴	jw://history
 bmbar	1
 icons	1
 page	history
-hist	1793500120000	https://a.example	title:https://a.example
-hist	1793500000000	https://a.example	title:https://a.example
+hist	1793500180000	https://a.example	title:https://a.example
+hist	1793500120000	https://b.example	title:https://b.example
+hist	1793500060000	https://a.example	title:https://a.example
+hist	1793500000000	https://duckduckgo.com/	title:https://duckduckgo.com/
 chrome_post 0 state
 url	jw://history
 nav	0	0	0	0
@@ -66,8 +69,10 @@ tab	-2	1	履歴	jw://history
 bmbar	1
 icons	1
 page	history
-hist	1793500120000	https://a.example	title:https://a.example
-hist	1793500000000	https://a.example	title:https://a.example
+hist	1793500180000	https://a.example	title:https://a.example
+hist	1793500120000	https://b.example	title:https://b.example
+hist	1793500060000	https://a.example	title:https://a.example
+hist	1793500000000	https://duckduckgo.com/	title:https://duckduckgo.com/
 chrome_post 0 state
 url	jw://history
 nav	0	0	0	0
@@ -76,8 +81,10 @@ tab	-2	1	履歴	jw://history
 bmbar	1
 icons	1
 page	history
-hist	1793500120000	https://a.example	title:https://a.example
-hist	1793500000000	https://a.example	title:https://a.example
+hist	1793500180000	https://a.example	title:https://a.example
+hist	1793500120000	https://b.example	title:https://b.example
+hist	1793500060000	https://a.example	title:https://a.example
+hist	1793500000000	https://duckduckgo.com/	title:https://duckduckgo.com/
 tab_new 2
 chrome_height 0 114
 tab_show 2
@@ -103,9 +110,11 @@ tab	2	0	title:https://c.example	https://c.example
 bmbar	1
 icons	1
 page	history
-hist	1793500180000	https://c.example	title:https://c.example
-hist	1793500120000	https://a.example	title:https://a.example
-hist	1793500000000	https://a.example	title:https://a.example
+hist	1793500240000	https://c.example	title:https://c.example
+hist	1793500180000	https://a.example	title:https://a.example
+hist	1793500120000	https://b.example	title:https://b.example
+hist	1793500060000	https://a.example	title:https://a.example
+hist	1793500000000	https://duckduckgo.com/	title:https://duckduckgo.com/
 chrome_post 0 state
 url	jw://history
 nav	0	0	0	0

@@ -3,12 +3,12 @@ chrome_load 114
 tab_new 1
 tab_show 1
 set_title 0 jabberwock
-navigate 1 about:blank
-set_title 0 title:about:blank - jabberwock
+navigate 1 https://duckduckgo.com/
+set_title 0 title:https://duckduckgo.com/ - jabberwock
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	1	1		
+tab	1	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 navigate 1 https://example.com

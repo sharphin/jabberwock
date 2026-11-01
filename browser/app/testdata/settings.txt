@@ -12,4 +12,8 @@ chrome go a b
 chrome go jw://settings
 chrome set bookmarks_bar 1
 chrome close -1
+# 新しいタブで開くページ（既定はホームページ。空白のページにもできる）
+chrome newtab
+chrome set newtab blank
+key 2
 close

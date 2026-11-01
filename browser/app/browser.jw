@@ -141,6 +141,14 @@ pub struct Browser {
         select(id);
     }
 
+    // 新しいタブで開くページ（設定の「新しいタブで開くページ」）。ホームページなら打った形のままでも URL にする
+    fn str blank_page() {
+        if prefs.get("newtab") == "home" {
+            return address.from_input(prefs.get("home")).unwrap_or(HOME);
+        }
+        HOME
+    }
+
     // 起動したときのタブ（設定の「起動したときに開くページ」）
     fn mut start() {
         match prefs.get("startup") {
@@ -151,7 +159,7 @@ pub struct Browser {
             case "last" -> {
                 let urls = data.session.map((e) -> e.url);
                 if urls.len() == 0 {
-                    new_tab(HOME);
+                    new_tab(blank_page());
                 } else {
                     for u in urls {
                         new_tab(u);
@@ -160,7 +168,7 @@ pub struct Browser {
                     select(first);
                 }
             }
-            default -> new_tab(HOME);
+            default -> new_tab(blank_page());
         }
     }
 
@@ -217,7 +225,7 @@ pub struct Browser {
         if tabs.len() == 0 {
             // 最後のタブを閉じたら、空のタブを 1 つ残す
             current = 0;
-            new_tab(HOME);
+            new_tab(blank_page());
             return;
         }
         if current == id {
@@ -373,7 +381,7 @@ pub struct Browser {
         match k {
             case FocusAddress -> check(eng.chrome_post("focus"));
             case NewTab -> {
-                new_tab(HOME);
+                new_tab(blank_page());
                 check(eng.chrome_post("focus"));
             }
             case CloseTab -> close_tab(current);
@@ -430,7 +438,7 @@ pub struct Browser {
             case "set" -> apply_setting(arg);
             case "act" -> act(arg);
             case "newtab" -> {
-                new_tab(HOME);
+                new_tab(blank_page());
                 check(eng.chrome_post("focus"));
             }
             case "select" -> select(arg.to_int().unwrap_or(0));

@@ -3,25 +3,25 @@ chrome_load 114
 tab_new 1
 tab_show 1
 set_title 0 jabberwock
-navigate 1 about:blank
-set_title 0 title:about:blank - jabberwock
+navigate 1 https://duckduckgo.com/
+set_title 0 title:https://duckduckgo.com/ - jabberwock
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	1	1		
+tab	1	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 tab_new 2
 tab_show 2
 set_title 0 jabberwock
-navigate 2 about:blank
+navigate 2 https://duckduckgo.com/
 chrome_post 0 focus
-set_title 0 title:about:blank - jabberwock
+set_title 0 title:https://duckduckgo.com/ - jabberwock
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	1	0		
-tab	2	1		
+tab	1	0	title:https://duckduckgo.com/	https://duckduckgo.com/
+tab	2	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 navigate 2 https://b.example
@@ -29,16 +29,16 @@ set_title 0 title:https://b.example - jabberwock
 chrome_post 0 state
 url	https://b.example
 nav	1	0	0	0
-tab	1	0		
+tab	1	0	title:https://duckduckgo.com/	https://duckduckgo.com/
 tab	2	1	title:https://b.example	https://b.example
 bmbar	1
 icons	1
 tab_show 1
-set_title 0 title:about:blank - jabberwock
+set_title 0 title:https://duckduckgo.com/ - jabberwock
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	1	1		
+tab	1	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 tab	2	0	title:https://b.example	https://b.example
 bmbar	1
 icons	1
@@ -55,46 +55,46 @@ tab_close 2
 tab_new 3
 tab_show 3
 set_title 0 jabberwock
-navigate 3 about:blank
-set_title 0 title:about:blank - jabberwock
+navigate 3 https://duckduckgo.com/
+set_title 0 title:https://duckduckgo.com/ - jabberwock
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	3	1		
+tab	3	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	3	1		
+tab	3	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 note	知らない命令: what
 window 0 1
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	3	1		
+tab	3	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 window 0 3
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	3	1		
+tab	3	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	3	1		
+tab	3	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 note	知らない窓の操作: spin
 chrome_post 0 state
-url	
+url	https://duckduckgo.com/
 nav	0	0	0	0
-tab	3	1		
+tab	3	1	title:https://duckduckgo.com/	https://duckduckgo.com/
 bmbar	1
 icons	1
 close 0
