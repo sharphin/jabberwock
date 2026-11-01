@@ -13,6 +13,8 @@ const SETTINGS_URL = "jw://settings";
 const SETTINGS_ID = -1;   // 設定のタブの番号（エンジンのタブではない。外枠が窓全体を覆って画面を出す）
 const HISTORY_URL = "jw://history";
 const HISTORY_ID = -2;    // 履歴のタブの番号（設定のタブと同じく外枠が出す）
+const BOOKMARKS_URL = "jw://bookmarks";
+const BOOKMARKS_ID = -3;  // ブックマークの一覧のタブの番号
 
 pub struct Tab {
     i64 id;
@@ -34,7 +36,8 @@ pub struct Browser {
     str note;        // 外枠に出す短い知らせ
     bool chrome_view;
     bool frameless;
-    bool covered;    // 外枠が窓全体を覆っている（設定か履歴のタブを見せている）
+    bool covered;    // 外枠が窓全体を覆っている（設定・履歴・ブックマークのタブを見せている）
+    bool menu;       // ⋮ のメニューを開いている（外枠をメニューの分だけ下へのばす）
     vault_link.Link vault;   // パスワードの金庫（別のプログラム）とのやりとり
 
     // data: 置き場所。ephemeral なら何も残さない（設定は読むだけ）。エンジンを開けなければ Err
@@ -48,7 +51,7 @@ pub struct Browser {
         let frameless = eng.info().frameless;
         let mut b = Browser {
             eng: eng, data: store.Store.open_at(data_dir, clock), prefs: prefs,
-            tabs: [], current: 0, done: false, note: "", chrome_view: chrome_view, frameless: frameless, covered: false,
+            tabs: [], current: 0, done: false, note: "", chrome_view: chrome_view, frameless: frameless, covered: false, menu: false,
             vault: vault_link.Link.new(data),   // 金庫は --ephemeral でも同じ置き場所の vault.dat を使う
         };
         if chrome_view {
@@ -66,9 +69,21 @@ pub struct Browser {
         }
     }
 
-    // 外枠の高さ（ブックマークバーを出すかで変わる）
+    // 外枠の高さ（ブックマークバーを出すかで変わる。⋮ のメニューを開いているあいだはその分のばす）
     fn i64 bar_height() {
-        chrome.height(prefs.on("bookmarks_bar"))
+        chrome.height(prefs.on("bookmarks_bar")) + if menu { chrome.menu_height() } else { 0 }
+    }
+
+    // ⋮ のメニューを開く・閉じる。外枠が窓全体を覆っているときは高さを変えない
+    fn mut set_menu(bool open) {
+        if menu == open {
+            return;
+        }
+        menu = open;
+        if !covered {
+            let h = bar_height();
+            check(eng.chrome_height(h));
+        }
     }
 
     // 今のタブがページなら番号、設定・履歴のタブかタブがないなら 0
@@ -132,6 +147,11 @@ pub struct Browser {
     // 履歴のタブを開く（もうあればそこへ移る）
     fn mut open_history() {
         open_inner(HISTORY_ID, HISTORY_URL, "履歴", "history");
+    }
+
+    // ブックマークの一覧のタブを開く（もうあればそこへ移る）
+    fn mut open_bookmarks() {
+        open_inner(BOOKMARKS_ID, BOOKMARKS_URL, "ブックマーク", "bookmarks");
     }
 
     fn mut open_inner(i64 id, str url, str title, str kind) {
@@ -250,6 +270,10 @@ pub struct Browser {
         }
         if input.trim() == HISTORY_URL {
             open_history();
+            return;
+        }
+        if input.trim() == BOOKMARKS_URL {
+            open_bookmarks();
             return;
         }
         let search = settings.search_prefix(prefs.get("search"));
@@ -422,6 +446,13 @@ pub struct Browser {
             case "stop" -> nav(name);
             case "settings" -> open_settings();
             case "history" -> open_history();
+            case "bookmarks" -> open_bookmarks();
+            case "menu" -> set_menu(arg == "open");
+            case "bmdel" -> {
+                if data.remove_bookmark(arg) {
+                    note = "ブックマークから外しました";
+                }
+            }
             case "opentab" -> go_new_tab(arg);
             case "hdel" -> forget(arg);
             case "hclear" -> {
@@ -497,6 +528,8 @@ pub struct Browser {
         if covered && i >= 0 {
             if tabs[i].inner == "history" {
                 s += "\npage\thistory" + history_lines();
+            } else if tabs[i].inner == "bookmarks" {
+                s += "\npage\tbookmarks";   // 一覧は下の bm の行で作る
             } else {
                 s += "\npage\tsettings" + prefs.to_chrome();
             }

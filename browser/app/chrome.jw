@@ -4,30 +4,34 @@
 // 外枠の高さ（論理ピクセル）。bookmarks: ブックマークバーを出すか
 pub fn i64 height(bool bookmarks) { if bookmarks { 114 } else { 84 } }
 
+// ⋮ のメニューを開いているあいだ外枠をのばす分
+pub fn i64 menu_height() { 248 }
+
 pub fn str html() {
     """<!doctype html>
 <!--
-外枠（タブ列・アドレス欄・ブックマーク・設定と履歴の画面）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
+外枠（タブ列・アドレス欄・ブックマーク・⋮ のメニュー・設定と履歴とブックマークの画面）。エンジンが表示し、本体（browser.jw）と文字列だけでやりとりする。
 - 外枠 → 本体（ChromeMessage）: "go <打った文字>" / "back" / "forward" / "reload" / "stop" /
   "newtab" / "select <タブ>" / "close <タブ>" / "bookmark" / "open <URL>" / "clear" /
-  "settings"（設定のタブを開く）/ "history"（履歴のタブを開く）/ "opentab <URL>"（新しいタブで開く）/
+  "settings"（設定のタブを開く）/ "history"（履歴のタブを開く）/ "bookmarks"（ブックマークの一覧のタブを開く）/
+  "menu open" / "menu close"（⋮ のメニューを開いた・閉じた。開いているあいだ本体は外枠をメニューの分だけのばす）/ "bmdel <URL>"（ブックマークを外す）/ "opentab <URL>"（新しいタブで開く）/
   "hdel <時刻> <URL>"（履歴から 1 件消す）/ "hclear"（履歴をすべて消す）/ "vault"（パスワードの金庫の窓を出す）/ "set <キー> <値>"（設定を変える）/ "act <キー>"（設定の画面のボタン）/
   "window drag" / "window min" / "window max" / "window close"（窓を動かす・最小化・最大化と戻す・閉じる）
 - 本体 → 外枠（chrome_post）: "focus"（アドレス欄へ）か、状態を 1 行ずつ書いたもの（区切りはタブ文字）:
     state
     url  今の URL
     nav  戻れる 0/1  進める 0/1  読み込み中 0/1  ブックマーク済み 0/1
-    tab  番号  今のタブなら 1  題  URL（アイコンを決める。jw://settings は設定、jw://history は履歴）
+    tab  番号  今のタブなら 1  題  URL（アイコンを決める。jw://settings は設定、jw://history は履歴、jw://bookmarks はブックマーク）
     frame 1（外枠が窓の一番上まで来ている。右端に ー □ × を出し、空いたところで窓を動かす）
     bmbar 0/1（ブックマークバーを出すか）
     icons 0/1（サイトのアイコン（/favicon.ico）を出すか。0 なら頭文字）
     bm   URL  題
     note 知らせ
-    page settings か history（外枠が窓全体を覆っている。下に設定か履歴の画面を出す）
+    page settings・history・bookmarks（外枠が窓全体を覆っている。下に設定・履歴・ブックマークの画面を出す。ブックマークは bm の行から作る）
     sec  見出し
     opt  キー  種類（choice / text / toggle / action）  値  表示  選択肢（値=表示|値=表示）
     hist 時刻（unix のミリ秒。0 はわからない）  URL  題（新しい順）
-  高さは #top 40 + #bar 44 + #bms 30（gen_chrome.jw の height と合わせる）
+  高さは #top 40 + #bar 44 + #bms 30（gen_chrome.jw の height と合わせる）。⋮ のメニュー #mnu は 240 + 余白 8（menu_height と合わせる）
 -->
 <meta charset="utf-8">
 <style>
@@ -100,7 +104,21 @@ button:disabled {{ opacity: .35; }}
 .hrow b {{ font-weight: normal; width: 28px; height: 28px; line-height: 28px; text-align: center; border-radius: 50%; opacity: 0; flex: none; cursor: pointer; }}
 .hrow:hover b {{ opacity: .7; }}
 .hrow b:hover {{ opacity: 1; background: var(--tab); }}
-#hnone {{ padding: 32px 0; text-align: center; opacity: .6; }}
+#hnone, #bnone {{ padding: 32px 0; text-align: center; opacity: .6; }}
+#bmk {{ display: none; max-width: 800px; margin: 0 auto; padding: 24px 16px 48px; }}
+#page.bookmarks #set {{ display: none; }}
+#page.bookmarks #bmk {{ display: block; }}
+#bmk h1 {{ font-size: 22px; font-weight: 400; margin: 0 0 16px; }}
+#bq {{ width: 100%; height: 36px; border: 1px solid var(--line); border-radius: 18px; padding: 0 16px; margin-bottom: 16px; background: var(--card); color: inherit; font: 14px "Segoe UI", system-ui, sans-serif; outline: none; }}
+#bq:focus {{ border-color: var(--accent); }}
+#mnu {{ display: none; position: absolute; right: 8px; width: 280px; height: 240px; padding: 8px 0; background: var(--card); border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.35); z-index: 10; }}
+#mnu.on {{ display: block; }}
+#mnu div.i {{ display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 16px; font-size: 13px; cursor: default; }}
+#mnu div.i:hover {{ background: var(--tab); }}
+#mnu div.i span.k {{ width: 18px; text-align: center; }}
+#mnu div.i span.t {{ flex: 1; }}
+#mnu div.i span.s {{ opacity: .6; font-size: 12px; }}
+#mnu hr {{ border: 0; border-top: 1px solid var(--line); margin: 4px 0; }}
 </style>
 <div id="top">
   <div id="tabs"></div>
@@ -115,27 +133,58 @@ button:disabled {{ opacity: .35; }}
   <input id="addr" spellcheck="false" placeholder="URL か検索語">
   <span id="note"></span>
   <button id="star" title="ブックマーク">☆</button>
-  <button id="key" title="パスワード（別の窓の金庫）">🔑</button>
-  <button id="clock" title="履歴 (Ctrl+H)">🕘</button>
-  <button id="gear" title="設定">⚙</button>
+  <button id="more" title="メニュー">⋮</button>
 </div>
 <div id="bms"></div>
-<div id="page"><div id="set"></div><div id="hist"><h1>履歴</h1><div id="hhead"><input id="hq" spellcheck="false" placeholder="履歴を検索"><button id="hclear">履歴をすべて消す</button></div><div id="hlist"></div></div></div>
+<div id="mnu"></div>
+<div id="page"><div id="set"></div><div id="bmk"><h1>ブックマーク</h1><input id="bq" spellcheck="false" placeholder="ブックマークを検索"><div id="blist"></div></div><div id="hist"><h1>履歴</h1><div id="hhead"><input id="hq" spellcheck="false" placeholder="履歴を検索"><button id="hclear">履歴をすべて消す</button></div><div id="hlist"></div></div></div>
 <script>
 const send = (s) => chrome.webview.postMessage(s);
 const $ = (id) => document.getElementById(id);
-let loading = false, editing = false, showIcons = true, setKey = "", histKey = "", histRows = [];
+let loading = false, editing = false, showIcons = true, setKey = "", histKey = "", histRows = [], bmKey = "", bmRows = [];
 $("back").onclick = () => send("back");
 $("fwd").onclick = () => send("forward");
 $("rel").onclick = () => send(loading ? "stop" : "reload");
 $("star").onclick = () => send("bookmark");
-$("gear").onclick = () => send("settings");
-$("clock").onclick = () => send("history");
-// 外枠に入力があるときの Ctrl+H（ページを見ているときのキーはエンジンが受ける）
-document.addEventListener("keydown", (e) => {{ if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === "h" || e.key === "H")) {{ e.preventDefault(); send("history"); }} }});
+// ⋮ のメニュー（Chrome にならう）。開いているあいだ本体は外枠をメニューの分だけ下へのばす
+const MENU = [
+  ["＋", "新しいタブ", "Ctrl+T", "newtab"],
+  ["🕘", "履歴", "Ctrl+H", "history"],
+  ["★", "ブックマーク", "Ctrl+Shift+O", "bookmarks"],
+  ["🔑", "パスワードの金庫", "", "vault"],
+  null,
+  ["⚙", "設定", "", "settings"],
+];
+function menuOpen() {{ return $("mnu").classList.contains("on"); }}
+function closeMenu() {{ if (!menuOpen()) return; $("mnu").classList.remove("on"); send("menu close"); }}
+function openMenu() {{
+  const m = $("mnu");
+  m.textContent = "";
+  for (const it of MENU) {{
+    if (!it) {{ m.append(el("hr")); continue; }}
+    const row = el("div", "i");
+    row.append(el("span", "k", it[0]), el("span", "t", it[1]), el("span", "s", it[2]));
+    row.onclick = () => {{ closeMenu(); send(it[3]); }};
+    m.append(row);
+  }}
+  m.style.top = ($("bms").classList.contains("off") ? 84 : 114) + "px";
+  m.classList.add("on");
+  send("menu open");
+}}
+$("more").onclick = () => {{ if (menuOpen()) closeMenu(); else openMenu(); }};
+// メニューの外を押す・Esc・ページへ移る（外枠からフォーカスが離れる）と閉じる
+document.addEventListener("mousedown", (e) => {{ if (menuOpen() && !e.target.closest("#mnu") && e.target !== $("more")) closeMenu(); }});
+window.addEventListener("blur", () => closeMenu());
+// 外枠に入力があるときの Ctrl+H・Ctrl+Shift+O（ページを見ているときのキーはエンジンが受ける）
+document.addEventListener("keydown", (e) => {{
+  if (e.key === "Escape") closeMenu();
+  if (!e.ctrlKey || e.altKey) return;
+  if (!e.shiftKey && (e.key === "h" || e.key === "H")) {{ e.preventDefault(); closeMenu(); send("history"); }}
+  if (e.shiftKey && (e.key === "o" || e.key === "O")) {{ e.preventDefault(); closeMenu(); send("bookmarks"); }}
+}});
+$("bq").oninput = () => bookmarkPage(null);
 $("hq").oninput = () => historyPage(null);
 $("hclear").onclick = () => {{ if (confirm("履歴をすべて消しますか？（Cookie は消しません）")) send("hclear"); }};
-$("key").onclick = () => send("vault");
 $("plus").onclick = () => send("newtab");
 $("wmin").onclick = () => send("window min");
 $("wmax").onclick = () => send("window max");
@@ -158,7 +207,7 @@ const iconOk = new Map(); // origin → true / false（読めたか）
 function icon(url) {{
   const box = el("span", "ico");
   if (!url) return box;
-  if (url.startsWith("jw:")) {{ box.textContent = url === "jw://history" ? "🕘" : "⚙"; return box; }}
+  if (url.startsWith("jw:")) {{ box.textContent = url === "jw://history" ? "🕘" : url === "jw://bookmarks" ? "★" : "⚙"; return box; }}
   let u = null;
   try {{ u = new URL(url); }} catch (_) {{}}
   const host = u ? u.hostname.replace(/^www\\./, "") : "";
@@ -272,6 +321,36 @@ function historyPage(rows) {{
   if (!shown) {{ const none = el("div", "", histRows.length ? "見つかりませんでした" : "まだ履歴はありません"); none.id = "hnone"; list.append(none); }}
 }}
 
+// ブックマークの一覧（本体から届いた bm の行で作る）。rows が null なら検索欄だけ変わった
+function bookmarkPage(rows) {{
+  if (rows) {{
+    const key = JSON.stringify(rows) + showIcons;
+    if (key === bmKey) return;
+    bmKey = key; bmRows = rows;
+  }}
+  const q = $("bq").value.trim().toLowerCase();
+  const list = $("blist");
+  list.textContent = "";
+  const card = el("div", "card");
+  let shown = 0;
+  for (const [, url, title] of bmRows) {{
+    if (q && !(title || "").toLowerCase().includes(q) && !url.toLowerCase().includes(q)) continue;
+    const row = el("div", "hrow");
+    const a = el("a", "", title || url); a.href = "#"; a.title = url;
+    a.onclick = (e) => {{ e.preventDefault(); send((e.ctrlKey ? "opentab " : "open ") + url); }};
+    a.onauxclick = (e) => {{ if (e.button === 1) {{ e.preventDefault(); send("opentab " + url); }} }};
+    let host = "";
+    try {{ host = new URL(url).hostname; }} catch (_) {{}}
+    const x = el("b", "", "×"); x.title = "ブックマークから外す";
+    x.onclick = () => send("bmdel " + url);
+    row.append(icon(url), a, el("span", "host", host), x);
+    card.append(row);
+    shown++;
+  }}
+  if (shown) list.append(card);
+  else {{ const none = el("div", "", bmRows.length ? "見つかりませんでした" : "ページを開いて ☆ を押すと、ここにブックマークが並びます"); none.id = "bnone"; list.append(none); }}
+}}
+
 chrome.webview.addEventListener("message", (ev) => {{
   const lines = String(ev.data).split("\\n");
   if (lines[0] === "focus") {{ $("addr").focus(); return; }}
@@ -279,7 +358,7 @@ chrome.webview.addEventListener("message", (ev) => {{
   const tabs = $("tabs"), bms = $("bms");
   tabs.textContent = ""; bms.textContent = "";
   let note = "", page = "";
-  const rows = [], hrows = [], fields = lines.slice(1).map((l) => l.split("\\t"));
+  const rows = [], hrows = [], brows = [], fields = lines.slice(1).map((l) => l.split("\\t"));
   for (const f of fields) if (f[0] === "icons") showIcons = f[1] === "1";
   for (const f of fields) {{
     if (f[0] === "url" && !editing) $("addr").value = f[1];
@@ -297,6 +376,7 @@ chrome.webview.addEventListener("message", (ev) => {{
       x.onclick = (e) => {{ e.stopPropagation(); send("close " + f[1]); }};
       t.append(icon(f[4] || ""), name, x); tabs.append(t);
     }}
+    if (f[0] === "bm") brows.push(f);
     if (f[0] === "bm") {{
       const a = el("a"); a.href = "#"; a.title = f[1];
       a.append(icon(f[1]), el("span", "", f[2] || f[1]));
@@ -312,8 +392,11 @@ chrome.webview.addEventListener("message", (ev) => {{
   }}
   if (!bms.firstChild) bms.append(el("i", "", "☆ を押すとここにブックマークが並びます"));
   $("note").textContent = note; $("note").title = note;
-  $("page").classList.toggle("on", page === "settings" || page === "history");
+  $("page").classList.toggle("on", page === "settings" || page === "history" || page === "bookmarks");
   $("page").classList.toggle("history", page === "history");
+  $("page").classList.toggle("bookmarks", page === "bookmarks");
+  if (page === "bookmarks") bookmarkPage(brows); else {{ bmKey = ""; $("bq").value = ""; }}
+  if (menuOpen()) $("mnu").style.top = ($("bms").classList.contains("off") ? 84 : 114) + "px";
   if (page === "settings") settings(rows); else setKey = "";
   if (page === "history") historyPage(hrows); else {{ histKey = ""; $("hq").value = ""; }}
 }});

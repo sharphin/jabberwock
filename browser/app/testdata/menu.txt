@@ -1,0 +1,17 @@
+# ⋮ のメニュー（開いているあいだ外枠をのばす）・ブックマークの一覧（開く・外す）・設定のタブではメニューで高さを変えない
+chrome go a.example
+chrome bookmark
+chrome go b.example
+chrome bookmark
+chrome menu open
+chrome menu close
+chrome menu open
+chrome menu close
+chrome bookmarks
+chrome menu open
+chrome menu close
+chrome bmdel https://a.example
+chrome bmdel https://none.example
+chrome go jw://bookmarks
+chrome open b.example
+key 3

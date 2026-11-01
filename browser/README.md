@@ -9,7 +9,7 @@ browser/
   app/address.jw                打った文字 → 開く URL（URL か検索語かの判定・%エンコード）
   app/store.jw                  履歴（見た時刻つき）・ブックマーク・前回のタブをファイルに残す（1 か所だけ）
   app/settings.jw               設定の項目の一覧と値（settings.tsv）。項目は items() に 1 行足すだけで増やせる
-  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・設定と履歴の画面）。chrome.jw は gen_chrome.jw がここから作る
+  app/chrome.html               外枠（タブ列・アドレス欄・ブックマーク・⋮ のメニュー・設定と履歴とブックマークの画面）。chrome.jw は gen_chrome.jw がここから作る
   app/vault_main.jw             パスワードの金庫（別のプログラム。ブラウザの 🔑 で、ブラウザが子プロセスとして起こす）
   app/vault.jw                  金庫のファイル vault.dat（作る・開ける・足す・消す・マスターパスワードの変更・パスワード作り）。暗号は std.hash・std.crypto
   app/vault_engine.jw           金庫の窓（std.browser）・ブラウザとの 1 行ずつのやりとり・クリップボード・自動で閉じる。テスト用の偽エンジンも

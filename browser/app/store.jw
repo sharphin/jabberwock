@@ -167,6 +167,19 @@ pub struct Store {
         added
     }
 
+    // ブックマークを外す。外したら true
+    fn mut bool remove_bookmark(str url) {
+        for i in range(bookmarks.len()) {
+            if bookmarks[i].url == url {
+                bookmarks.remove(i);
+                let text = to_text(bookmarks);
+                save("bookmarks.tsv", text);
+                return true;
+            }
+        }
+        false
+    }
+
     // 開いているタブを覚える（次の起動で開き直す）
     fn mut save_session(ref Entry[] tabs) {
         let text = to_text(tabs);

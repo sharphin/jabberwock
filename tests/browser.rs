@@ -140,7 +140,7 @@ fn scripts() {
     if !have_clang() {
         return;
     }
-    for name in ["basic", "tabs", "settings", "history"] {
+    for name in ["basic", "tabs", "settings", "history", "menu"] {
         let data = scratch(&format!("script-{}", name));
         let got = browse(&app().join(format!("testdata/{}.txt", name)), &["--data", &slash(&data), "--ephemeral"]);
         same_as_file(&got, &format!("{}.out", name));

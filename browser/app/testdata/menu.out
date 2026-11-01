@@ -1,0 +1,176 @@
+open 0 jabberwock
+chrome_load 114
+tab_new 1
+tab_show 1
+set_title 0 jabberwock
+navigate 1 https://duckduckgo.com/
+set_title 0 title:https://duckduckgo.com/ - jabberwock
+chrome_post 0 state
+url	https://duckduckgo.com/
+nav	0	0	0	0
+tab	1	1	title:https://duckduckgo.com/	https://duckduckgo.com/
+bmbar	1
+icons	1
+navigate 1 https://a.example
+set_title 0 title:https://a.example - jabberwock
+chrome_post 0 state
+url	https://a.example
+nav	1	0	0	0
+tab	1	1	title:https://a.example	https://a.example
+bmbar	1
+icons	1
+chrome_post 0 state
+url	https://a.example
+nav	1	0	0	1
+tab	1	1	title:https://a.example	https://a.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+note	ブックマークに足しました
+navigate 1 https://b.example
+set_title 0 title:https://b.example - jabberwock
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	0
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+note	ブックマークに足しました
+chrome_height 0 362
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_height 0 114
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_height 0 362
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_height 0 114
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_height 0 full
+set_title 0 ブックマーク - jabberwock
+chrome_post 0 state
+url	jw://bookmarks
+nav	0	0	0	0
+tab	1	0	title:https://b.example	https://b.example
+tab	-3	1	ブックマーク	jw://bookmarks
+bmbar	1
+icons	1
+page	bookmarks
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_post 0 state
+url	jw://bookmarks
+nav	0	0	0	0
+tab	1	0	title:https://b.example	https://b.example
+tab	-3	1	ブックマーク	jw://bookmarks
+bmbar	1
+icons	1
+page	bookmarks
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_post 0 state
+url	jw://bookmarks
+nav	0	0	0	0
+tab	1	0	title:https://b.example	https://b.example
+tab	-3	1	ブックマーク	jw://bookmarks
+bmbar	1
+icons	1
+page	bookmarks
+bm	https://a.example	title:https://a.example
+bm	https://b.example	title:https://b.example
+chrome_post 0 state
+url	jw://bookmarks
+nav	0	0	0	0
+tab	1	0	title:https://b.example	https://b.example
+tab	-3	1	ブックマーク	jw://bookmarks
+bmbar	1
+icons	1
+page	bookmarks
+bm	https://b.example	title:https://b.example
+note	ブックマークから外しました
+chrome_post 0 state
+url	jw://bookmarks
+nav	0	0	0	0
+tab	1	0	title:https://b.example	https://b.example
+tab	-3	1	ブックマーク	jw://bookmarks
+bmbar	1
+icons	1
+page	bookmarks
+bm	https://b.example	title:https://b.example
+set_title 0 ブックマーク - jabberwock
+chrome_post 0 state
+url	jw://bookmarks
+nav	0	0	0	0
+tab	1	0	title:https://b.example	https://b.example
+tab	-3	1	ブックマーク	jw://bookmarks
+bmbar	1
+icons	1
+page	bookmarks
+bm	https://b.example	title:https://b.example
+tab_new 2
+chrome_height 0 114
+tab_show 2
+set_title 0 jabberwock
+navigate 2 https://b.example
+set_title 0 title:https://b.example - jabberwock
+chrome_post 0 state
+url	https://b.example
+nav	0	0	0	1
+tab	1	0	title:https://b.example	https://b.example
+tab	2	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://b.example	title:https://b.example
+tab_close 2
+tab_show 1
+set_title 0 title:https://b.example - jabberwock
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://b.example	title:https://b.example
+chrome_post 0 state
+url	https://b.example
+nav	1	0	0	1
+tab	1	1	title:https://b.example	https://b.example
+bmbar	1
+icons	1
+bm	https://b.example	title:https://b.example
+close 0
