@@ -22,6 +22,7 @@ fn u8[] fake_random(str seed, i64 n) {
 }
 
 fn main() {
+    assert(vault.self_test());   // 暗号が決まりどおりの答えを出す
     let a = args();
     let file = if a.len() > 0 { a[0] } else { "test_vault.dat" };
     let mut v = vault.Vault.at(file);

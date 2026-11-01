@@ -88,6 +88,10 @@ struct App {
     }
 
     fn mut create(str master) {
+        if !vault.self_test() {
+            fail("この金庫のプログラムの暗号が正しく動いていません。金庫のファイルには触れていません");
+            return;
+        }
         if v.exists() {
             fail("金庫はもうあります");
             return;
@@ -108,6 +112,10 @@ struct App {
     }
 
     fn mut unlock(str master) {
+        if !vault.self_test() {
+            fail("この金庫のプログラムの暗号が正しく動いていません。金庫のファイルには触れていません");
+            return;
+        }
         match v.unlock(master) {
             case Ok(_) -> {
                 say("");

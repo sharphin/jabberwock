@@ -14,6 +14,30 @@ use std.hash;
 use std.text;
 
 // 鍵を作るときの回数。OWASP の勧め（2023）。実行ファイルで 1 秒ほど
+// 暗号が決まりどおりに動くかを、公開されている答え（PBKDF2 は RFC 6070 の SHA-256 版、ChaCha20-Poly1305 は
+// 別の実装で作った答え）と比べる。作り方（コンパイラなど）の違いで答えが変わると、別の exe で作った金庫が開かなくなるため、
+// 作る・開ける前に必ず確かめる
+pub fn bool self_test() {
+    let p = "password".bytes();
+    let s = "salt".bytes();
+    let k = hash.pbkdf2_sha256(ref p, ref s, 2);
+    if hash.hex(ref k) != "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43" {
+        return false;
+    }
+    let k1 = hash.pbkdf2_sha256(ref p, ref s, 1);
+    let n = "000000000000".bytes();
+    let aad = "".bytes();
+    let pt = "hello".bytes();
+    let c = crypto.seal(ref k1, ref n, ref aad, ref pt);
+    if hash.hex(ref c) != "574b4ad527f25fd9d99cb51bbd56d935b620704e25" {
+        return false;
+    }
+    match crypto.open(ref k1, ref n, ref aad, ref c) {
+        case Some(b) -> text.from_utf8(ref b).unwrap_or("") == "hello";
+        case None -> false;
+    }
+}
+
 pub fn i64 iterations() {
     600000
 }
