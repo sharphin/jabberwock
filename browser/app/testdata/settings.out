@@ -30,6 +30,8 @@ opt	search	choice	duckduckgo	アドレス欄で使う検索エンジン	duckduck
 sec	表示
 opt	bookmarks_bar	toggle	1	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_post 0 state
@@ -49,6 +51,8 @@ opt	search	choice	duckduckgo	アドレス欄で使う検索エンジン	duckduck
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_post 0 state
@@ -68,6 +72,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_post 0 state
@@ -87,6 +93,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_post 0 state
@@ -106,6 +114,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 note	知らない設定の操作: nothing
@@ -126,6 +136,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_post 0 state
@@ -145,6 +157,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 tab_new 2
@@ -182,6 +196,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 tab_new 3
@@ -219,6 +235,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	0	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_post 0 state
@@ -240,6 +258,8 @@ opt	search	choice	google	アドレス欄で使う検索エンジン	duckduckgo=D
 sec	表示
 opt	bookmarks_bar	toggle	1	ブックマークバーを出す	
 opt	icons	toggle	1	タブとブックマークにサイトのアイコンを出す	
+sec	パスワードの金庫
+opt	vault_remember	choice	session	金庫を開けたままにする	off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）
 sec	プライバシー
 opt	clear_data	action		Cookie と履歴を消す	
 chrome_height 0 114

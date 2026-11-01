@@ -6,7 +6,8 @@ pub fn str html() {
 <!--
 パスワードの金庫の画面。金庫（jwvault-app）の別の窓に出す（ページは開かない。ネットにもつながない: 下の CSP）。
 本体（vault_main.jw）と文字列だけでやりとりする。値の中の \\ タブ 改行は \\\\ \\t \\n にする（両向き）。
-- 画面 → 本体: "create <マスター>" / "unlock <マスター>" / "lock" / "gen" /
+- 画面 → 本体: "create <マスター>" / "unlock <マスター>" / "lock"（鍵も PIN も忘れる）/ "gen" /
+  "pin_set <PIN>" / "pin_clear" / "pin_unlock <PIN>"（PIN はメモリだけ。1 回違えば鍵を忘れる）/
   "save <サイト>\\t<ユーザー>\\t<パスワード>\\t<メモ>\\t<元のサイト>\\t<元のユーザー>"（元が空なら新しく足す）/
   "delete <サイト>\\t<ユーザー>" / "copy <サイト>\\t<ユーザー>" / "copyuser <サイト>\\t<ユーザー>" / "fill <サイト>\\t<ユーザー>" /
   "reveal <サイト>\\t<ユーザー>" / "master <今のマスター>\\t<新しいマスター>" / "window drag" / "window min" / "window close"
@@ -91,7 +92,7 @@ function el(tag, cls, text) {{ const x = document.createElement(tag); if (cls) x
 function input(type, ph) {{ const i = el("input"); i.type = type; i.placeholder = ph || ""; i.spellcheck = false; i.autocomplete = "off"; return i; }}
 function button(text, cls, f) {{ const b = el("button", cls, text); b.type = "button"; b.onclick = f; return b; }}
 
-let S = {{ mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "" }};
+let S = {{ mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "", keep: false, pin: false }};
 let editing = null;   // 編集中のもの（{{site, user}} か "new"）
 let shown = {{}};       // 見せているパスワード（サイト\\tユーザー → パスワード）
 let filter = "";
@@ -112,7 +113,7 @@ function letter(site) {{
 
 // 画面は届くたびに作り直す。打っている途中のマスターパスワードの欄は、値とカーソルの位置を引き継ぐ
 // （ブラウザのページが変わったという知らせなどで作り直されても、打った文字が消えたり別の欄へ移ったりしないように）
-const KEEP = ["m1", "m2", "mu", "mo", "mn1", "mn2"];
+const KEEP = ["m1", "m2", "mu", "mo", "mn1", "mn2", "mp", "mpn"];
 let peek = false;   // マスターパスワードの欄の文字を見せる
 let caps = false;   // Caps Lock が入っている
 document.addEventListener("keydown", (e) => capsCheck(e));
@@ -180,6 +181,24 @@ function renderMain(main, focused) {{
     a.focus();
     return;
   }}
+  if (S.mode === "pin") {{
+    // 鍵は覚えているが、PIN を打つまで中身を見せない
+    const c = el("div", "center");
+    c.append(el("h2", "", "PIN で開けてください"));
+    c.append(el("p", "", "1 回でも間違えると覚えていた鍵を忘れ、マスターパスワードが要ります。"));
+    const a = input("password", "PIN");
+    a.id = "mp";
+    const go = button("開ける", "main", () => {{
+      if (!a.value) return;
+      send("pin_unlock " + esc(a.value)); a.value = "";
+    }});
+    a.onkeydown = (e) => {{ if (e.key === "Enter") go.click(); }};
+    const back = button("マスターパスワードで開ける", "line", () => send("lock"));
+    c.append(a, go, back, msgLine());
+    main.append(c);
+    a.focus();
+    return;
+  }}
   if (S.mode !== "open") return;
   // 開いている
   main.append(msgLine());
@@ -223,6 +242,22 @@ function renderMain(main, focused) {{
     list.append(it);
   }}
   main.append(list);
+  // PIN（ブラウザを開いている間だけ、短い文字で開け直す）
+  main.append(el("h3", "", "PIN で開け直す"));
+  const pc = el("div", "card");
+  const pf = el("form", "edit");
+  if (!S.keep) {{
+    pf.append(el("p", "", "ブラウザの設定で「金庫を開けたままにする」を「ブラウザを開いている間」にすると使えます。"));
+  }} else if (S.pin) {{
+    pf.append(el("p", "", "PIN を決めてあります。金庫の窓を閉じたあとや、しばらく使わなかったあとは PIN で開けます。ブラウザを閉じると PIN も鍵も忘れます。"),
+      button("PIN をやめる", "line", () => send("pin_clear")));
+  }} else {{
+    pf.append(el("p", "", "決めなければ、ブラウザを閉じるまで何も打たずに開けます。PIN はこの金庫のプログラムのメモリにだけ置き、ファイルには書きません。"));
+    const pn = input("password", "PIN（4 文字以上）");
+    pn.id = "mpn";
+    pf.append(pn, button("PIN を決める", "line", () => {{ send("pin_set " + esc(pn.value)); pn.value = ""; }}));
+  }}
+  pc.append(pf); main.append(pc);
   // マスターパスワードを変える
   main.append(el("h3", "", "マスターパスワードを変える"));
   const mc = el("div", "card");
@@ -267,7 +302,7 @@ function editForm(l) {{
 chrome.webview.addEventListener("message", (ev) => {{
   const lines = String(ev.data).split("\\n");
   if (lines[0] !== "state") return;
-  const next = {{ mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "" }};
+  const next = {{ mode: "", site: "", msg: ["", ""], logins: [], pw: null, gen: "", keep: false, pin: false }};
   for (const line of lines.slice(1)) {{
     const f = line.split("\\t").map(unesc);
     if (f[0] === "mode") next.mode = f[1];
@@ -276,6 +311,8 @@ chrome.webview.addEventListener("message", (ev) => {{
     if (f[0] === "login") next.logins.push({{ site: f[1], user: f[2], note: f[3] || "" }});
     if (f[0] === "pw") next.pw = {{ site: f[1], user: f[2], pw: f[3] }};
     if (f[0] === "gen") next.gen = f[1];
+    if (f[0] === "keep") next.keep = f[1] === "1";
+    if (f[0] === "pin") next.pin = f[1] === "1";
   }}
   if (next.mode !== "open") {{ shown = {{}}; editing = null; draft = null; }}
   if (next.mode !== S.mode || next.msg[1]) busy = false;

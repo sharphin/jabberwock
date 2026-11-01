@@ -296,7 +296,7 @@ browser.close(e);
 - `Engine` のメソッド（持ち主が mut であること）: `info()`（`Info { name, script, chrome_view, persist, frameless }`。frameless は OS のタイトルバーがなく外枠が窓の一番上まで来ること）・`poll()`・`wait(ms)`・
   `tab_new()`（`Result<i64, str>`。タブの番号は 1 から、使い回さない）・`tab_close(tab)`・`tab_show(tab)`・`navigate(tab, url)`・`back(tab)`・`forward(tab)`・
   `reload(tab)`・`stop(tab)`・`chrome_load(html, height)`・`chrome_post(msg)`（外枠の HTML。`chrome_view` のときだけ）・`set_title(s)`・`clear_site_data()`・
-  `chrome_height(h)`（外枠の高さ。負なら外枠が窓全体を覆いタブのページを隠す）・`window(op)`（1 押している間マウスで窓を動かす・2 最小化・3 最大化の切り替え・4 手前に出す。ほかは Err）・
+  `chrome_height(h)`（外枠の高さ。負なら外枠が窓全体を覆いタブのページを隠す）・`window(op)`（1 押している間マウスで窓を動かす・2 最小化・3 最大化の切り替え・4 隠した・最小化した窓を出して手前に出す・5 隠す。ほかは Err）・
   `fill_login(tab, site, user, password)`（タブのログインの欄に入れる。site は `https://example.com` の形の出どころで、今のページの出どころと完全に同じときだけ。違えば Err で何もしない）。
   操作は `Result<(), str>`（ないタブ・できない操作は Err）。外枠の `chrome_post` は、`chrome_load` のあとなら外枠の準備ができる前でも受け付ける。
 - `Event`: `Ready`・`CloseRequested`・`NavStarted(tab, url)`・`NavFinished(tab, url, code)`（code 0 は成功）・`UrlChanged(tab, url)`・`TitleChanged(tab, title)`・

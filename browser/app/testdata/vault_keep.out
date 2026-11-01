@@ -1,0 +1,84 @@
+open jabberwock 金庫
+chrome_load 0
+chrome_height full
+chrome_post state
+mode	new
+site	
+chrome_post state
+mode	new
+site	
+random 16
+random 12
+ask_site
+chrome_post state
+mode	open
+site	
+msg	ok	金庫を作りました
+keep	1
+pin	0
+chrome_post state
+mode	open
+site	
+msg	err	PIN は 4 文字以上にしてください
+keep	1
+pin	0
+random 16
+chrome_post state
+mode	open
+site	
+msg	ok	PIN を決めました。ブラウザを閉じるまで、金庫の窓を閉じても PIN で開け直せます
+keep	1
+pin	1
+window 5
+chrome_post state
+mode	pin
+site	
+window 4
+chrome_post state
+mode	pin
+site	
+chrome_post state
+mode	pin
+site	
+msg	err	PIN で開けてください
+ask_site
+chrome_post state
+mode	open
+site	
+keep	1
+pin	1
+chrome_post state
+mode	pin
+site	
+msg	ok	しばらく使わなかったので閉じました（PIN で開けます）
+chrome_post state
+mode	locked
+site	
+msg	err	PIN が違うので、鍵を忘れました。マスターパスワードで開けてください
+chrome_post state
+mode	locked
+site	
+msg	err	金庫が閉じています
+ask_site
+chrome_post state
+mode	open
+site	
+keep	1
+pin	0
+chrome_post state
+mode	open
+site	
+keep	1
+pin	0
+window 5
+chrome_post state
+mode	open
+site	
+keep	1
+pin	0
+chrome_post state
+mode	open
+site	
+keep	0
+pin	0
+close

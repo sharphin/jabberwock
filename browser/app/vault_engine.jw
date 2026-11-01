@@ -3,7 +3,8 @@
 //   標準入力・標準出力の 1 行ずつで話す（行の形は vault_link.jw の先頭）。クリップボードは std.clipboard、乱数は std.random。
 // - Config.fake が true なら偽エンジン（テスト用。エンジンもブラウザもない）。利用者の操作は Config.fake_script の行から作る
 //   （イベントが空のときに wait が 1 行ずつ出す）:
-//     chrome <文字列> / close / site <URL>（ブラウザの今のページ）/ filled <番号>（入力の結果）/ lock（しばらく触らなかった）
+//     chrome <文字列> / close / site <URL>（ブラウザの今のページ）/ filled <番号>（入力の結果）/ lock（しばらく触らなかった）/
+//     show（ブラウザのメニューで金庫が押された）/ browser_exit（ブラウザが終わった）
 //   台本が終わったら CloseRequested を 1 回出す。呼ばれた操作は log に残す（テストで見る）。
 
 use std.browser;
@@ -30,6 +31,8 @@ pub enum Event {
     Site(str url);        // ブラウザの見えているタブの URL
     Filled(i64 code);     // 入力の結果（0 は入れた。2 はタブがない、3 はサイトが違う、-1 はブラウザがない）
     Lock;                 // しばらく触らなかった
+    Show;                 // ブラウザで「パスワードの金庫」が押された（窓を出す）
+    BrowserGone;          // ブラウザが終わった
     Other;                // 金庫には関係のないイベント
 }
 
@@ -37,11 +40,15 @@ pub enum Event {
 pub enum WindowOp {
     Drag;
     Minimize;
+    Focus;   // 隠した・最小化した窓を出して手前に出す
+    Hide;    // 窓を隠す（タスクバーからも消える）
 
     fn i64 code() {
         match this {
             case Drag -> 1;
             case Minimize -> 2;
+            case Focus -> 4;
+            case Hide -> 5;
         }
     }
 }
@@ -99,8 +106,10 @@ pub struct Engine {
     fn mut Option<Event> wait() {
         if real.len() == 0 {
             if queue.len() == 0 && !script_step() && !close_sent {
+                // 台本が終わったら、窓を閉じてブラウザも終わったことにする（隠れたまま待ち続けないように）
                 close_sent = true;
                 queue.push(Event.CloseRequested);
+                queue.push(Event.BrowserGone);
             }
             return poll();
         }
@@ -141,7 +150,8 @@ pub struct Engine {
             match io.read_line_for(0) {
                 case Ok(Some(line)) -> parent_line(line);
                 case Ok(None) -> {
-                    parent = false;   // ブラウザが終わった（金庫はそのまま使える。入力はできなくなる）
+                    parent = false;   // ブラウザが終わった（入力はできなくなる。金庫を閉じるかは vault_main が決める）
+                    queue.push(Event.BrowserGone);
                     return;
                 }
                 case Err(_) -> return;   // まだ届いていない
@@ -155,11 +165,7 @@ pub struct Engine {
         match f[0] {
             case "site" -> queue.push(Event.Site(a));
             case "filled" -> queue.push(Event.Filled(a.to_int().unwrap_or(-1)));
-            case "show" -> {
-                if real.len() > 0 {
-                    real[0].window(4).unwrap_or(());
-                }
-            }
+            case "show" -> queue.push(Event.Show);
             default -> {}
         }
     }
@@ -194,6 +200,10 @@ pub struct Engine {
                 queue.push(Event.Filled(line.slice(7, line.len()).to_int().unwrap_or(0)));
             } else if line == "lock" {
                 queue.push(Event.Lock);
+            } else if line == "show" {
+                queue.push(Event.Show);
+            } else if line == "browser_exit" {
+                queue.push(Event.BrowserGone);
             } else {
                 queue.push(Event.Failed(3, "台本の行が読めません: " + line));
             }

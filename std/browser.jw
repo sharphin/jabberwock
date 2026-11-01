@@ -152,7 +152,7 @@ pub struct Engine {
     /// 外枠の高さを変える（論理ピクセル）。負なら外枠が窓全体を覆い、タブのページは隠れる（設定画面など）
     fn mut Result<(), str> chrome_height(i64 height) { done(h.call(13, 0, "", if height < 0 { -1 } else { height })) }
 
-    /// 窓の操作（jw_engine.h の JWE_WINDOW_*）。op は 1 押している間マウスで動かす・2 最小化・3 最大化の切り替え・4 最小化を戻して手前に出す。
+    /// 窓の操作（jw_engine.h の JWE_WINDOW_*）。op は 1 押している間マウスで動かす・2 最小化・3 最大化の切り替え・4 隠した・最小化した窓を出して手前に出す・5 隠す。
     /// Info.frameless の外枠のボタンから呼ぶ。1〜4 の外なら Err
     fn mut Result<(), str> window(i64 op) { done(h.call(14, 0, "", op)) }
 

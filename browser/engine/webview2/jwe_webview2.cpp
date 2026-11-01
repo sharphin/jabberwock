@@ -749,8 +749,12 @@ JweStatus jwe_window(JweEngine *e, uint32_t op) {
         ShowWindow(e->hwnd, IsZoomed(e->hwnd) ? SW_RESTORE : SW_MAXIMIZE);
         return JWE_OK;
     case JWE_WINDOW_FOCUS:
+        if (!IsWindowVisible(e->hwnd)) ShowWindow(e->hwnd, SW_SHOW);
         if (IsIconic(e->hwnd)) ShowWindow(e->hwnd, SW_RESTORE);
         SetForegroundWindow(e->hwnd);
+        return JWE_OK;
+    case JWE_WINDOW_HIDE:
+        ShowWindow(e->hwnd, SW_HIDE);
         return JWE_OK;
     }
     return JWE_ERR_BAD_ARG;

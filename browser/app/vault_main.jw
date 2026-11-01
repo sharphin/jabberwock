@@ -11,7 +11,9 @@
 use vault_engine;
 use vault;
 use vault_ui;
+use settings;
 use std.env;
+use std.hash;
 use std.fs;
 
 struct App {
@@ -24,6 +26,12 @@ struct App {
     str reveal;      // 次の状態で 1 回だけ送るパスワードの行（"pw\t..."）
     str gen;
     bool done;
+    str data;        // 置き場所（ブラウザの設定 settings.tsv もここ）
+    bool hidden;     // 窓を隠している（開けたまま、ブラウザのメニューで出されるのを待つ）
+    bool browser;    // ブラウザが動いている
+    u8[] pin_salt;   // PIN（メモリにだけ置く。ファイルには書かない）
+    u8[] pin_hash;   // 空なら PIN なし
+    bool pin_locked; // 鍵は持ったまま、PIN を打つまで中身を見せない
 
     fn mut say(str m) {
         msg = m;
@@ -68,23 +76,99 @@ struct App {
             case "window" -> match arg {
                 case "drag" -> { eng.window(vault_engine.WindowOp.Drag).unwrap_or(()); }
                 case "min" -> { eng.window(vault_engine.WindowOp.Minimize).unwrap_or(()); }
-                case "close" -> done = true;
+                case "close" -> close_window();
                 default -> {}
             };
             case "create" -> create(vault.unescape(arg));
             case "unlock" -> unlock(vault.unescape(arg));
             case "lock" -> {
-                v.lock();
+                forget();
                 say("閉じました");
             }
+            case "pin_unlock" -> pin_unlock(vault.unescape(arg));
             default -> {
                 if !v.unlocked {
                     fail("金庫が閉じています");
                     return;
                 }
+                if pin_locked {
+                    fail("PIN で開けてください");
+                    return;
+                }
                 opened(name, arg);
             }
         }
+    }
+
+    // ブラウザの設定「金庫を開けたままにする」（off / session）
+    fn str remember() {
+        settings.Settings.open(data, "").get("vault_remember")
+    }
+
+    // 窓を閉じても鍵を覚えておくか（設定が off でなく、ブラウザが動いている）
+    fn bool keep() {
+        browser && remember() != "off"
+    }
+
+    // 鍵も PIN も忘れる
+    fn mut forget() {
+        v.lock();
+        pin_salt = [];
+        pin_hash = [];
+        pin_locked = false;
+    }
+
+    // 窓が閉じられた。開けたまま覚えておくなら隠すだけ（PIN があれば次は PIN を求める）
+    fn mut close_window() {
+        if v.unlocked && keep() {
+            eng.window(vault_engine.WindowOp.Hide).unwrap_or(());
+            hidden = true;
+            if pin_hash.len() > 0 {
+                pin_locked = true;
+            }
+            return;
+        }
+        done = true;
+    }
+
+    fn u8[] pin_digest(str pin) {
+        let mut b = pin_salt.map((x) -> x);
+        for x in pin.bytes() {
+            b.push(x);
+        }
+        hash.sha256(ref b)
+    }
+
+    fn mut set_pin(str pin) {
+        if !keep() {
+            fail("PIN は、ブラウザの設定で「金庫を開けたままにする」を「ブラウザを開いている間」にすると使えます");
+            return;
+        }
+        if pin.len() < 4 {
+            fail("PIN は 4 文字以上にしてください");
+            return;
+        }
+        let salt = random(16);
+        if salt.len() != 16 {
+            fail("乱数を取れませんでした");
+            return;
+        }
+        pin_salt = salt;
+        pin_hash = pin_digest(pin);
+        say("PIN を決めました。ブラウザを閉じるまで、金庫の窓を閉じても PIN で開け直せます");
+    }
+
+    fn mut pin_unlock(str pin) {
+        let d = pin_digest(pin);
+        if pin_hash.len() > 0 && hash.equal(ref d, ref pin_hash) {
+            pin_locked = false;
+            say("");
+            eng.ask_site();
+            return;
+        }
+        // 1 回でも違えば鍵を忘れる（PIN は短いので、何度も試させない）
+        forget();
+        fail("PIN が違うので、鍵を忘れました。マスターパスワードで開けてください");
     }
 
     fn mut create(str master) {
@@ -231,13 +315,29 @@ struct App {
                     case Err(e) -> fail(e);
                 }
             }
+            case "pin_set" -> set_pin(vault.unescape(arg));
+            case "pin_clear" -> {
+                pin_salt = [];
+                pin_hash = [];
+                say("PIN をやめました");
+            }
             default -> fail("知らない命令: " + name);
         }
     }
 
     fn mut handle(vault_engine.Event ev) {
         match ev {
-            case CloseRequested -> done = true;
+            case CloseRequested -> close_window();
+            case Show -> {
+                hidden = false;
+                eng.window(vault_engine.WindowOp.Focus).unwrap_or(());
+            }
+            case BrowserGone -> {
+                browser = false;
+                if hidden {
+                    done = true;   // 隠れたまま残らない（覚えていた鍵もここで消える）
+                }
+            }
             case ChromeMessage(m) -> command(m);
             case Site(u) -> site = vault.site_of(u);
             case Filled(code) -> match code {
@@ -247,9 +347,15 @@ struct App {
                 default -> fail("入れられませんでした（{code}）");
             };
             case Lock -> {
-                if v.unlocked {
-                    v.lock();
-                    say("しばらく使わなかったので閉じました");
+                if v.unlocked && !pin_locked {
+                    if !keep() {
+                        forget();
+                        say("しばらく使わなかったので閉じました");
+                    } else if pin_hash.len() > 0 {
+                        pin_locked = true;
+                        say("しばらく使わなかったので閉じました（PIN で開けます）");
+                    }
+                    // PIN がなく開けたままにする設定なら、ブラウザを閉じるまで開けておく
                 }
             }
             default -> {}
@@ -258,14 +364,15 @@ struct App {
 
     // 画面に今の状態を送る
     fn mut sync() {
-        let mode = if v.unlocked { "open" } else if v.exists() { "locked" } else { "new" };
+        let mode = if v.unlocked { if pin_locked { "pin" } else { "open" } } else if v.exists() { "locked" } else { "new" };
         let mut s = "state\nmode\t" + mode + "\nsite\t" + vault.escape(site);
         if msg != "" {
             s += "\nmsg\t" + (if msg_err { "err" } else { "ok" }) + "\t" + vault.escape(msg);
             msg = "";
             msg_err = false;
         }
-        if v.unlocked {
+        if v.unlocked && !pin_locked {
+            s += "\nkeep\t" + (if keep() { "1" } else { "0" }) + "\npin\t" + (if pin_hash.len() > 0 { "1" } else { "0" });
             for l in v.logins {
                 s += "\nlogin\t" + vault.escape(l.site) + "\t" + vault.escape(l.user) + "\t" + vault.escape(l.note);
             }
@@ -300,7 +407,7 @@ struct App {
                 case None -> {}
             }
         }
-        v.lock();
+        forget();
         eng.close();
     }
 }
@@ -377,7 +484,8 @@ fn main() {
     };
     let mut app = App {
         eng: eng, v: vault.Vault.at(file), rounds: rounds, site: "", msg: "", msg_err: false,
-        reveal: "", gen: "", done: false,
+        reveal: "", gen: "", done: false, data: data, hidden: false, browser: true,
+        pin_salt: [], pin_hash: [], pin_locked: false,
     };
     app.run();
     if show_log {

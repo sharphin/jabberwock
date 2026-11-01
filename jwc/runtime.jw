@@ -3656,7 +3656,8 @@ enum {{
     JWE_WINDOW_DRAG = 1,        /* 押している間、マウスで窓を動かす（外枠の空いたところが押されたとき） */
     JWE_WINDOW_MINIMIZE = 2,
     JWE_WINDOW_TOGGLE_MAXIMIZE = 3,
-    JWE_WINDOW_FOCUS = 4         /* 最小化を戻して手前に出す */
+    JWE_WINDOW_FOCUS = 4,        /* 隠した・最小化した窓を出して手前に出す */
+    JWE_WINDOW_HIDE = 5          /* 窓を隠す（タスクバーからも消える。JWE_WINDOW_FOCUS で出す） */
 }};
 JweStatus jwe_window(JweEngine *e, uint32_t op);
 

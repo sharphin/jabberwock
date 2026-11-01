@@ -212,8 +212,14 @@ fn vault_script() {
     }
     let dir = scratch("vault");
     let d = slash(&dir);
+    // vault.txt は「金庫の窓を閉じたら閉じる」の設定で（しばらく使わなければ閉じる）
+    std::fs::write(dir.join("settings.tsv"), "vault_remember\toff\n").unwrap();
     let out = run("vault_main", &["--data", &d, "--iterations", "2", "--fake", "testdata/vault.txt", "--log"]);
     same_as_file(&out, "vault.out");
+    // 既定の「ブラウザを開いている間」: 窓を閉じても隠すだけ・PIN・ブラウザが終われば終わる
+    let keep = scratch("vault-keep");
+    let out = run("vault_main", &["--data", &slash(&keep), "--iterations", "2", "--fake", "testdata/vault_keep.txt", "--log"]);
+    same_as_file(&out, "vault_keep.out");
     let text = std::fs::read_to_string(dir.join("vault.dat")).unwrap();
     assert!(text.starts_with("jwvault 1\nkdf pbkdf2-sha256 2 "), "{}", text);
     // パスワード・ユーザー名・サイトは平文で残さない

@@ -30,6 +30,8 @@ pub fn Item[] items() {
             "duckduckgo=DuckDuckGo|google=Google|bing=Bing"),
         item("表示", "bookmarks_bar", "ブックマークバーを出す", "toggle", "1", ""),
         item("表示", "icons", "タブとブックマークにサイトのアイコンを出す", "toggle", "1", ""),
+        item("パスワードの金庫", "vault_remember", "金庫を開けたままにする", "choice", "session",
+            "off=金庫の窓を閉じたら閉じる（5 分使わなくても閉じる）|session=ブラウザを開いている間（窓を閉じても覚えておく）"),
         item("プライバシー", "clear_data", "Cookie と履歴を消す", "action", "", ""),
     ]
 }

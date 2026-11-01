@@ -1,0 +1,15 @@
+# 金庫を開けたままにする（ブラウザを開いている間）: 窓を閉じても隠すだけ・PIN で開け直す・PIN を 1 回違えたら鍵を忘れる・ブラウザが終われば終わる
+chrome create correct horse
+chrome pin_set 12
+chrome pin_set 1234
+chrome window close
+show
+chrome copy https://x.example	u
+chrome pin_unlock 1234
+lock
+chrome pin_unlock 9999
+chrome copy https://x.example	u
+chrome unlock correct horse
+lock
+close
+browser_exit

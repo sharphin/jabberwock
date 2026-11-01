@@ -315,7 +315,7 @@ JweStatus jwe_set_title(JweEngine *e, const char *title, uint32_t title_len) {
 }
 
 JweStatus jwe_window(JweEngine *e, uint32_t op) {
-    if (op < JWE_WINDOW_DRAG || op > JWE_WINDOW_FOCUS) return JWE_ERR_BAD_ARG;
+    if (op < JWE_WINDOW_DRAG || op > JWE_WINDOW_HIDE) return JWE_ERR_BAD_ARG;
     char n[16];
     snprintf(n, sizeof n, "%u", op);
     logf_(e, "window", 0, n, (uint32_t)strlen(n));
