@@ -39,9 +39,13 @@ fn bool has(ref str[] xs, str x) {
     false
 }
 
+/// u8 の型か（`to_str` を使えるリストの要素）
+fn bool is_u8(ref ty.Ty t) { ty.is(t, "Int") && ty.int_of(t) == "u8" }
+
 fn bool is_builtin(str n) {
     n == "print" || n == "eprint" || n == "drop" || n == "assert" || n == "read_line" || n == "args" || n == "spawn"
         || n == "chan" || n == "exit" || n == "read_file" || n == "write_file" || n == "run_command" || n == "chr"
+        || n == "now_ns" || n == "unix_ms" || n == "sleep_ms" || n == "env_var"
 }
 
 /// 最後の `.` の位置（なければ -1）
@@ -2298,6 +2302,12 @@ pub struct Checker {
         } else if name == "insert" {
             want = 2;
         } else if name == "reverse" {
+        } else if name == "to_str" {
+            if !is_u8(elem) || argv.len() != 0 {
+                return Err(diag.make("to_str は u8 のリストに使います")
+                    .at(span, "`{ty.show(elem)}` のリストです（引数はありません）"));
+            }
+            return Ok(ty.opt(ty.Ty.Str));
         } else if name == "join" {
             if !ty.is(elem, "Str") || argv.len() != 1 {
                 return Err(diag.make("join は文字列のリストに使います")
@@ -2740,6 +2750,20 @@ pub struct Checker {
             if ty.is(ret, "Never") { return Ok(ret); }
             return Ok(ty.Ty.Enum("Result", own [ret, ty.Ty.Str]));
         }
+        if name == "now_ns" || name == "unix_ms" {
+            if argv.len() > 0 { return Err(arity_error(name, 0, argv.len(), span)); }
+            return Ok(ty.i64t());
+        }
+        if name == "sleep_ms" || name == "env_var" {
+            if argv.len() != 1 { return Err(arity_error(name, 1, argv.len(), span)); }
+            if name == "sleep_ms" {
+                let w = ty.i64t();
+                expect(argv[0], w)?;
+                return Ok(ty.Ty.Unit);
+            }
+            expect(argv[0], ty.Ty.Str)?;
+            return Ok(ty.opt(ty.Ty.Str));
+        }
         if name == "read_line" || name == "args" {
             if argv.len() > 0 { return Err(arity_error(name, 0, argv.len(), span)); }
             if name == "args" { return Ok(ty.Ty.List(own ty.Ty.Str)); }
@@ -2817,7 +2841,8 @@ pub struct Checker {
         Ok(ty.subst(ret, m))
     }
 
-    /// 数のメソッド。f64 は `to_bits` / `sqrt` / `abs` / `max` / `min`、整数は `abs` / `max` / `min`。
+    /// 数のメソッド。f64 は `to_bits` / `sqrt` / `floor` などの数学の関数 / `pow` / `is_nan` / `fixed` / `abs` / `max` / `min`、
+    /// 整数は `abs` / `max` / `min`。
     /// `max` / `min` の引数は receiver と同じ型（数の書き方はそれに合わせる）
     fn mut Result<ty.Ty, diag.Diag> num_method(ref ty.Ty t, str name, ref ast.Expr[] argv, i64 span) {
         let float = ty.is(t, "Float");
@@ -2825,19 +2850,29 @@ pub struct Checker {
         let mut ret = ty.cl(t);
         if float && name == "to_bits" {
             ret = ty.Ty.Int("u64");
-        } else if float && name == "sqrt" {
+        } else if float && (name == "sqrt" || name == "floor" || name == "ceil" || name == "round" || name == "trunc"
+                || name == "exp" || name == "ln" || name == "log10" || name == "sin" || name == "cos" || name == "tan") {
+        } else if float && name == "pow" {
+            arity = 1;
+        } else if float && name == "is_nan" {
+            ret = ty.Ty.Bool;
+        } else if float && name == "fixed" {
+            arity = 1;
+            ret = ty.Ty.Str;
         } else if name == "abs" {
         } else if name == "max" || name == "min" {
             arity = 1;
         } else if float {
             return Err(diag.make("f64 にメソッド `{name}` はありません")
-                .at(span, "f64 のメソッドは `to_bits()`（ビットの並びを u64 で）・`sqrt()`・`abs()`・`max(y)`・`min(y)` だけです"));
+                .at(span, "f64 のメソッドは `to_bits()`・`sqrt()`・`floor()`・`ceil()`・`round()`・`trunc()`・`exp()`・`ln()`・`log10()`・`sin()`・`cos()`・`tan()`・`pow(y)`・`is_nan()`・`fixed(n)`・`abs()`・`max(y)`・`min(y)` です"));
         } else {
             return Err(diag.make("`{ty.show(t)}` にメソッド `{name}` はありません")
                 .at(span, "整数のメソッドは `abs()`・`max(y)`・`min(y)` だけです"));
         }
         if argv.len() != arity { return Err(arity_error(name, arity, argv.len(), span)); }
-        for a in argv { expect(a, t)?; }
+        // `fixed(n)` の n は桁数（i64）。ほかは receiver と同じ型
+        let w = if name == "fixed" { ty.i64t() } else { ty.cl(t) };
+        for a in argv { expect(a, w)?; }
         return Ok(ret);
     }
 

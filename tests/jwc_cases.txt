@@ -6414,3 +6414,21 @@ fn main() { let S[2] b = [S { a: [0; 100000] }, S { a: [0; 100000] }]; }
 fn main() { let Option<i64[100000]>[2] b = [None, None]; }
 #####
 fn main() { let i64[] a = [0; 9223372036854775807]; }
+#####
+fn main() {
+    let x = 2.5;
+    let own f64 p = own 9.75;
+    print(x.floor(), x.ceil(), x.round(), x.trunc(), p.pow(2), x.exp(), x.ln(), x.log10(), x.sin(), x.cos(), x.tan(), x.is_nan());
+    print(x.fixed(2), "{p.fixed(1)}");
+    let u8[] b = "ab".bytes();
+    print(b.to_str(), env_var("HOME").is_some(), now_ns() > 0, unix_ms() > 0);
+    sleep_ms(1);
+}
+#####
+fn main() { let str[] s = ["a"]; print(s.to_str()); }
+#####
+fn main() { print((1.0).fixed(1.5)); }
+#####
+fn main() { sleep_ms("a"); }
+#####
+fn main() { let env_var = 1; }

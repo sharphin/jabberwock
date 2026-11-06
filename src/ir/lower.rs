@@ -1504,7 +1504,7 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 Ok(self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), strs, sp), sp))
             }
-            "exit" | "read_file" | "write_file" | "run_command" | "chr" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "chr" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
                 let mut ops = Vec::new();
                 for a in args {
                     ops.push(self.expr(a)?);

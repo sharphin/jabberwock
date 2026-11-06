@@ -173,3 +173,30 @@ fn system_builtins_check_types() {
     assert!(err("fn main() { write_file(\"a\"); }").title.contains("引数"));
     assert!(err("fn read_file() {} fn main() {}").title.contains("組み込み"));
 }
+
+#[test]
+fn clocks_and_sleep() {
+    let o = ok("fn main() {
+    let a = now_ns();
+    sleep_ms(20);
+    sleep_ms(0);
+    sleep_ms(-3);
+    let d = now_ns() - a;
+    print(d >= 20000000, d < 60000000000, unix_ms() > 1700000000000);
+}");
+    assert_eq!(o.output, "true true true\n");
+    assert!(err("fn main() { sleep_ms(); }").title.contains("引数"));
+    assert!(err("fn main() { print(now_ns(1)); }").title.contains("引数"));
+    assert!(err("fn main() { let str s = unix_ms(); }").title.contains("型"));
+}
+
+#[test]
+fn environment_variables() {
+    // PATH はどの環境にもある。ない名前・空・`=` を含む名前は None
+    let o = ok("fn main() {
+    print(env_var(\"PATH\").is_some(), env_var(\"JW_SURELY_NOT_SET_42\"), env_var(\"\"), env_var(\"A=B\"));
+}");
+    assert_eq!(o.output, "true None None None\n");
+    assert!(err("fn main() { env_var(1); }").title.contains("型"));
+    assert!(err("fn main() { let env_var = 1; }").title.contains("関数の名前"));
+}

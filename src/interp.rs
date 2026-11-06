@@ -26,9 +26,13 @@ type R<T> = Result<T, Diagnostic>;
 pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 13] = [
+pub(crate) const BUILTINS: [&str; 17] = [
     "print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command", "chr",
+    "now_ns", "unix_ms", "sleep_ms", "env_var",
 ];
+
+/// `now_ns()` の起点（はじめて呼んだとき。値の差だけに意味がある）
+static CLOCK_START: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -474,6 +478,36 @@ impl Interp {
                 Ok(match status {
                     Ok(st) => result(true, Value::Int(st.code().unwrap_or(-1) as i128, IntTy::I64)),
                     Err(_) => result(false, msg(format!("コマンドを起動できません: {}", cmd))),
+                })
+            }
+            "now_ns" => {
+                let mut start = CLOCK_START.lock().unwrap_or_else(|e| e.into_inner());
+                let t0 = *start.get_or_insert_with(std::time::Instant::now);
+                Ok(Value::Int(t0.elapsed().as_nanos() as i128, IntTy::I64))
+            }
+            "unix_ms" => {
+                let ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    Ok(d) => d.as_millis() as i128,
+                    Err(e) => -(e.duration().as_millis() as i128),
+                };
+                Ok(Value::Int(IntTy::I64.wrap(ms), IntTy::I64))
+            }
+            "sleep_ms" => {
+                let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
+                if n > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(n as u64));
+                }
+                Ok(Value::Unit)
+            }
+            // 名前が空・`=` や NUL を含む・値が UTF-8 でないなら None（jw_rt.c の jw_env_var と同じ）
+            "env_var" => {
+                let key = text(&vals[0]);
+                if key.is_empty() || key.contains('=') || key.contains('\0') {
+                    return Ok(none());
+                }
+                Ok(match std::env::var(&key) {
+                    Ok(v) => some(Value::Str(text_rc(v.as_str()))),
+                    Err(_) => none(),
                 })
             }
             _ => unreachable!("not a system builtin: {} at {:?}", name, span),
@@ -2369,7 +2403,7 @@ impl Interp {
                 Ok(Value::Unit)
             }
             "read_line" => self.read_line(span),
-            "exit" | "read_file" | "write_file" | "run_command" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
                 let vals = self.eval_all(args)?;
                 self.system(name, vals, span)
             }
@@ -2503,7 +2537,7 @@ impl Interp {
             _ => None,
         };
         if let Some(x) = num {
-            return Ok(num_method(x, name, vals));
+            return num_method(x, name, vals, span);
         }
         // task と chan のメソッド
         let handle = match &rv {
@@ -2539,7 +2573,7 @@ impl Interp {
             _ => None,
         };
         if let Some(slot) = seq_slot {
-            if !matches!(name, "len" | "map" | "filter" | "join") {
+            if !matches!(name, "len" | "map" | "filter" | "join" | "to_str") {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
             }
@@ -2615,6 +2649,7 @@ impl Interp {
                     Value::Unit
                 }
                 "join" => Value::Str(Rc::new(join_strs(items, &vals[0]))),
+                "to_str" => utf8_str(items),
                 "drain" => {
                     drained = Some(std::mem::take(items));
                     Value::Unit
@@ -3191,10 +3226,23 @@ fn str_list<'a>(items: impl Iterator<Item = &'a str>) -> Value {
 }
 
 /// 数のメソッド（types.rs の `num_method` が名前と引数を調べてある）。IR の exec も使う
-pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>) -> Value {
-    match (x, name, vals.as_slice()) {
+pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
+    Ok(match (x, name, vals.as_slice()) {
         (Value::Float(x), "to_bits", []) => Value::Int(x.to_bits() as i128, IntTy::U64),
         (Value::Float(x), "sqrt", []) => Value::Float(x.sqrt()),
+        (Value::Float(x), "floor", []) => Value::Float(x.floor()),
+        (Value::Float(x), "ceil", []) => Value::Float(x.ceil()),
+        (Value::Float(x), "round", []) => Value::Float(x.round()),
+        (Value::Float(x), "trunc", []) => Value::Float(x.trunc()),
+        (Value::Float(x), "exp", []) => Value::Float(x.exp()),
+        (Value::Float(x), "ln", []) => Value::Float(x.ln()),
+        (Value::Float(x), "log10", []) => Value::Float(x.log10()),
+        (Value::Float(x), "sin", []) => Value::Float(x.sin()),
+        (Value::Float(x), "cos", []) => Value::Float(x.cos()),
+        (Value::Float(x), "tan", []) => Value::Float(x.tan()),
+        (Value::Float(x), "pow", [Value::Float(y)]) => Value::Float(x.powf(*y)),
+        (Value::Float(x), "is_nan", []) => Value::Bool(x.is_nan()),
+        (Value::Float(x), "fixed", [Value::Int(n, _)]) => Value::Str(text_rc(fixed(x, *n, span)?.as_str())),
         (Value::Float(x), "abs", []) => Value::Float(x.abs()),
         (Value::Float(x), "max", [Value::Float(y)]) => Value::Float(x.max(*y)),
         (Value::Float(x), "min", [Value::Float(y)]) => Value::Float(x.min(*y)),
@@ -3202,7 +3250,23 @@ pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>) -> Value {
         (Value::Int(x, t), "max", [Value::Int(y, _)]) => Value::Int(x.max(*y), t),
         (Value::Int(x, t), "min", [Value::Int(y, _)]) => Value::Int(x.min(*y), t),
         (_, name, _) => unreachable!("type checked: {}", name),
+    })
+}
+
+/// 桁数の上限（`x.fixed(n)`。jw_rt.c の jw_f64_fixed と同じ）
+const FIXED_MAX: i128 = 100;
+
+/// `x.fixed(n)`: 小数点以下 n 桁の文字列（ちょうど真ん中は偶数へ丸める。C の printf と同じ）。inf と NaN は print と同じ形
+fn fixed(x: f64, n: i128, span: Span) -> R<String> {
+    if !(0..=FIXED_MAX).contains(&n) {
+        return Err(Diagnostic::new("桁数が範囲の外です")
+            .primary(span, format!("fixed({}) は使えません", n))
+            .note(format!("小数点以下の桁数は 0〜{} です", FIXED_MAX)));
     }
+    if !x.is_finite() {
+        return Ok(format!("{:?}", x));
+    }
+    Ok(format!("{:.*}", n as usize, x))
 }
 
 /// 文字列のメソッド。位置と長さは文字単位（バイトではない）
@@ -3306,6 +3370,21 @@ pub(crate) fn join_strs(items: &[Value], sep: &Value) -> String {
         })
         .collect();
     parts.join(sep.as_str())
+}
+
+/// `b.to_str()`: u8 のリストを文字列にする。正しい UTF-8 でなければ None
+pub(crate) fn utf8_str(items: &[Value]) -> Value {
+    let bytes: Vec<u8> = items
+        .iter()
+        .map(|v| match v {
+            Value::Int(b, _) => *b as u8,
+            _ => unreachable!("type checked: u8[]"),
+        })
+        .collect();
+    match String::from_utf8(bytes) {
+        Ok(t) => some(Value::Str(text_rc(t.as_str()))),
+        Err(_) => none(),
+    }
 }
 
 /// `chr(n)`: 番号 n の文字 1 つの文字列

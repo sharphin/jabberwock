@@ -1526,6 +1526,20 @@ WStr *jw_chr(int64_t n, const WSite *at) {{
     return jw_str_new(b, k);
 }}
 
+// x.fixed(n): 小数点以下 n 桁（printf の丸め。interp の fixed と同じ）。inf と NaN は print と同じ形
+WStr *jw_f64_fixed(double x, int64_t n, const WSite *at) {{
+    if (n < 0 || n > 100) {{
+        char label[128];
+        snprintf(label, sizeof label, "fixed(%lld) は使えません", (long long)n);
+        begin_error("桁数が範囲の外です");
+        finish_error(at, label, "小数点以下の桁数は 0〜100 です");
+    }}
+    char buf[512];
+    if (isnan(x) || isinf(x)) fmt_f64(buf, x);
+    else snprintf(buf, sizeof buf, "%.*f", (int)n, x);
+    return jw_str_new(buf, (int64_t)strlen(buf));
+}}
+
 // Rust の `lines()`: \\n で分け、行末の \\r を除く。最後の \\n のあとの空の行は数えない
 void jw_str_lines(WStr *s, WList *out) {{
     int64_t i = 0;
@@ -2344,6 +2358,110 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {{
 void jw_exit(int64_t code) {{
     jw_flush();
     exit((int)code);
+}}
+
+// ---------------------------------------------------------------- 時刻・環境変数・バイトから文字列
+// interp の `system`（now_ns / unix_ms / sleep_ms / env_var）と `utf8_str` と同じ動き
+
+#ifdef _WIN32
+__declspec(dllimport) int __stdcall QueryPerformanceCounter(int64_t *);
+__declspec(dllimport) int __stdcall QueryPerformanceFrequency(int64_t *);
+__declspec(dllimport) void __stdcall GetSystemTimePreciseAsFileTime(uint64_t *);
+__declspec(dllimport) void __stdcall Sleep(unsigned long);
+__declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+wchar_t *_wgetenv(const wchar_t *);
+#else
+#include <errno.h>
+#include <time.h>
+#endif
+
+// 単調な時計（ナノ秒。起点は決めない。値の差だけに意味がある）
+int64_t jw_now_ns(void) {{
+#ifdef _WIN32
+    int64_t c, f;
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return c / f * 1000000000 + c % f * 1000000000 / f;
+#else
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+#endif
+}}
+
+// 1970-01-01 (UTC) からのミリ秒
+int64_t jw_unix_ms(void) {{
+#ifdef _WIN32
+    uint64_t ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    return ((int64_t)ft - 116444736000000000LL) / 10000;
+#else
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+#endif
+}}
+
+// n ミリ秒待つ（0 以下なら待たない）。待つ前に出力を書き出す
+void jw_sleep_ms(int64_t n) {{
+    jw_flush();
+    if (n <= 0) return;
+#ifdef _WIN32
+    while (n > 0) {{
+        int64_t k = n > 0x7FFFFFFF ? 0x7FFFFFFF : n;
+        Sleep((unsigned long)k);
+        n -= k;
+    }}
+#else
+    struct timespec t, rest;
+    t.tv_sec = (time_t)(n / 1000);
+    t.tv_nsec = (long)(n % 1000) * 1000000;
+    while (nanosleep(&t, &rest) != 0 && errno == EINTR) t = rest;
+#endif
+}}
+
+// 環境変数。あれば 1 で *out に値。名前が空・`=` や NUL を含む・値が UTF-8 でない・ないなら 0
+int32_t jw_env_var(WStr *name, WStr **out) {{
+    if (name->len == 0 || memchr(name->data, '=', (size_t)name->len) || memchr(name->data, 0, (size_t)name->len)) return 0;
+    char *key = c_str(name);
+#ifdef _WIN32
+    wchar_t *wkey = to_wide(key);
+    free(key);
+    const wchar_t *w = _wgetenv(wkey);
+    free(wkey);
+    if (!w) return 0;
+    if (!*w) {{
+        *out = jw_str_new("", 0);
+        return 1;
+    }}
+    // 0x80 = WC_ERR_INVALID_CHARS（対になっていないサロゲートは失敗にする）
+    int len = WideCharToMultiByte(65001, 0x80, w, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) return 0;
+    char *v = malloc((size_t)len);
+    WideCharToMultiByte(65001, 0x80, w, -1, v, len, NULL, NULL);
+    *out = jw_str_new(v, (int64_t)len - 1);
+    free(v);
+    return 1;
+#else
+    const char *v = getenv(key);
+    free(key);
+    if (!v) return 0;
+    int64_t n = (int64_t)strlen(v);
+    if (!valid_utf8((const unsigned char *)v, n)) return 0;
+    *out = jw_str_new(v, n);
+    return 1;
+#endif
+}}
+
+// u8 のリストの to_str(): 正しい UTF-8 なら 1 で *out に文字列、そうでなければ 0
+int32_t jw_list_to_str(WList *l, WStr **out) {{
+    if (l->len == 0) {{
+        *out = jw_str_new("", 0);
+        return 1;
+    }}
+    if (!valid_utf8((const unsigned char *)l->data, l->len)) return 0;
+    *out = jw_str_new(l->data, l->len);
+    return 1;
 }}
 
 // ---------------------------------------------------------------- 入口

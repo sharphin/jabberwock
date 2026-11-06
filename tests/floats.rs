@@ -107,7 +107,7 @@ fn parse_floats_and_read_bits() {
         "Some(1.5)\nSome(-2250.0)\nSome(1.0)\nSome(0.5)\nNone\nNone\nSome(inf)\nSome(-inf)\nSome(NaN)\nNone\nNone\nSome(0.1)\nNone\nNone\nSome(7.0)\nSome(0.01)\n\
 4609434218613702656 4591870180066957722 9223372036854775808 4611686018427387904\n"
     );
-    assert!(err("let x = 1.5; print(x.round());").title.contains("メソッド"));
+    assert!(err("let x = 1.5; print(x.hypot());").title.contains("メソッド"));
 }
 
 #[test]
@@ -120,4 +120,33 @@ fn sqrt_abs_max_min() {
     assert_eq!(o, "1.4142135623730951 3.0 3.0 1.5 3.0 4.0\nNaN 1.0 2.0\n");
     assert!(err("let x = 1.5; print(x.max());").title.contains("引数"));
     assert!(err("let x = 1.5; print(x.max(true));").title.contains("型"));
+}
+
+#[test]
+fn math_methods() {
+    let o = main_ok("
+    let x = 2.5;
+    print(x.floor(), x.ceil(), x.round(), (-2.5).round(), x.trunc(), (-2.7).trunc(), (-2.7).floor());
+    print((0.0).exp(), (1.0).ln(), (1000.0).log10(), (0.0).sin(), (0.0).cos(), (0.0).tan());
+    print((2.0).pow(10), (4.0).pow(0.5), (0.0 / 0.0).is_nan(), x.is_nan(), (-1.0).ln().is_nan());
+    let own f64 p = own 9.75;
+    print(p.floor(), p.pow(2));");
+    assert_eq!(o, "2.0 3.0 3.0 -3.0 2.0 -2.0 -3.0\n1.0 0.0 3.0 0.0 1.0 0.0\n1024.0 2.0 true false true\n9.0 95.0625\n");
+    assert!(err("let x = 1.5; print(x.pow());").title.contains("引数"));
+    assert!(err("let x = 1.5; print(x.pow(true));").title.contains("型"));
+    assert!(err("let i64 n = 3; print(n.floor());").title.contains("メソッド"));
+}
+
+#[test]
+fn fixed_digits() {
+    let o = main_ok("
+    print((3.14159).fixed(2), (2.5).fixed(0), (0.5).fixed(0), (1.5).fixed(0), (-0.5).fixed(0), (0.125).fixed(2));
+    print((1.0 / 0.0).fixed(3), (-1.0 / 0.0).fixed(1), (0.0 / 0.0).fixed(2), (7.0).fixed(3));
+    print(\"{(2.0).sqrt().fixed(4)} m\");");
+    assert_eq!(o, "3.14 2 0 2 -0 0.12\ninf -inf NaN 7.000\n1.4142 m\n");
+    let e = run_source("fn main() { let i64 n = 101; print((1.0).fixed(n)); }", false).error.expect("error");
+    assert!(e.title.contains("桁数"), "{}", e.title);
+    let e = run_source("fn main() { print((1.0).fixed(-1)); }", false).error.expect("error");
+    assert!(e.title.contains("桁数"), "{}", e.title);
+    assert!(err("print((1.0).fixed(1.5));").title.contains("型"));
 }

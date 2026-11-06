@@ -32,6 +32,18 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare double @llvm.fabs.f64(double)\n" +
     "declare double @llvm.maxnum.f64(double, double)\n" +
     "declare double @llvm.minnum.f64(double, double)\n" +
+    "declare double @llvm.floor.f64(double)\n" +
+    "declare double @llvm.ceil.f64(double)\n" +
+    "declare double @llvm.round.f64(double)\n" +
+    "declare double @llvm.trunc.f64(double)\n" +
+    "declare double @llvm.exp.f64(double)\n" +
+    "declare double @llvm.log.f64(double)\n" +
+    "declare double @llvm.log10.f64(double)\n" +
+    "declare double @llvm.sin.f64(double)\n" +
+    "declare double @llvm.cos.f64(double)\n" +
+    "declare double @tan(double)\n" +
+    "declare double @llvm.pow.f64(double, double)\n" +
+    "declare ptr @jw_f64_fixed(double, i64, ptr)\n" +
     "declare void @jw_print_begin()\n" +
     "declare ptr @jw_chan_new(i64, ptr)\n" +
     "declare void @jw_chan_retain(ptr)\n" +
@@ -134,6 +146,11 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare void @jw_str_bytes(ptr, ptr)\n" +
     "declare i64 @jw_str_code(ptr, ptr)\n" +
     "declare void @jw_args(ptr)\n" +
+    "declare i64 @jw_now_ns()\n" +
+    "declare i64 @jw_unix_ms()\n" +
+    "declare void @jw_sleep_ms(i64)\n" +
+    "declare i32 @jw_env_var(ptr, ptr)\n" +
+    "declare i32 @jw_list_to_str(ptr, ptr)\n" +
     "\n";
 
 /// 1 回の load / store で読み書きする型（要素の印をつけてよいもの）

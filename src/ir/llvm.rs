@@ -161,6 +161,18 @@ declare double @llvm.sqrt.f64(double)
 declare double @llvm.fabs.f64(double)
 declare double @llvm.maxnum.f64(double, double)
 declare double @llvm.minnum.f64(double, double)
+declare double @llvm.floor.f64(double)
+declare double @llvm.ceil.f64(double)
+declare double @llvm.round.f64(double)
+declare double @llvm.trunc.f64(double)
+declare double @llvm.exp.f64(double)
+declare double @llvm.log.f64(double)
+declare double @llvm.log10.f64(double)
+declare double @llvm.sin.f64(double)
+declare double @llvm.cos.f64(double)
+declare double @tan(double)
+declare double @llvm.pow.f64(double, double)
+declare ptr @jw_f64_fixed(double, i64, ptr)
 declare void @jw_print_begin()
 declare ptr @jw_chan_new(i64, ptr)
 declare void @jw_chan_retain(ptr)
@@ -263,6 +275,11 @@ declare ptr @jw_list_join(ptr, ptr)
 declare void @jw_str_bytes(ptr, ptr)
 declare i64 @jw_str_code(ptr, ptr)
 declare void @jw_args(ptr)
+declare i64 @jw_now_ns()
+declare i64 @jw_unix_ms()
+declare void @jw_sleep_ms(i64)
+declare i32 @jw_env_var(ptr, ptr)
+declare i32 @jw_list_to_str(ptr, ptr)
 
 "#;
 
@@ -3564,6 +3581,25 @@ impl<'m, 'p> FnGen<'m, 'p> {
         })
     }
 
+    /// `Option<str>` を作る（ok が 0 なら None、ほかは *out の文字列の Some）。env_var と u8 のリストの to_str
+    fn some_str(&mut self, want: &Ty, ok: &str, out: &str) -> G<(String, Ty)> {
+        let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
+        let lt = self.m.lt(want)?;
+        let res = self.b.alloca(&lt);
+        let (_, no) = self.b.if_true(&none);
+        let nv = self.make_enum(want, "None", Vec::new())?;
+        self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+        let done = self.b.l();
+        self.b.br(&done);
+        self.b.label(&no);
+        let text = self.b.val(format!("load ptr, ptr {}", out));
+        let sv = self.make_enum(want, "Some", vec![(text, Ty::Str)])?;
+        self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+        self.b.br(&done);
+        self.b.label(&done);
+        Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
+    }
+
     fn builtin(&mut self, name: &str, ops: &[Operand], span: Span, want: &Ty) -> G<(String, Ty)> {
         let mut vals = Vec::new();
         // チャンネルのメソッドは、場所のチャンネルを複製せずに読む（数を増やすと、スレッドのあいだで取り合いになる）
@@ -3764,6 +3800,17 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.label(&done);
                 Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
             }
+            "now_ns" | "unix_ms" => Ok((self.b.val(format!("call i64 @jw_{}()", name)), Ty::Int(IntTy::I64))),
+            "sleep_ms" => {
+                self.b.op(format!("call void @jw_sleep_ms(i64 {})", vals[0].0));
+                Ok(("0".to_string(), Ty::Unit))
+            }
+            "env_var" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_env_var(ptr {}, ptr {})", vals[0].0, out));
+                release(self, &vals);
+                self.some_str(want, &ok, &out)
+            }
             "args" => {
                 let out = self.b.alloca("%list");
                 self.b.op(format!("store %list zeroinitializer, ptr {}", out));
@@ -3771,9 +3818,26 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
             "f64.to_bits" => Ok((self.b.val(format!("bitcast double {} to i64", vals[0].0)), Ty::Int(IntTy::U64))),
-            "f64.sqrt" | "f64.abs" => {
-                let f = if name == "f64.sqrt" { "sqrt" } else { "fabs" };
+            "f64.sqrt" | "f64.abs" | "f64.floor" | "f64.ceil" | "f64.round" | "f64.trunc" | "f64.exp" | "f64.ln" | "f64.log10"
+            | "f64.sin" | "f64.cos" => {
+                let f = match &name[4..] {
+                    "abs" => "fabs",
+                    "ln" => "log",
+                    f => f,
+                };
                 Ok((self.b.val(format!("call double @llvm.{}.f64(double {})", f, vals[0].0)), Ty::Float))
+            }
+            // tan は LLVM の古い版に組み込みの関数がないので、C の tan を呼ぶ
+            "f64.tan" => Ok((self.b.val(format!("call double @tan(double {})", vals[0].0)), Ty::Float)),
+            "f64.pow" => {
+                let v = self.b.val(format!("call double @llvm.pow.f64(double {}, double {})", vals[0].0, vals[1].0));
+                Ok((v, Ty::Float))
+            }
+            "f64.is_nan" => Ok((self.b.val(format!("fcmp uno double {}, 0.0", vals[0].0)), Ty::Bool)),
+            "f64.fixed" => {
+                let site = self.m.site(span, "");
+                let v = self.b.val(format!("call ptr @jw_f64_fixed(double {}, i64 {}, ptr {})", vals[0].0, vals[1].0, site));
+                Ok((v, Ty::Str))
             }
             "f64.max" | "f64.min" => {
                 let f = if name == "f64.max" { "maxnum" } else { "minnum" };
@@ -4052,6 +4116,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let r = self.b.val(format!("call ptr @jw_list_join(ptr {}, ptr {})", pr.ptr, vals[0].0));
                         self.b.op(format!("call void @jw_str_release(ptr {})", vals[0].0));
                         Ok((r, Ty::Str))
+                    }
+                    "to_str" => {
+                        let out = self.b.alloca("ptr");
+                        let ok = self.b.val(format!("call i32 @jw_list_to_str(ptr {}, ptr {})", pr.ptr, out));
+                        self.some_str(want, &ok, &out)
                     }
                     "push" => {
                         let (v, t) = vals[0].clone();

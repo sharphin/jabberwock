@@ -447,6 +447,30 @@ fn sorting_matches_interp() {
 }
 
 #[test]
+fn math_and_bytes_match_interp() {
+    same_as_interp(
+        "mathbytes",
+        "fn main() {
+    let x = 2.5;
+    let own f64 p = own 9.75;
+    print(x.floor(), x.ceil(), x.round(), (-2.5).round(), x.trunc(), p.floor(), p.pow(2), (0.0 / 0.0).is_nan());
+    print((0.0).exp(), (1.0).ln(), (1000.0).log10(), (0.0).sin(), (0.0).cos(), (0.0).tan(), (2.0).pow(0.5));
+    print((3.14159).fixed(2), (2.5).fixed(0), (-0.5).fixed(0), (1.0 / 0.0).fixed(3), (0.0 / 0.0).fixed(1), \"{(7.0).fixed(3)}\");
+    let u8[] mut c = \"日本\".bytes();
+    print(c.to_str());
+    c.pop();
+    print(c.to_str());
+    let u8[] e = [];
+    print(e.to_str(), env_var(\"JW_SURELY_NOT_SET_42\"), env_var(\"\"));
+    let a = now_ns();
+    sleep_ms(5);
+    print(now_ns() - a >= 5000000, unix_ms() > 1700000000000);
+    print((1.0).fixed(101));
+}",
+    );
+}
+
+#[test]
 fn number_methods_match_interp() {
     same_as_interp(
         "nummeth",
