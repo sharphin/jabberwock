@@ -450,7 +450,7 @@ impl<'a> Cx<'a> {
                 self.operands(args, facts);
                 self.place(place, facts);
                 // 読むだけの操作のほかは、要素が動きうる（push・pop・sort など。辞書の値の解放も）
-                if !matches!(name.as_str(), "len" | "contains" | "get" | "keys") {
+                if !matches!(name.as_str(), "len" | "contains" | "get" | "keys" | "index_of") {
                     kill_elems(facts);
                 }
                 None

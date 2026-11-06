@@ -268,6 +268,8 @@ declare void @jw_eprint_end()
 declare i32 @jw_read_file(ptr, ptr)
 declare i32 @jw_write_file(ptr, ptr, ptr)
 declare i32 @jw_run_command(ptr, ptr, ptr, ptr)
+declare i32 @jw_run_output(ptr, ptr, ptr, ptr)
+declare void @jw_assert_eq_fail(ptr, ptr, ptr) noreturn
 declare void @jw_exit(i64) noreturn
 declare ptr @jw_chr(i64, ptr)
 declare ptr @jw_str_append(ptr, ptr)
@@ -280,6 +282,9 @@ declare i64 @jw_unix_ms()
 declare void @jw_sleep_ms(i64)
 declare i32 @jw_env_var(ptr, ptr)
 declare i32 @jw_list_to_str(ptr, ptr)
+declare i64 @jw_list_find_mem(ptr, i64, ptr)
+declare i64 @jw_list_find_f64(ptr, double)
+declare i64 @jw_list_find_str(ptr, ptr)
 
 "#;
 
@@ -3481,6 +3486,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
     fn binary(&mut self, op: BinOp, a: &Operand, b: &Operand, span: Span) -> G<(String, Ty)> {
         let (x, t) = self.operand(a)?;
         let (y, tb) = self.operand(b)?;
+        self.binary_vals(op, x, t, y, tb, span)
+    }
+
+    /// 計算した 2 つの値の演算（`binary` と、`assert_eq` の比べ方）
+    fn binary_vals(&mut self, op: BinOp, x: String, t: Ty, y: String, tb: Ty, span: Span) -> G<(String, Ty)> {
         if let (BinOp::Shl | BinOp::Shr, Ty::Int(i), Ty::Int(n)) = (op, &t, &tb) {
             return self.shift(op, &x, *i, &y, *n, span);
         }
@@ -3756,6 +3766,38 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let ok = self.b.val(format!("call i32 @jw_run_command(ptr {}, ptr {}, ptr {}, ptr {})", vals[0].0, list, code, out));
                 release(self, &vals[..1]);
                 self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load i64, ptr {}", code)), Ty::Int(IntTy::I64))))
+            }
+            // 引数のリストは jw_run_output が解放する
+            "run_output" => {
+                let list = self.b.alloca("%list");
+                self.b.op(format!("store %list {}, ptr {}", vals[1].0, list));
+                let text = self.b.alloca("ptr");
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_run_output(ptr {}, ptr {}, ptr {}, ptr {})", vals[0].0, list, text, out));
+                release(self, &vals[..1]);
+                self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load ptr, ptr {}", text)), Ty::Str)))
+            }
+            // 等しくなければ両方を表示して止まる（比べ方は `a == b` と同じ）
+            "assert_eq" => {
+                let (eq, _) = self.binary_vals(BinOp::Eq, vals[0].0.clone(), vals[0].1.clone(), vals[1].0.clone(), vals[1].1.clone(), span)?;
+                let bad = self.b.val(format!("xor i1 {}, true", eq));
+                let (_, ok) = self.b.if_true(&bad);
+                let site = self.m.site(span, "");
+                let mut shown = Vec::new();
+                for (v, t) in &vals {
+                    let sb = self.b.val("call ptr @jw_sb_new()");
+                    let lt = self.m.lt(t)?;
+                    let tmp = self.b.alloca(&lt);
+                    self.b.op(format!("store {} {}, ptr {}", lt, v, tmp));
+                    let f = self.m.helper(H::Show, t);
+                    self.b.op(format!("call void {}(ptr {}, ptr {}, i64 0, ptr {})", f, tmp, sb, site));
+                    shown.push(self.b.val(format!("call ptr @jw_sb_finish(ptr {})", sb)));
+                }
+                self.b.op(format!("call void @jw_assert_eq_fail(ptr {}, ptr {}, ptr {})", shown[0], shown[1], site));
+                self.b.op("unreachable");
+                self.b.label(&ok);
+                release(self, &vals);
+                Ok(("0".to_string(), Ty::Unit))
             }
             "concat" if vals.len() == 2 => {
                 let r = self.b.val(format!("call ptr @jw_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));
@@ -4116,6 +4158,41 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let r = self.b.val(format!("call ptr @jw_list_join(ptr {}, ptr {})", pr.ptr, vals[0].0));
                         self.b.op(format!("call void @jw_str_release(ptr {})", vals[0].0));
                         Ok((r, Ty::Str))
+                    }
+                    // 等しい最初の要素の位置（なければ -1）。整数と真偽値はバイトで比べる
+                    "contains" | "index_of" => {
+                        let (v, t) = vals[0].clone();
+                        let at = match *x {
+                            Ty::Float => self.b.val(format!("call i64 @jw_list_find_f64(ptr {}, double {})", pr.ptr, v)),
+                            Ty::Str => {
+                                let r = self.b.val(format!("call i64 @jw_list_find_str(ptr {}, ptr {})", pr.ptr, v));
+                                self.b.op(format!("call void @jw_str_release(ptr {})", v));
+                                r
+                            }
+                            _ => {
+                                let v = self.coerce(&v, &t, &x)?;
+                                let tmp = self.b.alloca(&xl);
+                                self.b.op(format!("store {} {}, ptr {}", xl, v, tmp));
+                                self.b.val(format!("call i64 @jw_list_find_mem(ptr {}, i64 {}, ptr {})", pr.ptr, size, tmp))
+                            }
+                        };
+                        let found = self.b.val(format!("icmp sge i64 {}, 0", at));
+                        if name == "contains" {
+                            return Ok((found, Ty::Bool));
+                        }
+                        let lt = self.m.lt(want)?;
+                        let res = self.b.alloca(&lt);
+                        let (_, no) = self.b.if_true(&found);
+                        let sv = self.make_enum(want, "Some", vec![(at, i64t.clone())])?;
+                        self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+                        let done = self.b.l();
+                        self.b.br(&done);
+                        self.b.label(&no);
+                        let nv = self.make_enum(want, "None", Vec::new())?;
+                        self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+                        self.b.br(&done);
+                        self.b.label(&done);
+                        Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
                     }
                     "to_str" => {
                         let out = self.b.alloca("ptr");

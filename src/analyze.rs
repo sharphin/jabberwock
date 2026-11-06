@@ -471,8 +471,8 @@ impl<'a> FnAnalyzer<'a> {
                             self.expr(a, true);
                         }
                     }
-                    "drop" | "assert" | "spawn" | "chan" | "exit" | "read_file" | "write_file" | "run_command" | "chr" | "now_ns"
-                    | "unix_ms" | "sleep_ms" | "env_var" => {
+                    "drop" | "assert" | "spawn" | "chan" | "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "chr"
+                    | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" | "assert_eq" => {
                         for a in args {
                             self.expr(a, false);
                         }

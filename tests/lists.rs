@@ -332,3 +332,27 @@ fn main() {
     assert_eq!(ok(src), "0 0 a\n0 1 b\n1 0 c\n0 z\n1 y\n");
     assert!(jabberwock::ir_text(src, &|_: &str| None).is_ok());
 }
+
+#[test]
+fn contains_and_index_of() {
+    let o = jabberwock::run_source("fn main() {
+    let i64[] v = [5, 7, 9];
+    print(v.contains(7), v.contains(8), v.index_of(9), v.index_of(1));
+    let u8[] b = \"hello\".bytes();
+    print(b.contains(108), b.index_of(111));
+    let f64[] f = [0.0 / 0.0, -0.0, 2.5];
+    print(f.contains(0.0 / 0.0), f.index_of(0.0), f.index_of(2.5));
+    let str[] s = [\"ab\", \"cd\", \"日本\"];
+    print(s.contains(\"cd\"), s.index_of(\"日本\"), s.index_of(\"x\"));
+    let bool[] t = [false, true];
+    let i16[] e = [];
+    print(t.index_of(true), e.contains(1), e.index_of(-3));
+    for x in v { print(x, v.contains(x)); }
+}", false);
+    assert!(o.error.is_none(), "{:?}", o.error.map(|d| d.title));
+    assert_eq!(o.output, "true false Some(2) None\ntrue Some(4)\nfalse Some(1) Some(2)\ntrue Some(2) None\nSome(1) false None\n5 true\n7 true\n9 true\n");
+    let e = jabberwock::run_source("struct P { i64 x; }\nfn main() { let P[] ps = []; print(ps.contains(P { x: 1 })); }", false).error.expect("error");
+    assert!(e.title.contains("contains"), "{}", e.title);
+    let e = jabberwock::run_source("fn main() { let i64[] a = [1]; print(a.index_of(\"x\")); }", false).error.expect("error");
+    assert!(e.title.contains("型"), "{}", e.title);
+}

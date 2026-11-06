@@ -139,6 +139,8 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare i32 @jw_read_file(ptr, ptr)\n" +
     "declare i32 @jw_write_file(ptr, ptr, ptr)\n" +
     "declare i32 @jw_run_command(ptr, ptr, ptr, ptr)\n" +
+    "declare i32 @jw_run_output(ptr, ptr, ptr, ptr)\n" +
+    "declare void @jw_assert_eq_fail(ptr, ptr, ptr) noreturn\n" +
     "declare void @jw_exit(i64) noreturn\n" +
     "declare ptr @jw_chr(i64, ptr)\n" +
     "declare ptr @jw_str_append(ptr, ptr)\n" +
@@ -151,6 +153,9 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare void @jw_sleep_ms(i64)\n" +
     "declare i32 @jw_env_var(ptr, ptr)\n" +
     "declare i32 @jw_list_to_str(ptr, ptr)\n" +
+    "declare i64 @jw_list_find_mem(ptr, i64, ptr)\n" +
+    "declare i64 @jw_list_find_f64(ptr, double)\n" +
+    "declare i64 @jw_list_find_str(ptr, ptr)\n" +
     "\n";
 
 /// 1 回の load / store で読み書きする型（要素の印をつけてよいもの）

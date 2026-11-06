@@ -6432,3 +6432,22 @@ fn main() { print((1.0).fixed(1.5)); }
 fn main() { sleep_ms("a"); }
 #####
 fn main() { let env_var = 1; }
+#####
+fn main() {
+    let i32[] n = [-1, 300];
+    let f64[] f = [2.5];
+    let str[] s = ["ab"];
+    let bool[] t = [true];
+    print(n.index_of(300), n.contains(-1), f.contains(2.5), s.index_of("ab"), t.contains(false));
+    let u8 a = 3;
+    assert_eq(a, 3);
+    assert_eq(3, a);
+    assert_eq("x", s[0]);
+    assert_eq(1.5, 2.5);
+    print(run_output("echo", ["hi"]));
+}
+#####
+fn main() { assert_eq(1, "a"); }
+#####
+struct P { i64 x; }
+fn main() { let P[] ps = []; print(ps.index_of(P { x: 1 })); }

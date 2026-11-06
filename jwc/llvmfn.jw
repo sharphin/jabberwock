@@ -1601,6 +1601,11 @@ struct FnGen {
     fn mut Result<llvm.V, str> binary(ref mut llvm.Module m, str op, ref ir.Operand a, ref ir.Operand c, i64 span) {
         let xa = operand(m, a)?;
         let xb = operand(m, c)?;
+        binary_vals(m, op, xa, xb, span)
+    }
+
+    /// 計算した 2 つの値の演算（`binary` と、`assert_eq` の比べ方）
+    fn mut Result<llvm.V, str> binary_vals(ref mut llvm.Module m, str op, ref llvm.V xa, ref llvm.V xb, i64 span) {
         let x = xa.v;
         let t = ty.cl(xa.t);
         if (op == "Shl" || op == "Shr") && ty.is(t, "Int") && ty.is(xb.t, "Int") {
@@ -1874,6 +1879,38 @@ struct FnGen {
             let ok = b.val("call i32 @jw_run_command(ptr " + vals[0].v + ", ptr " + lst + ", ptr " + cd + ", ptr " + out + ")");
             release(vals, 1);
             return result_of(m, want, ok, out, "int", cd);
+        }
+        // 引数のリストは jw_run_output が解放する
+        if name == "run_output" {
+            let rlst = b.alloca("%list");
+            b.op("store %list " + vals[1].v + ", ptr " + rlst);
+            let rtext = b.alloca("ptr");
+            let rout = b.alloca("ptr");
+            let rok = b.val("call i32 @jw_run_output(ptr " + vals[0].v + ", ptr " + rlst + ", ptr " + rtext + ", ptr " + rout + ")");
+            release(vals, 1);
+            return result_of(m, want, rok, rout, "str", rtext);
+        }
+        // 等しくなければ両方を表示して止まる（比べ方は `a == b` と同じ）
+        if name == "assert_eq" {
+            let eqv = binary_vals(m, "Eq", vals[0], vals[1], span)?;
+            let bad = b.val("xor i1 " + eqv.v + ", true");
+            let aok = b.if_true(bad);
+            let asite = m.site(span, "");
+            let str[] mut shown = [];
+            for x in vals {
+                let sb = b.val("call ptr @jw_sb_new()");
+                let lt = m.lt(x.t)?;
+                let tmp = b.alloca(lt);
+                b.op("store " + lt + " " + x.v + ", ptr " + tmp);
+                let f = m.helper("Show", x.t);
+                b.op("call void " + f + "(ptr " + tmp + ", ptr " + sb + ", i64 0, ptr " + asite + ")");
+                shown.push(b.val("call ptr @jw_sb_finish(ptr " + sb + ")"));
+            }
+            b.op("call void @jw_assert_eq_fail(ptr " + shown[0] + ", ptr " + shown[1] + ", ptr " + asite + ")");
+            b.op("unreachable");
+            b.label(aok);
+            release(vals, all);
+            return Ok(llvm.vt("0", ty.Ty.Unit));
         }
         if name == "concat" && vals.len() == 2 {
             let r = b.val("call ptr @jw_str_concat(ptr " + vals[0].v + ", ptr " + vals[1].v + ")");
@@ -2209,6 +2246,36 @@ struct FnGen {
                 let r = b.val("call ptr @jw_list_join(ptr " + pr.ptr + ", ptr " + vals[0].v + ")");
                 b.op("call void @jw_str_release(ptr " + vals[0].v + ")");
                 return Ok(llvm.vt(r, ty.Ty.Str));
+            }
+            // 等しい最初の要素の位置（なければ -1）。整数と真偽値はバイトで比べる
+            if name == "contains" || name == "index_of" {
+                let mut at = "";
+                if ty.is(x, "Float") {
+                    at = b.val("call i64 @jw_list_find_f64(ptr " + pr.ptr + ", double " + vals[0].v + ")");
+                } else if ty.is(x, "Str") {
+                    at = b.val("call i64 @jw_list_find_str(ptr " + pr.ptr + ", ptr " + vals[0].v + ")");
+                    b.op("call void @jw_str_release(ptr " + vals[0].v + ")");
+                } else {
+                    let cv = coerce(m, vals[0].v, vals[0].t, x)?;
+                    let ftmp = b.alloca(xl);
+                    b.op("store " + xl + " " + cv + ", ptr " + ftmp);
+                    at = b.val("call i64 @jw_list_find_mem(ptr " + pr.ptr + ", i64 " + size + ", ptr " + ftmp + ")");
+                }
+                let found = b.val("icmp sge i64 " + at + ", 0");
+                if name == "contains" { return Ok(llvm.vt(found, ty.Ty.Bool)); }
+                let flt = m.lt(want)?;
+                let fres = b.alloca(flt);
+                let fno = b.if_true(found);
+                let fsv = make_enum(m, want, "Some", [llvm.vt(at, ty.i64t())])?;
+                b.op("store " + flt + " " + fsv + ", ptr " + fres);
+                let fdone = b.l();
+                b.br(fdone);
+                b.label(fno);
+                let fnv = make_enum(m, want, "None", [])?;
+                b.op("store " + flt + " " + fnv + ", ptr " + fres);
+                b.br(fdone);
+                b.label(fdone);
+                return Ok(llvm.vt(b.val("load " + flt + ", ptr " + fres), ty.cl(want)));
             }
             if name == "to_str" {
                 let tout = b.alloca("ptr");

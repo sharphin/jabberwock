@@ -26,9 +26,9 @@ type R<T> = Result<T, Diagnostic>;
 pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 17] = [
+pub(crate) const BUILTINS: [&str; 19] = [
     "print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command", "chr",
-    "now_ns", "unix_ms", "sleep_ms", "env_var",
+    "now_ns", "unix_ms", "sleep_ms", "env_var", "run_output", "assert_eq",
 ];
 
 /// `now_ns()` の起点（はじめて呼んだとき。値の差だけに意味がある）
@@ -466,7 +466,7 @@ impl Interp {
                     Err(_) => result(false, msg(format!("ファイルに書けません: {}", path))),
                 })
             }
-            "run_command" => {
+            "run_command" | "run_output" => {
                 let cmd = text(&vals[0]);
                 let Value::Array(items, _) = self.seq_at(&vals[1]).clone() else { unreachable!("type checked: str[]") };
                 let mut vals = vals;
@@ -474,10 +474,25 @@ impl Interp {
                 self.release(list, span, "使い終わった一時的な値");
                 use std::io::Write;
                 let _ = std::io::stdout().flush();
-                let status = std::process::Command::new(&cmd).args(items.iter().map(text)).status();
-                Ok(match status {
-                    Ok(st) => result(true, Value::Int(st.code().unwrap_or(-1) as i128, IntTy::I64)),
+                let mut command = std::process::Command::new(&cmd);
+                command.args(items.iter().map(text));
+                if name == "run_command" {
+                    return Ok(match command.status() {
+                        Ok(st) => result(true, Value::Int(st.code().unwrap_or(-1) as i128, IntTy::I64)),
+                        Err(_) => result(false, msg(format!("コマンドを起動できません: {}", cmd))),
+                    });
+                }
+                // 標準出力だけ受け取る（標準入力と標準エラーはそのまま）。jw_rt.c の jw_run_output と同じ文
+                command.stdin(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit());
+                Ok(match command.output() {
                     Err(_) => result(false, msg(format!("コマンドを起動できません: {}", cmd))),
+                    Ok(o) => match o.status.code().unwrap_or(-1) {
+                        0 => match String::from_utf8(o.stdout) {
+                            Ok(t) => result(true, Value::Str(text_rc(t.as_str()))),
+                            Err(_) => result(false, msg(format!("コマンドの出力が UTF-8 ではありません: {}", cmd))),
+                        },
+                        c => result(false, msg(format!("コマンドが失敗しました（終了コード {}）: {}", c, cmd))),
+                    },
                 })
             }
             "now_ns" => {
@@ -512,6 +527,16 @@ impl Interp {
             }
             _ => unreachable!("not a system builtin: {} at {:?}", name, span),
         }
+    }
+
+    /// `assert_eq(a, b)`: 等しくなければ、両方の値を出して止まる（型検査で `a == b` と同じに調べてある）。IR の exec も使う
+    pub(crate) fn assert_eq(&mut self, vals: Vec<Value>, span: Span) -> R<Value> {
+        let (a, b) = (vals[0].clone(), vals[1].clone());
+        if as_bool(binary(BinOp::Eq, a.clone(), b.clone(), span)?, span)? {
+            return Ok(Value::Unit);
+        }
+        let (sa, sb) = (self.show(&a, span, 0)?, self.show(&b, span, 0)?);
+        Err(Diagnostic::new("assert_eq に失敗しました").primary(span, format!("左は {}、右は {} でした", sa, sb)))
     }
 
     /// `exit(n)` で終わったときの終了コード
@@ -2403,9 +2428,13 @@ impl Interp {
                 Ok(Value::Unit)
             }
             "read_line" => self.read_line(span),
-            "exit" | "read_file" | "write_file" | "run_command" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
                 let vals = self.eval_all(args)?;
                 self.system(name, vals, span)
+            }
+            "assert_eq" => {
+                let vals = self.eval_all(args)?;
+                self.assert_eq(vals, span)
             }
             "chr" => {
                 let v = self.eval(&args[0])?;
@@ -2573,7 +2602,7 @@ impl Interp {
             _ => None,
         };
         if let Some(slot) = seq_slot {
-            if !matches!(name, "len" | "map" | "filter" | "join" | "to_str") {
+            if !matches!(name, "len" | "map" | "filter" | "join" | "to_str" | "contains" | "index_of") {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
             }
@@ -2650,6 +2679,8 @@ impl Interp {
                 }
                 "join" => Value::Str(Rc::new(join_strs(items, &vals[0]))),
                 "to_str" => utf8_str(items),
+                "contains" => Value::Bool(find_in(items, &vals[0]).is_some()),
+                "index_of" => find_in(items, &vals[0]).map_or_else(none, |i| some(Value::Int(i as i128, IntTy::I64))),
                 "drain" => {
                     drained = Some(std::mem::take(items));
                     Value::Unit
@@ -3370,6 +3401,17 @@ pub(crate) fn join_strs(items: &[Value], sep: &Value) -> String {
         })
         .collect();
     parts.join(sep.as_str())
+}
+
+/// `a.contains(x)` / `a.index_of(x)`: x と等しい最初の要素の位置（`==` と同じ比べ方。NaN はどれとも等しくない）
+pub(crate) fn find_in(items: &[Value], x: &Value) -> Option<usize> {
+    items.iter().position(|v| match (v, x) {
+        (Value::Int(a, _), Value::Int(b, _)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a == b,
+        _ => unreachable!("type checked: scalar elements"),
+    })
 }
 
 /// `b.to_str()`: u8 のリストを文字列にする。正しい UTF-8 でなければ None

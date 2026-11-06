@@ -478,9 +478,10 @@ impl<'a> Machine<'a> {
                         self.it.world.eprint_line(&line);
                         Ok(Value::Unit)
                     }
-                    "exit" | "read_file" | "write_file" | "run_command" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
+                    "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
                         self.it.system(name, vals, *span)
                     }
+                    "assert_eq" => self.it.assert_eq(vals, *span),
                     "chr" => {
                         let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
                         crate::interp::chr(n, *span)
@@ -609,6 +610,11 @@ impl<'a> Machine<'a> {
             }
             "join" => Value::Str(Rc::new(crate::interp::join_strs(items, &vals[0]))),
             "to_str" => crate::interp::utf8_str(items),
+            "contains" => Value::Bool(crate::interp::find_in(items, &vals[0]).is_some()),
+            "index_of" => match crate::interp::find_in(items, &vals[0]) {
+                Some(i) => crate::interp::some(Value::Int(i as i128, IntTy::I64)),
+                None => crate::interp::none(),
+            },
             "drain" => Value::Array(std::mem::take(items), true),
             "insert" => {
                 let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };

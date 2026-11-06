@@ -471,6 +471,27 @@ fn math_and_bytes_match_interp() {
 }
 
 #[test]
+fn find_and_assert_eq_match_interp() {
+    same_as_interp(
+        "findeq",
+        "fn main() {
+    let i32[] n = [-1, 300];
+    let f64[] f = [0.0 / 0.0, -0.0, 2.5];
+    let str[] s = [\"ab\", \"日本\"];
+    let bool[] t = [false, true];
+    print(n.index_of(300), n.contains(-1), f.contains(0.0 / 0.0), f.index_of(0.0), s.index_of(\"日本\"), s.contains(\"x\"), t.index_of(true));
+    let u8 a = 3;
+    assert_eq(a, 3);
+    assert_eq(\"x\", \"x\");
+    assert_eq(s[0], \"ab\");
+    match run_output(\"echo\", [\"hi\"]) { case Ok(o) -> print(o.trim()); case Err(e) -> print(e); }
+    print(run_output(\"jw-no-such-command\", []));
+    assert_eq(a + 1, 5);
+}",
+    );
+}
+
+#[test]
 fn number_methods_match_interp() {
     same_as_interp(
         "nummeth",

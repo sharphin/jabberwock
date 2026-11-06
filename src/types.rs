@@ -2069,6 +2069,15 @@ impl<'a> Checker<'a> {
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
             "reverse" => (0, Ty::Unit, true),
+            // 等しい要素を探す（比べ方は `==` と同じ。要素は数・真偽値・文字列）
+            "contains" | "index_of" => {
+                if !matches!(elem, Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str) || args.len() != 1 {
+                    return Err(Diagnostic::new(format!("{} は数・真偽値・文字列のリストに使います", name))
+                        .primary(span, format!("`{}` のリストです（探す値を 1 つ渡します）", elem.show())));
+                }
+                self.expect(&args[0], elem)?;
+                return Ok(if name == "contains" { Ty::Bool } else { Ty::Enum("Option".to_string(), vec![I64]) });
+            }
             "to_str" => {
                 if *elem != Ty::Int(IntTy::U8) || !args.is_empty() {
                     return Err(Diagnostic::new("to_str は u8 のリストに使います")
@@ -2469,12 +2478,13 @@ impl<'a> Checker<'a> {
                 self.expect(&args[0], &I64)?;
                 return Ok(Ty::Str);
             }
-            "exit" | "read_file" | "write_file" | "run_command" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "run_output" => {
                 let str_list = Ty::List(Box::new(Ty::Str));
                 let (params, ret) = match name {
                     "exit" => (vec![Ty::Int(IntTy::I64)], Ty::Never),
                     "read_file" => (vec![Ty::Str], Ty::Str),
                     "write_file" => (vec![Ty::Str, Ty::Str], Ty::Unit),
+                    "run_output" => (vec![Ty::Str, str_list], Ty::Str),
                     _ => (vec![Ty::Str, str_list], Ty::Int(IntTy::I64)),
                 };
                 if args.len() != params.len() {
@@ -2523,6 +2533,14 @@ impl<'a> Checker<'a> {
                         .primary(span, "何を送るチャンネルか決める手がかりがない")
                         .note("`let chan<i64> c = chan();` のように型を書いてください")),
                 };
+            }
+            // 比べ方は `a == b` と同じ（数の書き方を相手に合わせる）
+            "assert_eq" => {
+                if args.len() != 2 {
+                    return Err(arity_error(name, 2, args.len(), span));
+                }
+                self.binary(BinOp::Eq, &args[0], &args[1], span, None)?;
+                return Ok(Ty::Unit);
             }
             "drop" | "assert" => {
                 if args.len() != 1 {

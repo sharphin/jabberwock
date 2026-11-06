@@ -1522,6 +1522,22 @@ WStr *jw_chr(int64_t n, const WSite *at) {
     return jw_str_new(b, k);
 }
 
+// assert_eq(a, b) が等しくなかった（a / b は表示した文字列。interp の `assert_eq` と同じ文）
+void jw_assert_eq_fail(WStr *a, WStr *b, const WSite *at) {
+    WSb *l = jw_sb_new();
+    jw_sb_cstr(l, "左は ");
+    jw_sb_str(l, a);
+    jw_sb_cstr(l, "、右は ");
+    jw_sb_str(l, b);
+    jw_sb_cstr(l, " でした");
+    WStr *t = jw_sb_finish(l);
+    char *label = malloc((size_t)t->len + 1);
+    memcpy(label, t->data, (size_t)t->len);
+    label[t->len] = 0;
+    begin_error("assert_eq に失敗しました");
+    finish_error(at, label, NULL);
+}
+
 // x.fixed(n): 小数点以下 n 桁（printf の丸め。interp の fixed と同じ）。inf と NaN は print と同じ形
 WStr *jw_f64_fixed(double x, int64_t n, const WSite *at) {
     if (n < 0 || n > 100) {
@@ -2186,8 +2202,10 @@ static FILE *open_file(const char *path, const wchar_t *mode) {
 #define MODE_READ L"rb"
 #define MODE_WRITE L"wb"
 #else
+#include <errno.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <unistd.h>
 extern char **environ;
 #define open_file(path, mode) fopen(path, mode)
 #define MODE_READ "rb"
@@ -2304,9 +2322,18 @@ static void quote_arg(WSb *b, const char *a) {
 }
 #endif
 
-// run_command: 動かして終わるのを待つ。動いたら 1 で *code に終了コード（シグナルで止まったら -1）、
-// 起動できなければ 0 で *err にエラーの文。args（str のリスト）はここで解放する
-int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
+#ifdef _WIN32
+int _pipe(int *, unsigned, int);
+int _dup(int);
+int _dup2(int, int);
+int _close(int);
+int _read(int, void *, unsigned);
+intptr_t _cwait(int *, intptr_t, int);
+#endif
+
+// コマンドを動かして終わるのを待つ。動いたら 1 で *code に終了コード（シグナルで止まったら -1）、
+// 起動できなければ 0 で *err にエラーの文。cap が NULL でなければ標準出力をそこに集める。args（str のリスト）はここで解放する
+static int32_t run_cmd(WStr *cmd, WList *args, int64_t *code, WStr **err, WSb *cap) {
     jw_flush();
     int64_t n = args->len;
     WStr **items = (WStr **)args->data;
@@ -2328,15 +2355,70 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
     }
     wargv[n + 1] = NULL;
     wchar_t *wcmd = to_wide(argv[0]);
-    intptr_t r = _wspawnvp(0 /* _P_WAIT */, wcmd, (const wchar_t *const *)wargv);
-    ok = r != -1;
-    if (ok) *code = (int64_t)(int32_t)r;
+    if (!cap) {
+        intptr_t r = _wspawnvp(0 /* _P_WAIT */, wcmd, (const wchar_t *const *)wargv);
+        ok = r != -1;
+        if (ok) *code = (int64_t)(int32_t)r;
+    } else {
+        // 標準出力（1 番）を一時的にパイプへつなぎ替えて起動する（子は 1 番を受け継ぐ）。
+        // つなぎ替えているあいだ、ほかのスレッドの出力は錠で待たせる
+        int fds[2];
+        ok = _pipe(fds, 1 << 16, 0x8000 /* _O_BINARY */) == 0;
+        if (ok) {
+            if (g_threaded) lock(&out_lock);
+            fflush(stdout);
+            int saved = _dup(1);
+            _dup2(fds[1], 1);
+            intptr_t h = _wspawnvp(1 /* _P_NOWAIT */, wcmd, (const wchar_t *const *)wargv);
+            _dup2(saved, 1);
+            _close(saved);
+            if (g_threaded) unlock(&out_lock);
+            _close(fds[1]);
+            ok = h != -1;
+            char buf[4096];
+            int k;
+            while ((k = _read(fds[0], buf, sizeof buf)) > 0) {
+                if (ok) jw_sb_push(cap, buf, k);
+            }
+            _close(fds[0]);
+            if (ok) {
+                int st = 0;
+                _cwait(&st, h, 0);
+                *code = (int64_t)(int32_t)st;
+            }
+        }
+    }
     free(wcmd);
     for (int64_t i = 0; i <= n; i++) free(wargv[i]);
     free(wargv);
 #else
     pid_t pid;
-    ok = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ) == 0;
+    int fds[2] = {-1, -1};
+    posix_spawn_file_actions_t fa;
+    if (cap) {
+        ok = pipe(fds) == 0;
+        if (ok) {
+            posix_spawn_file_actions_init(&fa);
+            posix_spawn_file_actions_adddup2(&fa, fds[1], 1);
+            posix_spawn_file_actions_addclose(&fa, fds[0]);
+            posix_spawn_file_actions_addclose(&fa, fds[1]);
+            ok = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ) == 0;
+            posix_spawn_file_actions_destroy(&fa);
+            close(fds[1]);
+            char buf[4096];
+            ssize_t k;
+            while ((k = read(fds[0], buf, sizeof buf)) != 0) {
+                if (k < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if (ok) jw_sb_push(cap, buf, (int64_t)k);
+            }
+            close(fds[0]);
+        }
+    } else {
+        ok = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ) == 0;
+    }
     if (ok) {
         int st = 0;
         while (waitpid(pid, &st, 0) < 0) {}
@@ -2349,6 +2431,33 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {
     for (int64_t i = 0; i < n; i++) jw_str_release(items[i]);
     jw_list_free(args, sizeof(WStr *), NULL);
     return ok;
+}
+
+// run_command: 出力はそのまま画面へ
+int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) { return run_cmd(cmd, args, code, err, NULL); }
+
+// run_output: 標準出力を文字列で返す。起動できない・終了コードが 0 でない・出力が UTF-8 でないなら 0 で *err（interp の `system` と同じ文）
+int32_t jw_run_output(WStr *cmd, WList *args, WStr **out, WStr **err) {
+    WSb *cap = jw_sb_new();
+    int64_t code = 0;
+    if (!run_cmd(cmd, args, &code, err, cap)) {
+        sb_drop(cap);
+        return 0;
+    }
+    if (code != 0) {
+        sb_drop(cap);
+        char head[96];
+        snprintf(head, sizeof head, "コマンドが失敗しました（終了コード %lld）: ", (long long)code);
+        *err = message(head, cmd);
+        return 0;
+    }
+    if (!valid_utf8((const unsigned char *)cap->p, cap->len)) {
+        sb_drop(cap);
+        *err = message("コマンドの出力が UTF-8 ではありません: ", cmd);
+        return 0;
+    }
+    *out = jw_sb_finish(cap);
+    return 1;
 }
 
 void jw_exit(int64_t code) {
@@ -2447,6 +2556,28 @@ int32_t jw_env_var(WStr *name, WStr **out) {
     *out = jw_str_new(v, n);
     return 1;
 #endif
+}
+
+// a.contains(x) / a.index_of(x): 等しい最初の要素の位置（なければ -1）。整数・真偽値は size バイトで比べる
+int64_t jw_list_find_mem(WList *l, int64_t size, const void *x) {
+    for (int64_t i = 0; i < l->len; i++)
+        if (memcmp(l->data + i * size, x, (size_t)size) == 0) return i;
+    return -1;
+}
+
+// 小数は == と同じ（NaN はどれとも等しくない。0.0 と -0.0 は等しい）
+int64_t jw_list_find_f64(WList *l, double x) {
+    const double *d = (const double *)l->data;
+    for (int64_t i = 0; i < l->len; i++)
+        if (d[i] == x) return i;
+    return -1;
+}
+
+int64_t jw_list_find_str(WList *l, WStr *x) {
+    WStr **items = (WStr **)l->data;
+    for (int64_t i = 0; i < l->len; i++)
+        if (items[i]->len == x->len && memcmp(items[i]->data, x->data, (size_t)x->len) == 0) return i;
+    return -1;
 }
 
 // u8 のリストの to_str(): 正しい UTF-8 なら 1 で *out に文字列、そうでなければ 0

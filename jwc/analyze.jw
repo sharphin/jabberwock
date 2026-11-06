@@ -516,7 +516,7 @@ struct Cx {
                 operands(ops, ref mut facts);
                 place(pl, ref mut facts);
                 // 読むだけの操作のほかは、要素が動きうる（push・pop・sort など。辞書の値の解放も）
-                if !(n == "len" || n == "contains" || n == "get" || n == "keys") { kill_elems(ref mut facts); }
+                if !(n == "len" || n == "contains" || n == "get" || n == "keys" || n == "index_of") { kill_elems(ref mut facts); }
                 0
             }
             case CopyOut(pl, w, s) -> {

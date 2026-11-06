@@ -46,7 +46,7 @@
 | `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>`・interface を型として使う |
 | `tests/strings.rs` | 文字列の埋め込み `"x = {x}"` |
 | `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
-| `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a` |
+| `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a`・`contains` / `index_of` |
 | `tests/floats.rs` | 小数 f64 |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
@@ -66,7 +66,7 @@
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/fuzz.rs` | 差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
 | `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す**。確かめた範囲と残りは docs/safety-testing.md |
-| `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()`・時刻（`now_ns` / `unix_ms` / `sleep_ms`）・環境変数 `env_var` |
+| `tests/system.rs` | ファイルの読み書き・`run_command` / `run_output`・`assert_eq`・`exit`・`eprint`・値なしの値 `()`・時刻（`now_ns` / `unix_ms` / `sleep_ms`）・環境変数 `env_var` |
 
 ## 大事な不変条件
 
@@ -260,12 +260,16 @@
   デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
   スレッドを作れなければ spawn の位置でエラー（`start_thread` / jw_rt.c の `jw_spawn`。錠を持ったまま作り、作れてから `alive` を足す）。
   環境変数 `JW_MAX_THREADS` で上限を下げて起こせる（`threads::max_threads` / jw_rt.c の `max_threads`。`--release` の実行ファイルは見ない）。
-- ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）と時刻・環境変数（`now_ns` / `unix_ms` / `sleep_ms` / `env_var`）: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
+- ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）と時刻・環境変数（`now_ns` / `unix_ms` / `sleep_ms` / `env_var`）・`run_output`: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
   LLVM は jw_rt.c の `jw_read_file` などと `result_of`（`Result<T, str>` を作る）。エラーの文は OS の文を使わず、interp と jw_rt.c で一字一句そろえる。
   時刻・環境変数は jw_rt.c の `jw_now_ns` など（Windows は QueryPerformanceCounter・GetSystemTimePreciseAsFileTime・Sleep・_wgetenv）。
   `now_ns` の起点は interp（はじめて呼んだとき）と実行ファイル（CLOCK_MONOTONIC）で違う。差だけを使うこと。
   `env_var` / `now_ns` などの名前は組み込み（`BUILTINS`）なので、変数や関数の名前にできない（jwc の `env` とぶつかるので `env` にはしなかった）。
   `Option<str>` を返す組み込み（env_var・u8 のリストの `to_str`）は llvm.rs / llvmfn.jw の `some_str` で作る。
+  `run_command` と `run_output` は jw_rt.c の `run_cmd` を共有する（`run_output` は標準出力をパイプで受ける。Windows は 1 番をパイプへつなぎ替えて `_wspawnvp(_P_NOWAIT)`、そのあいだ出力の錠を持つ）。
+- `assert_eq(a, b)`: 型は types.rs が `binary(BinOp::Eq, ..)` で `==` と同じに調べる。interp の `Interp::assert_eq`（exec も）、
+  llvm.rs は `binary_vals`（`binary` から値の計算を分けたもの。jwc の llvmfn.jw も同じ）で比べ、違えば Show の手伝いで両方を文字にして `jw_assert_eq_fail`。
+- リストの `contains` / `index_of`（要素は数・真偽値・文字列）: interp の `find_in`（exec も）、llvm は jw_rt.c の `jw_list_find_mem`（整数・真偽値をバイトで）/ `jw_list_find_f64` / `jw_list_find_str`。
 - f64 のメソッド（`floor` / `ceil` / `round` / `trunc` / `exp` / `ln` / `log10` / `sin` / `cos` / `tan` / `pow` / `is_nan` / `fixed`）: 型は types.rs の `num_method`（エラーの文 `F64_METHODS` は jwc/typeck.jw と同じ）、
   動きは interp の `num_method`（exec も）。LLVM は `llvm.floor.f64` などの組み込み（tan だけ C の `tan`）、`fixed` は jw_rt.c の `jw_f64_fixed`（`%.*f`。Rust の `{:.*}` と丸めが同じことを確かめた）。
   `exit` は `World.exit`（終了コードを覚えて `exit_marker` で全スレッドを止める）。`run_inner` / `ir_mismatch` がそれをエラーでなく終了として扱う。

@@ -45,7 +45,7 @@ fn bool is_u8(ref ty.Ty t) { ty.is(t, "Int") && ty.int_of(t) == "u8" }
 fn bool is_builtin(str n) {
     n == "print" || n == "eprint" || n == "drop" || n == "assert" || n == "read_line" || n == "args" || n == "spawn"
         || n == "chan" || n == "exit" || n == "read_file" || n == "write_file" || n == "run_command" || n == "chr"
-        || n == "now_ns" || n == "unix_ms" || n == "sleep_ms" || n == "env_var"
+        || n == "now_ns" || n == "unix_ms" || n == "sleep_ms" || n == "env_var" || n == "run_output" || n == "assert_eq"
 }
 
 /// 最後の `.` の位置（なければ -1）
@@ -2302,6 +2302,15 @@ pub struct Checker {
         } else if name == "insert" {
             want = 2;
         } else if name == "reverse" {
+        } else if name == "contains" || name == "index_of" {
+            // 等しい要素を探す（比べ方は `==` と同じ。要素は数・真偽値・文字列）
+            if !(ty.is(elem, "Int") || ty.is(elem, "Float") || ty.is(elem, "Bool") || ty.is(elem, "Str")) || argv.len() != 1 {
+                return Err(diag.make("{name} は数・真偽値・文字列のリストに使います")
+                    .at(span, "`{ty.show(elem)}` のリストです（探す値を 1 つ渡します）"));
+            }
+            expect(argv[0], elem)?;
+            if name == "contains" { return Ok(ty.Ty.Bool); }
+            return Ok(ty.opt(ty.i64t()));
         } else if name == "to_str" {
             if !is_u8(elem) || argv.len() != 0 {
                 return Err(diag.make("to_str は u8 のリストに使います")
@@ -2726,7 +2735,7 @@ pub struct Checker {
             expect(argv[0], w)?;
             return Ok(ty.Ty.Str);
         }
-        if name == "exit" || name == "read_file" || name == "write_file" || name == "run_command" {
+        if name == "exit" || name == "read_file" || name == "write_file" || name == "run_command" || name == "run_output" {
             let ty.Ty[] mut params = [];
             let mut ret = ty.Ty.Unit;
             if name == "exit" {
@@ -2738,6 +2747,10 @@ pub struct Checker {
             } else if name == "write_file" {
                 params.push(ty.Ty.Str);
                 params.push(ty.Ty.Str);
+            } else if name == "run_output" {
+                params.push(ty.Ty.Str);
+                params.push(ty.Ty.List(own ty.Ty.Str));
+                ret = ty.Ty.Str;
             } else {
                 params.push(ty.Ty.Str);
                 params.push(ty.Ty.List(own ty.Ty.Str));
@@ -2776,6 +2789,13 @@ pub struct Checker {
             return Err(diag.make("chan() の型が分かりません")
                 .at(span, "何を送るチャンネルか決める手がかりがない")
                 .with_note("`let chan<i64> c = chan();` のように型を書いてください"));
+        }
+        // 比べ方は `a == b` と同じ（数の書き方を相手に合わせる）
+        if name == "assert_eq" {
+            if argv.len() != 2 { return Err(arity_error(name, 2, argv.len(), span)); }
+            let nh = none();
+            binary("Eq", argv[0], argv[1], span, nh)?;
+            return Ok(ty.Ty.Unit);
         }
         if name == "drop" || name == "assert" {
             if argv.len() != 1 { return Err(arity_error(name, 1, argv.len(), span)); }
