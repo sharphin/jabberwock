@@ -4,6 +4,7 @@
 
 /// (モジュールの名前, ソース)。名前の順
 pub const MODULES: &[(&str, &str)] = &[
+    ("json", include_str!("../std/json.jw")),
     ("lists", include_str!("../std/lists.jw")),
     ("strings", include_str!("../std/strings.jw")),
 ];

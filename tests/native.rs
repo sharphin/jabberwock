@@ -507,6 +507,35 @@ fn main() {
 }
 
 #[test]
+fn std_json_matches_interp() {
+    same_as_interp("stdjson", "use std.json;
+fn main() {
+    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";
+    match json.parse(text) {
+        case Ok(v) -> {
+            print(json.stringify(v));
+            print(json.pretty(v, 2));
+            match ref *v {
+                case Obj(f) -> print(f.len(), f.contains(\"n\"));
+                default -> print(\"?\");
+            }
+            print(json.get_str(v, \"name\").unwrap_or(\"-\"), json.get_num(v, \"n\").is_none(), json.get_str(v, \"zz\").is_none());
+        }
+        case Err(e) -> print(e);
+    }
+    for bad in [\"\", \"[1,\", \"{{\\\"a\\\" 1}}\", \"tru\", \"\\\"abc\", \"[1] x\", \"01\", \"-\", \"\\\"\\\\x\\\"\"] {
+        match json.parse(bad) {
+            case Ok(v) -> print(\"ok?\", json.stringify(v));
+            case Err(e) -> print(e);
+        }
+    }
+    let own json.Value v = own json.Value.Arr(own [own json.Value.Str(\"a\\nb\"), own json.Value.Num(0.5)]);
+    print(json.stringify(v));
+}
+");
+}
+
+#[test]
 fn std_modules_match_interp() {
     same_as_interp("stdmods", "use std.strings;
 use std.lists;

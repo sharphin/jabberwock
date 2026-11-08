@@ -83,6 +83,37 @@ fn main() {
     assert_eq!(ok(src), "14 5 1\ntrue 0\n7 0 9 2\n1 4 7\ntrue true\n7\nins 10\n1.75\nz 0\n");
 }
 
+pub const JSON: &str = "use std.json;
+fn main() {
+    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";
+    match json.parse(text) {
+        case Ok(v) -> {
+            print(json.stringify(v));
+            print(json.pretty(v, 2));
+            match ref *v {
+                case Obj(f) -> print(f.len(), f.contains(\"n\"));
+                default -> print(\"?\");
+            }
+            print(json.get_str(v, \"name\").unwrap_or(\"-\"), json.get_num(v, \"n\").is_none(), json.get_str(v, \"zz\").is_none());
+        }
+        case Err(e) -> print(e);
+    }
+    for bad in [\"\", \"[1,\", \"{{\\\"a\\\" 1}}\", \"tru\", \"\\\"abc\", \"[1] x\", \"01\", \"-\", \"\\\"\\\\x\\\"\"] {
+        match json.parse(bad) {
+            case Ok(v) -> print(\"ok?\", json.stringify(v));
+            case Err(e) -> print(e);
+        }
+    }
+    let own json.Value v = own json.Value.Arr(own [own json.Value.Str(\"a\\nb\"), own json.Value.Num(0.5)]);
+    print(json.stringify(v));
+}
+";
+
+#[test]
+fn json_module() {
+    assert_eq!(ok(JSON), "{\"name\":\"jab\\\"ber\",\"n\":[1,2.5,-300,true,null],\"o\":{},\"u\":\"é😀\",\"e\":[]}\n{\n  \"name\": \"jab\\\"ber\",\n  \"n\": [\n    1,\n    2.5,\n    -300,\n    true,\n    null\n  ],\n  \"o\": {},\n  \"u\": \"é😀\",\n  \"e\": []\n}\n5 true\njab\"ber true true\nJSON を読めません（1 文字目）: 値がありません\nJSON を読めません（4 文字目）: 値がありません\nJSON を読めません（6 文字目）: `:` が要ります\nJSON を読めません（4 文字目）: `true` と書くところです\nJSON を読めません（5 文字目）: 文字列が閉じていません\nJSON を読めません（5 文字目）: 値のあとに余分な文字があります\nJSON を読めません（3 文字目）: 数の先頭に 0 は書けません\nJSON を読めません（2 文字目）: 数の書き方がおかしいです\nJSON を読めません（4 文字目）: 未知のエスケープ `\\x` です\n[\"a\\nb\",0.5]\n");
+}
+
 /// 同じ名前のファイルがあっても、標準ライブラリはコンパイラの中のものを使う。ふつうの `use strings;` はそのファイル
 #[test]
 fn std_is_not_overridden_by_local_files() {
@@ -118,7 +149,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("lists, strings"), "{}", e);
+    assert!(e.contains("json, lists, strings"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す

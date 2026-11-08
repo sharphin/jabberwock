@@ -1834,7 +1834,6 @@ fn key_kind(k: &Ty) -> i32 {
     }
 }
 
-/// 整数を i64 に広げる
 /// 整数を文字にするときの形（jw_rt.c の `fmt_int`: 0 符号つき・1 符号なし・2 文字）
 fn int_shape(t: IntTy) -> i32 {
     match t {
@@ -1844,6 +1843,7 @@ fn int_shape(t: IntTy) -> i32 {
     }
 }
 
+/// 整数を i64 に広げる
 fn widen(b: &mut B, v: &str, t: IntTy) -> String {
     if t.bits() == 64 {
         return v.to_string();
