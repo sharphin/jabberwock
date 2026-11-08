@@ -6523,3 +6523,5 @@ fn main() { let c = '\q'; }
 fn main() { let c = '\u{D800}'; }
 #####
 fn main() { let c = 'a }
+#####
+fn main() { let s = "a\u{8}b\u{7f}\u{1b}\u{85}\t"; print(s.len()); }
