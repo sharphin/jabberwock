@@ -303,8 +303,13 @@ struct Parser {
             if peek() == "use" {
                 // `use geom;`: 同じフォルダの geom.jw を使う
                 bump();
-                let s = span();
-                let n = expect_ident("モジュールの名前")?;
+                let mut s = span();
+                let mut n = expect_ident("モジュールの名前")?;
+                // `use std.json;`: 標準ライブラリ。書いた名前は `json`
+                if n == "std" && eat(".") {
+                    s = span();
+                    n = expect_ident("標準ライブラリのモジュールの名前")?;
+                }
                 expect(";", "`;`")?;
                 if has(uses, n) {
                     return Err(diag.error("`use {n}` が二回あります", s, "ここが二回目"));

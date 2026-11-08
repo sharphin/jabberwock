@@ -3,10 +3,12 @@
 // `use geom;` で同じフォルダの geom.jw を読む（使われる側が先。輪はエラー）。使う側の `geom . area` は
 // 1 つの名前 `geom.area` にまとめ（merge_paths）、モジュールの中の名前は `geom.area` に書き換える（Qualify）。
 // 全部を 1 つのプログラムにまとめる。
+// `use std.名前;` は標準ライブラリ（stdlib.jw の中のソース）。モジュールの名前は `std/名前` で、`名前.x` を `std/名前.x` に書き換える。
 use ast;
 use diag;
 use lexer;
 use parser;
+use stdlib;
 
 fn bool has(ref str[] xs, str x) {
     for y in xs {
@@ -141,9 +143,19 @@ pub struct Loader {
         names.push("");
         srcs.push(src);
         module("", 0)?;
+        // 変数につけられない名前: モジュールの名前と、`std/名前` の書いた名前
         let str[] mut mods = [];
         for (i, n) in names {
-            if i > 0 { mods.push(n); }
+            if i > 0 {
+                mods.push(n);
+                match n.find("/") {
+                    case Some(c) -> {
+                        let short = n.slice(c + 1, n.len());
+                        if !has(mods, short) { mods.push(short); }
+                    }
+                    case None -> {}
+                }
+            }
         }
         let mut all = ast.Program {
             structs: [], enums: [], interfaces: [], fns: [], uses: [], use_spans: [], public: [], modules: mods,
@@ -164,31 +176,64 @@ pub struct Loader {
     /// `file` 番目のファイルを、モジュール `name` として読む（使うモジュールを先に読む）
     fn mut Result<Info, diag.Diag> module(str name, i64 file) {
         let toks = lexer.lex_file(srcs[file], file)?;
+        // 書いた名前と、モジュールの名前（`use std.名前;` なら `std/名前`）
         let str[] mut uses = [];
+        let str[] mut keys = [];
         let i64[] mut use_spans = [];
         let mut k = 0;
         while k + 1 < toks.len() {
             if toks[k].kind == "use" && toks[k + 1].kind == "ident" {
-                uses.push(toks[k + 1].text);
-                use_spans.push(toks[k + 1].span);
+                if toks[k + 1].text == "std" && k + 3 < toks.len() && toks[k + 2].kind == "." {
+                    if toks[k + 3].kind == "ident" {
+                        uses.push(toks[k + 3].text);
+                        keys.push("std/" + toks[k + 3].text);
+                        use_spans.push(toks[k + 3].span);
+                    }
+                } else {
+                    uses.push(toks[k + 1].text);
+                    keys.push(toks[k + 1].text);
+                    use_spans.push(toks[k + 1].span);
+                }
             }
             k += 1;
         }
         loading.push(name);
+        let str[] mut seen = [];
+        let str[] mut alias_from = [];
+        let str[] mut alias_to = [];
         for (i, u) in uses {
-            if has(done, u) { continue; }
-            if has(loading, u) {
+            if has(seen, u) { continue; }
+            seen.push(u);
+            let key = keys[i];
+            if key != u {
+                alias_from.push(u);
+                alias_to.push(key);
+            }
+            if has(loading, key) {
                 return Err(diag.error_note("モジュール `{u}` の use が輪になっています", use_spans[i],
                     "ここで使うと、読む順が決まらない", "共通の部分を別のモジュールに分けてください"));
             }
-            let text = match read_file(dir + u + ".jw") {
-                case Ok(t) -> t;
-                case Err(e) -> return Err(diag.error("モジュール `{u}` が見つかりません", use_spans[i], "同じフォルダに {u}.jw がない"));
+            if has(done, key) { continue; }
+            let text = if key != u {
+                // 標準ライブラリは、同じ名前のファイルがあってもコンパイラの中のものを使う
+                match stdlib.source(u) {
+                    case Some(t) -> t;
+                    case None -> {
+                        let all = stdlib.names().join(", ");
+                        return Err(diag.error_note("標準ライブラリに `std.{u}` はありません", use_spans[i], "この名前のモジュールはない",
+                            "標準ライブラリのモジュール: {all}"));
+                    }
+                }
+            } else {
+                match read_file(dir + u + ".jw") {
+                    case Ok(t) -> t;
+                    case Err(e) -> return Err(diag.error("モジュール `{u}` が見つかりません", use_spans[i], "同じフォルダに {u}.jw がない"));
+                }
             };
-            names.push(u);
+            names.push(key);
             srcs.push(text);
-            let info = module(u, names.len() - 1)?;
-            done.push(u);
+            let info = module(key, names.len() - 1)?;
+            done.push(key);
             infos.push(info);
         }
         loading.pop();
@@ -198,10 +243,10 @@ pub struct Loader {
         let str[] mut structs = [];
         let str[] mut enums = [];
         let str[str] mut variants = [];
-        for u in uses {
+        for (ui, u) in uses {
             if has(mods, u) { continue; }
             for (j, d) in done {
-                if d == u {
+                if d == keys[ui] {
                     for x in range(infos[j].names.len()) {
                         let n = infos[j].names[x];
                         if infos[j].pubs[x] && infos[j].find(n) == x {
@@ -224,7 +269,11 @@ pub struct Loader {
         let mut prog = parser.parse_with(merged, structs, enums, variants)?;
         let info = info_of(prog);
         if name != "" {
-            prog = qualify(prog, name, info);
+            prog = qualify(prog, name, info, alias_from, alias_to);
+        } else if alias_from.len() > 0 {
+            // 最初のファイルは自分の名前を書き換えず、`名前.x` だけ `std/名前.x` にする
+            let empty = Info { names: [], kinds: [], pubs: [], variants: [] };
+            prog = qualify(prog, name, empty, alias_from, alias_to);
         }
         prog.uses = [];
         prog.use_spans = [];
@@ -240,8 +289,8 @@ pub fn Loader new_loader(str dir) {
 // ---------------------------------------------------------------- モジュールの中の名前の書き換え
 
 /// モジュールの中の名前を、モジュール名をつけた名前に書き換えたプログラムを作る
-fn ast.Program qualify(ast.Program p, str module, ref Info info) {
-    let mut q = Qualify { module: module, fns: [], structs: [], types: [], enums: [] };
+fn ast.Program qualify(ast.Program p, str module, ref Info info, ref str[] alias_from, ref str[] alias_to) {
+    let mut q = Qualify { module: module, fns: [], structs: [], types: [], enums: [], alias_from: strs(alias_from), alias_to: strs(alias_to) };
     for (i, n) in info.names {
         if info.find(n) != i { continue; }
         let k = info.kinds[i];
@@ -272,7 +321,7 @@ fn ast.Program qualify(ast.Program p, str module, ref Info info) {
     let ast.FnDef[] mut fns = [];
     for f in p.fns { fns.push(q.func(f, true)); }
     let str[] mut consts = [];
-    for c in p.consts { consts.push(module + "." + c); }
+    for c in p.consts { consts.push(q.name(c)); }
     let i64[] mut bl = [];
     for x in p.borrow_lambdas { bl.push(x); }
     ast.Program {
@@ -288,8 +337,26 @@ struct Qualify {
     // 型として書ける名前（構造体・enum・interface）
     str[] types;
     str[] enums;
+    // `use std.名前;` の書いた名前 → モジュールの名前（`strings` → `std/strings`）
+    str[] alias_from;
+    str[] alias_to;
 
-    fn str name(str n) { module + "." + n }
+    /// 最初のファイル（名前が空）は、自分の名前を書き換えない
+    fn str name(str n) { if module == "" { n } else { module + "." + n } }
+
+    /// ほかのモジュールの名前（`strings.f`）を、モジュールの本当の名前に（`std/strings.f`）
+    fn str alias(str n) {
+        match n.find(".") {
+            case Some(i) -> {
+                let m = n.slice(0, i);
+                for (j, f) in alias_from {
+                    if f == m { return alias_to[j] + n.slice(i, n.len()); }
+                }
+                n
+            }
+            case None -> n;
+        }
+    }
 
     /// 関数（`body` なら本体も）。メソッド・静的メソッド（`Point.len`）は構造体の名前を書き換える
     fn ast.FnDef func(ref ast.FnDef f, bool body) {
@@ -312,7 +379,7 @@ struct Qualify {
             }
             let str[] mut bs = [];
             for x in b.split(" + ") {
-                if has(types, x) { bs.push(name(x)); } else { bs.push(x); }
+                if has(types, x) { bs.push(name(x)); } else { bs.push(alias(x)); }
             }
             bounds.push(bs.join(" + "));
         }
@@ -342,7 +409,7 @@ struct Qualify {
     }
 
     fn str type_name(str n, ref str[] tps) {
-        if has(types, n) && !has(tps, n) { name(n) } else { n }
+        if has(types, n) && !has(tps, n) { name(n) } else { alias(n) }
     }
 
     fn ast.Block block(ref ast.Block b, ref str[] tps) {
@@ -382,7 +449,7 @@ struct Qualify {
     fn ast.Expr expr(ref ast.Expr e, ref str[] tps) {
         let k = match ref e.kind {
             // 名前のある関数を値として使う（変数に関数と同じ名前はつけられないので、関数の名前なら関数）
-            case Var(n) -> ast.ExprKind.Var(if has(fns, n) { name(n) } else { n });
+            case Var(n) -> ast.ExprKind.Var(if has(fns, n) { name(n) } else { alias(n) });
             case Call(n, xs) -> {
                 let mut static_call = false;
                 match n.find(".") {
@@ -392,14 +459,14 @@ struct Qualify {
                     }
                     case None -> {}
                 }
-                ast.ExprKind.Call(if has(fns, n) || static_call { name(n) } else { n }, own exprs(xs, tps))
+                ast.ExprKind.Call(if has(fns, n) || static_call { name(n) } else { alias(n) }, own exprs(xs, tps))
             }
             case StructLit(n, inits) -> {
                 let ast.FieldInit[] mut out = [];
                 for i in inits { out.push(ast.FieldInit { name: i.name, span: i.span, value: expr(i.value, tps) }); }
-                ast.ExprKind.StructLit(if has(structs, n) { name(n) } else { n }, own out)
+                ast.ExprKind.StructLit(if has(structs, n) { name(n) } else { alias(n) }, own out)
             }
-            case Variant(en, vn, xs) -> ast.ExprKind.Variant(if has(enums, en) { name(en) } else { en }, vn, own exprs(xs, tps));
+            case Variant(en, vn, xs) -> ast.ExprKind.Variant(if has(enums, en) { name(en) } else { alias(en) }, vn, own exprs(xs, tps));
             case Cast(x, t) -> ast.ExprKind.Cast(own expr(x, tps), own ty(t, tps));
             case Try(x) -> ast.ExprKind.Try(own expr(x, tps));
             case Own(x) -> ast.ExprKind.Own(own expr(x, tps));

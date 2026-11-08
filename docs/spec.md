@@ -61,6 +61,30 @@ fn main() {
 - 構造体の値を print すると、型の名前はモジュール名つきで出る（`geom.Point { x: 3, y: 4 }`）。
 - エラーの位置は、そのモジュールのファイルの中で示す。
 
+### 1.2 標準ライブラリ
+
+```
+use std.strings;
+use std.lists;
+fn main() {
+    print(strings.pad_left("42", 5, "0"));     // 00042
+    let i64[] xs = [3, 1, 4];
+    print(lists.sum(xs), lists.max(xs).unwrap_or(0));   // 8 4
+}
+```
+
+- `use std.名前;` で標準ライブラリのモジュールを使う。jabberwock で書いたモジュールで、コンパイラ（jabberwock・jwc）の中に入っている（ソースはリポジトリの `std/`）。
+- 使う側では、ふつうのモジュールと同じく `名前.関数` と書く（`std.` はつけない）。変数や引数に `名前` はつけられない。
+- 同じフォルダに `名前.jw` があっても、`use std.名前;` は標準ライブラリを使う（`use 名前;` ならそのファイル）。
+  同じファイルに `use 名前;` と `use std.名前;` を両方は書けない。どのモジュールの中からでも使える。
+- エラーの位置は `std/名前.jw` の中で示す。
+- 今あるモジュール:
+
+| モジュール | 関数 |
+|---|---|
+| `std.strings` | `pad_left(s, 幅, 埋める字)` `pad_right` `center` `trim_start(s)` `trim_end(s)` `words(s)`（空白で区切る） `rfind(s, sub)` → `Option<i64>` `count(s, sub)`（重ならない回数） `to_base(x, 基数)` `hex(x)` `parse_int(s, 基数)` → `Option<i64>` `is_space(c)` `is_digit(c)` `is_alpha(c)` |
+| `std.lists` | `sum(a)` `sum_f64(a)` `min(a)` / `max(a)` → `Option<i64>` `range_of(from, to)` `slice(a, from, to)` / `slice_str` `extend(ref mut a, ref mut b)`（b の要素を a の後ろへ動かす） `any(a, f)` `all(a, f)` `binary_search(a, x)` → `Result<i64, i64>`（なければ入れる位置を Err で） |
+
 ## 2. 字句
 
 | 種類 | 書き方 |
@@ -939,7 +963,7 @@ loop {
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | interface の値から元の構造体を取り出す（型で分岐） | これから |
 | `f32`・文字型 | これから |
-| フォルダを分けたモジュール（`use a.b;`）・メソッドやフィールドごとの `pub` | これから |
+| フォルダを分けたモジュール（`use a.b;`。標準ライブラリの `use std.名前;` だけはできる）・メソッドやフィールドごとの `pub` | これから |
 | 辞書のキーに構造体を使う | これから |
 | 写しの中の own を取り出すのを、実行前（型検査）のエラーにする | これから（今は実行時エラー。7.1） |
 | 構造体のフィールドに関数の値を置く・メソッドを値にする | これから |

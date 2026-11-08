@@ -191,8 +191,13 @@ impl Parser {
             if *self.peek() == Tok::Use {
                 // `use geom;`: 同じフォルダの geom.jw を使う
                 self.bump();
-                let span = self.span();
-                let name = self.expect_ident("モジュールの名前")?;
+                let mut span = self.span();
+                let mut name = self.expect_ident("モジュールの名前")?;
+                // `use std.json;`: 標準ライブラリ。書いた名前は `json`
+                if name == "std" && self.eat(Tok::Dot) {
+                    span = self.span();
+                    name = self.expect_ident("標準ライブラリのモジュールの名前")?;
+                }
                 self.expect(Tok::Semi, "`;`")?;
                 if uses.iter().any(|(n, _)| *n == name) {
                     return Err(Diagnostic::new(format!("`use {}` が二回あります", name)).primary(span, "ここが二回目"));

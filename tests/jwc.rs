@@ -263,11 +263,24 @@ fn ast_with_modules() {
         ("dot_end", "use util;\nfn main() { util.; }\n"),
         ("twice", "use util;\nuse util;\nfn main() {}\n"),
         ("bad_mod", "use bad;\nfn main() {}\n"),
+        // 標準ライブラリ（同じ名前のファイル strings.jw があっても使わない）
+        ("strings", "pub fn str pad_left(str s) { s }\n"),
+        ("std_main", "use std.strings;\nuse std.lists;\nfn main() {\n    print(strings.pad_left(\"42\", 5, \"0\"));\n    print(\"[\" + strings.pad_right(\"ab\", 4, \".\") + \"]\");\n    print(\"[\" + strings.center(\"ab\", 7, \"*\") + \"]\");\n    print(\"[\" + strings.trim_start(\"  hi \") + \"]\");\n    print(\"[\" + strings.trim_end(\"  hi \\n\") + \"]\");\n    let ws = strings.words(\"  a bc\\tdef  \");\n    let j = ws.join(\",\"); print(\"{ws.len()} {j}\");\n    print(strings.rfind(\"abcabc\", \"bc\").unwrap_or(-1));\n    print(strings.count(\"aaaa\", \"aa\"));\n    print(strings.hex(255));\n    print(strings.to_base(-10, 2));\n    print(strings.parse_int(\"-ff\", 16).unwrap_or(0));\n    print(strings.parse_int(\"zz\", 10).is_none());\n    print(strings.is_digit(\"7\"));\n    let i64[] mut xs = [3, 1, 4, 1, 5];\n    print(lists.sum(xs));\n    print(lists.max(xs).unwrap_or(0));\n    print(lists.min(xs).unwrap_or(0));\n    let i64[] mut ys = [9, 2];\n    lists.extend(ref mut xs, ref mut ys);\n    print(\"{xs.len()} {ys.len()} {xs[6]}\");\n    print(lists.slice(xs, 1, 3).len());\n    print(lists.any(xs, (x) -> x > 8));\n    print(lists.all(xs, (x) -> x > 0));\n    let s = lists.range_of(0, 10);\n    print(lists.binary_search(s, 7).unwrap_or(-1));\n    match lists.binary_search(s, 70) { case Ok(i) -> print(i); case Err(i) -> print(\"ins {i}\"); }\n}\n"),
+        ("std_mod", "use std.strings;\nuse fmtx;\nfn main() { let strings.Nope x = 1; }\n"),
+        ("fmtx", "use std.lists;\npub fn i64 total(ref i64[] a) { lists.sum(a) }\n"),
+        ("std_use", "use fmtx;\nuse std.lists;\nfn main() { let i64[] a = [1, 2]; print(fmtx.total(a), lists.max(a).unwrap_or(0)); }\n"),
+        ("std_missing", "use std.nope;\nfn main() {}\n"),
+        ("std_twice", "use std.lists;\nuse std.lists;\nfn main() {}\n"),
+        ("std_var", "use std.lists;\nfn main() { let lists = 1; }\n"),
+        ("std_bare", "use std;\nfn main() {}\n"),
     ];
     for (n, s) in files {
         std::fs::write(dir.join(format!("{}.jw", n)), s).unwrap();
     }
-    for n in ["ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod"] {
+    for n in [
+        "ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod", "std_main", "std_mod", "std_use", "std_missing",
+        "std_twice", "std_var", "std_bare",
+    ] {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));
         same_irs(&dir.join(format!("{}.jw", n)));
@@ -371,6 +384,36 @@ fn runtime_is_up_to_date() {
     }
     let got = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(got == want, "jwc/runtime.jw が runtime/jw_rt.c と合っていません。`JWC_REGEN=1 cargo test --test jwc runtime_is_up_to_date` で作り直してください");
+}
+
+/// jwc/stdlib.jw: 標準ライブラリ（std/）のソースを文字列にしたもの
+fn stdlib_jw() -> String {
+    let mut out = String::from(
+        "// 標準ライブラリ（リポジトリの std/）を文字列にしたもの。`use std.名前;` で読む（modules.jw）。\n\
+         // 手で書き換えない: std/ を直したら `JWC_REGEN=1 cargo test --test jwc stdlib_is_up_to_date` で作り直す。\n\n\
+         /// `std.名前` のソース\n\
+         pub fn Option<str> source(str name) {\n",
+    );
+    for (name, src) in jabberwock::stdlib::MODULES {
+        let body = src.replace('\\', "\\\\").replace('{', "{{").replace('}', "}}");
+        out += &format!("    if name == \"{}\" {{\n        return Some(\"\"\"\n{}\"\"\");\n    }}\n", name, body);
+    }
+    out += "    None\n}\n\n/// 標準ライブラリのモジュールの名前\npub fn str[] names() {\n    [";
+    let names: Vec<String> = jabberwock::stdlib::names().iter().map(|n| format!("\"{}\"", n)).collect();
+    out += &names.join(", ");
+    out += "]\n}\n";
+    out
+}
+
+#[test]
+fn stdlib_is_up_to_date() {
+    let path = root().join("jwc/stdlib.jw");
+    let want = stdlib_jw();
+    if std::env::var("JWC_REGEN").is_ok() {
+        std::fs::write(&path, &want).unwrap();
+    }
+    let got = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(got == want, "jwc/stdlib.jw が std/ と合っていません。`JWC_REGEN=1 cargo test --test jwc stdlib_is_up_to_date` で作り直してください");
 }
 
 /// `jwc build` で作った実行ファイルが、interp と同じものを出す

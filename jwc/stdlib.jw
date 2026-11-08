@@ -1,0 +1,271 @@
+// 標準ライブラリ（リポジトリの std/）を文字列にしたもの。`use std.名前;` で読む（modules.jw）。
+// 手で書き換えない: std/ を直したら `JWC_REGEN=1 cargo test --test jwc stdlib_is_up_to_date` で作り直す。
+
+/// `std.名前` のソース
+pub fn Option<str> source(str name) {
+    if name == "lists" {
+        return Some("""
+// std.lists: リストの便利な関数。`use std.lists;` で `lists.sum(xs)` のように使う。
+
+/// 合計
+pub fn i64 sum(ref i64[] a) {{
+    let mut t = 0;
+    for x in a {{ t += x; }}
+    t
+}}
+
+/// 小数の合計
+pub fn f64 sum_f64(ref f64[] a) {{
+    let mut t = 0.0;
+    for x in a {{ t += x; }}
+    t
+}}
+
+/// いちばん小さい要素（空なら None）
+pub fn Option<i64> min(ref i64[] a) {{
+    if a.len() == 0 {{ return None; }}
+    let mut m = a[0];
+    for x in a {{ if x < m {{ m = x; }} }}
+    Some(m)
+}}
+
+/// いちばん大きい要素（空なら None）
+pub fn Option<i64> max(ref i64[] a) {{
+    if a.len() == 0 {{ return None; }}
+    let mut m = a[0];
+    for x in a {{ if x > m {{ m = x; }} }}
+    Some(m)
+}}
+
+/// from から to の手前までの整数のリスト
+pub fn i64[] range_of(i64 from, i64 to) {{
+    let i64[] mut out = [];
+    for i in range(from, to) {{ out.push(i); }}
+    out
+}}
+
+/// a の from から to の手前までを写したリスト（範囲は 0〜len に切り詰める）
+pub fn i64[] slice(ref i64[] a, i64 from, i64 to) {{
+    let i64[] mut out = [];
+    let mut i = from.max(0);
+    let end = to.min(a.len());
+    while i < end {{
+        out.push(a[i]);
+        i += 1;
+    }}
+    out
+}}
+
+/// 文字列のリストの部分（`slice` の str 版）
+pub fn str[] slice_str(ref str[] a, i64 from, i64 to) {{
+    let str[] mut out = [];
+    let mut i = from.max(0);
+    let end = to.min(a.len());
+    while i < end {{
+        out.push(a[i]);
+        i += 1;
+    }}
+    out
+}}
+
+/// b の要素をすべて a の後ろに足す（b は空になる）
+pub fn extend<T>(ref mut T[] a, ref mut T[] b) {{
+    b.reverse();
+    while b.len() > 0 {{
+        match b.pop() {{
+            case Some(x) -> a.push(x);
+            case None -> {{}}
+        }}
+    }}
+}}
+
+/// f が真になる要素があるか
+pub fn bool any(ref i64[] a, fn bool(i64) f) {{
+    for x in a {{ if f(x) {{ return true; }} }}
+    false
+}}
+
+/// すべての要素で f が真か（空なら真）
+pub fn bool all(ref i64[] a, fn bool(i64) f) {{
+    for x in a {{ if !f(x) {{ return false; }} }}
+    true
+}}
+
+/// 並んだリスト a で x を二分探索する。あればその位置、なければ Err(入れるべき位置)
+pub fn Result<i64, i64> binary_search(ref i64[] a, i64 x) {{
+    let mut lo = 0;
+    let mut hi = a.len();
+    while lo < hi {{
+        let mid = lo + (hi - lo) / 2;
+        if a[mid] == x {{ return Ok(mid); }}
+        if a[mid] < x {{ lo = mid + 1; }} else {{ hi = mid; }}
+    }}
+    Err(lo)
+}}
+""");
+    }
+    if name == "strings" {
+        return Some("""
+// std.strings: 文字列の便利な関数。`use std.strings;` で `strings.pad_left(s, 5, "0")` のように使う。
+// 長さと位置は、文字列のメソッドと同じく文字単位。
+
+/// s の左を fill で埋めて、width 文字にする（もう width 以上ならそのまま。fill は 1 文字）
+pub fn str pad_left(str s, i64 width, str fill) {{
+    let n = s.len();
+    if n >= width {{ return s; }}
+    fill.repeat(width - n) + s
+}}
+
+/// s の右を fill で埋めて、width 文字にする
+pub fn str pad_right(str s, i64 width, str fill) {{
+    let n = s.len();
+    if n >= width {{ return s; }}
+    s + fill.repeat(width - n)
+}}
+
+/// s を真ん中に置いて、左右を fill で埋める（割り切れないときは右を多くする）
+pub fn str center(str s, i64 width, str fill) {{
+    let n = s.len();
+    if n >= width {{ return s; }}
+    let left = (width - n) / 2;
+    fill.repeat(left) + s + fill.repeat(width - n - left)
+}}
+
+/// 空白（スペース・タブ・改行・復帰）か
+pub fn bool is_space(str c) {{
+    c == " " || c == "\\t" || c == "\\n" || c == "\\r"
+}}
+
+/// 1 文字が 0〜9 か
+pub fn bool is_digit(str c) {{
+    c.len() == 1 && c.code() >= 48 && c.code() <= 57
+}}
+
+/// 1 文字が英字（a〜z・A〜Z）か
+pub fn bool is_alpha(str c) {{
+    if c.len() != 1 {{ return false; }}
+    let k = c.code();
+    (k >= 65 && k <= 90) || (k >= 97 && k <= 122)
+}}
+
+/// 左の空白を取る
+pub fn str trim_start(str s) {{
+    let cs = s.chars();
+    let mut i = 0;
+    while i < cs.len() && is_space(cs[i]) {{ i += 1; }}
+    s.slice(i, cs.len())
+}}
+
+/// 右の空白を取る
+pub fn str trim_end(str s) {{
+    let cs = s.chars();
+    let mut j = cs.len();
+    while j > 0 && is_space(cs[j - 1]) {{ j -= 1; }}
+    s.slice(0, j)
+}}
+
+/// 空白で区切った語（空の語は入れない）
+pub fn str[] words(str s) {{
+    let str[] mut out = [];
+    let mut cur = "";
+    for c in s.chars() {{
+        if is_space(c) {{
+            if cur.len() > 0 {{
+                out.push(cur);
+                cur = "";
+            }}
+        }} else {{
+            cur += c;
+        }}
+    }}
+    if cur.len() > 0 {{ out.push(cur); }}
+    out
+}}
+
+/// sub が最後に現れる位置
+pub fn Option<i64> rfind(str s, str sub) {{
+    let Option<i64> mut found = None;
+    let mut from = 0;
+    loop {{
+        match s.slice(from, s.len()).find(sub) {{
+            case Some(i) -> {{
+                found = Some(from + i);
+                from = from + i + 1;
+                if sub.len() == 0 || from > s.len() {{ break; }}
+            }}
+            case None -> break;
+        }}
+    }}
+    found
+}}
+
+/// sub が重ならずに何回現れるか（sub が空なら 0）
+pub fn i64 count(str s, str sub) {{
+    if sub.len() == 0 {{ return 0; }}
+    let mut n = 0;
+    let mut from = 0;
+    loop {{
+        match s.slice(from, s.len()).find(sub) {{
+            case Some(i) -> {{
+                n += 1;
+                from = from + i + sub.len();
+            }}
+            case None -> break;
+        }}
+    }}
+    n
+}}
+
+/// 整数を base 進数（2〜36）の文字列にする。英字は小文字
+pub fn str to_base(i64 x, i64 base) {{
+    assert(base >= 2 && base <= 36);
+    let digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+    if x == 0 {{ return "0"; }}
+    let neg = x < 0;
+    let mut out = "";
+    let mut v = x;
+    while v != 0 {{
+        let mut d = v % base;
+        if d < 0 {{ d = -d; }}
+        out = digits.slice(d, d + 1) + out;
+        v = v / base;
+    }}
+    if neg {{ "-" + out }} else {{ out }}
+}}
+
+/// 16 進数の文字列（`to_base(x, 16)`）
+pub fn str hex(i64 x) {{
+    to_base(x, 16)
+}}
+
+/// base 進数（2〜36）の文字列を読む。前に `-` を書ける。大文字も読む。読めなければ None
+pub fn Option<i64> parse_int(str s, i64 base) {{
+    assert(base >= 2 && base <= 36);
+    let cs = s.chars();
+    if cs.len() == 0 {{ return None; }}
+    let mut i = 0;
+    let neg = cs[0] == "-";
+    if neg || cs[0] == "+" {{ i = 1; }}
+    if i >= cs.len() {{ return None; }}
+    let mut v = 0;
+    while i < cs.len() {{
+        let k = cs[i].code();
+        let mut d = 99;
+        if k >= 48 && k <= 57 {{ d = k - 48; }}
+        if k >= 97 && k <= 122 {{ d = k - 97 + 10; }}
+        if k >= 65 && k <= 90 {{ d = k - 65 + 10; }}
+        if d >= base {{ return None; }}
+        if neg {{ v = v * base - d; }} else {{ v = v * base + d; }}
+        i += 1;
+    }}
+    Some(v)
+}}
+""");
+    }
+    None
+}
+
+/// 標準ライブラリのモジュールの名前
+pub fn str[] names() {
+    ["lists", "strings"]
+}

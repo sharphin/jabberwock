@@ -12,6 +12,7 @@ pub mod native;
 pub mod parser;
 pub mod project;
 mod sort;
+pub mod stdlib;
 pub mod threads;
 pub mod types;
 

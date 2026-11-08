@@ -471,6 +471,42 @@ fn math_and_bytes_match_interp() {
 }
 
 #[test]
+fn std_modules_match_interp() {
+    same_as_interp("stdmods", "use std.strings;
+use std.lists;
+fn main() {
+    print(strings.pad_left(\"42\", 5, \"0\"));
+    print(\"[\" + strings.pad_right(\"ab\", 4, \".\") + \"]\");
+    print(\"[\" + strings.center(\"ab\", 7, \"*\") + \"]\");
+    print(\"[\" + strings.trim_start(\"  hi \") + \"]\");
+    print(\"[\" + strings.trim_end(\"  hi \\n\") + \"]\");
+    let ws = strings.words(\"  a bc\\tdef  \");
+    let j = ws.join(\",\"); print(\"{ws.len()} {j}\");
+    print(strings.rfind(\"abcabc\", \"bc\").unwrap_or(-1));
+    print(strings.count(\"aaaa\", \"aa\"));
+    print(strings.hex(255));
+    print(strings.to_base(-10, 2));
+    print(strings.parse_int(\"-ff\", 16).unwrap_or(0));
+    print(strings.parse_int(\"zz\", 10).is_none());
+    print(strings.is_digit(\"7\"));
+    let i64[] mut xs = [3, 1, 4, 1, 5];
+    print(lists.sum(xs));
+    print(lists.max(xs).unwrap_or(0));
+    print(lists.min(xs).unwrap_or(0));
+    let i64[] mut ys = [9, 2];
+    lists.extend(ref mut xs, ref mut ys);
+    print(\"{xs.len()} {ys.len()} {xs[6]}\");
+    print(lists.slice(xs, 1, 3).len());
+    print(lists.any(xs, (x) -> x > 8));
+    print(lists.all(xs, (x) -> x > 0));
+    let s = lists.range_of(0, 10);
+    print(lists.binary_search(s, 7).unwrap_or(-1));
+    match lists.binary_search(s, 70) { case Ok(i) -> print(i); case Err(i) -> print(\"ins {i}\"); }
+}
+");
+}
+
+#[test]
 fn find_and_assert_eq_match_interp() {
     same_as_interp(
         "findeq",
