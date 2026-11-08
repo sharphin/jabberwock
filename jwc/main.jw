@@ -48,13 +48,13 @@ const PRELUDE = "enum Option<T> {{\n" +
 fn str escape(str s) {
     let mut out = "";
     for c in s.chars() {
-        if c == "\\" { out += "\\\\"; }
-        else if c == "\"" { out += "\\\""; }
-        else if c == "\n" { out += "\\n"; }
-        else if c == "\t" { out += "\\t"; }
-        else if c == "\r" { out += "\\r"; }
-        else if c == "\0" { out += "\\0"; }
-        else { out += c; }
+        if c == '\\' { out += "\\\\"; }
+        else if c == '"' { out += "\\\""; }
+        else if c == '\n' { out += "\\n"; }
+        else if c == '\t' { out += "\\t"; }
+        else if c == '\r' { out += "\\r"; }
+        else if c == '\0' { out += "\\0"; }
+        else { out += c.to_str(); }
     }
     out
 }
@@ -96,7 +96,7 @@ fn Result<ast.Program, diag.Diag> parse_all(ref mut modules.Loader l, str src) {
 fn str dir_of(str path) {
     let mut cut = 0;
     for (i, c) in path.chars() {
-        if c == "/" || c == "\\" { cut = i + 1; }
+        if c == '/' || c == '\\' { cut = i + 1; }
     }
     path.slice(0, cut)
 }

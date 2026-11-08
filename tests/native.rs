@@ -499,7 +499,7 @@ fn main() {
     }
     let s = \"héllo\";
     let mut out = \"\";
-    for x in s.chars() { out += x; }
+    for x in s.chars() { out += x.to_str(); }
     print(out, 'é' as u32);
     print(m['z']);
 }
@@ -553,7 +553,6 @@ fn main() {
     print(strings.to_base(-10, 2));
     print(strings.parse_int(\"-ff\", 16).unwrap_or(0));
     print(strings.parse_int(\"zz\", 10).is_none());
-    print(strings.is_digit(\"7\"));
     let i64[] mut xs = [3, 1, 4, 1, 5];
     print(lists.sum(xs));
     print(lists.max(xs).unwrap_or(0));

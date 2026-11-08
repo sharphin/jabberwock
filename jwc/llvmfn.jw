@@ -2097,7 +2097,10 @@ struct FnGen {
             let lp = b.val("getelementptr i8, ptr " + s + ", i64 8");
             return Ok(llvm.vt(b.val("load i64, ptr " + lp), ty.i64t()));
         }
-        if name == "chars" { return Ok(list_of(s, "jw_str_chars_list", "")); }
+        if name == "chars" {
+            let x = list_of(s, "jw_str_chars_list", "");
+            return Ok(llvm.vt(x.v, ty.Ty.List(own ty.Ty.Int("char"))));
+        }
         if name == "bytes" {
             let x = list_of(s, "jw_str_bytes", "");
             return Ok(llvm.vt(x.v, ty.Ty.List(own ty.Ty.Int("u8"))));

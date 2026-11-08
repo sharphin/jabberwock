@@ -4614,7 +4614,7 @@ fn main() {
     print(chr(97), chr(233), chr(35486), chr(128512), chr(0).byte_len());
     let mut n = 0;
     for c in "x9_".chars() {
-        let k = c.code();
+        let k = c as i64;
         if k >= 48 && k <= 57 { n += 1; }
     }
     let u8[] b = "AZ".bytes();
@@ -4698,7 +4698,7 @@ enum Expr {
 
 fn Result<Tok[], str> lex(str src) {
     let Tok[] mut out = [];
-    let cs = src.chars();
+    let cs = src.chars().map((c) -> c.to_str());
     let mut i = 0;
     while i < cs.len() {
         let c = cs[i];
@@ -6479,7 +6479,7 @@ fn main() {
     }
     let s = "héllo";
     let mut out = "";
-    for x in s.chars() { out += x; }
+    for x in s.chars() { out += x.to_str(); }
     print(out, 'é' as u32);
     print(m['z']);
 }

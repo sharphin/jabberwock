@@ -3351,7 +3351,7 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
     Ok(match name {
         "len" => Value::Int(text.chars().count() as i128, IntTy::I64),
         "byte_len" => Value::Int(text.len() as i128, IntTy::I64),
-        "chars" => Value::Array(text.chars().map(|c| string(c.to_string())).collect(), true),
+        "chars" => Value::Array(text.chars().map(|c| Value::Int(c as i128, IntTy::Char)).collect(), true),
         "bytes" => Value::Array(text.bytes().map(|b| Value::Int(b as i128, IntTy::U8)).collect(), true),
         "code" => match text.chars().next() {
             Some(c) => Value::Int(c as i128, IntTy::I64),

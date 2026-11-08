@@ -136,7 +136,7 @@ fn bytes_and_char_codes() {
     print(chr(97), chr(233), chr(35486), chr(128512), chr(0).byte_len());
     let mut n = 0;
     for c in \"x9_\".chars() {
-        let k = c.code();
+        let k = c as i64;
         if k >= 48 && k <= 57 { n += 1; }
     }
     let u8[] b = \"AZ\".bytes();

@@ -192,15 +192,15 @@ pub fn Const wrap(bool neg, u64 mag, str t) {
 fn str debug_str(str s) {
     let mut out = "\"";
     for c in s.chars() {
-        let k = c.code();
-        if c == "\\" { out += "\\\\"; }
-        else if c == "\"" { out += "\\\""; }
-        else if c == "\n" { out += "\\n"; }
-        else if c == "\t" { out += "\\t"; }
-        else if c == "\r" { out += "\\r"; }
-        else if c == "\0" { out += "\\0"; }
+        let k = c as i64;
+        if c == '\\' { out += "\\\\"; }
+        else if c == '"' { out += "\\\""; }
+        else if c == '\n' { out += "\\n"; }
+        else if c == '\t' { out += "\\t"; }
+        else if c == '\r' { out += "\\r"; }
+        else if c == '\0' { out += "\\0"; }
         else if k < 32 || (k >= 127 && k < 160) { out += "\\u{{" + hex_of(k) + "}}"; }
-        else { out += c; }
+        else { out += c.to_str(); }
     }
     out + "\""
 }

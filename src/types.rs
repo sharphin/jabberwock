@@ -2324,7 +2324,8 @@ impl<'a> Checker<'a> {
         let list = Ty::List(Box::new(Ty::Str));
         let (params, ret): (Vec<Ty>, Ty) = match name {
             "len" | "byte_len" => (vec![], I64),
-            "chars" | "lines" => (vec![], list),
+            "chars" => (vec![], Ty::List(Box::new(Ty::Int(IntTy::Char)))),
+            "lines" => (vec![], list),
             "bytes" => (vec![], Ty::List(Box::new(Ty::Int(IntTy::U8)))),
             "code" => (vec![], I64),
             "split" => (vec![Ty::Str], list),

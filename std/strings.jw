@@ -23,28 +23,11 @@ pub fn str center(str s, i64 width, str fill) {
     fill.repeat(left) + s + fill.repeat(width - n - left)
 }
 
-/// 空白（スペース・タブ・改行・復帰）か
-pub fn bool is_space(str c) {
-    c == " " || c == "\t" || c == "\n" || c == "\r"
-}
-
-/// 1 文字が 0〜9 か
-pub fn bool is_digit(str c) {
-    c.len() == 1 && c.code() >= 48 && c.code() <= 57
-}
-
-/// 1 文字が英字（a〜z・A〜Z）か
-pub fn bool is_alpha(str c) {
-    if c.len() != 1 { return false; }
-    let k = c.code();
-    (k >= 65 && k <= 90) || (k >= 97 && k <= 122)
-}
-
 /// 左の空白を取る
 pub fn str trim_start(str s) {
     let cs = s.chars();
     let mut i = 0;
-    while i < cs.len() && is_space(cs[i]) { i += 1; }
+    while i < cs.len() && cs[i].is_space() { i += 1; }
     s.slice(i, cs.len())
 }
 
@@ -52,7 +35,7 @@ pub fn str trim_start(str s) {
 pub fn str trim_end(str s) {
     let cs = s.chars();
     let mut j = cs.len();
-    while j > 0 && is_space(cs[j - 1]) { j -= 1; }
+    while j > 0 && cs[j - 1].is_space() { j -= 1; }
     s.slice(0, j)
 }
 
@@ -61,13 +44,13 @@ pub fn str[] words(str s) {
     let str[] mut out = [];
     let mut cur = "";
     for c in s.chars() {
-        if is_space(c) {
+        if c.is_space() {
             if cur.len() > 0 {
                 out.push(cur);
                 cur = "";
             }
         } else {
-            cur += c;
+            cur += c.to_str();
         }
     }
     if cur.len() > 0 { out.push(cur); }
@@ -136,12 +119,12 @@ pub fn Option<i64> parse_int(str s, i64 base) {
     let cs = s.chars();
     if cs.len() == 0 { return None; }
     let mut i = 0;
-    let neg = cs[0] == "-";
-    if neg || cs[0] == "+" { i = 1; }
+    let neg = cs[0] == '-';
+    if neg || cs[0] == '+' { i = 1; }
     if i >= cs.len() { return None; }
     let mut v = 0;
     while i < cs.len() {
-        let k = cs[i].code();
+        let k = cs[i] as i64;
         let mut d = 99;
         if k >= 48 && k <= 57 { d = k - 48; }
         if k >= 97 && k <= 122 { d = k - 97 + 10; }

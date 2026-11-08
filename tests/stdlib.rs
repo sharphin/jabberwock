@@ -41,12 +41,11 @@ fn main() {
     print(strings.hex(255), strings.to_base(-10, 2), strings.to_base(0, 7));
     print(strings.parse_int("-ff", 16).unwrap_or(0), strings.parse_int("Z", 36).unwrap_or(0));
     print(strings.parse_int("12a", 10).is_none(), strings.parse_int("-", 10).is_none());
-    print(strings.is_digit("7"), strings.is_digit("x"), strings.is_alpha("Q"), strings.is_space("\t"));
 }
 "#;
     assert_eq!(
         ok(src),
-        "00042\n[ab..]\n[**ab***]\n[abcdef]\n[hi ]\n[  hi]\n3 a,bc,def\n4 true\n2 0\nff -1010 0\n-255 35\ntrue true\ntrue false true true\n"
+        "00042\n[ab..]\n[**ab***]\n[abcdef]\n[hi ]\n[  hi]\n3 a,bc,def\n4 true\n2 0\nff -1010 0\n-255 35\ntrue true\n"
     );
 }
 

@@ -398,8 +398,8 @@ struct Lexer {
 }
 
 pub fn Result<Token[], diag.Diag> lex(str src) {
-    let cs = src.chars();
-    let codes = cs.map((c) -> c.code());
+    let codes = src.chars().map((c) -> c as i64);
+    let cs = src.chars().map((c) -> c.to_str());
     let mut l = Lexer { cs: cs, codes: codes, i: 0, line: 1, col: 1, out: [] };
     l.run()
 }

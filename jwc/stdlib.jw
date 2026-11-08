@@ -131,14 +131,14 @@ fn str pretty_at(ref Value v, i64 indent, i64 level) {{
 pub fn str quote(str s) {{
     let mut out = "\\"";
     for c in s.chars() {{
-        let k = c.code();
-        if c == "\\"" {{ out += "\\\\\\""; }}
-        else if c == "\\\\" {{ out += "\\\\\\\\"; }}
-        else if c == "\\n" {{ out += "\\\\n"; }}
-        else if c == "\\r" {{ out += "\\\\r"; }}
-        else if c == "\\t" {{ out += "\\\\t"; }}
+        let k = c as i64;
+        if c == '"' {{ out += "\\\\\\""; }}
+        else if c == '\\\\' {{ out += "\\\\\\\\"; }}
+        else if c == '\\n' {{ out += "\\\\n"; }}
+        else if c == '\\r' {{ out += "\\\\r"; }}
+        else if c == '\\t' {{ out += "\\\\t"; }}
         else if k < 32 {{ out += "\\\\u" + hex4(k); }}
-        else {{ out += c; }}
+        else {{ out += c.to_str(); }}
     }}
     out + "\\""
 }}
@@ -163,7 +163,7 @@ fn str number(f64 n) {{
 
 struct Reader {{
     str text;
-    str[] cs;
+    char[] cs;
     i64 i;
     i64 depth;
 
@@ -172,29 +172,32 @@ struct Reader {{
     }}
 
     fn mut space() {{
-        while i < cs.len() && (cs[i] == " " || cs[i] == "\\t" || cs[i] == "\\n" || cs[i] == "\\r") {{ i += 1; }}
+        while i < cs.len() && cs[i].is_space() {{ i += 1; }}
     }}
 
-    fn str peek() {{
-        if i < cs.len() {{ cs[i] }} else {{ "" }}
+    /// 今の文字（終わりなら `'\\0'`。JSON の文字列の外に \\0 は書けない）
+    fn char peek() {{
+        if i < cs.len() {{ cs[i] }} else {{ '\\0' }}
     }}
+
+    fn bool at_end() {{ i >= cs.len() }}
 
     fn mut Result<own Value, str> value() {{
         space();
+        if at_end() {{ return Err(fail("値がありません")); }}
         let c = peek();
-        if c == "" {{ return Err(fail("値がありません")); }}
-        if c == "{{{{" || c == "[" {{
+        if c == '{{' || c == '[' {{
             depth += 1;
             if depth > 500 {{ return Err(fail("入れ子が深すぎます")); }}
-            let r = if c == "{{{{" {{ object()? }} else {{ array()? }};
+            let r = if c == '{{' {{ object()? }} else {{ array()? }};
             depth -= 1;
             return Ok(r);
         }}
-        if c == "\\"" {{ return Ok(own Value.Str(string()?)); }}
-        if c == "t" {{ word("true")?; return Ok(own Value.Bool(true)); }}
-        if c == "f" {{ word("false")?; return Ok(own Value.Bool(false)); }}
-        if c == "n" {{ word("null")?; return Ok(own Value.Null); }}
-        if c == "-" || (c >= "0" && c <= "9") {{ return Ok(own Value.Num(num()?)); }}
+        if c == '"' {{ return Ok(own Value.Str(string()?)); }}
+        if c == 't' {{ word("true")?; return Ok(own Value.Bool(true)); }}
+        if c == 'f' {{ word("false")?; return Ok(own Value.Bool(false)); }}
+        if c == 'n' {{ word("null")?; return Ok(own Value.Null); }}
+        if c == '-' || c.is_digit() {{ return Ok(own Value.Num(num()?)); }}
         Err(fail("`{{c}}` から始まる値はありません"))
     }}
 
@@ -208,22 +211,22 @@ struct Reader {{
 
     fn mut Result<f64, str> num() {{
         let start = i;
-        if peek() == "-" {{ i += 1; }}
+        if peek() == '-' {{ i += 1; }}
         let digits_from = i;
-        while peek() >= "0" && peek() <= "9" && peek() != "" {{ i += 1; }}
+        while !at_end() && peek().is_digit() {{ i += 1; }}
         if i == digits_from {{ return Err(fail("数の書き方がおかしいです")); }}
-        if i - digits_from > 1 && cs[digits_from] == "0" {{ return Err(fail("数の先頭に 0 は書けません")); }}
-        if peek() == "." {{
+        if i - digits_from > 1 && cs[digits_from] == '0' {{ return Err(fail("数の先頭に 0 は書けません")); }}
+        if peek() == '.' {{
             i += 1;
             let f = i;
-            while peek() >= "0" && peek() <= "9" && peek() != "" {{ i += 1; }}
+            while !at_end() && peek().is_digit() {{ i += 1; }}
             if i == f {{ return Err(fail("小数点のあとに数字がありません")); }}
         }}
-        if peek() == "e" || peek() == "E" {{
+        if peek() == 'e' || peek() == 'E' {{
             i += 1;
-            if peek() == "+" || peek() == "-" {{ i += 1; }}
+            if peek() == '+' || peek() == '-' {{ i += 1; }}
             let e = i;
-            while peek() >= "0" && peek() <= "9" && peek() != "" {{ i += 1; }}
+            while !at_end() && peek().is_digit() {{ i += 1; }}
             if i == e {{ return Err(fail("指数に数字がありません")); }}
         }}
         match text.slice(start, i).to_float() {{
@@ -237,30 +240,31 @@ struct Reader {{
         let mut out = "";
         loop {{
             let c = peek();
-            if c == "" {{ return Err(fail("文字列が閉じていません")); }}
+            if at_end() {{ return Err(fail("文字列が閉じていません")); }}
             i += 1;
-            if c == "\\"" {{ break; }}
-            if c.code() < 32 {{ return Err(fail("文字列の中に制御文字があります")); }}
-            if c != "\\\\" {{
-                out += c;
+            if c == '"' {{ break; }}
+            if (c as i64) < 32 {{ return Err(fail("文字列の中に制御文字があります")); }}
+            if c != '\\\\' {{
+                out += c.to_str();
                 continue;
             }}
+            if at_end() {{ return Err(fail("文字列が閉じていません")); }}
             let e = peek();
             i += 1;
-            if e == "\\"" {{ out += "\\""; }}
-            else if e == "\\\\" {{ out += "\\\\"; }}
-            else if e == "/" {{ out += "/"; }}
-            else if e == "b" {{ out += "\\u{{8}}"; }}
-            else if e == "f" {{ out += "\\u{{c}}"; }}
-            else if e == "n" {{ out += "\\n"; }}
-            else if e == "r" {{ out += "\\r"; }}
-            else if e == "t" {{ out += "\\t"; }}
-            else if e == "u" {{
+            if e == '"' {{ out += "\\""; }}
+            else if e == '\\\\' {{ out += "\\\\"; }}
+            else if e == '/' {{ out += "/"; }}
+            else if e == 'b' {{ out += "\\u{{8}}"; }}
+            else if e == 'f' {{ out += "\\u{{c}}"; }}
+            else if e == 'n' {{ out += "\\n"; }}
+            else if e == 'r' {{ out += "\\r"; }}
+            else if e == 't' {{ out += "\\t"; }}
+            else if e == 'u' {{
                 let mut code = hex()?;
-                // サロゲートの組（😀）は 1 文字にする
-                if code >= 55296 && code <= 56319 && peek() == "\\\\" {{
+                // サロゲートの組（\\ud83d\\ude00 の形）は 1 文字にする
+                if code >= 55296 && code <= 56319 && peek() == '\\\\' {{
                     i += 1;
-                    if peek() != "u" {{ return Err(fail("サロゲートの組が途中です")); }}
+                    if peek() != 'u' {{ return Err(fail("サロゲートの組が途中です")); }}
                     i += 1;
                     let low = hex()?;
                     if low < 56320 || low > 57343 {{ return Err(fail("サロゲートの組が正しくありません")); }}
@@ -281,8 +285,8 @@ struct Reader {{
         let mut v = 0;
         for k in range(4) {{
             let c = peek();
-            if c == "" {{ return Err(fail("\\\\u のあとに 16 進数が 4 つ要ります")); }}
-            let d = c.code();
+            if at_end() {{ return Err(fail("\\\\u のあとに 16 進数が 4 つ要ります")); }}
+            let d = c as i64;
             let mut x = -1;
             if d >= 48 && d <= 57 {{ x = d - 48; }}
             if d >= 97 && d <= 102 {{ x = d - 87; }}
@@ -298,7 +302,7 @@ struct Reader {{
         i += 1;
         let (own Value)[] mut items = [];
         space();
-        if peek() == "]" {{
+        if peek() == ']' {{
             i += 1;
             return Ok(own Value.Arr(own items));
         }}
@@ -307,8 +311,8 @@ struct Reader {{
             space();
             let c = peek();
             i += 1;
-            if c == "]" {{ break; }}
-            if c != "," {{ i -= 1; return Err(fail("`,` か `]` が要ります")); }}
+            if c == ']' {{ break; }}
+            if c != ',' {{ i -= 1; return Err(fail("`,` か `]` が要ります")); }}
         }}
         Ok(own Value.Arr(own items))
     }}
@@ -317,23 +321,23 @@ struct Reader {{
         i += 1;
         let (own Value)[str] mut fields = [];
         space();
-        if peek() == "}}}}" {{
+        if peek() == '}}' {{
             i += 1;
             return Ok(own Value.Obj(own fields));
         }}
         loop {{
             space();
-            if peek() != "\\"" {{ return Err(fail("キー（文字列）が要ります")); }}
+            if peek() != '"' {{ return Err(fail("キー（文字列）が要ります")); }}
             let k = string()?;
             space();
-            if peek() != ":" {{ return Err(fail("`:` が要ります")); }}
+            if peek() != ':' {{ return Err(fail("`:` が要ります")); }}
             i += 1;
             fields[k] = value()?;
             space();
             let c = peek();
             i += 1;
-            if c == "}}}}" {{ break; }}
-            if c != "," {{ i -= 1; return Err(fail("`,` か `}}}}` が要ります")); }}
+            if c == '}}' {{ break; }}
+            if c != ',' {{ i -= 1; return Err(fail("`,` か `}}}}` が要ります")); }}
         }}
         Ok(own Value.Obj(own fields))
     }}
@@ -468,28 +472,11 @@ pub fn str center(str s, i64 width, str fill) {{
     fill.repeat(left) + s + fill.repeat(width - n - left)
 }}
 
-/// 空白（スペース・タブ・改行・復帰）か
-pub fn bool is_space(str c) {{
-    c == " " || c == "\\t" || c == "\\n" || c == "\\r"
-}}
-
-/// 1 文字が 0〜9 か
-pub fn bool is_digit(str c) {{
-    c.len() == 1 && c.code() >= 48 && c.code() <= 57
-}}
-
-/// 1 文字が英字（a〜z・A〜Z）か
-pub fn bool is_alpha(str c) {{
-    if c.len() != 1 {{ return false; }}
-    let k = c.code();
-    (k >= 65 && k <= 90) || (k >= 97 && k <= 122)
-}}
-
 /// 左の空白を取る
 pub fn str trim_start(str s) {{
     let cs = s.chars();
     let mut i = 0;
-    while i < cs.len() && is_space(cs[i]) {{ i += 1; }}
+    while i < cs.len() && cs[i].is_space() {{ i += 1; }}
     s.slice(i, cs.len())
 }}
 
@@ -497,7 +484,7 @@ pub fn str trim_start(str s) {{
 pub fn str trim_end(str s) {{
     let cs = s.chars();
     let mut j = cs.len();
-    while j > 0 && is_space(cs[j - 1]) {{ j -= 1; }}
+    while j > 0 && cs[j - 1].is_space() {{ j -= 1; }}
     s.slice(0, j)
 }}
 
@@ -506,13 +493,13 @@ pub fn str[] words(str s) {{
     let str[] mut out = [];
     let mut cur = "";
     for c in s.chars() {{
-        if is_space(c) {{
+        if c.is_space() {{
             if cur.len() > 0 {{
                 out.push(cur);
                 cur = "";
             }}
         }} else {{
-            cur += c;
+            cur += c.to_str();
         }}
     }}
     if cur.len() > 0 {{ out.push(cur); }}
@@ -581,12 +568,12 @@ pub fn Option<i64> parse_int(str s, i64 base) {{
     let cs = s.chars();
     if cs.len() == 0 {{ return None; }}
     let mut i = 0;
-    let neg = cs[0] == "-";
-    if neg || cs[0] == "+" {{ i = 1; }}
+    let neg = cs[0] == '-';
+    if neg || cs[0] == '+' {{ i = 1; }}
     if i >= cs.len() {{ return None; }}
     let mut v = 0;
     while i < cs.len() {{
-        let k = cs[i].code();
+        let k = cs[i] as i64;
         let mut d = 99;
         if k >= 48 && k <= 57 {{ d = k - 48; }}
         if k >= 97 && k <= 122 {{ d = k - 97 + 10; }}

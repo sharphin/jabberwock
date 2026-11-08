@@ -82,7 +82,7 @@ fn main() {
 
 | モジュール | 関数 |
 |---|---|
-| `std.strings` | `pad_left(s, 幅, 埋める字)` `pad_right` `center` `trim_start(s)` `trim_end(s)` `words(s)`（空白で区切る） `rfind(s, sub)` → `Option<i64>` `count(s, sub)`（重ならない回数） `to_base(x, 基数)` `hex(x)` `parse_int(s, 基数)` → `Option<i64>` `is_space(c)` `is_digit(c)` `is_alpha(c)` |
+| `std.strings` | `pad_left(s, 幅, 埋める字)` `pad_right` `center` `trim_start(s)` `trim_end(s)` `words(s)`（空白で区切る） `rfind(s, sub)` → `Option<i64>` `count(s, sub)`（重ならない回数） `to_base(x, 基数)` `hex(x)` `parse_int(s, 基数)` → `Option<i64>`（1 文字の判定は char のメソッド `c.is_digit()` など） |
 | `std.json` | `parse(text)` → `Result<own json.Value, str>` `stringify(ref v)` `pretty(ref v, 字下げ)` `quote(s)` `get_str(ref v, key)` / `get_num` / `get_bool` → `Option`。値は `enum Value { Null; Bool(bool b); Num(f64 n); Str(str s); Arr(own (own Value)[] items); Obj(own (own Value)[str] fields); }`（object は入れた順を覚える。`match ref *v { case Obj(f) -> ... }` で中を見る） |
 | `std.lists` | `sum(a)` `sum_f64(a)` `min(a)` / `max(a)` → `Option<i64>` `range_of(from, to)` `slice(a, from, to)` / `slice_str` `extend(ref mut a, ref mut b)`（b の要素を a の後ろへ動かす） `any(a, f)` `all(a, f)` `binary_search(a, x)` → `Result<i64, i64>`（なければ入れる位置を Err で） |
 
@@ -439,7 +439,7 @@ match "42".to_int() {
 |---|---|---|
 | `len()` | `i64` | 文字数 |
 | `byte_len()` | `i64` | バイト数（UTF-8）。`"日本語".byte_len()` は 9 |
-| `chars()` | `str[]` | 1 文字ずつのリスト（1 文字の str） |
+| `chars()` | `char[]` | 1 文字ずつのリスト（[3.5](#35-文字)。1 文字の str が要るなら `c.to_str()`） |
 | `bytes()` | `u8[]` | バイト（UTF-8）のリスト |
 | `code()` | `i64` | 1 文字目の番号（Unicode）。`"a".code()` は 97。空の文字列なら実行時エラー |
 | `lines()` | `str[]` | 行ごとのリスト（改行は含まない） |

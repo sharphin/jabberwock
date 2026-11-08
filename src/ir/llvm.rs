@@ -4014,7 +4014,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let lp = self.b.val(format!("getelementptr i8, ptr {}, i64 8", s));
                 (self.b.val(format!("load i64, ptr {}", lp)), i64t)
             }
-            "chars" => list_of(self, "jw_str_chars_list", ""),
+            "chars" => {
+                let (v, _) = list_of(self, "jw_str_chars_list", "");
+                (v, Ty::List(Box::new(Ty::Int(IntTy::Char))))
+            }
             "bytes" => {
                 let (v, _) = list_of(self, "jw_str_bytes", "");
                 (v, Ty::List(Box::new(Ty::Int(IntTy::U8))))

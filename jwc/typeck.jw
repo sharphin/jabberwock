@@ -52,7 +52,7 @@ fn bool is_builtin(str n) {
 fn i64 last_dot(str s) {
     let mut at = -1;
     for (i, c) in s.chars() {
-        if c == "." { at = i; }
+        if c == '.' { at = i; }
     }
     at
 }
@@ -2555,7 +2555,9 @@ pub struct Checker {
         let mut ret = ty.Ty.Unit;
         if name == "len" || name == "byte_len" || name == "code" {
             ret = ty.i64t();
-        } else if name == "chars" || name == "lines" {
+        } else if name == "chars" {
+            ret = ty.Ty.List(own ty.Ty.Int("char"));
+        } else if name == "lines" {
             ret = ty.Ty.List(own ty.Ty.Str);
         } else if name == "bytes" {
             ret = ty.Ty.List(own ty.Ty.Int("u8"));
