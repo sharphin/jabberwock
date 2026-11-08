@@ -1610,7 +1610,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 };
                 let mut ops = vec![x];
                 ops.extend(vals);
-                let kind = if matches!(inner, Ty::Float) { "f64" } else { "int" };
+                let kind = match inner {
+                    Ty::Float => "f64",
+                    Ty::Int(IntTy::Char) => "char",
+                    _ => "int",
+                };
                 let r = self.temp_of(ty, Rvalue::Builtin(format!("{}.{}", kind, name), ops, sp), sp);
                 self.drop_temp(&temp, sp);
                 Ok(r)

@@ -41,6 +41,9 @@ pub enum IntTy {
     U64,
     /// 配列の添字などに使う符号なし。幅は 64 ビットだが、u64 とは別の型
     Usize,
+    /// 文字（Unicode の文字の番号。0〜0x10FFFF でサロゲートを除く）。実行時は 32 ビットの符号なし整数だが、
+    /// 型検査は計算・自動の変換・数の書き方を許さない（`is_char`）
+    Char,
 }
 
 impl IntTy {
@@ -55,6 +58,7 @@ impl IntTy {
             "u32" => IntTy::U32,
             "u64" => IntTy::U64,
             "usize" => IntTy::Usize,
+            "char" => IntTy::Char,
             _ => return None,
         })
     }
@@ -70,6 +74,7 @@ impl IntTy {
             IntTy::U32 => "u32",
             IntTy::U64 => "u64",
             IntTy::Usize => "usize",
+            IntTy::Char => "char",
         }
     }
 
@@ -77,7 +82,7 @@ impl IntTy {
         match self {
             IntTy::I8 | IntTy::U8 => 8,
             IntTy::I16 | IntTy::U16 => 16,
-            IntTy::I32 | IntTy::U32 => 32,
+            IntTy::I32 | IntTy::U32 | IntTy::Char => 32,
             IntTy::I64 | IntTy::U64 | IntTy::Usize => 64,
         }
     }
@@ -103,6 +108,9 @@ impl IntTy {
     }
 
     pub fn contains(self, v: i128) -> bool {
+        if self == IntTy::Char {
+            return u32::try_from(v).ok().and_then(char::from_u32).is_some();
+        }
         self.min() <= v && v <= self.max()
     }
 
@@ -122,6 +130,10 @@ impl IntTy {
     pub fn widens_to(self, to: IntTy) -> bool {
         if self == to {
             return true;
+        }
+        // 文字は数とまぜない
+        if self == IntTy::Char || to == IntTy::Char {
+            return false;
         }
         if self == IntTy::Usize || to == IntTy::Usize {
             return to == IntTy::Usize && matches!(self, IntTy::U8 | IntTy::U16 | IntTy::U32);

@@ -471,6 +471,106 @@ fn math_and_bytes_match_interp() {
 }
 
 #[test]
+fn chars_match_interp() {
+    same_as_interp("chars", "struct Tok { char c; i64 n; }
+fn main() {
+    let c = 'a';
+    let char d = 'Z';
+    print(c, d, '日', '\\n' as u32, '\\u{1F600}');
+    print(\"x{c}y\");
+    print(c < d, c == 'a', c != d, c.to_upper(), d.to_lower(), '5'.is_digit(), ' '.is_space());
+    print('q'.is_alpha(), '_'.is_alnum(), 'Q'.is_upper(), 'q'.is_lower(), '@'.is_alpha(), '['.is_alpha());
+    let n = c as u32;
+    print(n, (n + 1).to_char().unwrap_or('?'), 0xD800.to_char().is_none(), (-1).to_char().is_none());
+    let u8 b = 66;
+    print(b as char, 'x'.to_str() + \"!\");
+    let char[] mut cs = ['c', 'a', 'b'];
+    cs.sort();
+    print(cs, cs.contains('b'), cs.index_of('c').unwrap_or(-1));
+    let i64[char] mut m = [];
+    m['x'] = 1;
+    m['y'] = 2;
+    print(m, m['y']);
+    let t = Tok { c: 'k', n: 1 };
+    print(t);
+    match c {
+        case 'a' -> print(\"is a\");
+        default -> print(\"other\");
+    }
+    let s = \"héllo\";
+    let mut out = \"\";
+    for x in s.chars() { out += x.to_str(); }
+    print(out, 'é' as u32);
+    print(m['z']);
+}
+");
+}
+
+#[test]
+fn std_json_matches_interp() {
+    same_as_interp("stdjson", "use std.json;
+fn main() {
+    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";
+    match json.parse(text) {
+        case Ok(v) -> {
+            print(json.stringify(v));
+            print(json.pretty(v, 2));
+            match ref *v {
+                case Obj(f) -> print(f.len(), f.contains(\"n\"));
+                default -> print(\"?\");
+            }
+            print(json.get_str(v, \"name\").unwrap_or(\"-\"), json.get_num(v, \"n\").is_none(), json.get_str(v, \"zz\").is_none());
+        }
+        case Err(e) -> print(e);
+    }
+    for bad in [\"\", \"[1,\", \"{{\\\"a\\\" 1}}\", \"tru\", \"\\\"abc\", \"[1] x\", \"01\", \"-\", \"\\\"\\\\x\\\"\"] {
+        match json.parse(bad) {
+            case Ok(v) -> print(\"ok?\", json.stringify(v));
+            case Err(e) -> print(e);
+        }
+    }
+    let own json.Value v = own json.Value.Arr(own [own json.Value.Str(\"a\\nb\"), own json.Value.Num(0.5)]);
+    print(json.stringify(v));
+}
+");
+}
+
+#[test]
+fn std_modules_match_interp() {
+    same_as_interp("stdmods", "use std.strings;
+use std.lists;
+fn main() {
+    print(strings.pad_left(\"42\", 5, \"0\"));
+    print(\"[\" + strings.pad_right(\"ab\", 4, \".\") + \"]\");
+    print(\"[\" + strings.center(\"ab\", 7, \"*\") + \"]\");
+    print(\"[\" + strings.trim_start(\"  hi \") + \"]\");
+    print(\"[\" + strings.trim_end(\"  hi \\n\") + \"]\");
+    let ws = strings.words(\"  a bc\\tdef  \");
+    let j = ws.join(\",\"); print(\"{ws.len()} {j}\");
+    print(strings.rfind(\"abcabc\", \"bc\").unwrap_or(-1));
+    print(strings.count(\"aaaa\", \"aa\"));
+    print(strings.hex(255));
+    print(strings.to_base(-10, 2));
+    print(strings.parse_int(\"-ff\", 16).unwrap_or(0));
+    print(strings.parse_int(\"zz\", 10).is_none());
+    let i64[] mut xs = [3, 1, 4, 1, 5];
+    print(lists.sum(xs));
+    print(lists.max(xs).unwrap_or(0));
+    print(lists.min(xs).unwrap_or(0));
+    let i64[] mut ys = [9, 2];
+    lists.extend(ref mut xs, ref mut ys);
+    print(\"{xs.len()} {ys.len()} {xs[6]}\");
+    print(lists.slice(xs, 1, 3).len());
+    print(lists.any(xs, (x) -> x > 8));
+    print(lists.all(xs, (x) -> x > 0));
+    let s = lists.range_of(0, 10);
+    print(lists.binary_search(s, 7).unwrap_or(-1));
+    match lists.binary_search(s, 70) { case Ok(i) -> print(i); case Err(i) -> print(\"ins {i}\"); }
+}
+");
+}
+
+#[test]
 fn find_and_assert_eq_match_interp() {
     same_as_interp(
         "findeq",

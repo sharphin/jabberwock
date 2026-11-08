@@ -389,8 +389,34 @@ _Noreturn void jw_fail_dangling(const WSite *use, const WSite *borrowed, void *b
 }
 
 // 整数を 10 進の文字にする（buf は 21 バイト以上）。書いた長さを返す
+// is_unsigned: 0 符号つき・1 符号なし・2 文字（UTF-8 にする）
 static int fmt_int(char *buf, size_t n, int64_t v, int32_t is_unsigned) {
     (void)n;
+    if (is_unsigned == 2) {
+        uint32_t c = (uint32_t)v;
+        int len;
+        if (c < 0x80) {
+            buf[0] = (char)c;
+            len = 1;
+        } else if (c < 0x800) {
+            buf[0] = (char)(0xC0 | (c >> 6));
+            buf[1] = (char)(0x80 | (c & 0x3F));
+            len = 2;
+        } else if (c < 0x10000) {
+            buf[0] = (char)(0xE0 | (c >> 12));
+            buf[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+            buf[2] = (char)(0x80 | (c & 0x3F));
+            len = 3;
+        } else {
+            buf[0] = (char)(0xF0 | (c >> 18));
+            buf[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+            buf[2] = (char)(0x80 | ((c >> 6) & 0x3F));
+            buf[3] = (char)(0x80 | (c & 0x3F));
+            len = 4;
+        }
+        buf[len] = 0;
+        return len;
+    }
     char tmp[24];
     int k = 0;
     int neg = !is_unsigned && v < 0;
@@ -1455,13 +1481,16 @@ int64_t jw_str_chars(WStr *s) {
 
 static void push_str(WList *out, WStr *x) { *(WStr **)jw_list_push_slot(out, 8, NULL) = x; }
 
+// `s.chars()`: 文字（char、32 ビットの文字の番号）のリスト。文字列は正しい UTF-8
 void jw_str_chars_list(WStr *s, WList *out) {
     int64_t i = 0;
     while (i < s->len) {
-        int64_t j = i + 1;
-        while (j < s->len && is_cont((unsigned char)s->data[j])) j++;
-        push_str(out, jw_str_new(s->data + i, j - i));
-        i = j;
+        unsigned char b = (unsigned char)s->data[i];
+        int64_t n = b < 0x80 ? 1 : b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4;
+        uint32_t c = n == 1 ? b : n == 2 ? (b & 0x1F) : n == 3 ? (b & 0x0F) : (b & 0x07);
+        for (int64_t k = 1; k < n && i + k < s->len; k++) c = (c << 6) | ((unsigned char)s->data[i + k] & 0x3F);
+        *(uint32_t *)jw_list_push_slot(out, 4, NULL) = c;
+        i += n;
     }
 }
 

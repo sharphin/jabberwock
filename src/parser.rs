@@ -191,8 +191,13 @@ impl Parser {
             if *self.peek() == Tok::Use {
                 // `use geom;`: 同じフォルダの geom.jw を使う
                 self.bump();
-                let span = self.span();
-                let name = self.expect_ident("モジュールの名前")?;
+                let mut span = self.span();
+                let mut name = self.expect_ident("モジュールの名前")?;
+                // `use std.json;`: 標準ライブラリ。書いた名前は `json`
+                if name == "std" && self.eat(Tok::Dot) {
+                    span = self.span();
+                    name = self.expect_ident("標準ライブラリのモジュールの名前")?;
+                }
                 self.expect(Tok::Semi, "`;`")?;
                 if uses.iter().any(|(n, _)| *n == name) {
                     return Err(Diagnostic::new(format!("`use {}` が二回あります", name)).primary(span, "ここが二回目"));
@@ -863,6 +868,7 @@ impl Parser {
         let start = self.span();
         let pat = match self.peek().clone() {
             Tok::Int(n) => Pat::Int(n),
+            Tok::Char(c) => Pat::Int(c as i128),
             Tok::Str(s) => Pat::Str(s),
             Tok::True => Pat::Bool(true),
             Tok::False => Pat::Bool(false),
@@ -906,7 +912,7 @@ impl Parser {
                 }
             }
             _ => {
-                return Err(Diagnostic::new("case に書けるのは、今のところ整数・真偽値・文字列の値と enum の種類だけです")
+                return Err(Diagnostic::new("case に書けるのは、今のところ整数・文字・真偽値・文字列の値と enum の種類だけです")
                     .primary(start, format!("ここに {} があります", self.peek().describe())))
             }
         };
@@ -1294,6 +1300,12 @@ impl Parser {
             Tok::Str(s) => {
                 let span = self.bump().span;
                 Ok(Expr::new(ExprKind::Str(s), span))
+            }
+            // 文字 `'a'` は `97 as char` と同じ
+            Tok::Char(c) => {
+                let span = self.bump().span;
+                let code = Expr::new(ExprKind::Int(c as i128), span);
+                Ok(Expr::new(ExprKind::Cast(Box::new(code), TypeExpr { kind: TypeKind::Name("char".to_string()), span }), span))
             }
             Tok::LBrack => {
                 // `[1, 2, 3]` / `[0; 5]`

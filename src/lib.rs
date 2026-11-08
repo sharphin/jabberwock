@@ -12,6 +12,7 @@ pub mod native;
 pub mod parser;
 pub mod project;
 mod sort;
+pub mod stdlib;
 pub mod threads;
 pub mod types;
 
@@ -91,6 +92,7 @@ pub fn token_dump(src: &str, path: &str) -> String {
                 lexer::Tok::Float(s) => format!("{} {}", head("float"), s),
                 lexer::Tok::Int(n) => format!("{} {}", head("int"), n),
                 lexer::Tok::Str(s) => format!("{} \"{}\"", head("str"), escape(s)),
+                lexer::Tok::Char(c) => format!("{} {}", head("char"), *c as u32),
                 lexer::Tok::Eof => head("eof"),
                 lexer::Tok::Interp(parts) => {
                     lines.push(head("interp"));

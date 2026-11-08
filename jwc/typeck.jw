@@ -52,7 +52,7 @@ fn bool is_builtin(str n) {
 fn i64 last_dot(str s) {
     let mut at = -1;
     for (i, c) in s.chars() {
-        if c == "." { at = i; }
+        if c == '.' { at = i; }
     }
     at
 }
@@ -271,12 +271,24 @@ pub fn Info new_info(i64 n) {
 
 // ---------------------------------------------------------------- エラー
 
+/// 文字に計算を使った
+fn diag.Diag char_arith(i64 span) {
+    diag.make("文字は計算に使えません")
+        .at(span, "char は比べるだけ")
+        .with_note("文字の番号で計算するなら `c as u32` で整数にし、文字に戻すなら `n.to_char()` を使ってください")
+}
+
+fn bool is_char(ref ty.Ty t) { ty.is(t, "Int") && ty.int_of(t) == "char" }
+
 fn diag.Diag mismatch(ref ty.Ty want, ref ty.Ty got, i64 span) {
     let d = diag.make("型が合いません").at(span, "ここは `{ty.show(got)}` ですが、`{ty.show(want)}` が必要です");
     if ty.is(want, "Ref") && ty.ref_mut(want) && !ty.is(got, "Ref") {
         return d.with_note("書き換えられる引数（`ref mut`）には、呼ぶ側でも `ref mut x` と書いてください");
     }
     if ty.is(got, "Int") && ty.is(want, "Int") {
+        if is_char(got) || is_char(want) {
+            return d.with_note("文字と数は自動で変換しません（文字は `'a'`、文字の番号は `c as u32`）");
+        }
         return d.with_note("値が欠けるかもしれない変換は `as` で明示してください（例: `x as {ty.int_of(want)}`）");
     }
     d
@@ -1577,7 +1589,7 @@ pub struct Checker {
                     if is_const_tree(rng[i]) { continue; }
                     let at_t = expr(rng[i])?;
                     let at = ty.int_of(at_t);
-                    if at == "" {
+                    if at == "" || at == "char" {
                         let w = ty.i64t();
                         return Err(mismatch(w, at_t, rng[i].span));
                     }
@@ -1745,7 +1757,8 @@ pub struct Checker {
                 set_float_tree(e);
                 return Ok(ty.Ty.Float);
             }
-            let it = if hint_is(hint, "Int") { ty.int_of(hint.t) } else { "i64" };
+            // 数の書き方は文字にならない（`'a'` か `97 as char` と書く）
+            let it = if hint_is(hint, "Int") && ty.int_of(hint.t) != "char" { ty.int_of(hint.t) } else { "i64" };
             return const_expr(e, it);
         }
         match ref e.kind {
@@ -1901,12 +1914,32 @@ pub struct Checker {
             case Cast(x, te) -> {
                 let target = resolve(te)?;
                 if !(ty.is(target, "Int") || ty.is(target, "Float")) {
-                    return Err(diag.make("`as` で変換できるのは数の型（整数と f64）だけです")
+                    return Err(diag.make("`as` で変換できるのは数の型（整数と f64）と char だけです")
                         .at(te.span, "`{ty.show(target)}` は数の型ではありません"));
                 }
                 let got = expr(x)?;
                 if !(ty.is(got, "Int") || ty.is(got, "Float")) {
-                    return Err(diag.make("`as` で変換できるのは数（整数と f64）だけです").at(x.span, "ここは `{ty.show(got)}` です"));
+                    return Err(diag.make("`as` で変換できるのは数（整数と f64）と文字だけです").at(x.span, "ここは `{ty.show(got)}` です"));
+                }
+                if is_char(target) && !is_char(got) {
+                    // 文字にできるのは u8 と、文字の番号の定数（`'a'` は `97 as char`）だけ
+                    if is_const_tree(x) {
+                        let good = match const_val(x) {
+                            case Ok(v) -> ty.contains("char", v);
+                            case Err(ce) -> false;
+                        };
+                        if !good {
+                            return Err(diag.make("文字の番号ではありません")
+                                .at(x.span, "文字にできるのは 0〜0x10FFFF（0xD800〜0xDFFF を除く）です"));
+                        }
+                    } else if !(ty.is(got, "Int") && ty.int_of(got) == "u8") {
+                        return Err(diag.make("`as char` にできるのは u8 だけです")
+                            .at(x.span, "ここは `{ty.show(got)}` です")
+                            .with_note("ほかの整数は `n.to_char()`（文字の番号でなければ None）を使ってください"));
+                    }
+                }
+                if is_char(got) && ty.is(target, "Float") {
+                    return Err(diag.make("文字は f64 にできません").at(x.span, "`c as u32` のように整数にしてください"));
                 }
                 Ok(target)
             }
@@ -2099,12 +2132,13 @@ pub struct Checker {
                 }
                 let t = expr_h(x, hint)?;
                 if op == "~" {
-                    if ty.is(t, "Int") { return Ok(t); }
+                    if ty.is(t, "Int") && !is_char(t) { return Ok(t); }
                     return Err(diag.make("`~` は整数に使います").at(x.span, "ここは `{ty.show(t)}` です"));
                 }
                 if ty.is(t, "Float") { return Ok(t); }
                 let it = ty.int_of(t);
                 if it != "" && ty.signed(it) { return Ok(t); }
+                if it == "char" { return Err(char_arith(e.span)); }
                 if it != "" {
                     return Err(diag.make("符号なしの型 `{it}` に `-` は使えません")
                         .at(e.span, "ここ")
@@ -2185,6 +2219,7 @@ pub struct Checker {
             let lt0 = expr_h(l, h)?;
             let nh = none();
             let rt0 = expr_h(r, nh)?;
+            if is_char(lt0) || is_char(rt0) { return Err(char_arith(span)); }
             if ty.is(lt0, "Int") && ty.is(rt0, "Int") { return Ok(lt0); }
             return Err(diag.make("`<<` と `>>` は整数に使います").at(span, "`{ty.show(lt0)}` と `{ty.show(rt0)}` です"));
         }
@@ -2204,6 +2239,8 @@ pub struct Checker {
         }
         let bad = diag.make("型が合わない演算です").at(span, "`{ty.show(lt)}` と `{ty.show(rt)}` にはこの演算を使えません");
         let both_int = ty.is(lt, "Int") && ty.is(rt, "Int");
+        // 文字は比べるだけ（計算するなら `c as u32`）
+        if arith && (is_char(lt) || is_char(rt)) { return Err(char_arith(span)); }
         if op == "&&" || op == "||" {
             if !ty.is(lt, "Bool") { return Err(mismatch(ty.Ty.Bool, lt, l.span)); }
             if !ty.is(rt, "Bool") { return Err(mismatch(ty.Ty.Bool, rt, r.span)); }
@@ -2518,7 +2555,9 @@ pub struct Checker {
         let mut ret = ty.Ty.Unit;
         if name == "len" || name == "byte_len" || name == "code" {
             ret = ty.i64t();
-        } else if name == "chars" || name == "lines" {
+        } else if name == "chars" {
+            ret = ty.Ty.List(own ty.Ty.Int("char"));
+        } else if name == "lines" {
             ret = ty.Ty.List(own ty.Ty.Str);
         } else if name == "bytes" {
             ret = ty.Ty.List(own ty.Ty.Int("u8"));
@@ -2564,7 +2603,7 @@ pub struct Checker {
     fn mut Result<(), diag.Diag> index_value(ref ast.Expr idx) {
         let h = hint_of(ty.i64t());
         let t = expr_h(idx, h)?;
-        if ty.is(t, "Int") { return Ok(()); }
+        if ty.is(t, "Int") && !is_char(t) { return Ok(()); }
         Err(diag.make("添字は整数です").at(idx.span, "ここは `{ty.show(t)}` です"))
     }
 
@@ -2864,11 +2903,29 @@ pub struct Checker {
     /// 数のメソッド。f64 は `to_bits` / `sqrt` / `floor` などの数学の関数 / `pow` / `is_nan` / `fixed` / `abs` / `max` / `min`、
     /// 整数は `abs` / `max` / `min`。
     /// `max` / `min` の引数は receiver と同じ型（数の書き方はそれに合わせる）
+    /// 文字のメソッド（判定と大文字・小文字は ASCII の範囲だけ見る）
+    fn mut Result<ty.Ty, diag.Diag> char_method(str name, ref ast.Expr[] argv, i64 span) {
+        let ret = if name == "is_digit" || name == "is_alpha" || name == "is_alnum" || name == "is_space" || name == "is_upper" || name == "is_lower" {
+            ty.Ty.Bool
+        } else if name == "to_upper" || name == "to_lower" {
+            ty.Ty.Int("char")
+        } else if name == "to_str" {
+            ty.Ty.Str
+        } else {
+            return Err(diag.make("char にメソッド `{name}` はありません")
+                .at(span, "char のメソッドは `is_digit()`・`is_alpha()`・`is_alnum()`・`is_space()`・`is_upper()`・`is_lower()`・`to_upper()`・`to_lower()`・`to_str()` です"));
+        };
+        if argv.len() != 0 { return Err(arity_error(name, 0, argv.len(), span)); }
+        Ok(ret)
+    }
+
     fn mut Result<ty.Ty, diag.Diag> num_method(ref ty.Ty t, str name, ref ast.Expr[] argv, i64 span) {
         let float = ty.is(t, "Float");
         let mut arity = 0;
         let mut ret = ty.cl(t);
-        if float && name == "to_bits" {
+        if !float && name == "to_char" {
+            ret = ty.opt(ty.Ty.Int("char"));
+        } else if float && name == "to_bits" {
             ret = ty.Ty.Int("u64");
         } else if float && (name == "sqrt" || name == "floor" || name == "ceil" || name == "round" || name == "trunc"
                 || name == "exp" || name == "ln" || name == "log10" || name == "sin" || name == "cos" || name == "tan") {
@@ -2887,7 +2944,7 @@ pub struct Checker {
                 .at(span, "f64 のメソッドは `to_bits()`・`sqrt()`・`floor()`・`ceil()`・`round()`・`trunc()`・`exp()`・`ln()`・`log10()`・`sin()`・`cos()`・`tan()`・`pow(y)`・`is_nan()`・`fixed(n)`・`abs()`・`max(y)`・`min(y)` です"));
         } else {
             return Err(diag.make("`{ty.show(t)}` にメソッド `{name}` はありません")
-                .at(span, "整数のメソッドは `abs()`・`max(y)`・`min(y)` だけです"));
+                .at(span, "整数のメソッドは `abs()`・`max(y)`・`min(y)`・`to_char()` だけです"));
         }
         if argv.len() != arity { return Err(arity_error(name, arity, argv.len(), span)); }
         // `fixed(n)` の n は桁数（i64）。ほかは receiver と同じ型
@@ -2924,6 +2981,7 @@ pub struct Checker {
             return map_method(recv, rt, mk, mv, name, argv, span);
         }
         if k == "Str" { return str_method(name, argv, span); }
+        if is_char(inner) { return char_method(name, argv, span); }
         if k == "Float" || k == "Int" { return num_method(inner, name, argv, span); }
         if k == "Task" {
             let tr = ty.inner(inner);
@@ -3033,6 +3091,11 @@ pub struct Checker {
         let b = ty.int_of(rt);
         let c = ty.common(a, b);
         if c == "" {
+            if a == "char" || b == "char" {
+                return Err(diag.make("文字と数は比べられません")
+                    .at(span, "`{a}` と `{b}`")
+                    .with_note("文字は `'a'` と書きます。文字の番号と比べるなら `c as u32` で整数にしてください"));
+            }
             return Err(diag.make("型の違う整数どうしの演算です")
                 .at(span, "`{a}` と `{b}`")
                 .with_note("どちらかに値が欠けずにそろえられないので、`as` で型をそろえてください"));

@@ -385,6 +385,11 @@ struct Todo {
 }
 
 /// 整数を i64 に広げる
+/// 整数を文字にするときの形（jw_rt.c の `fmt_int`: 0 符号つき・1 符号なし・2 文字）
+pub fn str int_shape(str t) {
+    if t == "char" { "2" } else if ty.signed(t) { "0" } else { "1" }
+}
+
 pub fn str widen(ref mut B b, str v, str t) {
     if ty.bits(t) == 64 { return v; }
     b.val(ext(t) + " i{ty.bits(t)} " + v + " to i64")
@@ -1367,7 +1372,7 @@ pub struct Module {
             let it = ty.int_of(t);
             let v = b.val("load i{ty.bits(it)}, ptr %p");
             let w = widen(b, v, it);
-            b.op("call void @jw_sb_int(ptr %sb, i64 " + w + ", i32 " + (if ty.signed(it) { "0" } else { "1" }) + ")");
+            b.op("call void @jw_sb_int(ptr %sb, i64 " + w + ", i32 " + int_shape(it) + ")");
         } else if k == "Float" {
             let v = b.val("load double, ptr %p");
             b.op("call void @jw_sb_float(ptr %sb, double " + v + ")");

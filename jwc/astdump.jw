@@ -7,13 +7,13 @@ use typeck;
 pub fn str escape(str s) {
     let mut out = "";
     for c in s.chars() {
-        if c == "\\" { out += "\\\\"; }
-        else if c == "\"" { out += "\\\""; }
-        else if c == "\n" { out += "\\n"; }
-        else if c == "\t" { out += "\\t"; }
-        else if c == "\r" { out += "\\r"; }
-        else if c == "\0" { out += "\\0"; }
-        else { out += c; }
+        if c == '\\' { out += "\\\\"; }
+        else if c == '"' { out += "\\\""; }
+        else if c == '\n' { out += "\\n"; }
+        else if c == '\t' { out += "\\t"; }
+        else if c == '\r' { out += "\\r"; }
+        else if c == '\0' { out += "\\0"; }
+        else { out += c.to_str(); }
     }
     out
 }

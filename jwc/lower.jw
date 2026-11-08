@@ -1617,7 +1617,8 @@ pub struct Lower {
             let x = if rp.t == -2 { ir.clone_op(temp_op) } else { ir.copy_of(ir.clone_place(rp.p)) };
             let ir.Operand[] mut opv = [x];
             for v in vals.drain() { opv.push(v); }
-            let bn = if k == "Float" { "f64." + name } else if k == "Int" { "int." + name } else { "str." + name };
+            let bn = if k == "Float" { "f64." + name } else if k == "Int" && ty.int_of(inner) == "char" { "char." + name }
+                else if k == "Int" { "int." + name } else { "str." + name };
             let r = temp_of(et, ir.Rvalue.Builtin(bn, own opv, sp), sp);
             drop_temp_l(temp_l, sp);
             return Ok(r);

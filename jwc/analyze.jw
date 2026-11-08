@@ -470,7 +470,7 @@ struct Cx {
                 operands(ops, ref mut facts);
                 // 数と文字列の計算・表示のほかは、何が起きるか個別に見ない（スレッド・入出力など）
                 let pure = n == "print" || n == "eprint" || n == "concat" || n == "append" || n == "assert";
-                if !(pure || n.starts_with("f64.") || n.starts_with("int.") || n.starts_with("str.")) { kill_elems(ref mut facts); }
+                if !(pure || n.starts_with("f64.") || n.starts_with("int.") || n.starts_with("char.") || n.starts_with("str.")) { kill_elems(ref mut facts); }
                 0
             }
             case Map(ks, vs, s) -> {

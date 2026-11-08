@@ -1348,7 +1348,7 @@ impl<'p> Module<'p> {
             Ty::Int(i) => {
                 let v = b.val(format!("load i{}, ptr %p", i.bits()));
                 let w = widen(b, &v, *i);
-                b.op(format!("call void @jw_sb_int(ptr %sb, i64 {}, i32 {})", w, if i.signed() { 0 } else { 1 }));
+                b.op(format!("call void @jw_sb_int(ptr %sb, i64 {}, i32 {})", w, int_shape(*i)));
             }
             Ty::Float => {
                 let v = b.val("load double, ptr %p");
@@ -1831,6 +1831,15 @@ fn key_kind(k: &Ty) -> i32 {
         Ty::Str => 1,
         Ty::Bool => 2,
         _ => 0,
+    }
+}
+
+/// 整数を文字にするときの形（jw_rt.c の `fmt_int`: 0 符号つき・1 符号なし・2 文字）
+fn int_shape(t: IntTy) -> i32 {
+    match t {
+        IntTy::Char => 2,
+        t if t.signed() => 0,
+        _ => 1,
     }
 }
 
@@ -2423,13 +2432,16 @@ impl<'m, 'p> FnGen<'m, 'p> {
                                 r.fresh = Some(missing);
                             } else {
                                 let (_, ok) = self.b.if_true(&missing);
-                                let unsigned = matches!(&*kty, Ty::Int(t) if !t.signed());
+                                let shape = match &*kty {
+                                    Ty::Int(t) => int_shape(*t),
+                                    _ => 0,
+                                };
                                 let s = self.m.site(*key_span, "");
                                 self.b.op(format!(
                                     "call void @jw_fail_nokey(i32 {}, i64 {}, i32 {}, ptr {})",
                                     key_kind(&kty),
                                     k64,
-                                    unsigned as i32,
+                                    shape,
                                     s
                                 ));
                                 self.b.op("unreachable");
@@ -3208,7 +3220,7 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         // 整数は組み立てずにそのまま文字列にする
                         if let Ty::Int(i) = t {
                             let w = widen(&mut self.b, &v, i);
-                            let r = self.b.val(format!("call ptr @jw_str_int(i64 {}, i32 {})", w, !i.signed() as i32));
+                            let r = self.b.val(format!("call ptr @jw_str_int(i64 {}, i32 {})", w, int_shape(i)));
                             return Ok((r, Ty::Str));
                         }
                         let sb = self.b.val("call ptr @jw_sb_new()");
@@ -3886,6 +3898,65 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let v = self.b.val(format!("call double @llvm.{}.f64(double {}, double {})", f, vals[0].0, vals[1].0));
                 Ok((v, Ty::Float))
             }
+            // 文字の番号なら Some（0〜0x10FFFF で、0xD800〜0xDFFF でない）
+            "int.to_char" => {
+                let Ty::Int(i) = vals[0].1 else { unreachable!("an integer method on an integer") };
+                let w = widen(&mut self.b, &vals[0].0, i);
+                let inr = self.b.val(format!("icmp ule i64 {}, 1114111", w));
+                let off = self.b.val(format!("sub i64 {}, 55296", w));
+                let sur = self.b.val(format!("icmp uge i64 {}, 2048", off));
+                let ok = self.b.val(format!("and i1 {}, {}", inr, sur));
+                let c = self.b.val(format!("trunc i64 {} to i32", w));
+                let lt = self.m.lt(want)?;
+                let some = self.make_enum(want, "Some", vec![(c, Ty::Int(IntTy::Char))])?;
+                let none = self.make_enum(want, "None", Vec::new())?;
+                Ok((self.b.val(format!("select i1 {}, {} {}, {} {}", ok, lt, some, lt, none)), want.clone()))
+            }
+            // 文字のメソッド（ASCII の範囲だけ見る。interp の char_method と同じ）
+            _ if name.starts_with("char.") => {
+                let c = vals[0].0.clone();
+                let range = |me: &mut Self, lo: u32, n: u32, x: &str| {
+                    let d = me.b.val(format!("sub i32 {}, {}", x, lo));
+                    me.b.val(format!("icmp ult i32 {}, {}", d, n))
+                };
+                let v = match &name[5..] {
+                    "is_digit" => range(self, 48, 10, &c),
+                    "is_upper" => range(self, 65, 26, &c),
+                    "is_lower" => range(self, 97, 26, &c),
+                    "is_alpha" | "is_alnum" => {
+                        let folded = self.b.val(format!("or i32 {}, 32", c));
+                        let a = range(self, 97, 26, &folded);
+                        if name == "char.is_alpha" {
+                            a
+                        } else {
+                            let d = range(self, 48, 10, &c);
+                            self.b.val(format!("or i1 {}, {}", a, d))
+                        }
+                    }
+                    "is_space" => {
+                        let mut acc = self.b.val(format!("icmp eq i32 {}, 32", c));
+                        for k in [9, 10, 13] {
+                            let e = self.b.val(format!("icmp eq i32 {}, {}", c, k));
+                            acc = self.b.val(format!("or i1 {}, {}", acc, e));
+                        }
+                        acc
+                    }
+                    "to_upper" | "to_lower" => {
+                        let up = name == "char.to_upper";
+                        let hit = if up { range(self, 97, 26, &c) } else { range(self, 65, 26, &c) };
+                        let moved = self.b.val(format!("{} i32 {}, 32", if up { "sub" } else { "add" }, c));
+                        let r = self.b.val(format!("select i1 {}, i32 {}, i32 {}", hit, moved, c));
+                        return Ok((r, Ty::Int(IntTy::Char)));
+                    }
+                    "to_str" => {
+                        let w = self.b.val(format!("zext i32 {} to i64", c));
+                        let r = self.b.val(format!("call ptr @jw_str_int(i64 {}, i32 2)", w));
+                        return Ok((r, Ty::Str));
+                    }
+                    m => return Err(format!("文字のメソッド {}", m)),
+                };
+                Ok((v, Ty::Bool))
+            }
             // 整数の abs / max / min は比べて選ぶ（abs は一周する: 最小の値はそのまま）
             _ if name.starts_with("int.") => {
                 let Ty::Int(i) = vals[0].1 else { unreachable!("an integer method on an integer") };
@@ -3943,7 +4014,10 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let lp = self.b.val(format!("getelementptr i8, ptr {}, i64 8", s));
                 (self.b.val(format!("load i64, ptr {}", lp)), i64t)
             }
-            "chars" => list_of(self, "jw_str_chars_list", ""),
+            "chars" => {
+                let (v, _) = list_of(self, "jw_str_chars_list", "");
+                (v, Ty::List(Box::new(Ty::Int(IntTy::Char))))
+            }
             "bytes" => {
                 let (v, _) = list_of(self, "jw_str_bytes", "");
                 (v, Ty::List(Box::new(Ty::Int(IntTy::U8))))

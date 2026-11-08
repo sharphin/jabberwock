@@ -31,7 +31,7 @@ fn bool is_alpha(i64 c) { (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 
 
 fn Result<Tok[], str> lex(str src) {
     let Tok[] mut out = [];
-    let cs = src.chars();
+    let cs = src.chars().map((c) -> c.to_str());
     let mut i = 0;
     while i < cs.len() {
         let c = cs[i].code();

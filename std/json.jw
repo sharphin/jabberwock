@@ -1,0 +1,337 @@
+// std.json: JSON を読む・書く。`use std.json;` で `json.parse(text)` / `json.stringify(v)` のように使う。
+// 値は enum `json.Value`。配列と object は own で持つ（借りた match で受け取れるように）。object は入れた順を覚える。
+
+pub enum Value {
+    Null;
+    Bool(bool b);
+    Num(f64 n);
+    Str(str s);
+    Arr(own (own Value)[] items);
+    Obj(own (own Value)[str] fields);
+}
+
+/// JSON の文字列を読む。読めなければ Err（何文字目で何が悪いか）
+pub fn Result<own Value, str> parse(str text) {
+    let mut p = Reader { text: text, cs: text.chars(), i: 0, depth: 0 };
+    let v = p.value()?;
+    p.space();
+    if p.i < p.cs.len() {
+        return Err(p.fail("値のあとに余分な文字があります"));
+    }
+    Ok(v)
+}
+
+/// object のキー key の文字列（なければ・文字列でなければ None）
+pub fn Option<str> get_str(ref Value v, str key) {
+    match v {
+        case Obj(f) -> {
+            for (k, x) in f {
+                if k == key {
+                    return match x {
+                        case Str(s) -> Some(s);
+                        default -> None;
+                    };
+                }
+            }
+            None
+        }
+        default -> None;
+    }
+}
+
+/// object のキー key の数（なければ・数でなければ None）
+pub fn Option<f64> get_num(ref Value v, str key) {
+    match v {
+        case Obj(f) -> {
+            for (k, x) in f {
+                if k == key {
+                    return match x {
+                        case Num(n) -> Some(n);
+                        default -> None;
+                    };
+                }
+            }
+            None
+        }
+        default -> None;
+    }
+}
+
+/// object のキー key の真偽値（なければ・真偽値でなければ None）
+pub fn Option<bool> get_bool(ref Value v, str key) {
+    match v {
+        case Obj(f) -> {
+            for (k, x) in f {
+                if k == key {
+                    return match x {
+                        case Bool(b) -> Some(b);
+                        default -> None;
+                    };
+                }
+            }
+            None
+        }
+        default -> None;
+    }
+}
+
+/// JSON の文字列にする（空白なし）
+pub fn str stringify(ref Value v) {
+    match v {
+        case Null -> "null";
+        case Bool(b) -> if b { "true" } else { "false" };
+        case Num(n) -> number(n);
+        case Str(s) -> quote(s);
+        case Arr(items) -> {
+            let str[] mut parts = [];
+            for x in items { parts.push(stringify(x)); }
+            "[" + parts.join(",") + "]"
+        }
+        case Obj(fields) -> {
+            let str[] mut parts = [];
+            for (k, x) in fields { parts.push(quote(k) + ":" + stringify(x)); }
+            "{{" + parts.join(",") + "}}"
+        }
+    }
+}
+
+/// 字下げつきの JSON の文字列にする（indent は字下げの空白の数）
+pub fn str pretty(ref Value v, i64 indent) {
+    pretty_at(v, indent, 0)
+}
+
+fn str pretty_at(ref Value v, i64 indent, i64 level) {
+    let inner = " ".repeat(indent * (level + 1));
+    let outer = " ".repeat(indent * level);
+    match v {
+        case Arr(items) -> {
+            if items.len() == 0 { return "[]"; }
+            let str[] mut parts = [];
+            for x in items { parts.push(inner + pretty_at(x, indent, level + 1)); }
+            "[\n" + parts.join(",\n") + "\n" + outer + "]"
+        }
+        case Obj(fields) -> {
+            if fields.len() == 0 { return "{{}}"; }
+            let str[] mut parts = [];
+            for (k, x) in fields { parts.push(inner + quote(k) + ": " + pretty_at(x, indent, level + 1)); }
+            "{{\n" + parts.join(",\n") + "\n" + outer + "}}"
+        }
+        default -> stringify(v);
+    }
+}
+
+/// 文字列を JSON の文字列の書き方にする（`"` で囲み、`"` `\` と制御文字をエスケープする）
+pub fn str quote(str s) {
+    let mut out = "\"";
+    for c in s.chars() {
+        let k = c as i64;
+        if c == '"' { out += "\\\""; }
+        else if c == '\\' { out += "\\\\"; }
+        else if c == '\n' { out += "\\n"; }
+        else if c == '\r' { out += "\\r"; }
+        else if c == '\t' { out += "\\t"; }
+        else if k < 32 { out += "\\u" + hex4(k); }
+        else { out += c.to_str(); }
+    }
+    out + "\""
+}
+
+fn str hex4(i64 k) {
+    let digits = "0123456789abcdef";
+    let mut out = "";
+    let mut v = k;
+    for i in range(4) {
+        out = digits.slice(v % 16, v % 16 + 1) + out;
+        v = v / 16;
+    }
+    out
+}
+
+/// 数の書き方（整数なら小数点なし。NaN と無限大は JSON にないので null）
+fn str number(f64 n) {
+    if n.is_nan() || n - n != 0.0 { return "null"; }
+    if n == n.trunc() && n.abs() < 1000000000000000.0 { return "{n as i64}"; }
+    "{n}"
+}
+
+struct Reader {
+    str text;
+    char[] cs;
+    i64 i;
+    i64 depth;
+
+    fn str fail(str why) {
+        "JSON を読めません（{i + 1} 文字目）: {why}"
+    }
+
+    fn mut space() {
+        while i < cs.len() && cs[i].is_space() { i += 1; }
+    }
+
+    /// 今の文字（終わりなら `'\0'`。JSON の文字列の外に \0 は書けない）
+    fn char peek() {
+        if i < cs.len() { cs[i] } else { '\0' }
+    }
+
+    fn bool at_end() { i >= cs.len() }
+
+    fn mut Result<own Value, str> value() {
+        space();
+        if at_end() { return Err(fail("値がありません")); }
+        let c = peek();
+        if c == '{' || c == '[' {
+            depth += 1;
+            if depth > 500 { return Err(fail("入れ子が深すぎます")); }
+            let r = if c == '{' { object()? } else { array()? };
+            depth -= 1;
+            return Ok(r);
+        }
+        if c == '"' { return Ok(own Value.Str(string()?)); }
+        if c == 't' { word("true")?; return Ok(own Value.Bool(true)); }
+        if c == 'f' { word("false")?; return Ok(own Value.Bool(false)); }
+        if c == 'n' { word("null")?; return Ok(own Value.Null); }
+        if c == '-' || c.is_digit() { return Ok(own Value.Num(num()?)); }
+        Err(fail("`{c}` から始まる値はありません"))
+    }
+
+    fn mut Result<(), str> word(str w) {
+        for c in w.chars() {
+            if peek() != c { return Err(fail("`{w}` と書くところです")); }
+            i += 1;
+        }
+        Ok(())
+    }
+
+    fn mut Result<f64, str> num() {
+        let start = i;
+        if peek() == '-' { i += 1; }
+        let digits_from = i;
+        while !at_end() && peek().is_digit() { i += 1; }
+        if i == digits_from { return Err(fail("数の書き方がおかしいです")); }
+        if i - digits_from > 1 && cs[digits_from] == '0' { return Err(fail("数の先頭に 0 は書けません")); }
+        if peek() == '.' {
+            i += 1;
+            let f = i;
+            while !at_end() && peek().is_digit() { i += 1; }
+            if i == f { return Err(fail("小数点のあとに数字がありません")); }
+        }
+        if peek() == 'e' || peek() == 'E' {
+            i += 1;
+            if peek() == '+' || peek() == '-' { i += 1; }
+            let e = i;
+            while !at_end() && peek().is_digit() { i += 1; }
+            if i == e { return Err(fail("指数に数字がありません")); }
+        }
+        match text.slice(start, i).to_float() {
+            case Some(v) -> Ok(v);
+            case None -> Err(fail("数の書き方がおかしいです"));
+        }
+    }
+
+    fn mut Result<str, str> string() {
+        i += 1;
+        let mut out = "";
+        loop {
+            let c = peek();
+            if at_end() { return Err(fail("文字列が閉じていません")); }
+            i += 1;
+            if c == '"' { break; }
+            if (c as i64) < 32 { return Err(fail("文字列の中に制御文字があります")); }
+            if c != '\\' {
+                out += c.to_str();
+                continue;
+            }
+            if at_end() { return Err(fail("文字列が閉じていません")); }
+            let e = peek();
+            i += 1;
+            if e == '"' { out += "\""; }
+            else if e == '\\' { out += "\\"; }
+            else if e == '/' { out += "/"; }
+            else if e == 'b' { out += "\u{8}"; }
+            else if e == 'f' { out += "\u{c}"; }
+            else if e == 'n' { out += "\n"; }
+            else if e == 'r' { out += "\r"; }
+            else if e == 't' { out += "\t"; }
+            else if e == 'u' {
+                let mut code = hex()?;
+                // サロゲートの組（\ud83d\ude00 の形）は 1 文字にする
+                if code >= 55296 && code <= 56319 && peek() == '\\' {
+                    i += 1;
+                    if peek() != 'u' { return Err(fail("サロゲートの組が途中です")); }
+                    i += 1;
+                    let low = hex()?;
+                    if low < 56320 || low > 57343 { return Err(fail("サロゲートの組が正しくありません")); }
+                    code = 65536 + (code - 55296) * 1024 + (low - 56320);
+                }
+                match code.to_char() {
+                    case Some(ch) -> out += ch.to_str();
+                    case None -> return Err(fail("文字の番号が正しくありません"));
+                }
+            } else {
+                return Err(fail("未知のエスケープ `\\{e}` です"));
+            }
+        }
+        Ok(out)
+    }
+
+    fn mut Result<i64, str> hex() {
+        let mut v = 0;
+        for k in range(4) {
+            let c = peek();
+            if at_end() { return Err(fail("\\u のあとに 16 進数が 4 つ要ります")); }
+            let d = c as i64;
+            let mut x = -1;
+            if d >= 48 && d <= 57 { x = d - 48; }
+            if d >= 97 && d <= 102 { x = d - 87; }
+            if d >= 65 && d <= 70 { x = d - 55; }
+            if x < 0 { return Err(fail("\\u のあとに 16 進数が 4 つ要ります")); }
+            v = v * 16 + x;
+            i += 1;
+        }
+        Ok(v)
+    }
+
+    fn mut Result<own Value, str> array() {
+        i += 1;
+        let (own Value)[] mut items = [];
+        space();
+        if peek() == ']' {
+            i += 1;
+            return Ok(own Value.Arr(own items));
+        }
+        loop {
+            items.push(value()?);
+            space();
+            let c = peek();
+            i += 1;
+            if c == ']' { break; }
+            if c != ',' { i -= 1; return Err(fail("`,` か `]` が要ります")); }
+        }
+        Ok(own Value.Arr(own items))
+    }
+
+    fn mut Result<own Value, str> object() {
+        i += 1;
+        let (own Value)[str] mut fields = [];
+        space();
+        if peek() == '}' {
+            i += 1;
+            return Ok(own Value.Obj(own fields));
+        }
+        loop {
+            space();
+            if peek() != '"' { return Err(fail("キー（文字列）が要ります")); }
+            let k = string()?;
+            space();
+            if peek() != ':' { return Err(fail("`:` が要ります")); }
+            i += 1;
+            fields[k] = value()?;
+            space();
+            let c = peek();
+            i += 1;
+            if c == '}' { break; }
+            if c != ',' { i -= 1; return Err(fail("`,` か `}}` が要ります")); }
+        }
+        Ok(own Value.Obj(own fields))
+    }
+}

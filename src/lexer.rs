@@ -6,6 +6,8 @@ pub enum Tok {
     Float(String),
     Int(i128),
     Str(String),
+    /// 文字（`'a'`）
+    Char(char),
     /// `{...}` の埋め込みがある文字列 `"x = {x}"`
     Interp(Vec<StrPart>),
     Ident(String),
@@ -87,6 +89,7 @@ impl Tok {
             Tok::Int(n) => format!("整数 `{}`", n),
             Tok::Float(t) => format!("小数 `{}`", t),
             Tok::Str(_) | Tok::Interp(_) => "文字列".to_string(),
+            Tok::Char(_) => "文字".to_string(),
             Tok::Ident(s) => format!("名前 `{}`", s),
             Tok::Eof => "ファイルの終わり".to_string(),
             other => format!("`{}`", other.symbol()),
@@ -482,6 +485,55 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Diagnostic> {
                 };
                 let len = if line == start_line { col - start_col } else { open };
                 out.push(Token { tok, span: Span { file: 0, line: start_line, col: start_col, len } });
+            }
+            '\'' => {
+                // 文字 `'a'`。エスケープは文字列と同じ（と `\'`）
+                let at = Span { file: 0, line, col, len: 1 };
+                let (ch, n) = match (chars.get(i + 1).copied(), chars.get(i + 2).copied()) {
+                    (Some('\\'), Some('u')) if chars.get(i + 3) == Some(&'{') => {
+                        let close = (i + 4..chars.len()).find(|&k| chars[k] == '}' || chars[k] == '\'' || chars[k] == '\n');
+                        let code = close.filter(|&k| chars[k] == '}').and_then(|k| {
+                            let hex: String = chars[i + 4..k].iter().collect();
+                            u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).map(|c| (c, k))
+                        });
+                        let Some((c, k)) = code else {
+                            return Err(Diagnostic::new("文字の番号のエスケープが正しくありません").primary(
+                                Span { file: 0, line, col: col + 1, len: 2 },
+                                "`\\u{41}` のように、{ } の中に 16 進数で文字の番号を書きます",
+                            ));
+                        };
+                        (c, k + 1 - i)
+                    }
+                    (Some('\\'), esc) => {
+                        let mapped = match esc {
+                            Some('n') => '\n',
+                            Some('t') => '\t',
+                            Some('r') => '\r',
+                            Some('0') => '\0',
+                            Some('"') => '"',
+                            Some('\'') => '\'',
+                            Some('\\') => '\\',
+                            _ => {
+                                return Err(Diagnostic::new("未知のエスケープです").primary(
+                                    Span { file: 0, line, col: col + 1, len: 2 },
+                                    "使えるのは \\n \\t \\r \\0 \\' \\\" \\\\ \\u{...} です",
+                                ));
+                            }
+                        };
+                        (mapped, 3)
+                    }
+                    (Some('\'') | Some('\n') | None, _) => {
+                        return Err(Diagnostic::new("文字が空です").primary(at, "`'a'` のように、' ' の中に 1 文字書きます"));
+                    }
+                    (Some(c), _) => (c, 2),
+                };
+                if chars.get(i + n) != Some(&'\'') {
+                    return Err(Diagnostic::new("文字が閉じていません")
+                        .primary(at, "' ' の中には 1 文字だけ書けます（文字列なら \" \"）"));
+                }
+                out.push(Token { tok: Tok::Char(ch), span: Span { file: 0, line, col, len: n + 1 } });
+                i += n + 1;
+                col += n + 1;
             }
             _ => {
                 let next = chars.get(i + 1).copied();

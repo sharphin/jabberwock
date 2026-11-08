@@ -61,6 +61,31 @@ fn main() {
 - 構造体の値を print すると、型の名前はモジュール名つきで出る（`geom.Point { x: 3, y: 4 }`）。
 - エラーの位置は、そのモジュールのファイルの中で示す。
 
+### 1.2 標準ライブラリ
+
+```
+use std.strings;
+use std.lists;
+fn main() {
+    print(strings.pad_left("42", 5, "0"));     // 00042
+    let i64[] xs = [3, 1, 4];
+    print(lists.sum(xs), lists.max(xs).unwrap_or(0));   // 8 4
+}
+```
+
+- `use std.名前;` で標準ライブラリのモジュールを使う。jabberwock で書いたモジュールで、コンパイラ（jabberwock・jwc）の中に入っている（ソースはリポジトリの `std/`）。
+- 使う側では、ふつうのモジュールと同じく `名前.関数` と書く（`std.` はつけない）。変数や引数に `名前` はつけられない。
+- 同じフォルダに `名前.jw` があっても、`use std.名前;` は標準ライブラリを使う（`use 名前;` ならそのファイル）。
+  同じファイルに `use 名前;` と `use std.名前;` を両方は書けない。どのモジュールの中からでも使える。
+- エラーの位置は `std/名前.jw` の中で示す。
+- 今あるモジュール:
+
+| モジュール | 関数 |
+|---|---|
+| `std.strings` | `pad_left(s, 幅, 埋める字)` `pad_right` `center` `trim_start(s)` `trim_end(s)` `words(s)`（空白で区切る） `rfind(s, sub)` → `Option<i64>` `count(s, sub)`（重ならない回数） `to_base(x, 基数)` `hex(x)` `parse_int(s, 基数)` → `Option<i64>`（1 文字の判定は char のメソッド `c.is_digit()` など） |
+| `std.json` | `parse(text)` → `Result<own json.Value, str>` `stringify(ref v)` `pretty(ref v, 字下げ)` `quote(s)` `get_str(ref v, key)` / `get_num` / `get_bool` → `Option`。値は `enum Value { Null; Bool(bool b); Num(f64 n); Str(str s); Arr(own (own Value)[] items); Obj(own (own Value)[str] fields); }`（object は入れた順を覚える。`match ref *v { case Obj(f) -> ... }` で中を見る） |
+| `std.lists` | `sum(a)` `sum_f64(a)` `min(a)` / `max(a)` → `Option<i64>` `range_of(from, to)` `slice(a, from, to)` / `slice_str` `extend(ref mut a, ref mut b)`（b の要素を a の後ろへ動かす） `any(a, f)` `all(a, f)` `binary_search(a, x)` → `Result<i64, i64>`（なければ入れる位置を Err で） |
+
 ## 2. 字句
 
 | 種類 | 書き方 |
@@ -70,6 +95,7 @@ fn main() {
 | 整数 | `0`〜`18446744073709551615`。`0xff`（16 進）・`0b1010`（2 進）・`0o17`（8 進）とも書ける。`1_000_000` のように `_` で区切ってよい。型は使う先で決まる（[3.2](#32-数の書き方と型)） |
 | 小数 | `1.5`、`0.25`。`.` の前後に数字が要る（`1.` や `.5` は書けない）。型は `f64` |
 | 文字列 | `"..."`。使えるエスケープは `\n` `\t` `\r` `\0` `\"` `\\` と `\u{1F600}`（16 進で書いた文字の番号）。途中で改行はできない（改行を含むなら `"""..."""`。開きの `"""` の直後の改行は含めない。中では `"` をそのまま書ける）。`{式}` で値を埋め込める（`{{` `}}` は `{` `}` そのもの） |
+| 文字 | `'a'`・`'日'`。エスケープは文字列と同じものと `\'`（`'\n'`・`'\''`・`'\u{1F600}'`）。型は `char`（[3.5](#35-文字)） |
 | 真偽値 | `true` `false` |
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false` `use` `pub` `const`
@@ -88,6 +114,7 @@ fn main() {
 | `f64` | 小数（64 ビットの浮動小数点数。IEEE 754） |
 | `bool` | `true` / `false` |
 | `str` | 文字列（1 種類だけ） |
+| `char` | 文字（Unicode の文字 1 つ。[3.5](#35-文字)） |
 | 構造体名・enum 名 | 定義した型。型の引数があれば `Pair<i64>` のように書く |
 | `Option<T>` | `T` の値があるか、ないか（最初からある enum） |
 | `Result<T, E>` | 成功の値 `T` か、失敗の値 `E`（最初からある enum） |
@@ -131,6 +158,7 @@ fn main() {
 |---|---|---|
 | `x.sqrt()` | `f64` | 平方根（負の数は `NaN`） |
 | `x.abs()` | `f64`・整数 | 絶対値。整数は型の幅で一周する（`i64` の最小の値はそのまま）。符号なしの整数はそのまま |
+| `n.to_char()` | 整数 | 文字の番号 n の文字（`Option<char>`。番号が 0〜0x10FFFF でないか、0xD800〜0xDFFF なら `None`） |
 | `x.max(y)`・`x.min(y)` | `f64`・整数 | 大きいほう・小さいほう。`y` は `x` と同じ型（数の書き方は `x` の型になる。`a.max(0)`） |
 | `x.to_bits()` | `f64` | 上のとおり |
 | `x.floor()`・`x.ceil()`・`x.round()`・`x.trunc()` | `f64` | 切り下げ・切り上げ・四捨五入（ちょうど真ん中は 0 から遠いほう。`(-2.5).round()` は `-3.0`）・0 の方へ切り捨て。結果も `f64` |
@@ -162,6 +190,33 @@ fn main() {
 - 関数の引数・戻り値・構造体のフィールド・enum の中身には型を書く。
 - `let` は型を省略できる。省略すると初期値の型になる（前から順に決めるだけ）。
 - `ref mut T` は `ref T` が要るところにそのまま渡せる（逆はできない）。
+
+### 3.5 文字
+
+```
+let c = 'a';
+print(c, c.to_upper(), c as u32, '5'.is_digit());   // a A 97 true
+let n = 0x3042;
+print(n.to_char().unwrap_or('?'));                   // あ
+```
+
+- `char` は Unicode の文字 1 つ（文字の番号 0〜0x10FFFF。0xD800〜0xDFFF は除く）。コピーできる値。
+- 比べられる（`==` `<` など。文字の番号の大小）。計算（`+` など）はできない。
+- 数とは自動で変換しない（`let char c = 97;` も `c == 97` もエラー）。文字の番号は `c as u32`（ほかの整数型にもできる）。
+  整数から文字にするのは `n.to_char()`（`Option<char>`）。`as char` にできるのは `u8` と、文字の番号の定数（`'a'` は `97 as char` と同じ）だけ。
+- print と埋め込み（`"{c}"`）では文字そのものを出す。リストや構造体の中でも同じ（`[a, b]`）。
+- 辞書のキー・リストの `contains` / `index_of` / `sort`・match の case（`case 'a' ->`）に使える。
+
+| メソッド | 意味 |
+|---|---|
+| `c.is_digit()` | `0`〜`9` か |
+| `c.is_alpha()`・`c.is_alnum()` | 英字（`a`〜`z`・`A`〜`Z`）か・英字か数字か |
+| `c.is_upper()`・`c.is_lower()` | 英大文字か・英小文字か |
+| `c.is_space()` | スペース・タブ・改行（`\n` `\r`）か |
+| `c.to_upper()`・`c.to_lower()` | 英字の大文字・小文字（`char`。英字でなければそのまま） |
+| `c.to_str()` | 1 文字の文字列 |
+
+- 判定と大文字・小文字は ASCII の範囲だけを見る（`'é'.is_alpha()` は false）。
 
 ## 4. 変数
 
@@ -344,7 +399,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)。形を重ねてもよい）。
+- case に書けるのは、整数・文字・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)。形を重ねてもよい）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -384,7 +439,7 @@ match "42".to_int() {
 |---|---|---|
 | `len()` | `i64` | 文字数 |
 | `byte_len()` | `i64` | バイト数（UTF-8）。`"日本語".byte_len()` は 9 |
-| `chars()` | `str[]` | 1 文字ずつのリスト（文字型はまだないので、1 文字の str） |
+| `chars()` | `char[]` | 1 文字ずつのリスト（[3.5](#35-文字)。1 文字の str が要るなら `c.to_str()`） |
 | `bytes()` | `u8[]` | バイト（UTF-8）のリスト |
 | `code()` | `i64` | 1 文字目の番号（Unicode）。`"a".code()` は 97。空の文字列なら実行時エラー |
 | `lines()` | `str[]` | 行ごとのリスト（改行は含まない） |
@@ -938,8 +993,8 @@ loop {
 |---|---|
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | interface の値から元の構造体を取り出す（型で分岐） | これから |
-| `f32`・文字型 | これから |
-| フォルダを分けたモジュール（`use a.b;`）・メソッドやフィールドごとの `pub` | これから |
+| `f32` | これから |
+| フォルダを分けたモジュール（`use a.b;`。標準ライブラリの `use std.名前;` だけはできる）・メソッドやフィールドごとの `pub` | これから |
 | 辞書のキーに構造体を使う | これから |
 | 写しの中の own を取り出すのを、実行前（型検査）のエラーにする | これから（今は実行時エラー。7.1） |
 | 構造体のフィールドに関数の値を置く・メソッドを値にする | これから |
