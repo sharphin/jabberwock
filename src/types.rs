@@ -95,6 +95,9 @@ impl Ty {
 
 const I64: Ty = Ty::Int(IntTy::I64);
 
+/// f64 のメソッドの一覧（エラーの文。jwc/typeck.jw と同じ）
+const F64_METHODS: &str = "f64 のメソッドは `to_bits()`・`sqrt()`・`floor()`・`ceil()`・`round()`・`trunc()`・`exp()`・`ln()`・`log10()`・`sin()`・`cos()`・`tan()`・`pow(y)`・`is_nan()`・`fixed(n)`・`abs()`・`max(y)`・`min(y)` です";
+
 /// `from` の値を `to` の場所に入れられるか。`ref mut T` は `ref T` としても使える。
 /// 整数は値が欠けない変換（u8 → i64 など）なら自動で変換する
 fn assignable(from: &Ty, to: &Ty) -> bool {
@@ -2066,6 +2069,22 @@ impl<'a> Checker<'a> {
             "remove" => (1, elem.clone(), true),
             "insert" => (2, Ty::Unit, true),
             "reverse" => (0, Ty::Unit, true),
+            // 等しい要素を探す（比べ方は `==` と同じ。要素は数・真偽値・文字列）
+            "contains" | "index_of" => {
+                if !matches!(elem, Ty::Int(_) | Ty::Float | Ty::Bool | Ty::Str) || args.len() != 1 {
+                    return Err(Diagnostic::new(format!("{} は数・真偽値・文字列のリストに使います", name))
+                        .primary(span, format!("`{}` のリストです（探す値を 1 つ渡します）", elem.show())));
+                }
+                self.expect(&args[0], elem)?;
+                return Ok(if name == "contains" { Ty::Bool } else { Ty::Enum("Option".to_string(), vec![I64]) });
+            }
+            "to_str" => {
+                if *elem != Ty::Int(IntTy::U8) || !args.is_empty() {
+                    return Err(Diagnostic::new("to_str は u8 のリストに使います")
+                        .primary(span, format!("`{}` のリストです（引数はありません）", elem.show())));
+                }
+                return Ok(Ty::Enum("Option".to_string(), vec![Ty::Str]));
+            }
             "join" => {
                 if *elem != Ty::Str || args.len() != 1 {
                     return Err(Diagnostic::new("join は文字列のリストに使います")
@@ -2459,12 +2478,13 @@ impl<'a> Checker<'a> {
                 self.expect(&args[0], &I64)?;
                 return Ok(Ty::Str);
             }
-            "exit" | "read_file" | "write_file" | "run_command" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "run_output" => {
                 let str_list = Ty::List(Box::new(Ty::Str));
                 let (params, ret) = match name {
                     "exit" => (vec![Ty::Int(IntTy::I64)], Ty::Never),
                     "read_file" => (vec![Ty::Str], Ty::Str),
                     "write_file" => (vec![Ty::Str, Ty::Str], Ty::Unit),
+                    "run_output" => (vec![Ty::Str, str_list], Ty::Str),
                     _ => (vec![Ty::Str, str_list], Ty::Int(IntTy::I64)),
                 };
                 if args.len() != params.len() {
@@ -2474,6 +2494,23 @@ impl<'a> Checker<'a> {
                     self.expect(a, p)?;
                 }
                 return Ok(if ret == Ty::Never { ret } else { Ty::Enum("Result".to_string(), vec![ret, Ty::Str]) });
+            }
+            "now_ns" | "unix_ms" => {
+                if !args.is_empty() {
+                    return Err(arity_error(name, 0, args.len(), span));
+                }
+                return Ok(I64);
+            }
+            "sleep_ms" | "env_var" => {
+                if args.len() != 1 {
+                    return Err(arity_error(name, 1, args.len(), span));
+                }
+                if name == "sleep_ms" {
+                    self.expect(&args[0], &I64)?;
+                    return Ok(Ty::Unit);
+                }
+                self.expect(&args[0], &Ty::Str)?;
+                return Ok(Ty::Enum("Option".to_string(), vec![Ty::Str]));
             }
             "read_line" | "args" => {
                 if !args.is_empty() {
@@ -2496,6 +2533,14 @@ impl<'a> Checker<'a> {
                         .primary(span, "何を送るチャンネルか決める手がかりがない")
                         .note("`let chan<i64> c = chan();` のように型を書いてください")),
                 };
+            }
+            // 比べ方は `a == b` と同じ（数の書き方を相手に合わせる）
+            "assert_eq" => {
+                if args.len() != 2 {
+                    return Err(arity_error(name, 2, args.len(), span));
+                }
+                self.binary(BinOp::Eq, &args[0], &args[1], span, None)?;
+                return Ok(Ty::Unit);
             }
             "drop" | "assert" => {
                 if args.len() != 1 {
@@ -2549,19 +2594,25 @@ impl<'a> Checker<'a> {
     }
 
     /// `p.name(args)`。メソッドは `構造体名.name` という関数で、最初の引数が `this`（`ref 構造体`）
-    /// 数のメソッド。f64 は `to_bits` / `sqrt` / `abs` / `max` / `min`、整数は `abs` / `max` / `min`。
+    /// 数のメソッド。f64 は `to_bits` / `sqrt` / `floor` などの数学の関数 / `pow` / `is_nan` / `fixed` / `abs` / `max` / `min`、
+    /// 整数は `abs` / `max` / `min`。
     /// `max` / `min` の引数は receiver と同じ型（数の書き方はそれに合わせる）
     fn num_method(&mut self, t: &Ty, name: &str, args: &[Expr], span: Span) -> R<Ty> {
         let float = matches!(t, Ty::Float);
         let (arity, ret) = match name {
             "to_bits" if float => (0, Ty::Int(IntTy::U64)),
-            "sqrt" if float => (0, Ty::Float),
+            "sqrt" | "floor" | "ceil" | "round" | "trunc" | "exp" | "ln" | "log10" | "sin" | "cos" | "tan" if float => {
+                (0, Ty::Float)
+            }
+            "pow" if float => (1, Ty::Float),
+            "is_nan" if float => (0, Ty::Bool),
+            "fixed" if float => (1, Ty::Str),
             "abs" => (0, t.clone()),
             "max" | "min" => (1, t.clone()),
             _ if float => {
                 return Err(Diagnostic::new(format!("f64 にメソッド `{}` はありません", name)).primary(
                     span,
-                    "f64 のメソッドは `to_bits()`（ビットの並びを u64 で）・`sqrt()`・`abs()`・`max(y)`・`min(y)` だけです",
+                    F64_METHODS,
                 ))
             }
             _ => {
@@ -2573,7 +2624,8 @@ impl<'a> Checker<'a> {
             return Err(arity_error(name, arity, args.len(), span));
         }
         for a in args {
-            self.expect(a, t)?;
+            // `fixed(n)` の n は桁数（i64）。ほかは receiver と同じ型
+            self.expect(a, if name == "fixed" { &I64 } else { t })?;
         }
         Ok(ret)
     }

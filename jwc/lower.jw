@@ -10,6 +10,7 @@ use typeck;
 fn bool is_builtin(str n) {
     n == "print" || n == "eprint" || n == "drop" || n == "assert" || n == "read_line" || n == "args" || n == "spawn"
         || n == "chan" || n == "exit" || n == "read_file" || n == "write_file" || n == "run_command" || n == "chr"
+        || n == "now_ns" || n == "unix_ms" || n == "sleep_ms" || n == "env_var" || n == "run_output" || n == "assert_eq"
 }
 
 /// エラー表示に使う場所の名前（interp の `describe`）
@@ -1511,7 +1512,8 @@ pub struct Lower {
             for a in argv { strs.push(show(a)?); }
             return Ok(temp_of(ty.Ty.Unit, ir.Rvalue.Builtin(name, own strs, sp), sp));
         }
-        if name == "exit" || name == "read_file" || name == "write_file" || name == "run_command" || name == "chr" {
+        if name == "exit" || name == "read_file" || name == "write_file" || name == "run_command" || name == "chr"
+            || name == "now_ns" || name == "unix_ms" || name == "sleep_ms" || name == "env_var" || name == "run_output" || name == "assert_eq" {
             let opv = exprs(argv)?;
             if name != "exit" { return Ok(temp_of(et, ir.Rvalue.Builtin(name, own opv, sp), sp)); }
             // exit からは戻らない

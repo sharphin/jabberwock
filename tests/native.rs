@@ -447,6 +447,51 @@ fn sorting_matches_interp() {
 }
 
 #[test]
+fn math_and_bytes_match_interp() {
+    same_as_interp(
+        "mathbytes",
+        "fn main() {
+    let x = 2.5;
+    let own f64 p = own 9.75;
+    print(x.floor(), x.ceil(), x.round(), (-2.5).round(), x.trunc(), p.floor(), p.pow(2), (0.0 / 0.0).is_nan());
+    print((0.0).exp(), (1.0).ln(), (1000.0).log10(), (0.0).sin(), (0.0).cos(), (0.0).tan(), (2.0).pow(0.5));
+    print((3.14159).fixed(2), (2.5).fixed(0), (-0.5).fixed(0), (1.0 / 0.0).fixed(3), (0.0 / 0.0).fixed(1), \"{(7.0).fixed(3)}\");
+    let u8[] mut c = \"日本\".bytes();
+    print(c.to_str());
+    c.pop();
+    print(c.to_str());
+    let u8[] e = [];
+    print(e.to_str(), env_var(\"JW_SURELY_NOT_SET_42\"), env_var(\"\"));
+    let a = now_ns();
+    sleep_ms(5);
+    print(now_ns() - a >= 5000000, unix_ms() > 1700000000000);
+    print((1.0).fixed(101));
+}",
+    );
+}
+
+#[test]
+fn find_and_assert_eq_match_interp() {
+    same_as_interp(
+        "findeq",
+        "fn main() {
+    let i32[] n = [-1, 300];
+    let f64[] f = [0.0 / 0.0, -0.0, 2.5];
+    let str[] s = [\"ab\", \"日本\"];
+    let bool[] t = [false, true];
+    print(n.index_of(300), n.contains(-1), f.contains(0.0 / 0.0), f.index_of(0.0), s.index_of(\"日本\"), s.contains(\"x\"), t.index_of(true));
+    let u8 a = 3;
+    assert_eq(a, 3);
+    assert_eq(\"x\", \"x\");
+    assert_eq(s[0], \"ab\");
+    match run_output(\"echo\", [\"hi\"]) { case Ok(o) -> print(o.trim()); case Err(e) -> print(e); }
+    print(run_output(\"jw-no-such-command\", []));
+    assert_eq(a + 1, 5);
+}",
+    );
+}
+
+#[test]
 fn number_methods_match_interp() {
     same_as_interp(
         "nummeth",

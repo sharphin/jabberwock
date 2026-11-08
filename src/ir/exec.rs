@@ -426,10 +426,10 @@ impl<'a> Machine<'a> {
                 }
                 Ok(Value::Str(text_rc(shown?.as_str())))
             }
-            Rvalue::Builtin(name, ops, _) if name.starts_with("f64.") || name.starts_with("int.") => {
+            Rvalue::Builtin(name, ops, span) if name.starts_with("f64.") || name.starts_with("int.") => {
                 let mut vals = self.operands(f, locs, ops)?;
                 let x = vals.remove(0);
-                Ok(crate::interp::num_method(x, &name[4..], vals))
+                crate::interp::num_method(x, &name[4..], vals, *span)
             }
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;
@@ -478,7 +478,10 @@ impl<'a> Machine<'a> {
                         self.it.world.eprint_line(&line);
                         Ok(Value::Unit)
                     }
-                    "exit" | "read_file" | "write_file" | "run_command" => self.it.system(name, vals, *span),
+                    "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
+                        self.it.system(name, vals, *span)
+                    }
+                    "assert_eq" => self.it.assert_eq(vals, *span),
                     "chr" => {
                         let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
                         crate::interp::chr(n, *span)
@@ -606,6 +609,12 @@ impl<'a> Machine<'a> {
                 Value::Unit
             }
             "join" => Value::Str(Rc::new(crate::interp::join_strs(items, &vals[0]))),
+            "to_str" => crate::interp::utf8_str(items),
+            "contains" => Value::Bool(crate::interp::find_in(items, &vals[0]).is_some()),
+            "index_of" => match crate::interp::find_in(items, &vals[0]) {
+                Some(i) => crate::interp::some(Value::Int(i as i128, IntTy::I64)),
+                None => crate::interp::none(),
+            },
             "drain" => Value::Array(std::mem::take(items), true),
             "insert" => {
                 let Value::Int(i, _) = vals[0] else { unreachable!("type checked") };

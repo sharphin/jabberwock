@@ -161,6 +161,18 @@ declare double @llvm.sqrt.f64(double)
 declare double @llvm.fabs.f64(double)
 declare double @llvm.maxnum.f64(double, double)
 declare double @llvm.minnum.f64(double, double)
+declare double @llvm.floor.f64(double)
+declare double @llvm.ceil.f64(double)
+declare double @llvm.round.f64(double)
+declare double @llvm.trunc.f64(double)
+declare double @llvm.exp.f64(double)
+declare double @llvm.log.f64(double)
+declare double @llvm.log10.f64(double)
+declare double @llvm.sin.f64(double)
+declare double @llvm.cos.f64(double)
+declare double @tan(double)
+declare double @llvm.pow.f64(double, double)
+declare ptr @jw_f64_fixed(double, i64, ptr)
 declare void @jw_print_begin()
 declare ptr @jw_chan_new(i64, ptr)
 declare void @jw_chan_retain(ptr)
@@ -256,6 +268,8 @@ declare void @jw_eprint_end()
 declare i32 @jw_read_file(ptr, ptr)
 declare i32 @jw_write_file(ptr, ptr, ptr)
 declare i32 @jw_run_command(ptr, ptr, ptr, ptr)
+declare i32 @jw_run_output(ptr, ptr, ptr, ptr)
+declare void @jw_assert_eq_fail(ptr, ptr, ptr) noreturn
 declare void @jw_exit(i64) noreturn
 declare ptr @jw_chr(i64, ptr)
 declare ptr @jw_str_append(ptr, ptr)
@@ -263,6 +277,14 @@ declare ptr @jw_list_join(ptr, ptr)
 declare void @jw_str_bytes(ptr, ptr)
 declare i64 @jw_str_code(ptr, ptr)
 declare void @jw_args(ptr)
+declare i64 @jw_now_ns()
+declare i64 @jw_unix_ms()
+declare void @jw_sleep_ms(i64)
+declare i32 @jw_env_var(ptr, ptr)
+declare i32 @jw_list_to_str(ptr, ptr)
+declare i64 @jw_list_find_mem(ptr, i64, ptr)
+declare i64 @jw_list_find_f64(ptr, double)
+declare i64 @jw_list_find_str(ptr, ptr)
 
 "#;
 
@@ -3464,6 +3486,11 @@ impl<'m, 'p> FnGen<'m, 'p> {
     fn binary(&mut self, op: BinOp, a: &Operand, b: &Operand, span: Span) -> G<(String, Ty)> {
         let (x, t) = self.operand(a)?;
         let (y, tb) = self.operand(b)?;
+        self.binary_vals(op, x, t, y, tb, span)
+    }
+
+    /// 計算した 2 つの値の演算（`binary` と、`assert_eq` の比べ方）
+    fn binary_vals(&mut self, op: BinOp, x: String, t: Ty, y: String, tb: Ty, span: Span) -> G<(String, Ty)> {
         if let (BinOp::Shl | BinOp::Shr, Ty::Int(i), Ty::Int(n)) = (op, &t, &tb) {
             return self.shift(op, &x, *i, &y, *n, span);
         }
@@ -3562,6 +3589,25 @@ impl<'m, 'p> FnGen<'m, 'p> {
             }
             _ => return Err(format!("{:?} の {}", op, t.show())),
         })
+    }
+
+    /// `Option<str>` を作る（ok が 0 なら None、ほかは *out の文字列の Some）。env_var と u8 のリストの to_str
+    fn some_str(&mut self, want: &Ty, ok: &str, out: &str) -> G<(String, Ty)> {
+        let none = self.b.val(format!("icmp eq i32 {}, 0", ok));
+        let lt = self.m.lt(want)?;
+        let res = self.b.alloca(&lt);
+        let (_, no) = self.b.if_true(&none);
+        let nv = self.make_enum(want, "None", Vec::new())?;
+        self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+        let done = self.b.l();
+        self.b.br(&done);
+        self.b.label(&no);
+        let text = self.b.val(format!("load ptr, ptr {}", out));
+        let sv = self.make_enum(want, "Some", vec![(text, Ty::Str)])?;
+        self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+        self.b.br(&done);
+        self.b.label(&done);
+        Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
     }
 
     fn builtin(&mut self, name: &str, ops: &[Operand], span: Span, want: &Ty) -> G<(String, Ty)> {
@@ -3721,6 +3767,38 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 release(self, &vals[..1]);
                 self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load i64, ptr {}", code)), Ty::Int(IntTy::I64))))
             }
+            // 引数のリストは jw_run_output が解放する
+            "run_output" => {
+                let list = self.b.alloca("%list");
+                self.b.op(format!("store %list {}, ptr {}", vals[1].0, list));
+                let text = self.b.alloca("ptr");
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_run_output(ptr {}, ptr {}, ptr {}, ptr {})", vals[0].0, list, text, out));
+                release(self, &vals[..1]);
+                self.result_of(want, &ok, &out, |me| Ok((me.b.val(format!("load ptr, ptr {}", text)), Ty::Str)))
+            }
+            // 等しくなければ両方を表示して止まる（比べ方は `a == b` と同じ）
+            "assert_eq" => {
+                let (eq, _) = self.binary_vals(BinOp::Eq, vals[0].0.clone(), vals[0].1.clone(), vals[1].0.clone(), vals[1].1.clone(), span)?;
+                let bad = self.b.val(format!("xor i1 {}, true", eq));
+                let (_, ok) = self.b.if_true(&bad);
+                let site = self.m.site(span, "");
+                let mut shown = Vec::new();
+                for (v, t) in &vals {
+                    let sb = self.b.val("call ptr @jw_sb_new()");
+                    let lt = self.m.lt(t)?;
+                    let tmp = self.b.alloca(&lt);
+                    self.b.op(format!("store {} {}, ptr {}", lt, v, tmp));
+                    let f = self.m.helper(H::Show, t);
+                    self.b.op(format!("call void {}(ptr {}, ptr {}, i64 0, ptr {})", f, tmp, sb, site));
+                    shown.push(self.b.val(format!("call ptr @jw_sb_finish(ptr {})", sb)));
+                }
+                self.b.op(format!("call void @jw_assert_eq_fail(ptr {}, ptr {}, ptr {})", shown[0], shown[1], site));
+                self.b.op("unreachable");
+                self.b.label(&ok);
+                release(self, &vals);
+                Ok(("0".to_string(), Ty::Unit))
+            }
             "concat" if vals.len() == 2 => {
                 let r = self.b.val(format!("call ptr @jw_str_concat(ptr {}, ptr {})", vals[0].0, vals[1].0));
                 release(self, &vals);
@@ -3764,6 +3842,17 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 self.b.label(&done);
                 Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
             }
+            "now_ns" | "unix_ms" => Ok((self.b.val(format!("call i64 @jw_{}()", name)), Ty::Int(IntTy::I64))),
+            "sleep_ms" => {
+                self.b.op(format!("call void @jw_sleep_ms(i64 {})", vals[0].0));
+                Ok(("0".to_string(), Ty::Unit))
+            }
+            "env_var" => {
+                let out = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_env_var(ptr {}, ptr {})", vals[0].0, out));
+                release(self, &vals);
+                self.some_str(want, &ok, &out)
+            }
             "args" => {
                 let out = self.b.alloca("%list");
                 self.b.op(format!("store %list zeroinitializer, ptr {}", out));
@@ -3771,9 +3860,26 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 Ok((self.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(Ty::Str))))
             }
             "f64.to_bits" => Ok((self.b.val(format!("bitcast double {} to i64", vals[0].0)), Ty::Int(IntTy::U64))),
-            "f64.sqrt" | "f64.abs" => {
-                let f = if name == "f64.sqrt" { "sqrt" } else { "fabs" };
+            "f64.sqrt" | "f64.abs" | "f64.floor" | "f64.ceil" | "f64.round" | "f64.trunc" | "f64.exp" | "f64.ln" | "f64.log10"
+            | "f64.sin" | "f64.cos" => {
+                let f = match &name[4..] {
+                    "abs" => "fabs",
+                    "ln" => "log",
+                    f => f,
+                };
                 Ok((self.b.val(format!("call double @llvm.{}.f64(double {})", f, vals[0].0)), Ty::Float))
+            }
+            // tan は LLVM の古い版に組み込みの関数がないので、C の tan を呼ぶ
+            "f64.tan" => Ok((self.b.val(format!("call double @tan(double {})", vals[0].0)), Ty::Float)),
+            "f64.pow" => {
+                let v = self.b.val(format!("call double @llvm.pow.f64(double {}, double {})", vals[0].0, vals[1].0));
+                Ok((v, Ty::Float))
+            }
+            "f64.is_nan" => Ok((self.b.val(format!("fcmp uno double {}, 0.0", vals[0].0)), Ty::Bool)),
+            "f64.fixed" => {
+                let site = self.m.site(span, "");
+                let v = self.b.val(format!("call ptr @jw_f64_fixed(double {}, i64 {}, ptr {})", vals[0].0, vals[1].0, site));
+                Ok((v, Ty::Str))
             }
             "f64.max" | "f64.min" => {
                 let f = if name == "f64.max" { "maxnum" } else { "minnum" };
@@ -4052,6 +4158,46 @@ impl<'m, 'p> FnGen<'m, 'p> {
                         let r = self.b.val(format!("call ptr @jw_list_join(ptr {}, ptr {})", pr.ptr, vals[0].0));
                         self.b.op(format!("call void @jw_str_release(ptr {})", vals[0].0));
                         Ok((r, Ty::Str))
+                    }
+                    // 等しい最初の要素の位置（なければ -1）。整数と真偽値はバイトで比べる
+                    "contains" | "index_of" => {
+                        let (v, t) = vals[0].clone();
+                        let at = match *x {
+                            Ty::Float => self.b.val(format!("call i64 @jw_list_find_f64(ptr {}, double {})", pr.ptr, v)),
+                            Ty::Str => {
+                                let r = self.b.val(format!("call i64 @jw_list_find_str(ptr {}, ptr {})", pr.ptr, v));
+                                self.b.op(format!("call void @jw_str_release(ptr {})", v));
+                                r
+                            }
+                            _ => {
+                                let v = self.coerce(&v, &t, &x)?;
+                                let tmp = self.b.alloca(&xl);
+                                self.b.op(format!("store {} {}, ptr {}", xl, v, tmp));
+                                self.b.val(format!("call i64 @jw_list_find_mem(ptr {}, i64 {}, ptr {})", pr.ptr, size, tmp))
+                            }
+                        };
+                        let found = self.b.val(format!("icmp sge i64 {}, 0", at));
+                        if name == "contains" {
+                            return Ok((found, Ty::Bool));
+                        }
+                        let lt = self.m.lt(want)?;
+                        let res = self.b.alloca(&lt);
+                        let (_, no) = self.b.if_true(&found);
+                        let sv = self.make_enum(want, "Some", vec![(at, i64t.clone())])?;
+                        self.b.op(format!("store {} {}, ptr {}", lt, sv, res));
+                        let done = self.b.l();
+                        self.b.br(&done);
+                        self.b.label(&no);
+                        let nv = self.make_enum(want, "None", Vec::new())?;
+                        self.b.op(format!("store {} {}, ptr {}", lt, nv, res));
+                        self.b.br(&done);
+                        self.b.label(&done);
+                        Ok((self.b.val(format!("load {}, ptr {}", lt, res)), want.clone()))
+                    }
+                    "to_str" => {
+                        let out = self.b.alloca("ptr");
+                        let ok = self.b.val(format!("call i32 @jw_list_to_str(ptr {}, ptr {})", pr.ptr, out));
+                        self.some_str(want, &ok, &out)
                     }
                     "push" => {
                         let (v, t) = vals[0].clone();
