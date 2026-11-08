@@ -426,10 +426,14 @@ impl<'a> Machine<'a> {
                 }
                 Ok(Value::Str(text_rc(shown?.as_str())))
             }
-            Rvalue::Builtin(name, ops, span) if name.starts_with("f64.") || name.starts_with("int.") => {
+            Rvalue::Builtin(name, ops, span)
+                if name.starts_with("f64.") || name.starts_with("int.") || name.starts_with("char.") =>
+            {
                 let mut vals = self.operands(f, locs, ops)?;
                 let x = vals.remove(0);
-                crate::interp::num_method(x, &name[4..], vals, *span)
+                let method = name.split_once('.').map_or("", |(_, m)| m);
+                let v = crate::interp::num_method(x, method, vals, *span)?;
+                Ok(self.it.adopt(v))
             }
             Rvalue::Builtin(name, ops, span) if name.starts_with("str.") => {
                 let mut vals = self.operands(f, locs, ops)?;

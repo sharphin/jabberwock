@@ -471,6 +471,42 @@ fn math_and_bytes_match_interp() {
 }
 
 #[test]
+fn chars_match_interp() {
+    same_as_interp("chars", "struct Tok { char c; i64 n; }
+fn main() {
+    let c = 'a';
+    let char d = 'Z';
+    print(c, d, '日', '\\n' as u32, '\\u{1F600}');
+    print(\"x{c}y\");
+    print(c < d, c == 'a', c != d, c.to_upper(), d.to_lower(), '5'.is_digit(), ' '.is_space());
+    print('q'.is_alpha(), '_'.is_alnum(), 'Q'.is_upper(), 'q'.is_lower(), '@'.is_alpha(), '['.is_alpha());
+    let n = c as u32;
+    print(n, (n + 1).to_char().unwrap_or('?'), 0xD800.to_char().is_none(), (-1).to_char().is_none());
+    let u8 b = 66;
+    print(b as char, 'x'.to_str() + \"!\");
+    let char[] mut cs = ['c', 'a', 'b'];
+    cs.sort();
+    print(cs, cs.contains('b'), cs.index_of('c').unwrap_or(-1));
+    let i64[char] mut m = [];
+    m['x'] = 1;
+    m['y'] = 2;
+    print(m, m['y']);
+    let t = Tok { c: 'k', n: 1 };
+    print(t);
+    match c {
+        case 'a' -> print(\"is a\");
+        default -> print(\"other\");
+    }
+    let s = \"héllo\";
+    let mut out = \"\";
+    for x in s.chars() { out += x; }
+    print(out, 'é' as u32);
+    print(m['z']);
+}
+");
+}
+
+#[test]
 fn std_modules_match_interp() {
     same_as_interp("stdmods", "use std.strings;
 use std.lists;

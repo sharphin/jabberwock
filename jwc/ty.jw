@@ -35,13 +35,13 @@ pub enum Ty {
 // ---------------------------------------------------------------- 整数の型
 
 pub fn bool is_int_name(str n) {
-    n == "i8" || n == "i16" || n == "i32" || n == "i64" || n == "u8" || n == "u16" || n == "u32" || n == "u64" || n == "usize"
+    n == "i8" || n == "i16" || n == "i32" || n == "i64" || n == "u8" || n == "u16" || n == "u32" || n == "u64" || n == "usize" || n == "char"
 }
 
 pub fn i64 bits(str t) {
     if t == "i8" || t == "u8" { 8 }
     else if t == "i16" || t == "u16" { 16 }
-    else if t == "i32" || t == "u32" { 32 }
+    else if t == "i32" || t == "u32" || t == "char" { 32 }
     else { 64 }
 }
 
@@ -69,6 +69,8 @@ pub fn str max_text(str t) { "{max_mag(t)}" }
 /// 値が欠けずに `to` へ変換できるか（usize は u8 / u16 / u32 からだけ受け取る）
 pub fn bool widens_to(str from, str to) {
     if from == to { return true; }
+    // 文字は数とまぜない
+    if from == "char" || to == "char" { return false; }
     if from == "usize" || to == "usize" {
         return to == "usize" && (from == "u8" || from == "u16" || from == "u32");
     }
@@ -101,6 +103,8 @@ fn CV big_cv() { CV { neg: false, mag: 0, big: true } }
 
 pub fn bool contains(str t, ref CV v) {
     if v.big { return false; }
+    // 文字は 0〜0x10FFFF でサロゲートを除く
+    if t == "char" { return !v.neg && v.mag <= 1114111 && !(v.mag >= 55296 && v.mag <= 57343); }
     if v.neg { v.mag <= min_mag(t) } else { v.mag <= max_mag(t) }
 }
 

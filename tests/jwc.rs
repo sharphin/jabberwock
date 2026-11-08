@@ -101,6 +101,14 @@ fn tokens_and_lexer_errors() {
         "\tlet a = b @ c;",
         "let a = b << 2 >> 1 && c || d -> e += f -= g *= h /= i %= j ++ -- != == <= >= & | ^ ~ ? !;",
         "let s = \"日本語{x}語\";",
+        "let c = 'a'; let d = '\\n' '\\'' '\\\\' '\\u{1F600}' '日' '\"';",
+        "let c = '';",
+        "let c = 'ab';",
+        "let c = '\\q';",
+        "let c = '\\u{D800}';",
+        "let c = '\\u{zz}';",
+        "let c = 'a",
+        "let c = '",
         "",
     ];
     let dir = std::env::temp_dir().join(format!("jw-jwc-cases-{}", std::process::id()));

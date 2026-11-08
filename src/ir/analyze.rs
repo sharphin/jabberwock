@@ -398,7 +398,7 @@ impl<'a> Cx<'a> {
                 self.operands(ops, facts);
                 // 数と文字列の計算・表示のほかは、何が起きるか個別に見ない（スレッド・入出力など）
                 let pure = matches!(name.as_str(), "print" | "eprint" | "concat" | "append" | "assert");
-                if !(pure || name.starts_with("f64.") || name.starts_with("int.") || name.starts_with("str.")) {
+                if !(pure || name.starts_with("f64.") || name.starts_with("int.") || name.starts_with("char.") || name.starts_with("str.")) {
                     kill_elems(facts);
                 }
                 None

@@ -551,9 +551,9 @@ struct FnGen {
                             r.fresh = missing;
                         } else {
                             let ok = b.if_true(missing);
-                            let unsigned = ty.is(kty, "Int") && !ty.signed(ty.int_of(kty));
+                            let shape = if ty.is(kty, "Int") { llvm.int_shape(ty.int_of(kty)) } else { "0" };
                             let s = m.site(key_span, "");
-                            b.op("call void @jw_fail_nokey(i32 {llvm.key_kind(kty)}, i64 " + k64 + ", i32 " + (if unsigned { "1" } else { "0" }) +
+                            b.op("call void @jw_fail_nokey(i32 {llvm.key_kind(kty)}, i64 " + k64 + ", i32 " + shape +
                                 ", ptr " + s + ")");
                             b.op("unreachable");
                             b.label(ok);
@@ -1292,7 +1292,7 @@ struct FnGen {
                 if ty.is(x.t, "Int") {
                     let it = ty.int_of(x.t);
                     let w = llvm.widen(ref mut b, x.v, it);
-                    let rr = b.val("call ptr @jw_str_int(i64 " + w + ", i32 " + (if ty.signed(it) { "0" } else { "1" }) + ")");
+                    let rr = b.val("call ptr @jw_str_int(i64 " + w + ", i32 " + llvm.int_shape(it) + ")");
                     return Ok(llvm.vt(rr, ty.Ty.Str));
                 }
                 let sb = b.val("call ptr @jw_sb_new()");
@@ -1993,6 +1993,55 @@ struct FnGen {
             let fv = b.val("call double @llvm." + f2 + ".f64(double " + vals[0].v + ", double " + vals[1].v + ")");
             return Ok(llvm.vt(fv, ty.Ty.Float));
         }
+        // 文字の番号なら Some（0〜0x10FFFF で、0xD800〜0xDFFF でない）
+        if name == "int.to_char" {
+            let w = llvm.widen(ref mut b, vals[0].v, ty.int_of(vals[0].t));
+            let inr = b.val("icmp ule i64 " + w + ", 1114111");
+            let off = b.val("sub i64 " + w + ", 55296");
+            let sur = b.val("icmp uge i64 " + off + ", 2048");
+            let ok = b.val("and i1 " + inr + ", " + sur);
+            let c = b.val("trunc i64 " + w + " to i32");
+            let lt = m.lt(want)?;
+            let some = make_enum(m, want, "Some", [llvm.vt(c, ty.Ty.Int("char"))])?;
+            let none = make_enum(m, want, "None", [])?;
+            return Ok(llvm.vt(b.val("select i1 " + ok + ", " + lt + " " + some + ", " + lt + " " + none), ty.cl(want)));
+        }
+        // 文字のメソッド（ASCII の範囲だけ見る。interp の char_method と同じ）
+        if name.starts_with("char.") {
+            let c = vals[0].v;
+            let mn = name.slice(5, name.len());
+            if mn == "to_upper" || mn == "to_lower" {
+                let up = mn == "to_upper";
+                let hit = if up { char_range(97, 26, c) } else { char_range(65, 26, c) };
+                let moved = b.val((if up { "sub" } else { "add" }) + " i32 " + c + ", 32");
+                return Ok(llvm.vt(b.val("select i1 " + hit + ", i32 " + moved + ", i32 " + c), ty.Ty.Int("char")));
+            }
+            if mn == "to_str" {
+                let w = b.val("zext i32 " + c + " to i64");
+                return Ok(llvm.vt(b.val("call ptr @jw_str_int(i64 " + w + ", i32 2)"), ty.Ty.Str));
+            }
+            let mut v = "";
+            if mn == "is_digit" { v = char_range(48, 10, c); }
+            else if mn == "is_upper" { v = char_range(65, 26, c); }
+            else if mn == "is_lower" { v = char_range(97, 26, c); }
+            else if mn == "is_alpha" || mn == "is_alnum" {
+                let folded = b.val("or i32 " + c + ", 32");
+                v = char_range(97, 26, folded);
+                if mn == "is_alnum" {
+                    let d = char_range(48, 10, c);
+                    v = b.val("or i1 " + v + ", " + d);
+                }
+            } else if mn == "is_space" {
+                v = b.val("icmp eq i32 " + c + ", 32");
+                for k in [9, 10, 13] {
+                    let e = b.val("icmp eq i32 " + c + ", {k}");
+                    v = b.val("or i1 " + v + ", " + e);
+                }
+            } else {
+                return Err("文字のメソッド " + mn);
+            }
+            return Ok(llvm.vt(v, ty.Ty.Bool));
+        }
         // 整数の abs / max / min は比べて選ぶ（abs は一周する: 最小の値はそのまま）
         if name.starts_with("int.") {
             let it = ty.int_of(vals[0].t);
@@ -2020,6 +2069,12 @@ struct FnGen {
             return Ok(r);
         }
         Err("組み込み " + name)
+    }
+
+    /// `x - lo <u n`（文字が lo から n 個の範囲にあるか）
+    fn mut str char_range(i64 lo, i64 n, str x) {
+        let d = b.val("sub i32 " + x + ", {lo}");
+        b.val("icmp ult i32 " + d + ", {n}")
     }
 
     fn mut Result<str, str> int_arg(ref llvm.V[] vals, i64 i) {

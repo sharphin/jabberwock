@@ -20,6 +20,7 @@ fn str describe(ref lexer.Token t) {
     if k == "int" { "整数 `{t.num}`" }
     else if k == "float" { "小数 `{t.text}`" }
     else if k == "str" || k == "interp" { "文字列" }
+    else if k == "char" { "文字" }
     else if k == "ident" { "名前 `{t.text}`" }
     else if k == "eof" { "ファイルの終わり" }
     else { "`{k}`" }
@@ -1107,7 +1108,7 @@ struct Parser {
     fn mut Result<ast.Pat, diag.Diag> parse_pat_in() {
         let start = span();
         let k = peek();
-        if k == "int" {
+        if k == "int" || k == "char" {
             let n = toks[pos].num;
             bump();
             return Ok(ast.Pat.Int(false, n));
@@ -1172,7 +1173,7 @@ struct Parser {
             }
             return Err(unexpected("整数"));
         }
-        Err(diag.error("case に書けるのは、今のところ整数・真偽値・文字列の値と enum の種類だけです", start,
+        Err(diag.error("case に書けるのは、今のところ整数・文字・真偽値・文字列の値と enum の種類だけです", start,
             "ここに {describe(toks[pos])} があります"))
     }
 
@@ -1616,6 +1617,13 @@ struct Parser {
             let t = text();
             let s = bump();
             return Ok(ast.mk(ast.ExprKind.Str(t), s));
+        }
+        // 文字 `'a'` は `97 as char` と同じ
+        if k == "char" {
+            let n = toks[pos].num;
+            let s = bump();
+            let t = ast.TypeExpr { kind: ast.TypeKind.Name("char"), span: s };
+            return Ok(ast.mk(ast.ExprKind.Cast(own ast.mk(ast.ExprKind.Int(n), s), own t), s));
         }
         if k == "[" {
             return parse_bracket();

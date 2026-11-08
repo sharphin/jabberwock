@@ -95,6 +95,8 @@ struct Lexer {
                 }
             } else if c == 34 {
                 string(start_col)?;
+            } else if c == 39 {
+                character(start_col)?;
             } else {
                 symbol(start_col)?;
             }
@@ -323,6 +325,56 @@ struct Lexer {
             out.push(t);
         }
         out.push(Token { kind: "end", text: "", num: 0, span: sp });
+        Ok(())
+    }
+
+    // 文字 `'a'`。エスケープは文字列と同じ（と `\'`）。num は文字の番号
+    fn mut Result<(), diag.Diag> character(i64 start_col) {
+        let at_sp = diag.mk_span(line, col, 1);
+        let mut v = 0;
+        let mut n = 2;
+        let c1 = at(i + 1);
+        if c1 == 92 && at(i + 2) == 117 && at(i + 3) == 123 {
+            let mut k = i + 4;
+            while k < codes.len() && codes[k] != 125 && codes[k] != 39 && codes[k] != 10 {
+                k += 1;
+            }
+            let mut ok = k < codes.len() && codes[k] == 125 && k > i + 4 && k - (i + 4) <= 8;
+            if ok {
+                let mut m = i + 4;
+                while m < k {
+                    let dv = digit_value(codes[m], 16);
+                    if dv < 0 { ok = false; }
+                    v = v * 16 + dv;
+                    m += 1;
+                }
+            }
+            if ok && (v > 1114111 || (v >= 55296 && v <= 57343)) { ok = false; }
+            if !ok {
+                return Err(diag.error("文字の番号のエスケープが正しくありません", diag.mk_span(line, col + 1, 2),
+                    "`\\u{{41}}` のように、{{ }} の中に 16 進数で文字の番号を書きます"));
+            }
+            n = k + 1 - i;
+        } else if c1 == 92 {
+            let esc = at(i + 2);
+            v = if esc == 110 { 10 } else if esc == 116 { 9 } else if esc == 114 { 13 } else if esc == 48 { 0 }
+                else if esc == 34 || esc == 39 || esc == 92 { esc } else { -1 };
+            if v < 0 {
+                return Err(diag.error("未知のエスケープです", diag.mk_span(line, col + 1, 2),
+                    "使えるのは \\n \\t \\r \\0 \\' \\\" \\\\ \\u{{...}} です"));
+            }
+            n = 3;
+        } else if c1 == 39 || c1 == 10 || c1 < 0 {
+            return Err(diag.error("文字が空です", at_sp, "`'a'` のように、' ' の中に 1 文字書きます"));
+        } else {
+            v = c1;
+        }
+        if at(i + n) != 39 {
+            return Err(diag.error("文字が閉じていません", at_sp, "' ' の中には 1 文字だけ書けます（文字列なら \" \"）"));
+        }
+        out.push(Token { kind: "char", text: "", num: v as u64, span: diag.mk_span(line, start_col, n + 1) });
+        i += n + 1;
+        col += n + 1;
         Ok(())
     }
 

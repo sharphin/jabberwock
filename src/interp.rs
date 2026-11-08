@@ -1045,6 +1045,7 @@ impl Interp {
         }
         Ok(match v {
             Value::Unit => "()".to_string(),
+            Value::Int(n, IntTy::Char) => char_of(*n).to_string(),
             Value::Int(n, _) => n.to_string(),
             // 整数と見分けがつくよう、3.0 は `3.0` と出す
             Value::Float(x) => format!("{:?}", x),
@@ -3177,6 +3178,7 @@ pub(crate) fn locate(c: &Value, key: &Value, key_span: Span, base_span: Span) ->
         (Value::Map(m), k) => m.find(k).ok_or_else(|| {
             let shown = match k {
                 Value::Str(s) => format!("\"{}\"", s),
+                Value::Int(n, IntTy::Char) => char_of(*n).to_string(),
                 Value::Int(n, _) => n.to_string(),
                 Value::Bool(b) => b.to_string(),
                 _ => "?".to_string(),
@@ -3277,11 +3279,43 @@ pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>, span: Span) -> 
         (Value::Float(x), "abs", []) => Value::Float(x.abs()),
         (Value::Float(x), "max", [Value::Float(y)]) => Value::Float(x.max(*y)),
         (Value::Float(x), "min", [Value::Float(y)]) => Value::Float(x.min(*y)),
+        (Value::Int(x, IntTy::Char), name, []) => char_method(x, name),
+        (Value::Int(x, _), "to_char", []) => {
+            if IntTy::Char.contains(x) {
+                Value::Enum { variant: Rc::from("Some"), fields: vec![Value::Int(x, IntTy::Char)], copy: true }
+            } else {
+                Value::Enum { variant: Rc::from("None"), fields: Vec::new(), copy: true }
+            }
+        }
         (Value::Int(x, t), "abs", []) => Value::Int(t.wrap(x.abs()), t),
         (Value::Int(x, t), "max", [Value::Int(y, _)]) => Value::Int(x.max(*y), t),
         (Value::Int(x, t), "min", [Value::Int(y, _)]) => Value::Int(x.min(*y), t),
         (_, name, _) => unreachable!("type checked: {}", name),
     })
+}
+
+/// 文字の番号から文字（型検査と `as char` で正しい番号だけが来る）
+pub(crate) fn char_of(n: i128) -> char {
+    u32::try_from(n).ok().and_then(char::from_u32).expect("valid char")
+}
+
+/// 文字のメソッド。判定と大文字・小文字は ASCII の範囲だけ（jw_rt.c / llvm.rs と同じ）
+fn char_method(x: i128, name: &str) -> Value {
+    let lower = (97..=122).contains(&x);
+    let upper = (65..=90).contains(&x);
+    let digit = (48..=57).contains(&x);
+    match name {
+        "is_digit" => Value::Bool(digit),
+        "is_alpha" => Value::Bool(lower || upper),
+        "is_alnum" => Value::Bool(lower || upper || digit),
+        "is_space" => Value::Bool(x == 32 || x == 9 || x == 10 || x == 13),
+        "is_upper" => Value::Bool(upper),
+        "is_lower" => Value::Bool(lower),
+        "to_upper" => Value::Int(if lower { x - 32 } else { x }, IntTy::Char),
+        "to_lower" => Value::Int(if upper { x + 32 } else { x }, IntTy::Char),
+        "to_str" => Value::Str(text_rc(&char_of(x).to_string())),
+        _ => unreachable!("type checked: {}", name),
+    }
 }
 
 /// 桁数の上限（`x.fixed(n)`。jw_rt.c の jw_f64_fixed と同じ）

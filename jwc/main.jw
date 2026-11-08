@@ -66,7 +66,7 @@ fn str dump(ref lexer.Token[] toks) {
         let head = "{diag.line_of(t.span)}:{diag.col_of(t.span)}:{diag.len_of(t.span)} {k}";
         if k == "ident" || k == "float" {
             lines.push(head + " " + t.text);
-        } else if k == "int" {
+        } else if k == "int" || k == "char" {
             lines.push(head + " {t.num}");
         } else if k == "str" {
             lines.push(head + " \"" + escape(t.text) + "\"");

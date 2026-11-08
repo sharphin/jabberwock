@@ -58,6 +58,7 @@
 | `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも）。区画の確保・使い回し・別スレッドでの解放・`Option<own T>`・文字列の長さを、interp と -O1 / -O2 で突き合わせる（`same_as_interp`） |
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
+| `tests/chars.rs` | 文字型 char（`'a'`・比べる・`as` / `to_char`・判定のメソッド・辞書のキー・match・エラー） |
 | `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド） |
 | `tests/project.rs` | パッケージ（alice.toml・依存先・`alice new` / `run` / `test` / `build`） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
@@ -109,6 +110,10 @@
 - 整数の値は `Value::Int(i128, IntTy)`。計算は i128 でして、型の幅で一周させる（`IntTy::wrap`）。
 - 型検査は整数の式に「この型で使う」という印 `Expr.int` をつける（数の書き方を相手に合わせる・自動の変換）。
   interp は `eval` / `eval_flow` の最後にその型へ変換する（`convert`）。印をつけるのは `types.rs` の `convert` / `set_tree` だけ。
+- 文字 `char` は整数型の 1 つ `IntTy::Char`（値は `Value::Int(番号, IntTy::Char)`、IR / LLVM では 32 ビットの符号なし整数）。
+  `'a'` はパーサが `97 as char`（`ExprKind::Cast`）にする（jwc も同じ）。型検査が計算（`char_arith`）・数との自動の変換（`widens_to`）・数の書き方を char にすること・
+  `as char`（u8 と正しい番号の定数だけ）を弾く。表示は interp の `char_of`、llvm は `int_shape`（jw_rt.c の `fmt_int` の 2 が UTF-8）。
+  メソッドは types の `char_method`、interp の `char_method`（`num_method` から）、IR は `char.名前` の Builtin、llvm は比べるだけで書く（jwc の llvmfn も同じ順）。`n.to_char()` は `int.to_char`。
 - 小数は `Value::Float(f64)`・`Ty::Float`。数だけの式が f64 の場所にあれば、型検査が `set_float_tree` で `Expr.float` をつけ、
   interp の `convert` が整数を小数にする（中の数すべてにつけるので、計算も小数でする）。
 - 整数のあふれは一周する。定数の式（`is_const_tree`）の結果が型に入らないときだけ `types.rs` が警告を出す（そのまま書いた数ならエラー）。
