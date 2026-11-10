@@ -25,7 +25,7 @@
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
 | `src/stdlib.rs` | 標準ライブラリ: `std/` の jabberwock のソースを `include_str!` で入れておく（`use std.名前;` で `modules.rs` が読む） |
-| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`・`fs.jw`・`cli.jw`・`sets.jw`・`http.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
+| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`・`fs.jw`・`cli.jw`・`sets.jw`・`http.jw`・`time.jw`・`csv.jw`・`encoding.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
 | `src/project.rs` | パッケージ（alice.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは別の実行ファイル `alice`（`src/alice.rs` の `project_*`）。説明は docs/packages.md |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
@@ -59,7 +59,7 @@
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/chars.rs` | 文字型 char（`'a'`・比べる・`as` / `to_char`・判定のメソッド・辞書のキー・match・エラー） |
-| `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド）。std.fs の例は `tests/fs_example.jw`（`DIR` をテストごとのフォルダに置き換える。native / jwc も使う）、std.cli は `tests/cli_example.jw`、std.sets は `tests/sets_example.jw`、std.http は `tests/http_example.jw`（`serve_http` がテストの中で小さなサーバーを立てる。curl がなければ何もしない） |
+| `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド）。std.fs の例は `tests/fs_example.jw`（`DIR` をテストごとのフォルダに置き換える。native / jwc も使う）、std.cli は `tests/cli_example.jw`、std.sets は `tests/sets_example.jw`、std.time は `tests/time_example.jw`、std.csv と std.encoding は `tests/text_formats_example.jw`、std.http は `tests/http_example.jw`（`serve_http` がテストの中で小さなサーバーを立てる。curl がなければ何もしない） |
 | `tests/project.rs` | パッケージ（alice.toml・依存先・`alice new` / `run` / `test` / `build`） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |

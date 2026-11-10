@@ -569,6 +569,12 @@ fn std_http_matches_interp() {
 }
 
 #[test]
+fn std_time_csv_encoding_match_interp() {
+    same_as_interp("stdtime", include_str!("time_example.jw"));
+    same_as_interp("stdformats", include_str!("text_formats_example.jw"));
+}
+
+#[test]
 fn std_sets_matches_interp() {
     same_as_interp("stdsets", include_str!("sets_example.jw"));
 }

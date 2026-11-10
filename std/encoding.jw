@@ -1,0 +1,103 @@
+// std.encoding: base64 と 16 進。`use std.encoding;` で `encoding.base64("hi")` `encoding.from_base64(s)?` のように使う。
+// 文字列は UTF-8 のバイトとして扱う。バイトのまま扱うときは `_bytes` のつくほう（u8[]）。
+
+/// 文字列を base64 にする
+pub fn str base64(str s) { base64_bytes(s.bytes()) }
+
+/// バイトを base64 にする（`=` で埋める標準の形）
+pub fn str base64_bytes(ref u8[] b) {
+    let table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".chars();
+    let mut out = "";
+    let n = b.len();
+    let mut i = 0;
+    while i < n {
+        let x0 = b[i] as i64;
+        let x1 = if i + 1 < n { b[i + 1] as i64 } else { 0 };
+        let x2 = if i + 2 < n { b[i + 2] as i64 } else { 0 };
+        let v = (x0 << 16) | (x1 << 8) | x2;
+        out += table[v >> 18 & 63].to_str() + table[v >> 12 & 63].to_str();
+        out += if i + 1 < n { table[v >> 6 & 63].to_str() } else { "=" };
+        out += if i + 2 < n { table[v & 63].to_str() } else { "=" };
+        i += 3;
+    }
+    out
+}
+
+/// base64 を文字列に戻す（UTF-8 でなければ Err）
+pub fn Result<str, str> from_base64(str s) {
+    let b = from_base64_bytes(s)?;
+    b.to_str().ok_or("base64 の中身が UTF-8 ではありません")
+}
+
+/// base64 をバイトに戻す（`=` の埋めはあってもなくてもよい。空白・改行は飛ばす。`-` `_`（URL 用の形）も読む）
+pub fn Result<u8[], str> from_base64_bytes(str s) {
+    let u8[] mut out = [];
+    let mut acc = 0;
+    let mut bits = 0;
+    let mut ended = false;
+    for (i, c) in s.chars() {
+        if c == ' ' || c == '\n' || c == '\r' || c == '\t' { continue; }
+        if c == '=' {
+            ended = true;
+            continue;
+        }
+        let v = if c >= 'A' && c <= 'Z' { (c as i64) - 65 }
+            else if c >= 'a' && c <= 'z' { (c as i64) - 71 }
+            else if c >= '0' && c <= '9' { (c as i64) + 4 }
+            else if c == '+' || c == '-' { 62 }
+            else if c == '/' || c == '_' { 63 }
+            else { -1 };
+        if v < 0 || ended { return Err("base64 として読めない文字があります（{i + 1} 文字目）"); }
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits & 255) as u8);
+        }
+    }
+    if bits >= 6 { return Err("base64 の長さがおかしいです"); }
+    Ok(out)
+}
+
+/// 文字列を 16 進にする（小文字）
+pub fn str hex(str s) { hex_bytes(s.bytes()) }
+
+/// バイトを 16 進にする（小文字）
+pub fn str hex_bytes(ref u8[] b) {
+    let digits = "0123456789abcdef".chars();
+    let mut out = "";
+    for x in b {
+        let v = x as i64;
+        out += digits[v >> 4].to_str() + digits[v & 15].to_str();
+    }
+    out
+}
+
+/// 16 進を文字列に戻す（UTF-8 でなければ Err）
+pub fn Result<str, str> from_hex(str s) {
+    let b = from_hex_bytes(s)?;
+    b.to_str().ok_or("16 進の中身が UTF-8 ではありません")
+}
+
+/// 16 進をバイトに戻す（大文字・小文字どちらも。長さは偶数）
+pub fn Result<u8[], str> from_hex_bytes(str s) {
+    let cs = s.chars();
+    if cs.len() % 2 != 0 { return Err("16 進の長さが奇数です"); }
+    let u8[] mut out = [];
+    let mut i = 0;
+    while i < cs.len() {
+        let hi = hex_val(cs[i]);
+        let lo = hex_val(cs[i + 1]);
+        if hi < 0 || lo < 0 { return Err("16 進として読めない文字があります（{i + 1} 文字目）"); }
+        out.push((hi * 16 + lo) as u8);
+        i += 2;
+    }
+    Ok(out)
+}
+
+fn i64 hex_val(char c) {
+    if c >= '0' && c <= '9' { return (c as i64) - 48; }
+    if c >= 'a' && c <= 'f' { return (c as i64) - 87; }
+    if c >= 'A' && c <= 'F' { return (c as i64) - 55; }
+    -1
+}

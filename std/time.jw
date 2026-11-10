@@ -1,0 +1,157 @@
+// std.time: 日付と時刻（UTC だけ。地方時・タイムゾーンはまだない）。`use std.time;` で使う。
+//   let t = time.now();                 // 今の時刻（UTC）
+//   print(t.iso());                     // 2026-11-10T06:35:43.123Z
+//   let d = time.parse_iso("2026-01-02")?;
+//   print(d.weekday(), d.add_days(30).date());
+// 経過時間を測るのは組み込みの `now_ns()`（差だけに意味がある）。
+
+/// 日時（UTC）
+pub struct DateTime {
+    i64 year;
+    // 1〜12
+    i64 month;
+    // 1〜31
+    i64 day;
+    i64 hour;
+    i64 minute;
+    i64 second;
+    // ミリ秒（0〜999）
+    i64 ms;
+
+    /// 1970-01-01T00:00:00Z からのミリ秒
+    fn i64 to_unix_ms() {
+        days_from_civil(year, month, day) * 86400000 + ((hour * 60 + minute) * 60 + second) * 1000 + ms
+    }
+
+    /// `2026-11-10T06:35:43.123Z`（ミリ秒が 0 なら `2026-11-10T06:35:43Z`）
+    fn str iso() {
+        let mut s = date() + "T" + time();
+        if ms != 0 { s += "." + pad(ms, 3); }
+        s + "Z"
+    }
+
+    /// `2026-11-10`
+    fn str date() { pad(year, 4) + "-" + pad(month, 2) + "-" + pad(day, 2) }
+
+    /// `06:35:43`
+    fn str time() { pad(hour, 2) + ":" + pad(minute, 2) + ":" + pad(second, 2) }
+
+    /// 曜日（0 が月曜、6 が日曜）
+    fn i64 weekday() {
+        let d = days_from_civil(year, month, day);
+        // 1970-01-01 は木曜（3）
+        ((d % 7) + 7 + 3) % 7
+    }
+
+    /// 曜日の名前（`月` 〜 `日`）
+    fn str weekday_name() { ["月", "火", "水", "木", "金", "土", "日"][weekday()] }
+
+    /// n 日後（負なら前）
+    fn DateTime add_days(i64 n) { from_unix_ms(to_unix_ms() + n * 86400000) }
+
+    /// n ミリ秒後（負なら前）
+    fn DateTime add_ms(i64 n) { from_unix_ms(to_unix_ms() + n) }
+}
+
+/// 今の時刻（UTC）
+pub fn DateTime now() { from_unix_ms(unix_ms()) }
+
+/// 1970-01-01T00:00:00Z からのミリ秒を日時にする（負も可）
+pub fn DateTime from_unix_ms(i64 t) {
+    let mut days = t / 86400000;
+    let mut rest = t % 86400000;
+    if rest < 0 {
+        rest += 86400000;
+        days -= 1;
+    }
+    // 日数から年月日（H. Hinnant の civil_from_days）
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (if m <= 2 { 1 } else { 0 });
+    DateTime {
+        year: y, month: m, day: d,
+        hour: rest / 3600000, minute: rest / 60000 % 60, second: rest / 1000 % 60, ms: rest % 1000,
+    }
+}
+
+/// 年月日と時刻から作る（範囲を調べる）
+pub fn Result<DateTime, str> make(i64 year, i64 month, i64 day, i64 hour, i64 minute, i64 second) {
+    if month < 1 || month > 12 { return Err("月が 1〜12 ではありません: {month}"); }
+    if day < 1 || day > days_in_month(year, month) { return Err("日がその月にありません: {year}-{month}-{day}"); }
+    if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
+        return Err("時刻がおかしいです: {hour}:{minute}:{second}");
+    }
+    Ok(DateTime { year: year, month: month, day: day, hour: hour, minute: minute, second: second, ms: 0 })
+}
+
+/// `2026-11-10` / `2026-11-10T06:35:43` / `2026-11-10T06:35:43.123Z` / `2026-11-10 06:35:43` を読む（UTC とみなす。`+09:00` などはまだ読めない）
+pub fn Result<DateTime, str> parse_iso(str s) {
+    let bad = "日時を読めません: " + s;
+    let cs = s.chars();
+    let n = cs.len();
+    if n < 10 || cs[4] != '-' || cs[7] != '-' { return Err(bad); }
+    let year = num(s, 0, 4).ok_or(bad)?;
+    let month = num(s, 5, 7).ok_or(bad)?;
+    let day = num(s, 8, 10).ok_or(bad)?;
+    if n == 10 { return make(year, month, day, 0, 0, 0); }
+    if n < 19 || (cs[10] != 'T' && cs[10] != ' ') || cs[13] != ':' || cs[16] != ':' { return Err(bad); }
+    let mut t = make(year, month, day, num(s, 11, 13).ok_or(bad)?, num(s, 14, 16).ok_or(bad)?, num(s, 17, 19).ok_or(bad)?)?;
+    let mut i = 19;
+    if i < n && cs[i] == '.' {
+        let start = i + 1;
+        i = start;
+        while i < n && cs[i].is_digit() { i++; }
+        if i == start { return Err(bad); }
+        // 小数の秒はミリ秒まで（それより細かい桁は捨てる）
+        let mut digits = s.slice(start, i);
+        while digits.len() < 3 { digits += "0"; }
+        t.ms = num(digits, 0, 3).ok_or(bad)?;
+    }
+    if i < n && cs[i] == 'Z' { i++; }
+    if i != n { return Err(bad); }
+    Ok(t)
+}
+
+/// うるう年か
+pub fn bool is_leap(i64 year) { year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) }
+
+/// その月の日数
+pub fn i64 days_in_month(i64 year, i64 month) {
+    if month == 2 { return if is_leap(year) { 29 } else { 28 }; }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30; }
+    31
+}
+
+/// 1970-01-01 からの日数（H. Hinnant の days_from_civil）
+fn i64 days_from_civil(i64 year, i64 month, i64 day) {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+/// 0 で埋めて width 桁にする（負の数は `-` のあとを埋める）
+fn str pad(i64 n, i64 width) {
+    let neg = n < 0;
+    let mut s = "{n.abs()}";
+    while s.len() < width { s = "0" + s; }
+    if neg { "-" + s } else { s }
+}
+
+/// s の from〜to が数字だけなら、その数
+fn Option<i64> num(str s, i64 from, i64 to) {
+    let part = s.slice(from, to);
+    for c in part.chars() {
+        if !c.is_digit() { return None; }
+    }
+    part.to_int()
+}

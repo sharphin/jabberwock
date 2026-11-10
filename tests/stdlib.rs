@@ -215,6 +215,18 @@ fn http_module() {
     assert_eq!(ok(&src), HTTP_OUT);
 }
 
+/// std.time（tests/time_example.jw）
+#[test]
+fn time_module() {
+    assert_eq!(ok(include_str!("time_example.jw")), "1970-01-01T00:00:00Z 3 木\n2025-11-10T06:35:43.123Z 2025-11-10 06:35:43 月 1762756543123\n1969-12-31T23:59:59.999Z -1\n2024-02-29 2024-03-01 2023-12-31 2024-02-28T01:02:03.004Z\n2026-11-10T06:35:43.500Z 2026-11-10T06:35:43Z\n月が 1〜12 ではありません: 13\n日がその月にありません: 2026-2-30\n日時を読めません: 2026/01/01\n時刻がおかしいです: 25:0:0\n日時を読めません: 2026-01-01T00:00:00.Z\n日時を読めません: x\ntrue false 29\n9999-12-31T23:59:59.999Z 0001-01-01T00:00:00Z\ntrue\n");
+}
+
+/// std.csv と std.encoding（tests/text_formats_example.jw）
+#[test]
+fn csv_and_encoding_modules() {
+    assert_eq!(ok(include_str!("text_formats_example.jw")), "5\n2 [name, age]\n2 [Smith, J, 42]\n2 [say \"hi\", ]\n2 [two\nlines, x]\n2 [, ]\nname,age\n\"Smith, J\",42\n\"say \"\"hi\"\"\",\n\"two\nlines\",x\n,\n\n[a: 1, b: 2]\n[a: 3, b: ]\n0 1\nCSV の `\"` が閉じていません（1 行目）\nCSV の `\"` のあとに `,` がありません（1 行目）\n[]   \n[Zg==] f 66 f\n[Zm8=] fo 666f fo\n[Zm9v] foo 666f6f foo\n[Zm9vYg==] foob 666f6f62 foob\n[Zm9vYmE=] fooba 666f6f6261 fooba\n[Zm9vYmFy] foobar 666f6f626172 foobar\n[5pel5pys6Kqe] 日本語 e697a5e69cace8aa9e 日本語\nfoob foobar\nbase64 として読めない文字があります（5 文字目）\nbase64 の長さがおかしいです\nbase64 として読めない文字があります（4 文字目）\n16 進の長さが奇数です\n16 進として読めない文字があります（1 文字目）\n16 進の中身が UTF-8 ではありません\nAP+AAQ== 00ff8001 [0, 255, 128, 1] [0, 255, 128, 1]\n");
+}
+
 /// std.sets（tests/sets_example.jw）
 #[test]
 fn sets_module() {
@@ -292,7 +304,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("cli, fs, http, json, lists, rand, sets, strings"), "{}", e);
+    assert!(e.contains("cli, csv, encoding, fs, http, json, lists, rand, sets, strings, time"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す
