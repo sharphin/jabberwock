@@ -153,6 +153,12 @@ fn fs_module() {
     assert_eq!(ok(&fs_src("stdlib")), "a/b a/b /b b\na/b [] /\nc.tar.gz gz c.tar [] .env y.txt\nfalse\nhello world\n[a.txt, new.log, x]\n/a.txt\n/new.log\n/x/y/b.jw\n11 true false false true\ntrue false false\nfalse true\n消せません: D/x\nディレクトリを作れません: D\n消せません: D/nope\n名前を変えられません: D/nope\nパスに NUL 文字があります: a\0b\nディレクトリを読めません: D/nope\nディレクトリを読めません: D/c.txt\nfalse\nfalse\nok\n");
 }
 
+/// std.sets（tests/sets_example.jw）
+#[test]
+fn sets_module() {
+    assert_eq!(ok(include_str!("sets_example.jw")), "true true false 2 false\ntrue false [b, a]\n[a, c] 2\n[b, a, c] [a] [b] [c]\ntrue false [b] true false\n[3, 1, 2, -5] true 4\n[h, e, l, o] true false\ndup 5\ndup 3\n");
+}
+
 /// std.cli（tests/cli_example.jw）
 #[test]
 fn cli_module() {
@@ -224,7 +230,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("cli, fs, json, lists, rand, strings"), "{}", e);
+    assert!(e.contains("cli, fs, json, lists, rand, sets, strings"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す
