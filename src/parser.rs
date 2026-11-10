@@ -972,8 +972,12 @@ impl Parser {
     /// 値として使う if / match のブロック。最後に `;` のない式（値）が必要
     fn parse_value_block(&mut self, as_value: bool) -> R<Block> {
         let b = self.parse_block()?;
-        // 最後が return なら値は要らない（そこで関数を抜ける）
-        let returns = matches!(b.stmts.last(), Some(Stmt::Return { .. }));
+        // 最後が return か `exit(..);` なら値は要らない（そこで抜ける）
+        let returns = match b.stmts.last() {
+            Some(Stmt::Return { .. }) => true,
+            Some(Stmt::Expr(e)) => matches!(&e.kind, ExprKind::Call(n, _) if n == "exit"),
+            _ => false,
+        };
         if as_value && !b.tail && !returns {
             return Err(Diagnostic::new("値として使うブロックの最後に値がありません")
                 .primary(b.end, "このブロックの値が決まらない")

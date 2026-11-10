@@ -137,6 +137,24 @@ fn main() {
     assert_eq!(o.exit_code, Some(7));
 }
 
+/// 値として使うブロックの最後が `exit(..);` なら、値がなくてよい（そこで終わる）
+#[test]
+fn exit_ends_a_value_block() {
+    let o = ok("
+fn main() {
+    let Result<i64, str> r = Err(\"だめ\");
+    let n = match r {
+        case Ok(v) -> v;
+        case Err(e) -> { eprint(e); exit(3); }
+    };
+    let m = if n > 0 { n } else { exit(4); };
+    print(n + m);
+}");
+    assert_eq!(o.output, "");
+    assert_eq!(o.errput, "だめ\n");
+    assert_eq!(o.exit_code, Some(3));
+}
+
 #[test]
 fn exit_from_another_thread() {
     let o = ok("
