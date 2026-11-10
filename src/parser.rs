@@ -42,6 +42,8 @@ pub struct Parser {
     enum_variants: HashMap<String, Vec<String>>,
     /// 今の入れ子の深さ（式・ブロック・型・形）。`MAX_NEST` を超えたらエラー（深い入れ子でスタックがあふれないように）
     depth: usize,
+    /// 複合代入の左辺の添字を先に計算しておく `let`（`a[f()] += 1` の f を 1 回だけ呼ぶため）。文を読んだ直後に、その文の前へ置く
+    hoisted: Vec<Stmt>,
 }
 
 /// 入れ子の深さの上限。あとの段（型検査・実行・書き出し）も入れ子をたどる再帰なので、ここで止める
@@ -67,7 +69,7 @@ impl Parser {
         enum_names.push("Option".to_string());
         enum_names.push("Result".to_string());
         let enum_variants = scan_variants(&toks);
-        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names, enum_variants, depth: 0 }
+        Parser { toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false, enum_names, struct_names, enum_variants, depth: 0, hoisted: Vec::new() }
     }
 
     /// `use` したモジュールのあるファイルを読む。`geom.area` は 1 つの名前 `geom.area` にまとめる
@@ -672,6 +674,7 @@ impl Parser {
                 _ => {}
             }
             let stmt = self.parse_stmt()?;
+            stmts.append(&mut self.hoisted);
             let block_like = is_block_like(&stmt);
             let is_expr = matches!(stmt, Stmt::Expr(_));
             let end_of_stmt = self.prev_span();
@@ -773,6 +776,10 @@ impl Parser {
                     _ => self.parse_expr()?,
                 };
                 let span = e.span.join(self.prev_span());
+                let mut e = e;
+                if op.is_some() {
+                    hoist_indices(&mut e, &mut self.hoisted);
+                }
                 let value = match op {
                     None => rhs,
                     Some(op) => Expr::new(ExprKind::Binary(op, Box::new(e.clone()), Box::new(rhs)), span),
@@ -927,6 +934,7 @@ impl Parser {
             return self.parse_value_block(as_value);
         }
         let stmt = self.parse_stmt()?;
+        let mut stmts = std::mem::take(&mut self.hoisted);
         let end = self.prev_span();
         let is_expr = matches!(stmt, Stmt::Expr(_));
         if !is_block_like(&stmt) {
@@ -939,7 +947,8 @@ impl Parser {
                 .primary(end, "ここは値ではなく文")
                 .note("`case 1 -> 値;` のように書いてください"));
         }
-        Ok(Block { stmts: vec![stmt], tail: is_expr, end })
+        stmts.push(stmt);
+        Ok(Block { stmts, tail: is_expr, end })
     }
 
     fn parse_if_rest(&mut self, as_value: bool, start: Span) -> R<Expr> {
@@ -1365,6 +1374,7 @@ impl Parser {
                                 struct_names: self.struct_names.clone(),
                                 enum_variants: self.enum_variants.clone(),
                                 depth: self.depth,
+                                hoisted: Vec::new(),
                             };
                             let e = sub.parse_expr()?;
                             if *sub.peek() != Tok::Eof {
@@ -1921,4 +1931,30 @@ fn scan_variants(toks: &[Token]) -> HashMap<String, Vec<String>> {
         out.insert(n.clone(), names);
     }
     out
+}
+
+/// 複合代入の左辺（`a[f()][g()].x += 1`）の、計算の要る添字を隠れた変数（`#i行:列`）に置き換え、その `let` を out に足す（左から順）。
+/// 左辺は右辺の `x + e` に複製するので、そのままだと添字を 2 回計算してしまう。変数・数・文字列・真偽値・それらの `as` は置き換えない
+fn hoist_indices(e: &mut Expr, out: &mut Vec<Stmt>) {
+    match &mut e.kind {
+        ExprKind::Index(base, idx, _) => {
+            hoist_indices(base, out);
+            if !simple_index(idx) {
+                let span = idx.span;
+                let name = format!("#i{}:{}", span.line, span.col);
+                let init = std::mem::replace(&mut **idx, Expr::new(ExprKind::Var(name.clone()), span));
+                out.push(Stmt::Let { name, ty: None, mutable: false, span, init });
+            }
+        }
+        ExprKind::Field(base, ..) | ExprKind::Deref(base, _) => hoist_indices(base, out),
+        _ => {}
+    }
+}
+
+fn simple_index(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::Var(_) => true,
+        ExprKind::Cast(x, _) => simple_index(x),
+        _ => false,
+    }
 }

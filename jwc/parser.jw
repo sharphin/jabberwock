@@ -84,6 +84,36 @@ fn bool is_return_or_exit(ref ast.Stmt s) {
     }
 }
 
+/// 複合代入の左辺（`a[f()][g()].x += 1`）の、計算の要る添字を隠れた変数（`#i行:列`）に置き換えた写しを返し、その `let` を out に足す（左から順）。
+/// Rust 版の `hoist_indices`。変数・数・文字列・真偽値・それらの `as` は置き換えない
+fn ast.Expr hoist_indices(ref ast.Expr e, ref mut ast.Stmt[] out) {
+    match ref e.kind {
+        case Index(b, i) -> {
+            let nb = hoist_indices(b, out);
+            if simple_index(i) {
+                return ast.mk(ast.ExprKind.Index(own nb, own ast.clone_expr(i)), e.span);
+            }
+            let name = "#i{diag.line_of(i.span)}:{diag.col_of(i.span)}";
+            out.push(ast.Stmt.Let(name, false, own ast.no_type(), false, i.span, own ast.clone_expr(i)));
+            ast.mk(ast.ExprKind.Index(own nb, own ast.mk(ast.ExprKind.Var(name), i.span)), e.span)
+        }
+        case Field(x, n) -> ast.mk(ast.ExprKind.Field(own hoist_indices(x, out), n), e.span);
+        case Deref(x) -> ast.mk(ast.ExprKind.Deref(own hoist_indices(x, out)), e.span);
+        default -> ast.clone_expr(e);
+    }
+}
+
+fn bool simple_index(ref ast.Expr e) {
+    match ref e.kind {
+        case Int(n) -> true;
+        case Str(s) -> true;
+        case Bool(b) -> true;
+        case Var(n) -> true;
+        case Cast(x, t) -> simple_index(x);
+        default -> false;
+    }
+}
+
 fn bool is_variant_pat(ref ast.Pat p) {
     match ref p {
         case Variant(n, b, s, h, subs) -> true;
@@ -214,6 +244,8 @@ struct Parser {
     i64[] borrow_lambdas;
     // 今の入れ子の深さ（式・ブロック・型・形）。MAX_NEST を超えたらエラー
     i64 nest;
+    // 複合代入の左辺の添字を先に計算しておく `let`（Rust 版の `hoisted`）。文を読んだ直後に、その文の前へ置く
+    ast.Stmt[] hoisted;
 
     fn str peek() { toks[pos].kind }
 
@@ -883,6 +915,7 @@ struct Parser {
                 return Err(diag.error("構文エラー: `}}` が閉じていません", span(), "ファイルがここで終わっています"));
             }
             let st = parse_stmt()?;
+            for h in hoisted.drain() { stmts.push(h); }
             let block_like = is_block_like(st);
             let is_expr = is_expr_stmt(st);
             let end_of_stmt = prev_span();
@@ -979,8 +1012,10 @@ struct Parser {
         // `x += e` は `x = x + e`、`x++` は `x = x + 1` として扱う（文としてだけ書ける）
         let rhs = if op == "++" || op == "--" { ast.mk(ast.ExprKind.Int(1), ts) } else { parse_expr()? };
         let s = diag.join(e.span, prev_span());
-        let v = if bop == "=" { rhs } else { ast.mk(ast.ExprKind.Binary(bop, own ast.clone_expr(e), own rhs), s) };
-        Ok(ast.Stmt.Assign(own e, own v, s))
+        if bop == "=" { return Ok(ast.Stmt.Assign(own e, own rhs, s)); }
+        let t = hoist_indices(e, ref mut hoisted);
+        let v = ast.mk(ast.ExprKind.Binary(bop, own ast.clone_expr(t), own rhs), s);
+        Ok(ast.Stmt.Assign(own t, own v, s))
     }
 
     /// `if`。`as_value` なら値として使う位置なので else が必須で、中から外への break / continue はできない
@@ -1196,6 +1231,8 @@ struct Parser {
             return parse_value_block(as_value);
         }
         let st = parse_stmt()?;
+        let ast.Stmt[] mut stmts = [];
+        for h in hoisted.drain() { stmts.push(h); }
         let end = prev_span();
         let is_expr = is_expr_stmt(st);
         if !is_block_like(st) {
@@ -1206,7 +1243,8 @@ struct Parser {
             return Err(diag.error_note("値として使う match の case に値がありません", end, "ここは値ではなく文",
                 "`case 1 -> 値;` のように書いてください"));
         }
-        Ok(ast.Block { stmts: [st], tail: is_expr, end: end })
+        stmts.push(st);
+        Ok(ast.Block { stmts: stmts, tail: is_expr, end: end })
     }
 
     fn mut Result<ast.Expr, diag.Diag> parse_if_rest(bool as_value, i64 start) {
@@ -1900,7 +1938,7 @@ pub fn Result<ast.Program, diag.Diag> parse_with(lexer.Token[] toks, ref str[] m
         enum_names: enum_names, struct_names: struct_names, enum_variants: variants,
         bind_ready: false, in_method: false, this_fields: [], this_methods: [], this_statics: [], owner: "",
         locals: [], marks: [], use_consts: false, in_const: false, const_names: [], const_vals: [],
-        raw_call: false, borrow_lambdas: [], nest: 0,
+        raw_call: false, borrow_lambdas: [], nest: 0, hoisted: [],
     };
     p.parse_program()
 }

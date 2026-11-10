@@ -159,3 +159,41 @@ fn match_arms_end_with_semicolons() {
     let d = err_in_main("let x = match 1 {\n case 1 -> print(1);\n default -> { print(2); }\n};");
     assert!(d.title.contains("最後に値がありません"), "{}", d.title);
 }
+
+/// 複合代入の左辺の添字は 1 回だけ計算する（`a[f()] += 1` は f を 1 回だけ呼ぶ。入れ子・構造体の中・辞書のキー・case の中も）
+#[test]
+fn compound_assign_evaluates_index_once() {
+    let src = r#"struct P { i64[] xs; }
+fn i64 f(ref mut i64 n) { *n += 1; print("f", *n); *n }
+fn i64 k(str s) { print("k", s); 0 }
+fn main() {
+    let mut a = [0, 0, 0, 0];
+    let mut n = 0;
+    a[f(ref mut n)] += 10;
+    a[n + 1]++;
+    print(a, n);
+    let mut g = [[1, 2], [3, 4]];
+    g[k("x")][k("y") + 1] *= 5;
+    print(g);
+    let mut ps = [P { xs: [1, 2] }];
+    ps[k("p")].xs[k("q")] -= 7;
+    print(ps[0].xs);
+    let mut m = ["a": 1];
+    m["a"] += 1;
+    let i64[str] mut m2 = [];
+    m2["z"] = 0;
+    m2["z" + ""] += 3;
+    print(m, m2);
+    match n { case 1 -> a[f(ref mut n)] += 100; default -> {} }
+    print(a);
+    let c = 'b';
+    let i64[char] mut cs = [c: 1];
+    cs['b'] += 1;
+    print(cs);
+}
+"#;
+    let o = run_source(src, false);
+    assert!(o.error.is_none(), "{:?}", o.error.map(|d| d.render("t.jw", src)));
+    assert_eq!(o.live_objects, 0);
+    assert_eq!(o.output, "f 1\n[0, 10, 1, 0] 1\nk x\nk y\n[[1, 10], [3, 4]]\nk p\nk q\n[-6, 2]\n[a: 2] [z: 3]\nf 2\n[0, 10, 101, 0]\n[b: 2]\n");
+}
