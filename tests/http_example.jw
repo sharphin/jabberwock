@@ -1,0 +1,25 @@
+use std.http;
+use std.json;
+fn main() {
+    let base = "http://127.0.0.1:PORT";
+    match http.get(base + "/x.json") {
+        case Ok(r) -> {
+            print(r.status, r.ok(), r.body, r.header("Content-Type").unwrap_or("-"), r.header("x-nope").is_none());
+            match json.parse(r.body) {
+                case Ok(j) -> print(json.get_num(j, "a").unwrap_or(0.0));
+                case Err(e) -> print(e);
+            }
+        }
+        case Err(e) -> print("err", e);
+    }
+    match http.get(base + "/nothing") { case Ok(r) -> print(r.status, r.ok(), r.body); case Err(e) -> print("err", e); }
+    match http.post(base + "/echo", "{{\"b\": [1, 2]}}", "application/json") {
+        case Ok(r) -> print(r.status, r.body, r.header("x-type").unwrap_or("-"));
+        case Err(e) -> print("err", e);
+    }
+    let str[] h = ["X-Name: ジャバ"];
+    match http.request("PUT", base + "/echo", h, "") { case Ok(r) -> print(r.status, r.body); case Err(e) -> print("err", e); }
+    match http.get(base + "/moved") { case Ok(r) -> print(r.status, r.body); case Err(e) -> print("err", e); }
+    match http.get("ftp://x") { case Ok(r) -> print(r.status); case Err(e) -> print(e); }
+    match http.request("-x", base, h, "") { case Ok(r) -> print(r.status); case Err(e) -> print(e); }
+}

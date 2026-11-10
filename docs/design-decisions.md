@@ -703,3 +703,12 @@ let x = pick(true, 1, 2);
 - 型の引数 `T` は辞書のキーにできない（構造体が来ると困るため）ので、汎用の `Set<T>` はまだ書けない。
   よく使う型ごとに `IntSet` / `StrSet` / `CharSet` を用意した（中身は `bool[K]` の辞書）。
   辞書のキーに構造体を使えるようになったら（等しさとハッシュの決まりを入れたら）、汎用の `Set<T>` にまとめる。
+
+## std.http は curl を呼ぶ（2026-11-10）
+
+- 通信の本命は v1 設計の std.net / std.tls（資源の仕組みが要る）だが、それまで HTTP がまったく使えないのは不便なので、
+  std.http は OS の `curl` コマンドを `run_output` で呼ぶ形にした（組み込みを足さずに jabberwock だけで書ける。HTTPS も curl がやる）。
+  curl は Linux・macOS と Windows 10 以降に入っている。std.net ができたら、使う形（`get` / `post` / `Response`）はそのままで中身を差し替える。
+- 本文は `run_output` が受け取れる UTF-8 の文字列だけ。バイナリは std.net を待つ。
+- 引数で curl のオプションを足されないよう、URL は `http://` / `https://` で始まるものだけ、方法は `-` で始まらないものだけ受け付ける。
+  本文は `--data-raw`（`@` で始まってもファイルとして読まない）で渡す。
