@@ -6525,3 +6525,32 @@ fn main() { let c = '\u{D800}'; }
 fn main() { let c = 'a }
 #####
 fn main() { let s = "a\u{8}b\u{7f}\u{1b}\u{85}\t"; print(s.len()); }
+#####
+struct P { i64[] xs; }
+fn i64 f(ref mut i64 n) { *n += 1; print("f", *n); *n }
+fn i64 k(str s) { print("k", s); 0 }
+fn main() {
+    let mut a = [0, 0, 0, 0];
+    let mut n = 0;
+    a[f(ref mut n)] += 10;
+    a[n + 1]++;
+    print(a, n);
+    let mut g = [[1, 2], [3, 4]];
+    g[k("x")][k("y") + 1] *= 5;
+    print(g);
+    let mut ps = [P { xs: [1, 2] }];
+    ps[k("p")].xs[k("q")] -= 7;
+    print(ps[0].xs);
+    let mut m = ["a": 1];
+    m["a"] += 1;
+    let i64[str] mut m2 = [];
+    m2["z"] = 0;
+    m2["z" + ""] += 3;
+    print(m, m2);
+    match n { case 1 -> a[f(ref mut n)] += 100; default -> {} }
+    print(a);
+    let c = 'b';
+    let i64[char] mut cs = [c: 1];
+    cs['b'] += 1;
+    print(cs);
+}
