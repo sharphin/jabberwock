@@ -2587,6 +2587,229 @@ int32_t jw_env_var(WStr *name, WStr **out) {
 #endif
 }
 
+// ---------------------------------------------------------------- ファイルとディレクトリ（std.fs の下回り）
+// interp の `fs_op` と同じ動き・同じエラーの文
+
+#ifdef _WIN32
+#include <direct.h>
+#include <io.h>
+#include <sys/stat.h>
+__declspec(dllimport) unsigned long __stdcall GetFileAttributesW(const wchar_t *);
+__declspec(dllimport) int __stdcall MoveFileExW(const wchar_t *, const wchar_t *, unsigned long);
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
+static int path_ok(WStr *path, WStr **err) {
+    if (memchr(path->data, 0, (size_t)path->len)) {
+        *err = message("パスに NUL 文字があります: ", path);
+        return 0;
+    }
+    return 1;
+}
+
+// あるか（ファイルでもディレクトリでも。リンクはたどった先）
+int32_t jw_fs_exists(WStr *path) {
+    if (memchr(path->data, 0, (size_t)path->len)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    struct _stat64 st;
+    int ok = _wstat64(w, &st) == 0;
+    free(w);
+#else
+    struct stat st;
+    int ok = stat(cp, &st) == 0;
+#endif
+    free(cp);
+    return ok;
+}
+
+static int name_cmp(const void *a, const void *b) { return jw_str_cmp(*(WStr *const *)a, *(WStr *const *)b); }
+
+// 中の名前のリスト（`.` と `..` は除き、バイトの順に並べる。UTF-8 にできない名前があれば読めないとする）
+int32_t jw_fs_list(WStr *path, WList *out, WStr **err) {
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+    int ok = 1;
+#ifdef _WIN32
+    size_t n = strlen(cp);
+    char *pat = malloc(n + 3);
+    memcpy(pat, cp, n);
+    memcpy(pat + n, "\\*", 3);
+    wchar_t *w = to_wide(pat);
+    free(pat);
+    struct _wfinddata64_t fd;
+    intptr_t h = _wfindfirst64(w, &fd);
+    free(w);
+    if (h == -1) {
+        ok = 0;
+    } else {
+        do {
+            if (wcscmp(fd.name, L".") == 0 || wcscmp(fd.name, L"..") == 0) continue;
+            // 0x80 = WC_ERR_INVALID_CHARS（対になっていないサロゲートは失敗にする）
+            int k = WideCharToMultiByte(65001, 0x80, fd.name, -1, NULL, 0, NULL, NULL);
+            if (k <= 0) { ok = 0; break; }
+            char *u = malloc((size_t)k);
+            WideCharToMultiByte(65001, 0x80, fd.name, -1, u, k, NULL, NULL);
+            push_str(out, jw_str_new(u, (int64_t)k - 1));
+            free(u);
+        } while (_wfindnext64(h, &fd) == 0);
+        _findclose(h);
+    }
+#else
+    DIR *d = opendir(cp);
+    if (!d) {
+        ok = 0;
+    } else {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            int64_t n = (int64_t)strlen(e->d_name);
+            if (!valid_utf8((const unsigned char *)e->d_name, n)) { ok = 0; break; }
+            push_str(out, jw_str_new(e->d_name, n));
+        }
+        closedir(d);
+    }
+#endif
+    free(cp);
+    if (!ok) {
+        for (int64_t i = 0; i < out->len; i++) jw_str_release(((WStr **)out->data)[i]);
+        jw_list_free(out, 8, NULL);
+        out->data = NULL;
+        out->len = out->cap = 0;
+        *err = message("ディレクトリを読めません: ", path);
+        return 0;
+    }
+    if (out->len > 1) qsort(out->data, (size_t)out->len, sizeof(WStr *), name_cmp);
+    return 1;
+}
+
+int32_t jw_fs_make_dir(WStr *path, WStr **err) {
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    int ok = _wmkdir(w) == 0;
+    free(w);
+#else
+    int ok = mkdir(cp, 0777) == 0;
+#endif
+    free(cp);
+    if (!ok) *err = message("ディレクトリを作れません: ", path);
+    return ok;
+}
+
+// 情報: out に [種類（0 ファイル・1 ディレクトリ・2 そのほか）, 大きさ（バイト。ファイルでなければ 0）,
+// 更新時刻（1970 年からのミリ秒。Windows は秒の単位）, リンクか（1 か 0）]。リンクはたどった先（先がなければ種類 2）
+int32_t jw_fs_stat(WStr *path, WList *out, WStr **err) {
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+    int64_t kind = 2, size = 0, mtime = 0, link = 0;
+    int ok = 1;
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    unsigned long attr = GetFileAttributesW(w);
+    if (attr == 0xFFFFFFFFUL) {
+        ok = 0;
+    } else {
+        link = (attr & 0x400UL) != 0; // FILE_ATTRIBUTE_REPARSE_POINT
+        struct _stat64 st;
+        if (_wstat64(w, &st) == 0) {
+            kind = (st.st_mode & _S_IFMT) == _S_IFDIR ? 1 : (st.st_mode & _S_IFMT) == _S_IFREG ? 0 : 2;
+            size = kind == 0 ? (int64_t)st.st_size : 0;
+            mtime = (int64_t)st.st_mtime * 1000;
+        } else if (!link) {
+            ok = 0;
+        }
+    }
+    free(w);
+#else
+    struct stat st;
+    if (lstat(cp, &st) != 0) {
+        ok = 0;
+    } else {
+        link = S_ISLNK(st.st_mode) ? 1 : 0;
+        if (!link || stat(cp, &st) == 0) {
+            kind = S_ISDIR(st.st_mode) ? 1 : S_ISREG(st.st_mode) ? 0 : 2;
+            size = kind == 0 ? (int64_t)st.st_size : 0;
+#ifdef __APPLE__
+            mtime = (int64_t)st.st_mtimespec.tv_sec * 1000 + st.st_mtimespec.tv_nsec / 1000000;
+#else
+            mtime = (int64_t)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
+#endif
+        }
+    }
+#endif
+    free(cp);
+    if (!ok) {
+        *err = message("情報を読めません: ", path);
+        return 0;
+    }
+    int64_t v[4] = {kind, size, mtime, link};
+    jw_list_reserve(out, 8, 4);
+    memcpy(out->data, v, sizeof v);
+    out->len = 4;
+    return 1;
+}
+
+// ファイルか、空のディレクトリを消す（リンクはリンクそのものを消す）
+int32_t jw_fs_remove(WStr *path, WStr **err) {
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    wchar_t *w = to_wide(cp);
+    unsigned long attr = GetFileAttributesW(w);
+    int ok = attr != 0xFFFFFFFFUL && ((attr & 0x10UL) ? _wrmdir(w) == 0 : _wremove(w) == 0); // 0x10 = DIRECTORY
+    free(w);
+#else
+    int ok = remove(cp) == 0;
+#endif
+    free(cp);
+    if (!ok) *err = message("消せません: ", path);
+    return ok;
+}
+
+// 名前を変える。to があれば置き換える
+int32_t jw_fs_rename(WStr *from, WStr *to, WStr **err) {
+    if (!path_ok(from, err) || !path_ok(to, err)) return 0;
+    char *cf = c_str(from);
+    char *ct = c_str(to);
+#ifdef _WIN32
+    wchar_t *wf = to_wide(cf);
+    wchar_t *wt = to_wide(ct);
+    int ok = MoveFileExW(wf, wt, 0x1 /* REPLACE_EXISTING */) != 0;
+    free(wf);
+    free(wt);
+#else
+    int ok = rename(cf, ct) == 0;
+#endif
+    free(cf);
+    free(ct);
+    if (!ok) *err = message("名前を変えられません: ", from);
+    return ok;
+}
+
+// ファイルの後ろに足す（なければ作る）
+int32_t jw_fs_append(WStr *path, WStr *text, WStr **err) {
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    FILE *f = open_file(cp, L"ab");
+#else
+    FILE *f = open_file(cp, "ab");
+#endif
+    free(cp);
+    int ok = f != NULL;
+    if (f) {
+        if (fwrite(text->data, 1, (size_t)text->len, f) != (size_t)text->len) ok = 0;
+        if (fclose(f) != 0) ok = 0;
+    }
+    if (!ok) *err = message("ファイルに書けません: ", path);
+    return ok;
+}
+
 // a.contains(x) / a.index_of(x): 等しい最初の要素の位置（なければ -1）。整数・真偽値は size バイトで比べる
 int64_t jw_list_find_mem(WList *l, int64_t size, const void *x) {
     for (int64_t i = 0; i < l->len; i++)

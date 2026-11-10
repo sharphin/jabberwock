@@ -482,7 +482,8 @@ impl<'a> Machine<'a> {
                         self.it.world.eprint_line(&line);
                         Ok(Value::Unit)
                     }
-                    "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
+                    "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var"
+                    | "__fs_exists" | "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
                         self.it.system(name, vals, *span)
                     }
                     "assert_eq" => self.it.assert_eq(vals, *span),

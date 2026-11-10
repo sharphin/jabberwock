@@ -282,6 +282,7 @@ fn ast_with_modules() {
         ("std_var", "use std.lists;\nfn main() { let lists = 1; }\n"),
         ("std_bare", "use std;\nfn main() {}\n"),
         ("std_rand", "use std.rand;\nfn main() {\n    let mut r = rand.Rng.seeded(42);\n    print(r.next(), r.next());\n    let mut counts = [0, 0, 0, 0, 0, 0];\n    for i in range(6000) { let k = r.below(6); counts[k] += 1; }\n    print(counts);\n    let mut lo = 100;\n    let mut hi = -100;\n    for i in range(1000) {\n        let x = r.range(-5, 5);\n        lo = lo.min(x);\n        hi = hi.max(x);\n    }\n    print(lo, hi, r.range(-9223372036854775807, 9223372036854775807) != 0);\n    let f = r.float();\n    print(f >= 0.0 && f < 1.0, r.chance(0.0), r.chance(1.0));\n    let str[] mut a = [\"a\", \"b\", \"c\", \"d\", \"e\"];\n    r.shuffle(ref mut a);\n    print(a, a.len());\n    let mut t = rand.Rng.from_time();\n    print(t.below(10) < 10);\n}\n"),
+        ("std_fs", include_str!("fs_example.jw")),
         ("std_json", "use std.json;\nfn main() {\n    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";\n    match json.parse(text) {\n        case Ok(v) -> {\n            print(json.stringify(v));\n            print(json.pretty(v, 2));\n            match ref *v {\n                case Obj(f) -> print(f.len(), f.contains(\"n\"));\n                default -> print(\"?\");\n            }\n            print(json.get_str(v, \"name\").unwrap_or(\"-\"), json.get_num(v, \"n\").is_none(), json.get_str(v, \"zz\").is_none());\n        }\n        case Err(e) -> print(e);\n    }\n    for bad in [\"\", \"[1,\", \"{{\\\"a\\\" 1}}\", \"tru\", \"\\\"abc\", \"[1] x\", \"01\", \"-\", \"\\\"\\\\x\\\"\"] {\n        match json.parse(bad) {\n            case Ok(v) -> print(\"ok?\", json.stringify(v));\n            case Err(e) -> print(e);\n        }\n    }\n    let own json.Value v = own json.Value.Arr(own [own json.Value.Str(\"a\\nb\"), own json.Value.Num(0.5)]);\n    print(json.stringify(v));\n}\n"),
     ];
     for (n, s) in files {
@@ -289,7 +290,7 @@ fn ast_with_modules() {
     }
     for n in [
         "ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod", "std_main", "std_mod", "std_use", "std_missing",
-        "std_twice", "std_var", "std_bare", "std_json", "std_rand",
+        "std_twice", "std_var", "std_bare", "std_json", "std_rand", "std_fs",
     ] {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));

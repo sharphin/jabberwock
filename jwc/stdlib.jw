@@ -3,6 +3,144 @@
 
 /// `std.名前` のソース
 pub fn Option<str> source(str name) {
+    if name == "fs" {
+        return Some("""
+// std.fs: ファイルとディレクトリ。`use std.fs;` で `fs.exists("a.txt")` `fs.list_dir(".")?` のように使う。
+// 中身を読み書きするのは組み込みの `read_file` / `write_file`（UTF-8 の文字列だけ）。
+// パスの区切りは `/`（分けるときは `\\` も区切りとみなす）。エラーの文は OS によらず同じ。
+
+/// ファイルかディレクトリがあるか（リンクはたどった先を見る）
+pub fn bool exists(str path) {{ __fs_exists(path) }}
+
+/// ディレクトリの中の名前（`.` と `..` は除く。名前の順）
+pub fn Result<str[], str> list_dir(str path) {{ __fs_list(path) }}
+
+/// ディレクトリを作る（親はあること。もうあれば Err）
+pub fn Result<(), str> make_dir(str path) {{ __fs_make_dir(path) }}
+
+/// ディレクトリを親から順に作る（もうあれば何もしない）
+pub fn Result<(), str> make_dirs(str path) {{
+    if is_dir(path) {{ return Ok(()); }}
+    let up = parent(path);
+    if up != "" && !is_dir(up) {{ make_dirs(up)?; }}
+    make_dir(path)
+}}
+
+/// ファイルか、空のディレクトリを消す（リンクはリンクそのものを消す）
+pub fn Result<(), str> remove(str path) {{ __fs_remove(path) }}
+
+/// 名前を変える（別のディレクトリへも動かせる）。to があれば置き換える
+pub fn Result<(), str> rename(str from, str to) {{ __fs_rename(from, to) }}
+
+/// ファイルの後ろに text を足す（なければ作る）
+pub fn Result<(), str> append_text(str path, str text) {{ __fs_append(path, text) }}
+
+/// ファイル・ディレクトリの情報
+pub struct Info {{
+    // 中身の大きさ（バイト。ファイルでなければ 0）
+    i64 size;
+    bool is_file;
+    bool is_dir;
+    // path そのものがリンクか。ほかの欄はたどった先のもの（先がなければ is_file も is_dir も false）
+    bool is_link;
+    // 更新時刻（1970-01-01 UTC からのミリ秒。Windows は秒の単位）
+    i64 modified_ms;
+}}
+
+/// 情報を読む（なければ Err）
+pub fn Result<Info, str> stat(str path) {{
+    let v = __fs_stat(path)?;
+    Ok(Info {{ size: v[1], is_file: v[0] == 0, is_dir: v[0] == 1, is_link: v[3] == 1, modified_ms: v[2] }})
+}}
+
+/// ファイルか（なければ false）
+pub fn bool is_file(str path) {{
+    match stat(path) {{
+        case Ok(i) -> i.is_file;
+        case Err(e) -> false;
+    }}
+}}
+
+/// ディレクトリか（なければ false）
+pub fn bool is_dir(str path) {{
+    match stat(path) {{
+        case Ok(i) -> i.is_dir;
+        case Err(e) -> false;
+    }}
+}}
+
+/// path の下にあるファイルすべてのパス（`join(path, ...)` の形。ディレクトリの中は名前の順に深さ優先。リンクのディレクトリには入らない）
+pub fn Result<str[], str> walk(str path) {{
+    let str[] mut out = [];
+    walk_into(path, ref mut out)?;
+    Ok(out)
+}}
+
+fn Result<(), str> walk_into(str dir, ref mut str[] out) {{
+    for name in list_dir(dir)? {{
+        let p = join(dir, name);
+        let info = stat(p)?;
+        if info.is_dir && !info.is_link {{
+            walk_into(p, out)?;
+        }} else if info.is_file {{
+            out.push(p);
+        }}
+    }}
+    Ok(())
+}}
+
+// ---------------------------------------------------------------- パス（文字列だけで決める。ファイルは見ない）
+
+/// a と b をつなぐ（b が `/` で始まれば b のまま。a が空なら b）
+pub fn str join(str a, str b) {{
+    if a == "" || b.starts_with("/") {{ return b; }}
+    if a.ends_with("/") || a.ends_with("\\\\") {{ return a + b; }}
+    a + "/" + b
+}}
+
+/// 最後の区切り（`/` か `\\`）の位置。なければ -1
+fn i64 last_sep(str p) {{
+    let cs = p.chars();
+    let mut i = cs.len() - 1;
+    while i >= 0 {{
+        if cs[i] == '/' || cs[i] == '\\\\' {{ return i; }}
+        i--;
+    }}
+    -1
+}}
+
+/// 親のディレクトリ（`a/b/c.txt` → `a/b`、`c.txt` → ``、`/c` → `/`）
+pub fn str parent(str path) {{
+    let i = last_sep(path);
+    if i < 0 {{ return ""; }}
+    if i == 0 {{ return path.slice(0, 1); }}
+    path.slice(0, i)
+}}
+
+/// 最後の名前（`a/b/c.txt` → `c.txt`）
+pub fn str file_name(str path) {{ path.slice(last_sep(path) + 1, path.len()) }}
+
+/// 拡張子（`c.tar.gz` → `gz`。点で始まる名前 `.env` や点のない名前は ``）
+pub fn str ext(str path) {{
+    let name = file_name(path);
+    let cs = name.chars();
+    let mut i = cs.len() - 1;
+    while i > 0 {{
+        if cs[i] == '.' {{ return name.slice(i + 1, name.len()); }}
+        i--;
+    }}
+    ""
+}}
+
+/// 拡張子を除いた名前（`a/c.tar.gz` → `c.tar`）
+pub fn str stem(str path) {{
+    let name = file_name(path);
+    let e = ext(path);
+    if e == "" {{ return name; }}
+    name.slice(0, name.len() - e.len() - 1)
+}}
+""");
+    }
     if name == "json" {
         return Some("""
 // std.json: JSON を読む・書く。`use std.json;` で `json.parse(text)` / `json.stringify(v)` のように使う。
@@ -659,5 +797,5 @@ pub fn Option<i64> parse_int(str s, i64 base) {{
 
 /// 標準ライブラリのモジュールの名前
 pub fn str[] names() {
-    ["json", "lists", "rand", "strings"]
+    ["fs", "json", "lists", "rand", "strings"]
 }
