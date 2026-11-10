@@ -551,9 +551,9 @@ struct FnGen {
                             r.fresh = missing;
                         } else {
                             let ok = b.if_true(missing);
-                            let unsigned = ty.is(kty, "Int") && !ty.signed(ty.int_of(kty));
+                            let shape = if ty.is(kty, "Int") { llvm.int_shape(ty.int_of(kty)) } else { "0" };
                             let s = m.site(key_span, "");
-                            b.op("call void @jw_fail_nokey(i32 {llvm.key_kind(kty)}, i64 " + k64 + ", i32 " + (if unsigned { "1" } else { "0" }) +
+                            b.op("call void @jw_fail_nokey(i32 {llvm.key_kind(kty)}, i64 " + k64 + ", i32 " + shape +
                                 ", ptr " + s + ")");
                             b.op("unreachable");
                             b.label(ok);
@@ -1292,7 +1292,7 @@ struct FnGen {
                 if ty.is(x.t, "Int") {
                     let it = ty.int_of(x.t);
                     let w = llvm.widen(ref mut b, x.v, it);
-                    let rr = b.val("call ptr @jw_str_int(i64 " + w + ", i32 " + (if ty.signed(it) { "0" } else { "1" }) + ")");
+                    let rr = b.val("call ptr @jw_str_int(i64 " + w + ", i32 " + llvm.int_shape(it) + ")");
                     return Ok(llvm.vt(rr, ty.Ty.Str));
                 }
                 let sb = b.val("call ptr @jw_sb_new()");
@@ -1494,6 +1494,25 @@ struct FnGen {
         Ok(llvm.vt(b.val("load " + lt + ", ptr " + res), ty.cl(want)))
     }
 
+    /// `Option<str>` を作る（ok が 0 なら None、ほかは *out の文字列の Some）。env_var と u8 のリストの to_str
+    fn mut Result<llvm.V, str> some_str(ref mut llvm.Module m, ref ty.Ty want, str ok, str out) {
+        let none = b.val("icmp eq i32 " + ok + ", 0");
+        let lt = m.lt(want)?;
+        let res = b.alloca(lt);
+        let no = b.if_true(none);
+        let nv = make_enum(m, want, "None", [])?;
+        b.op("store " + lt + " " + nv + ", ptr " + res);
+        let done = b.l();
+        b.br(done);
+        b.label(no);
+        let text = b.val("load ptr, ptr " + out);
+        let sv = make_enum(m, want, "Some", [llvm.vt(text, ty.Ty.Str)])?;
+        b.op("store " + lt + " " + sv + ", ptr " + res);
+        b.br(done);
+        b.label(done);
+        Ok(llvm.vt(b.val("load " + lt + ", ptr " + res), ty.cl(want)))
+    }
+
     fn mut Result<str, str> make_enum(ref mut llvm.Module m, ref ty.Ty et, str variant, ref llvm.V[] vals) {
         let vs = m.variants(et)?;
         let mut vi = -1;
@@ -1589,6 +1608,11 @@ struct FnGen {
     fn mut Result<llvm.V, str> binary(ref mut llvm.Module m, str op, ref ir.Operand a, ref ir.Operand c, i64 span) {
         let xa = operand(m, a)?;
         let xb = operand(m, c)?;
+        binary_vals(m, op, xa, xb, span)
+    }
+
+    /// 計算した 2 つの値の演算（`binary` と、`assert_eq` の比べ方）
+    fn mut Result<llvm.V, str> binary_vals(ref mut llvm.Module m, str op, ref llvm.V xa, ref llvm.V xb, i64 span) {
         let x = xa.v;
         let t = ty.cl(xa.t);
         if (op == "Shl" || op == "Shr") && ty.is(t, "Int") && ty.is(xb.t, "Int") {
@@ -2162,6 +2186,38 @@ struct FnGen {
             release(vals, 1);
             return result_of(m, want, ok, out, "int", cd);
         }
+        // 引数のリストは jw_run_output が解放する
+        if name == "run_output" {
+            let rlst = b.alloca("%list");
+            b.op("store %list " + vals[1].v + ", ptr " + rlst);
+            let rtext = b.alloca("ptr");
+            let rout = b.alloca("ptr");
+            let rok = b.val("call i32 @jw_run_output(ptr " + vals[0].v + ", ptr " + rlst + ", ptr " + rtext + ", ptr " + rout + ")");
+            release(vals, 1);
+            return result_of(m, want, rok, rout, "str", rtext);
+        }
+        // 等しくなければ両方を表示して止まる（比べ方は `a == b` と同じ）
+        if name == "assert_eq" {
+            let eqv = binary_vals(m, "Eq", vals[0], vals[1], span)?;
+            let bad = b.val("xor i1 " + eqv.v + ", true");
+            let aok = b.if_true(bad);
+            let asite = m.site(span, "");
+            let str[] mut shown = [];
+            for x in vals {
+                let sb = b.val("call ptr @jw_sb_new()");
+                let lt = m.lt(x.t)?;
+                let tmp = b.alloca(lt);
+                b.op("store " + lt + " " + x.v + ", ptr " + tmp);
+                let f = m.helper("Show", x.t);
+                b.op("call void " + f + "(ptr " + tmp + ", ptr " + sb + ", i64 0, ptr " + asite + ")");
+                shown.push(b.val("call ptr @jw_sb_finish(ptr " + sb + ")"));
+            }
+            b.op("call void @jw_assert_eq_fail(ptr " + shown[0] + ", ptr " + shown[1] + ", ptr " + asite + ")");
+            b.op("unreachable");
+            b.label(aok);
+            release(vals, all);
+            return Ok(llvm.vt("0", ty.Ty.Unit));
+        }
         if name == "concat" && vals.len() == 2 {
             let r = b.val("call ptr @jw_str_concat(ptr " + vals[0].v + ", ptr " + vals[1].v + ")");
             release(vals, all);
@@ -2203,6 +2259,23 @@ struct FnGen {
             b.label(done);
             return Ok(llvm.vt(b.val("load " + lt + ", ptr " + res), ty.cl(want)));
         }
+        if name == "now_ns" || name == "unix_ms" { return Ok(llvm.vt(b.val("call i64 @jw_" + name + "()"), ty.i64t())); }
+        if name == "sleep_ms" {
+            b.op("call void @jw_sleep_ms(i64 " + vals[0].v + ")");
+            return Ok(llvm.vt("0", ty.Ty.Unit));
+        }
+        if name == "env_var" {
+            let eout = b.alloca("ptr");
+            let eok = b.val("call i32 @jw_env_var(ptr " + vals[0].v + ", ptr " + eout + ")");
+            release(vals, all);
+            return some_str(m, want, eok, eout);
+        }
+        if name == "__fs_append" {
+            let ferr = b.alloca("ptr");
+            let fok = b.val("call i32 @jw_" + name.slice(2, name.len()) + "(ptr " + vals[0].v + ", ptr " + vals[1].v + ", ptr " + ferr + ")");
+            release(vals, all);
+            return result_of(m, want, fok, ferr, "unit", "");
+        }
         if name == "args" {
             let out = b.alloca("%list");
             b.op("store %list zeroinitializer, ptr " + out);
@@ -2210,14 +2283,76 @@ struct FnGen {
             return Ok(llvm.vt(b.val("load %list, ptr " + out), ty.Ty.List(own ty.Ty.Str)));
         }
         if name == "f64.to_bits" { return Ok(llvm.vt(b.val("bitcast double " + vals[0].v + " to i64"), ty.Ty.Int("u64"))); }
-        if name == "f64.sqrt" || name == "f64.abs" {
-            let f = if name == "f64.sqrt" { "sqrt" } else { "fabs" };
+        if name == "f64.sqrt" || name == "f64.abs" || name == "f64.floor" || name == "f64.ceil" || name == "f64.round" || name == "f64.trunc"
+            || name == "f64.exp" || name == "f64.ln" || name == "f64.log10" || name == "f64.sin" || name == "f64.cos" {
+            let f = if name == "f64.abs" { "fabs" } else if name == "f64.ln" { "log" } else { name.slice(4, name.len()) };
             return Ok(llvm.vt(b.val("call double @llvm." + f + ".f64(double " + vals[0].v + ")"), ty.Ty.Float));
+        }
+        // tan は LLVM の古い版に組み込みの関数がないので、C の tan を呼ぶ
+        if name == "f64.tan" { return Ok(llvm.vt(b.val("call double @tan(double " + vals[0].v + ")"), ty.Ty.Float)); }
+        if name == "f64.pow" {
+            let pv = b.val("call double @llvm.pow.f64(double " + vals[0].v + ", double " + vals[1].v + ")");
+            return Ok(llvm.vt(pv, ty.Ty.Float));
+        }
+        if name == "f64.is_nan" { return Ok(llvm.vt(b.val("fcmp uno double " + vals[0].v + ", 0.0"), ty.Ty.Bool)); }
+        if name == "f64.fixed" {
+            let fsite = m.site(span, "");
+            let fv = b.val("call ptr @jw_f64_fixed(double " + vals[0].v + ", i64 " + vals[1].v + ", ptr " + fsite + ")");
+            return Ok(llvm.vt(fv, ty.Ty.Str));
         }
         if name == "f64.max" || name == "f64.min" {
             let f2 = if name == "f64.max" { "maxnum" } else { "minnum" };
             let fv = b.val("call double @llvm." + f2 + ".f64(double " + vals[0].v + ", double " + vals[1].v + ")");
             return Ok(llvm.vt(fv, ty.Ty.Float));
+        }
+        // 文字の番号なら Some（0〜0x10FFFF で、0xD800〜0xDFFF でない）
+        if name == "int.to_char" {
+            let w = llvm.widen(ref mut b, vals[0].v, ty.int_of(vals[0].t));
+            let inr = b.val("icmp ule i64 " + w + ", 1114111");
+            let off = b.val("sub i64 " + w + ", 55296");
+            let sur = b.val("icmp uge i64 " + off + ", 2048");
+            let ok = b.val("and i1 " + inr + ", " + sur);
+            let c = b.val("trunc i64 " + w + " to i32");
+            let lt = m.lt(want)?;
+            let some = make_enum(m, want, "Some", [llvm.vt(c, ty.Ty.Int("char"))])?;
+            let none = make_enum(m, want, "None", [])?;
+            return Ok(llvm.vt(b.val("select i1 " + ok + ", " + lt + " " + some + ", " + lt + " " + none), ty.cl(want)));
+        }
+        // 文字のメソッド（ASCII の範囲だけ見る。interp の char_method と同じ）
+        if name.starts_with("char.") {
+            let c = vals[0].v;
+            let mn = name.slice(5, name.len());
+            if mn == "to_upper" || mn == "to_lower" {
+                let up = mn == "to_upper";
+                let hit = if up { char_range(97, 26, c) } else { char_range(65, 26, c) };
+                let moved = b.val((if up { "sub" } else { "add" }) + " i32 " + c + ", 32");
+                return Ok(llvm.vt(b.val("select i1 " + hit + ", i32 " + moved + ", i32 " + c), ty.Ty.Int("char")));
+            }
+            if mn == "to_str" {
+                let w = b.val("zext i32 " + c + " to i64");
+                return Ok(llvm.vt(b.val("call ptr @jw_str_int(i64 " + w + ", i32 2)"), ty.Ty.Str));
+            }
+            let mut v = "";
+            if mn == "is_digit" { v = char_range(48, 10, c); }
+            else if mn == "is_upper" { v = char_range(65, 26, c); }
+            else if mn == "is_lower" { v = char_range(97, 26, c); }
+            else if mn == "is_alpha" || mn == "is_alnum" {
+                let folded = b.val("or i32 " + c + ", 32");
+                v = char_range(97, 26, folded);
+                if mn == "is_alnum" {
+                    let d = char_range(48, 10, c);
+                    v = b.val("or i1 " + v + ", " + d);
+                }
+            } else if mn == "is_space" {
+                v = b.val("icmp eq i32 " + c + ", 32");
+                for k in [9, 10, 13] {
+                    let e = b.val("icmp eq i32 " + c + ", {k}");
+                    v = b.val("or i1 " + v + ", " + e);
+                }
+            } else {
+                return Err("文字のメソッド " + mn);
+            }
+            return Ok(llvm.vt(v, ty.Ty.Bool));
         }
         // 整数の abs / max / min は比べて選ぶ（abs は一周する: 最小の値はそのまま）
         if name.starts_with("int.") {
@@ -2248,6 +2383,12 @@ struct FnGen {
         Err("組み込み " + name)
     }
 
+    /// `x - lo <u n`（文字が lo から n 個の範囲にあるか）
+    fn mut str char_range(i64 lo, i64 n, str x) {
+        let d = b.val("sub i32 " + x + ", {lo}");
+        b.val("icmp ult i32 " + d + ", {n}")
+    }
+
     fn mut Result<str, str> int_arg(ref llvm.V[] vals, i64 i) {
         if !ty.is(vals[i].t, "Int") { return Err("整数でない引数 " + ty.show(vals[i].t)); }
         Ok(llvm.widen(ref mut b, vals[i].v, ty.int_of(vals[i].t)))
@@ -2268,7 +2409,10 @@ struct FnGen {
             let lp = b.val("getelementptr i8, ptr " + s + ", i64 8");
             return Ok(llvm.vt(b.val("load i64, ptr " + lp), ty.i64t()));
         }
-        if name == "chars" { return Ok(list_of(s, "jw_str_chars_list", "")); }
+        if name == "chars" {
+            let x = list_of(s, "jw_str_chars_list", "");
+            return Ok(llvm.vt(x.v, ty.Ty.List(own ty.Ty.Int("char"))));
+        }
         if name == "bytes" {
             let x = list_of(s, "jw_str_bytes", "");
             return Ok(llvm.vt(x.v, ty.Ty.List(own ty.Ty.Int("u8"))));
@@ -2472,6 +2616,41 @@ struct FnGen {
                 let r = b.val("call ptr @jw_list_join(ptr " + pr.ptr + ", ptr " + vals[0].v + ")");
                 b.op("call void @jw_str_release(ptr " + vals[0].v + ")");
                 return Ok(llvm.vt(r, ty.Ty.Str));
+            }
+            // 等しい最初の要素の位置（なければ -1）。整数と真偽値はバイトで比べる
+            if name == "contains" || name == "index_of" {
+                let mut at = "";
+                if ty.is(x, "Float") {
+                    at = b.val("call i64 @jw_list_find_f64(ptr " + pr.ptr + ", double " + vals[0].v + ")");
+                } else if ty.is(x, "Str") {
+                    at = b.val("call i64 @jw_list_find_str(ptr " + pr.ptr + ", ptr " + vals[0].v + ")");
+                    b.op("call void @jw_str_release(ptr " + vals[0].v + ")");
+                } else {
+                    let cv = coerce(m, vals[0].v, vals[0].t, x)?;
+                    let ftmp = b.alloca(xl);
+                    b.op("store " + xl + " " + cv + ", ptr " + ftmp);
+                    at = b.val("call i64 @jw_list_find_mem(ptr " + pr.ptr + ", i64 " + size + ", ptr " + ftmp + ")");
+                }
+                let found = b.val("icmp sge i64 " + at + ", 0");
+                if name == "contains" { return Ok(llvm.vt(found, ty.Ty.Bool)); }
+                let flt = m.lt(want)?;
+                let fres = b.alloca(flt);
+                let fno = b.if_true(found);
+                let fsv = make_enum(m, want, "Some", [llvm.vt(at, ty.i64t())])?;
+                b.op("store " + flt + " " + fsv + ", ptr " + fres);
+                let fdone = b.l();
+                b.br(fdone);
+                b.label(fno);
+                let fnv = make_enum(m, want, "None", [])?;
+                b.op("store " + flt + " " + fnv + ", ptr " + fres);
+                b.br(fdone);
+                b.label(fdone);
+                return Ok(llvm.vt(b.val("load " + flt + ", ptr " + fres), ty.cl(want)));
+            }
+            if name == "to_str" {
+                let tout = b.alloca("ptr");
+                let tok = b.val("call i32 @jw_list_to_str(ptr " + pr.ptr + ", ptr " + tout + ")");
+                return some_str(m, want, tok, tout);
             }
             if name == "push" {
                 let v = coerce(m, vals[0].v, vals[0].t, x)?;

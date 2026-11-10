@@ -4614,7 +4614,7 @@ fn main() {
     print(chr(97), chr(233), chr(35486), chr(128512), chr(0).byte_len());
     let mut n = 0;
     for c in "x9_".chars() {
-        let k = c.code();
+        let k = c as i64;
         if k >= 48 && k <= 57 { n += 1; }
     }
     let u8[] b = "AZ".bytes();
@@ -4698,7 +4698,7 @@ enum Expr {
 
 fn Result<Tok[], str> lex(str src) {
     let Tok[] mut out = [];
-    let cs = src.chars();
+    let cs = src.chars().map((c) -> c.to_str());
     let mut i = 0;
     while i < cs.len() {
         let c = cs[i];
@@ -6414,3 +6414,143 @@ fn main() { let S[2] b = [S { a: [0; 100000] }, S { a: [0; 100000] }]; }
 fn main() { let Option<i64[100000]>[2] b = [None, None]; }
 #####
 fn main() { let i64[] a = [0; 9223372036854775807]; }
+#####
+fn main() {
+    let x = 2.5;
+    let own f64 p = own 9.75;
+    print(x.floor(), x.ceil(), x.round(), x.trunc(), p.pow(2), x.exp(), x.ln(), x.log10(), x.sin(), x.cos(), x.tan(), x.is_nan());
+    print(x.fixed(2), "{p.fixed(1)}");
+    let u8[] b = "ab".bytes();
+    print(b.to_str(), env_var("HOME").is_some(), now_ns() > 0, unix_ms() > 0);
+    sleep_ms(1);
+}
+#####
+fn main() { let str[] s = ["a"]; print(s.to_str()); }
+#####
+fn main() { print((1.0).fixed(1.5)); }
+#####
+fn main() { sleep_ms("a"); }
+#####
+fn main() { let env_var = 1; }
+#####
+fn main() {
+    let i32[] n = [-1, 300];
+    let f64[] f = [2.5];
+    let str[] s = ["ab"];
+    let bool[] t = [true];
+    print(n.index_of(300), n.contains(-1), f.contains(2.5), s.index_of("ab"), t.contains(false));
+    let u8 a = 3;
+    assert_eq(a, 3);
+    assert_eq(3, a);
+    assert_eq("x", s[0]);
+    assert_eq(1.5, 2.5);
+    print(run_output("echo", ["hi"]));
+}
+#####
+fn main() { assert_eq(1, "a"); }
+#####
+struct P { i64 x; }
+fn main() { let P[] ps = []; print(ps.index_of(P { x: 1 })); }
+#####
+struct Tok { char c; i64 n; }
+fn main() {
+    let c = 'a';
+    let char d = 'Z';
+    print(c, d, '日', '\n' as u32, '\u{1F600}');
+    print("x{c}y");
+    print(c < d, c == 'a', c != d, c.to_upper(), d.to_lower(), '5'.is_digit(), ' '.is_space());
+    print('q'.is_alpha(), '_'.is_alnum(), 'Q'.is_upper(), 'q'.is_lower(), '@'.is_alpha(), '['.is_alpha());
+    let n = c as u32;
+    print(n, (n + 1).to_char().unwrap_or('?'), 0xD800.to_char().is_none(), (-1).to_char().is_none());
+    let u8 b = 66;
+    print(b as char, 'x'.to_str() + "!");
+    let char[] mut cs = ['c', 'a', 'b'];
+    cs.sort();
+    print(cs, cs.contains('b'), cs.index_of('c').unwrap_or(-1));
+    let i64[char] mut m = [];
+    m['x'] = 1;
+    m['y'] = 2;
+    print(m, m['y']);
+    let t = Tok { c: 'k', n: 1 };
+    print(t);
+    match c {
+        case 'a' -> print("is a");
+        default -> print("other");
+    }
+    let s = "héllo";
+    let mut out = "";
+    for x in s.chars() { out += x.to_str(); }
+    print(out, 'é' as u32);
+    print(m['z']);
+}
+#####
+fn main() { let c = 'a' + 1; }
+#####
+fn main() { let c = -'a'; }
+#####
+fn main() { let c = 'a' << 1; }
+#####
+fn main() { let char c = 97; }
+#####
+fn main() { let c = 'a'; let b = c == 97; }
+#####
+fn main() { let i = 300; let c = i as char; }
+#####
+fn main() { let c = 0xD800 as char; }
+#####
+fn main() { let c = 'a' as f64; }
+#####
+fn main() { let a = [1, 2]; let x = a['a']; }
+#####
+fn main() { let c = 'a'.foo(); }
+#####
+fn main() { let c = 'a'.is_digit(1); }
+#####
+fn main() { let i64 n = 'a'; }
+#####
+fn main() { for i in range('a', 'z') {} }
+#####
+fn main() { let c = ~'a'; }
+#####
+fn main() { let x = 5.foo(); }
+#####
+fn main() { let c = 'ab'; }
+#####
+fn main() { let c = ''; }
+#####
+fn main() { let c = '\q'; }
+#####
+fn main() { let c = '\u{D800}'; }
+#####
+fn main() { let c = 'a }
+#####
+fn main() { let s = "a\u{8}b\u{7f}\u{1b}\u{85}\t"; print(s.len()); }
+#####
+struct P { i64[] xs; }
+fn i64 f(ref mut i64 n) { *n += 1; print("f", *n); *n }
+fn i64 k(str s) { print("k", s); 0 }
+fn main() {
+    let mut a = [0, 0, 0, 0];
+    let mut n = 0;
+    a[f(ref mut n)] += 10;
+    a[n + 1]++;
+    print(a, n);
+    let mut g = [[1, 2], [3, 4]];
+    g[k("x")][k("y") + 1] *= 5;
+    print(g);
+    let mut ps = [P { xs: [1, 2] }];
+    ps[k("p")].xs[k("q")] -= 7;
+    print(ps[0].xs);
+    let mut m = ["a": 1];
+    m["a"] += 1;
+    let i64[str] mut m2 = [];
+    m2["z"] = 0;
+    m2["z" + ""] += 3;
+    print(m, m2);
+    match n { case 1 -> a[f(ref mut n)] += 100; default -> {} }
+    print(a);
+    let c = 'b';
+    let i64[char] mut cs = [c: 1];
+    cs['b'] += 1;
+    print(cs);
+}

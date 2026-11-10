@@ -26,9 +26,14 @@ type R<T> = Result<T, Diagnostic>;
 pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 13] = [
+pub(crate) const BUILTINS: [&str; 26] = [
     "print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command", "chr",
+    "now_ns", "unix_ms", "sleep_ms", "env_var", "run_output", "assert_eq",
+    "__fs_exists", "__fs_list", "__fs_make_dir", "__fs_remove", "__fs_rename", "__fs_stat", "__fs_append",
 ];
+
+/// `now_ns()` の起点（はじめて呼んだとき。値の差だけに意味がある）
+static CLOCK_START: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -487,7 +492,7 @@ impl Interp {
                     Err(_) => result(false, msg(format!("ファイルに書けません: {}", path))),
                 })
             }
-            "run_command" => {
+            "run_command" | "run_output" => {
                 let cmd = text(&vals[0]);
                 let Value::Array(items, _) = self.seq_at(&vals[1]).clone() else { unreachable!("type checked: str[]") };
                 let mut vals = vals;
@@ -495,14 +500,95 @@ impl Interp {
                 self.release(list, span, "使い終わった一時的な値");
                 use std::io::Write;
                 let _ = std::io::stdout().flush();
-                let status = std::process::Command::new(&cmd).args(items.iter().map(text)).status();
-                Ok(match status {
-                    Ok(st) => result(true, Value::Int(st.code().unwrap_or(-1) as i128, IntTy::I64)),
+                let mut command = std::process::Command::new(&cmd);
+                command.args(items.iter().map(text));
+                if name == "run_command" {
+                    return Ok(match command.status() {
+                        Ok(st) => result(true, Value::Int(st.code().unwrap_or(-1) as i128, IntTy::I64)),
+                        Err(_) => result(false, msg(format!("コマンドを起動できません: {}", cmd))),
+                    });
+                }
+                // 標準出力だけ受け取る（標準入力と標準エラーはそのまま）。jw_rt.c の jw_run_output と同じ文
+                command.stdin(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit());
+                Ok(match command.output() {
                     Err(_) => result(false, msg(format!("コマンドを起動できません: {}", cmd))),
+                    Ok(o) => match o.status.code().unwrap_or(-1) {
+                        0 => match String::from_utf8(o.stdout) {
+                            Ok(t) => result(true, Value::Str(text_rc(t.as_str()))),
+                            Err(_) => result(false, msg(format!("コマンドの出力が UTF-8 ではありません: {}", cmd))),
+                        },
+                        c => result(false, msg(format!("コマンドが失敗しました（終了コード {}）: {}", c, cmd))),
+                    },
                 })
+            }
+            "now_ns" => {
+                let mut start = CLOCK_START.lock().unwrap_or_else(|e| e.into_inner());
+                let t0 = *start.get_or_insert_with(std::time::Instant::now);
+                Ok(Value::Int(t0.elapsed().as_nanos() as i128, IntTy::I64))
+            }
+            "unix_ms" => {
+                let ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                    Ok(d) => d.as_millis() as i128,
+                    Err(e) => -(e.duration().as_millis() as i128),
+                };
+                Ok(Value::Int(IntTy::I64.wrap(ms), IntTy::I64))
+            }
+            "sleep_ms" => {
+                let Value::Int(n, _) = vals[0] else { unreachable!("type checked: i64") };
+                if n > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(n as u64));
+                }
+                Ok(Value::Unit)
+            }
+            // 名前が空・`=` や NUL を含む・値が UTF-8 でないなら None（jw_rt.c の jw_env_var と同じ）
+            "env_var" => {
+                let key = text(&vals[0]);
+                if key.is_empty() || key.contains('=') || key.contains('\0') {
+                    return Ok(none());
+                }
+                Ok(match std::env::var(&key) {
+                    Ok(v) => some(Value::Str(text_rc(v.as_str()))),
+                    Err(_) => none(),
+                })
+            }
+            "__fs_exists" => {
+                let path = text(&vals[0]);
+                Ok(Value::Bool(!path.contains('\0') && std::fs::metadata(&path).is_ok()))
+            }
+            "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
+                let path = text(&vals[0]);
+                let other = if name == "__fs_rename" { text(&vals[1]) } else { String::new() };
+                if path.contains('\0') || other.contains('\0') {
+                    let bad = if path.contains('\0') { &path } else { &other };
+                    return Ok(result(false, msg(format!("パスに NUL 文字があります: {}", bad))));
+                }
+                match fs_op(name, &path, &other, &vals) {
+                    Err(m) => Ok(result(false, msg(m))),
+                    Ok(FsDone::Unit) => Ok(result(true, Value::Unit)),
+                    Ok(FsDone::Names(names)) => {
+                        let items = names.iter().map(|n| Value::Str(text_rc(n.as_str()))).collect();
+                        let list = self.new_list(items);
+                        Ok(Value::Enum { variant: Rc::from("Ok"), fields: vec![list], copy: false })
+                    }
+                    Ok(FsDone::Ints(ns)) => {
+                        let items = ns.iter().map(|&n| Value::Int(n as i128, IntTy::I64)).collect();
+                        let list = self.new_list(items);
+                        Ok(Value::Enum { variant: Rc::from("Ok"), fields: vec![list], copy: false })
+                    }
+                }
             }
             _ => unreachable!("not a system builtin: {} at {:?}", name, span),
         }
+    }
+
+    /// `assert_eq(a, b)`: 等しくなければ、両方の値を出して止まる（型検査で `a == b` と同じに調べてある）。IR の exec も使う
+    pub(crate) fn assert_eq(&mut self, vals: Vec<Value>, span: Span) -> R<Value> {
+        let (a, b) = (vals[0].clone(), vals[1].clone());
+        if as_bool(binary(BinOp::Eq, a.clone(), b.clone(), span)?, span)? {
+            return Ok(Value::Unit);
+        }
+        let (sa, sb) = (self.show(&a, span, 0)?, self.show(&b, span, 0)?);
+        Err(Diagnostic::new("assert_eq に失敗しました").primary(span, format!("左は {}、右は {} でした", sa, sb)))
     }
 
     /// `exit(n)` で終わったときの終了コード
@@ -1016,6 +1102,7 @@ impl Interp {
         }
         Ok(match v {
             Value::Unit => "()".to_string(),
+            Value::Int(n, IntTy::Char) => char_of(*n).to_string(),
             Value::Int(n, _) => n.to_string(),
             // 整数と見分けがつくよう、3.0 は `3.0` と出す
             Value::Float(x) => format!("{:?}", x),
@@ -2399,9 +2486,14 @@ impl Interp {
                 Ok(Value::Unit)
             }
             "read_line" => self.read_line(span),
-            "exit" | "read_file" | "write_file" | "run_command" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var"
+            | "__fs_exists" | "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
                 let vals = self.eval_all(args)?;
                 self.system(name, vals, span)
+            }
+            "assert_eq" => {
+                let vals = self.eval_all(args)?;
+                self.assert_eq(vals, span)
             }
             "chr" => {
                 let v = self.eval(&args[0])?;
@@ -2533,7 +2625,7 @@ impl Interp {
             _ => None,
         };
         if let Some(x) = num {
-            return Ok(num_method(x, name, vals));
+            return num_method(x, name, vals, span);
         }
         // task と chan のメソッド
         let handle = match &rv {
@@ -2569,7 +2661,7 @@ impl Interp {
             _ => None,
         };
         if let Some(slot) = seq_slot {
-            if !matches!(name, "len" | "map" | "filter" | "join") {
+            if !matches!(name, "len" | "map" | "filter" | "join" | "to_str" | "contains" | "index_of") {
                 let access = place.as_ref().map_or(Access::Write, |p| p.access.clone());
                 access.through(&rv).require(span, &format!("リストを `{}` で書き換えようとした", name))?;
             }
@@ -2645,6 +2737,9 @@ impl Interp {
                     Value::Unit
                 }
                 "join" => Value::Str(Rc::new(join_strs(items, &vals[0]))),
+                "to_str" => utf8_str(items),
+                "contains" => Value::Bool(find_in(items, &vals[0]).is_some()),
+                "index_of" => find_in(items, &vals[0]).map_or_else(none, |i| some(Value::Int(i as i128, IntTy::I64))),
                 "drain" => {
                     drained = Some(std::mem::take(items));
                     Value::Unit
@@ -3141,6 +3236,7 @@ pub(crate) fn locate(c: &Value, key: &Value, key_span: Span, base_span: Span) ->
         (Value::Map(m), k) => m.find(k).ok_or_else(|| {
             let shown = match k {
                 Value::Str(s) => format!("\"{}\"", s),
+                Value::Int(n, IntTy::Char) => char_of(*n).to_string(),
                 Value::Int(n, _) => n.to_string(),
                 Value::Bool(b) => b.to_string(),
                 _ => "?".to_string(),
@@ -3221,18 +3317,79 @@ fn str_list<'a>(items: impl Iterator<Item = &'a str>) -> Value {
 }
 
 /// 数のメソッド（types.rs の `num_method` が名前と引数を調べてある）。IR の exec も使う
-pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>) -> Value {
-    match (x, name, vals.as_slice()) {
+pub(crate) fn num_method(x: Value, name: &str, vals: Vec<Value>, span: Span) -> R<Value> {
+    Ok(match (x, name, vals.as_slice()) {
         (Value::Float(x), "to_bits", []) => Value::Int(x.to_bits() as i128, IntTy::U64),
         (Value::Float(x), "sqrt", []) => Value::Float(x.sqrt()),
+        (Value::Float(x), "floor", []) => Value::Float(x.floor()),
+        (Value::Float(x), "ceil", []) => Value::Float(x.ceil()),
+        (Value::Float(x), "round", []) => Value::Float(x.round()),
+        (Value::Float(x), "trunc", []) => Value::Float(x.trunc()),
+        (Value::Float(x), "exp", []) => Value::Float(x.exp()),
+        (Value::Float(x), "ln", []) => Value::Float(x.ln()),
+        (Value::Float(x), "log10", []) => Value::Float(x.log10()),
+        (Value::Float(x), "sin", []) => Value::Float(x.sin()),
+        (Value::Float(x), "cos", []) => Value::Float(x.cos()),
+        (Value::Float(x), "tan", []) => Value::Float(x.tan()),
+        (Value::Float(x), "pow", [Value::Float(y)]) => Value::Float(x.powf(*y)),
+        (Value::Float(x), "is_nan", []) => Value::Bool(x.is_nan()),
+        (Value::Float(x), "fixed", [Value::Int(n, _)]) => Value::Str(text_rc(fixed(x, *n, span)?.as_str())),
         (Value::Float(x), "abs", []) => Value::Float(x.abs()),
         (Value::Float(x), "max", [Value::Float(y)]) => Value::Float(x.max(*y)),
         (Value::Float(x), "min", [Value::Float(y)]) => Value::Float(x.min(*y)),
+        (Value::Int(x, IntTy::Char), name, []) => char_method(x, name),
+        (Value::Int(x, _), "to_char", []) => {
+            if IntTy::Char.contains(x) {
+                Value::Enum { variant: Rc::from("Some"), fields: vec![Value::Int(x, IntTy::Char)], copy: true }
+            } else {
+                Value::Enum { variant: Rc::from("None"), fields: Vec::new(), copy: true }
+            }
+        }
         (Value::Int(x, t), "abs", []) => Value::Int(t.wrap(x.abs()), t),
         (Value::Int(x, t), "max", [Value::Int(y, _)]) => Value::Int(x.max(*y), t),
         (Value::Int(x, t), "min", [Value::Int(y, _)]) => Value::Int(x.min(*y), t),
         (_, name, _) => unreachable!("type checked: {}", name),
+    })
+}
+
+/// 文字の番号から文字（型検査と `as char` で正しい番号だけが来る）
+pub(crate) fn char_of(n: i128) -> char {
+    u32::try_from(n).ok().and_then(char::from_u32).expect("valid char")
+}
+
+/// 文字のメソッド。判定と大文字・小文字は ASCII の範囲だけ（jw_rt.c / llvm.rs と同じ）
+fn char_method(x: i128, name: &str) -> Value {
+    let lower = (97..=122).contains(&x);
+    let upper = (65..=90).contains(&x);
+    let digit = (48..=57).contains(&x);
+    match name {
+        "is_digit" => Value::Bool(digit),
+        "is_alpha" => Value::Bool(lower || upper),
+        "is_alnum" => Value::Bool(lower || upper || digit),
+        "is_space" => Value::Bool(x == 32 || x == 9 || x == 10 || x == 13),
+        "is_upper" => Value::Bool(upper),
+        "is_lower" => Value::Bool(lower),
+        "to_upper" => Value::Int(if lower { x - 32 } else { x }, IntTy::Char),
+        "to_lower" => Value::Int(if upper { x + 32 } else { x }, IntTy::Char),
+        "to_str" => Value::Str(text_rc(&char_of(x).to_string())),
+        _ => unreachable!("type checked: {}", name),
     }
+}
+
+/// 桁数の上限（`x.fixed(n)`。jw_rt.c の jw_f64_fixed と同じ）
+const FIXED_MAX: i128 = 100;
+
+/// `x.fixed(n)`: 小数点以下 n 桁の文字列（ちょうど真ん中は偶数へ丸める。C の printf と同じ）。inf と NaN は print と同じ形
+fn fixed(x: f64, n: i128, span: Span) -> R<String> {
+    if !(0..=FIXED_MAX).contains(&n) {
+        return Err(Diagnostic::new("桁数が範囲の外です")
+            .primary(span, format!("fixed({}) は使えません", n))
+            .note(format!("小数点以下の桁数は 0〜{} です", FIXED_MAX)));
+    }
+    if !x.is_finite() {
+        return Ok(format!("{:?}", x));
+    }
+    Ok(format!("{:.*}", n as usize, x))
 }
 
 /// 文字列のメソッド。位置と長さは文字単位（バイトではない）
@@ -3252,7 +3409,7 @@ pub(crate) fn str_method(text: &str, name: &str, vals: Vec<Value>, span: Span) -
     Ok(match name {
         "len" => Value::Int(text.chars().count() as i128, IntTy::I64),
         "byte_len" => Value::Int(text.len() as i128, IntTy::I64),
-        "chars" => Value::Array(text.chars().map(|c| string(c.to_string())).collect(), true),
+        "chars" => Value::Array(text.chars().map(|c| Value::Int(c as i128, IntTy::Char)).collect(), true),
         "bytes" => Value::Array(text.bytes().map(|b| Value::Int(b as i128, IntTy::U8)).collect(), true),
         "code" => match text.chars().next() {
             Some(c) => Value::Int(c as i128, IntTy::I64),
@@ -3336,6 +3493,32 @@ pub(crate) fn join_strs(items: &[Value], sep: &Value) -> String {
         })
         .collect();
     parts.join(sep.as_str())
+}
+
+/// `a.contains(x)` / `a.index_of(x)`: x と等しい最初の要素の位置（`==` と同じ比べ方。NaN はどれとも等しくない）
+pub(crate) fn find_in(items: &[Value], x: &Value) -> Option<usize> {
+    items.iter().position(|v| match (v, x) {
+        (Value::Int(a, _), Value::Int(b, _)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a == b,
+        _ => unreachable!("type checked: scalar elements"),
+    })
+}
+
+/// `b.to_str()`: u8 のリストを文字列にする。正しい UTF-8 でなければ None
+pub(crate) fn utf8_str(items: &[Value]) -> Value {
+    let bytes: Vec<u8> = items
+        .iter()
+        .map(|v| match v {
+            Value::Int(b, _) => *b as u8,
+            _ => unreachable!("type checked: u8[]"),
+        })
+        .collect();
+    match String::from_utf8(bytes) {
+        Ok(t) => some(Value::Str(text_rc(t.as_str()))),
+        Err(_) => none(),
+    }
 }
 
 /// `chr(n)`: 番号 n の文字 1 つの文字列
@@ -3483,6 +3666,71 @@ pub(crate) fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             span,
             format!("{} と {} にはこの演算を使えません", l.type_name(), r.type_name()),
         )),
+    }
+}
+
+enum FsDone {
+    Unit,
+    Names(Vec<String>),
+    Ints(Vec<i64>),
+}
+
+/// std.fs の下回り（`__fs_list` など）。エラーの文は jw_rt.c の `jw_fs_list` などと同じ（OS の文は使わない）
+fn fs_op(name: &str, path: &str, other: &str, vals: &[Value]) -> Result<FsDone, String> {
+    use std::fs;
+    match name {
+        // 中の名前（`.` と `..` は除く。バイトの順に並べる。UTF-8 でない名前があれば読めないとする）
+        "__fs_list" => {
+            let fail = || format!("ディレクトリを読めません: {}", path);
+            let mut names = Vec::new();
+            for e in fs::read_dir(path).map_err(|_| fail())? {
+                let e = e.map_err(|_| fail())?;
+                names.push(e.file_name().into_string().map_err(|_| fail())?);
+            }
+            names.sort();
+            Ok(FsDone::Names(names))
+        }
+        "__fs_make_dir" => fs::create_dir(path).map(|_| FsDone::Unit).map_err(|_| format!("ディレクトリを作れません: {}", path)),
+        // ファイルか、空のディレクトリ（リンクはリンクそのものを消す）
+        "__fs_remove" => {
+            let dir = fs::symlink_metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+            let r = if dir { fs::remove_dir(path) } else { fs::remove_file(path) };
+            r.map(|_| FsDone::Unit).map_err(|_| format!("消せません: {}", path))
+        }
+        "__fs_rename" => fs::rename(path, other).map(|_| FsDone::Unit).map_err(|_| format!("名前を変えられません: {}", path)),
+        "__fs_append" => {
+            use std::io::Write;
+            let Value::Str(t) = &vals[1] else { unreachable!("type checked: str") };
+            let r = fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(t.as_bytes()));
+            r.map(|_| FsDone::Unit).map_err(|_| format!("ファイルに書けません: {}", path))
+        }
+        // [種類（0 ファイル・1 ディレクトリ・2 そのほか）, 大きさ, 更新時刻（ミリ秒）, リンクか]。リンクはたどった先（先がなければ種類 2）
+        "__fs_stat" => {
+            let lm = fs::symlink_metadata(path).map_err(|_| format!("情報を読めません: {}", path))?;
+            let link = lm.file_type().is_symlink();
+            let m = if link { fs::metadata(path).ok() } else { Some(lm) };
+            let Some(m) = m else { return Ok(FsDone::Ints(vec![2, 0, 0, 1])) };
+            let kind = if m.is_dir() { 1 } else if m.is_file() { 0 } else { 2 };
+            let size = if kind == 0 { m.len() as i64 } else { 0 };
+            Ok(FsDone::Ints(vec![kind, size, modified_ms(&m), link as i64]))
+        }
+        _ => unreachable!("not an fs builtin: {}", name),
+    }
+}
+
+/// 更新時刻（1970 年からのミリ秒）。jw_rt.c と同じく、秒 * 1000 + ナノ秒 / 10^6（Windows は秒の単位）
+fn modified_ms(m: &std::fs::Metadata) -> i64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        m.mtime().wrapping_mul(1000).wrapping_add(m.mtime_nsec() / 1_000_000)
+    }
+    #[cfg(not(unix))]
+    {
+        match m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+            Some(d) => d.as_secs() as i64 * 1000,
+            None => 0,
+        }
     }
 }
 

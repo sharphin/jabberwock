@@ -150,7 +150,7 @@ pub fn u8[] pbkdf2_sha256(ref u8[] password, ref u8[] salt, i64 iters) {
 
 /// 小文字の 16 進の文字列にする
 pub fn str hex(ref u8[] b) {
-    let digits = "0123456789abcdef".chars();
+    let digits = "0123456789abcdef".chars().map((one) -> one.to_str());
     let mut s = "";
     for x in b {
         let v = x as i64;

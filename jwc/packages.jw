@@ -11,7 +11,7 @@ pub fn Map empty() { Map { entry: "", paths: [], allows: [] } }
 fn bool name(str s) {
     if s == "" { return false; }
     let first = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
-    for (i, c) in s.chars() {
+    for (i, c) in s.chars().map((one) -> one.to_str()) {
         if !first.contains(c) && (i == 0 || !"0123456789".contains(c)) { return false; }
     }
     true

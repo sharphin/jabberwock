@@ -122,7 +122,7 @@ struct Parser {
     }
 
     fn mut Result<(), str> word(str w) {
-        for c in w.chars() {
+        for c in w.chars().map((one) -> one.to_str()) {
             if peek() != c { return Err(err("`{w}` のつもりの書き方が違います")); }
             pos += 1;
         }
@@ -305,7 +305,7 @@ struct Parser {
 
 /// JSON の文字列を読む（前後の空白はよい。余分なものがあれば Err）
 pub fn Result<Json, str> parse(str s) {
-    let mut p = Parser { cs: s.chars(), pos: 0, depth: 0 };
+    let mut p = Parser { cs: s.chars().map((one) -> one.to_str()), pos: 0, depth: 0 };
     p.ws();
     let v = p.value()?;
     p.ws();
@@ -330,7 +330,7 @@ fn str hex4_of(i64 n) {
 /// 文字列を JSON の文字列にする（`"` で囲む）
 pub fn str quote(str s) {
     let mut out = "\"";
-    for c in s.chars() {
+    for c in s.chars().map((one) -> one.to_str()) {
         if c == "\"" { out += "\\\""; }
         else if c == "\\" { out += "\\\\"; }
         else if c == "\n" { out += "\\n"; }

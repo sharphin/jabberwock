@@ -188,7 +188,34 @@ pub fn Const wrap(bool neg, u64 mag, str t) {
 
 // ---------------------------------------------------------------- 表示（`jwc --ir`。Rust 版の Display と同じ形）
 
-fn str debug_str(str s) { "\"" + astdump.escape(s) + "\"" }
+/// Rust の `{:?}` と同じ書き方の文字列（制御文字は `\u{8}` のように 16 進で）
+fn str debug_str(str s) {
+    let mut out = "\"";
+    for c in s.chars() {
+        let k = c as i64;
+        if c == '\\' { out += "\\\\"; }
+        else if c == '"' { out += "\\\""; }
+        else if c == '\n' { out += "\\n"; }
+        else if c == '\t' { out += "\\t"; }
+        else if c == '\r' { out += "\\r"; }
+        else if c == '\0' { out += "\\0"; }
+        else if k < 32 || (k >= 127 && k < 160) { out += "\\u{{" + hex_of(k) + "}}"; }
+        else { out += c.to_str(); }
+    }
+    out + "\""
+}
+
+fn str hex_of(i64 k) {
+    let digits = "0123456789abcdef";
+    let mut out = "";
+    let mut v = k;
+    loop {
+        out = digits.slice(v % 16, v % 16 + 1) + out;
+        v = v / 16;
+        if v == 0 { break; }
+    }
+    out
+}
 
 pub fn str show_program(ref Program p) {
     let mut out = "";

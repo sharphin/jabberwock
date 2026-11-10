@@ -307,7 +307,7 @@ let x = pick(true, 1, 2);
 - 文字列はメソッドで操作する（`len`・`split`・`slice`・`to_int` など。一覧は spec.md 6.7）。
 - **長さと位置は文字単位**（オーナーが決定）。バイト数は `byte_len()`（オーナーの案）。Python・Swift と同じで、日本語を途中で切る心配がない。
   位置を指定して取り出すのは長い文字列ほど遅くなるので、速さが要る所はあとでバイト単位のメソッドを足して補う。
-- 文字型はまだないので、`chars()` は 1 文字の `str` のリストを返す。
+- `chars()` は最初 1 文字の `str` のリストを返していた（文字型がなかったため）。2026-11-08 に文字型を入れて `char[]` に変えた（オーナーの判断）。
 - 数を文字列にするのは埋め込み（`"{x}"`）で足りるので、`to_str()` は作っていない。
 
 ## リストの insert / remove と、構造体の要素の for（2026-10-23 に実装）
@@ -853,3 +853,78 @@ let x = pick(true, 1, 2);
   これに合わせて、実行ファイルの read_line は stdio（getchar）をやめ、実行時ライブラリの自前の入れ物で読むようにした（read_line と read_line_for が同じ入れ物を使う。
   stdio にたまった分は待ち時間つきで読むときに見えないため）。行の切り方（改行と、その前の \r を取る。最後の行に改行がなくてもよい）と、読む前に出力を書き出すのは今までどおり。
   Linux は poll、Windows はパイプなら PeekNamedPipe、端末なら WaitForSingleObject、ファイルならすぐ読む。
+
+## 標準ライブラリの読み込みと文字型（2026-11-08）
+
+- 標準ライブラリは jabberwock で書き（リポジトリの `std/`）、コンパイラの中に入れる。`use std.名前;` で読み、使う側は `名前.f` と書く
+  （Go の `import "strings"` → `strings.F` と同じ形）。同じフォルダに同じ名前のファイルがあっても標準のほうを使う（どちらを読むかが場所で変わらないように）。
+  組み込み（ネイティブ）を足すと 4 か所（interp・IR・LLVM＋C・jwc）をそろえる必要があるので、jabberwock で書けるものは std に書く方針（オーナーと相談済み）。
+- 文字型 `char` は Unicode の文字 1 つ（Rust の char・Go の rune と同じ範囲）。実装は整数型の 1 つ（32 ビット）にして、IR・LLVM・辞書・並べ替えをそのまま使う。
+  型としては数とまぜない（計算・自動の変換・数の書き方を char にするのを禁止）。文字を数として扱う書き間違いを型で止めるため。
+  判定のメソッド（`is_alpha` など）は ASCII の範囲だけ見る（Unicode の表を持たない。字句解析などで要るのはほぼ ASCII）。
+
+## std.fs（2026-11-10）
+
+- ファイルとディレクトリの操作は、OS を呼ぶ小さな下回り（`__fs_exists` `__fs_list` `__fs_make_dir` `__fs_remove` `__fs_rename` `__fs_stat` `__fs_append`）だけを組み込みにし、
+  使う形（`fs.make_dirs`・`fs.walk`・`fs.Info`・パスの結合や拡張子）は std/fs.jw に jabberwock で書く。下回りの名前と C の関数（`jw_fs_*`）は
+  `safety-ci-resume` ブランチの std.fs とそろえた（あとで合わせやすいように）。開いたファイルを持つ資源型 `File` と逐次の読み書きは、資源の仕組みが要るので今回は入れない。
+- エラーの文は OS の文を使わず、interp と jw_rt.c で一字一句そろえる（突き合わせのため）。理由（なかった・権限がない）は分けない。
+- `list_dir` の名前はバイトの順に並べる（OS の順は決まらないため）。UTF-8 にできない名前があればエラー（`str` にできないため。黙って置き換えない）。
+- `walk` はリンクのディレクトリに入らない（輪になるのを防ぐ）。再帰の削除（`remove_all`）は、間違えたときの被害が大きいので入れない。
+
+## std.cli と、値のブロックを exit で終えること（2026-11-10）
+
+- std.cli は jabberwock だけで書く（組み込みは `args()` だけ使う）。結果は `Args`（書かれた名前・値・位置引数・help）で、型ごとの取り出しは `get` / `get_int` だけ。
+  `-h` / `--help` はエラーにせず `help` を立てる（表示して終わるかは使う側が決める）。自分で `h` / `help` を決めたらそちらが優先。
+  `-5` のように `-` のあとが数字なら位置引数（負の数を渡せるように）。使い方の表示は、日本語などを幅 2 として列をそろえる。
+- 値として使うブロックの最後の文が `exit(..);` なら、`return` と同じく値がなくてよいことにした（パーサの `parse_value_block`、jwc も）。
+  `case Err(e) -> { eprint(e); exit(2); }` が書けないのは不便なため。`exit` は組み込みの名前で別の意味にできないので、名前で見て決めてよい。
+
+## 複合代入の添字は 1 回だけ計算する（2026-11-10）
+
+- `a[f()] += 1` は `a[f()] = a[f()] + 1` に書き換えていたので、f が 2 回呼ばれていた（数え上げで別の場所に足すなど、気づきにくい誤り）。
+- パーサが、左辺の添字のうち計算の要るもの（変数・数・文字列・真偽値・それらの `as` 以外）を隠れた変数 `#i行:列` の `let` にして、その文の前に置く。
+  後ろの段（型検査・実行・IR・LLVM）は何も変えない。添字は左から順に、右辺より先に 1 回だけ計算する。
+
+## std.sets（2026-11-10）
+
+- 型の引数 `T` は辞書のキーにできない（構造体が来ると困るため）ので、汎用の `Set<T>` はまだ書けない。
+  よく使う型ごとに `IntSet` / `StrSet` / `CharSet` を用意した（中身は `bool[K]` の辞書）。
+  辞書のキーに構造体を使えるようになったら（等しさとハッシュの決まりを入れたら）、汎用の `Set<T>` にまとめる。
+
+## std.http は curl を呼ぶ（2026-11-10）
+
+- 通信の本命は v1 設計の std.net / std.tls（資源の仕組みが要る）だが、それまで HTTP がまったく使えないのは不便なので、
+  std.http は OS の `curl` コマンドを `run_output` で呼ぶ形にした（組み込みを足さずに jabberwock だけで書ける。HTTPS も curl がやる）。
+  curl は Linux・macOS と Windows 10 以降に入っている。std.net ができたら、使う形（`get` / `post` / `Response`）はそのままで中身を差し替える。
+- 本文は `run_output` が受け取れる UTF-8 の文字列だけ。バイナリは std.net を待つ。
+- 引数で curl のオプションを足されないよう、URL は `http://` / `https://` で始まるものだけ、方法は `-` で始まらないものだけ受け付ける。
+  本文は `--data-raw`（`@` で始まってもファイルとして読まない）で渡す。
+
+## std.time・std.csv・std.encoding（2026-11-10）
+
+- どれも組み込みを足さず jabberwock だけで書いた（時刻のもとは組み込みの `unix_ms()`）。
+- std.time は UTC だけ。地方時は OS のタイムゾーンの表を読む必要があり、まだ入れない。日付の計算は H. Hinnant の days_from_civil / civil_from_days。
+- std.csv は RFC 4180（`"` で囲む・`""` が `"`）。囲みが閉じていない・`"` のあとに `,` 以外が続くときは Err にする（黙って直さない）。
+- std.encoding の base64 は、読むときに URL 用の `-` `_` と、`=` のない形・空白と改行も受け付ける。書くときは標準の形（`+` `/` と `=`）。
+
+## main と safety-ci-resume を合わせる（2026-11-10。オーナーの判断: 案 A「向こう（safety-ci-resume）を正にする」）
+
+- 10/25 に分かれた 2 本を、safety-ci-resume を土台にして合わせた。Rust 版の凍結（10/29）はそのまま続ける。
+- main で 11/06〜11/10 に足した言語の機能（文字型 char・`chars()` が `char[]`・`a[f()] += 1` の添字を 1 回だけ計算・値のブロックを `exit(..);` で終える・
+  `run_output` / `assert_eq` / リストの `contains` / `index_of` / `to_str`・f64 の数学と `fixed`・`now_ns` などの組み込み）は、Rust 版と jwc の両方にもう入っていたので残した。
+  凍結の例外として扱う（新しく足したのではなく、合わせる前からあったもの）。
+- `chars()` が `char[]` になったので、向こうの std と jwc（ircert.jw・packages.jw）で文字を `str` として扱っていた所は
+  `s.chars().map((one) -> one.to_str())` にした（中の手順は変えない）。新しく書くコードは char のまま扱う。
+- 検査を消す解析で「何もしない組み込み」の一覧（analyze.rs・analyze.jw・CheckerMain.lean の `pureBuiltins`）に、f64 の数学・`int.to_char`・char のメソッドを足した。
+  どれも数や文字を計算するだけで、リストの要素を動かさない。
+- 標準ライブラリの名前は向こうの形（モジュールの名前 `std:名前`、`use std.名前;` の位置は `std` から名前まで、エラーの文も同じ）。
+  Rust 版の modules.rs も同じ形に直した（突き合わせのため。Rust 版も `use std.名前;` を読むが、資源などを使うモジュールは読めない）。
+- 重なっていた std は向こうのものを残し、main だけにあった関数を足した:
+  std.fs に `make_dirs`・`append_text`（組み込み `__fs_append`）・`walk`・パスの関数、std.date に `weekday_name`・`add_days`・`add_ms`、
+  std.csv に `write_row`・`parse_records`、std.text に main の std.strings の関数、std.base64 に `encode_str`・`decode_str`。
+  main の std.strings・std.encoding・std.time（日付）・curl を呼ぶ std.http は外した（それぞれ std.text・std.base64 と std.hash・std.date・向こうの std.http が代わる）。
+  std.json は向こうの `Json`（main の `json.Value`・`get_str` などは外した。`v.get(k).as_str()` で同じことができる）。
+  std.cli・std.sets・std.lists・std.rand はそのまま足した（std.rand は再現できる乱数、std.random は暗号用で役目が違う）。
+- `__fs_*` の組み込みは名前と形が両方で同じだったので、jw_rt.c・llvmfn.jw は向こうのもの（資源の節）を残し、`__fs_append` だけ足した。
+  jwc では向こうと同じく std.fs の中だけで使える。

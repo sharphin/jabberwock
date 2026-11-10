@@ -32,6 +32,15 @@ pub struct DateTime {
         floor_mod(days_from_civil(year, month, day) + 3, 7) + 1
     }
 
+    /// 曜日の名前（`月` 〜 `日`）
+    fn str weekday_name() { ["月", "火", "水", "木", "金", "土", "日"][weekday() - 1] }
+
+    /// n 日あと（負なら前）
+    fn DateTime add_days(i64 n) { from_unix_ms(unix_ms() + n * DAY_MS) }
+
+    /// n ミリ秒あと（負なら前）
+    fn DateTime add_ms(i64 n) { from_unix_ms(unix_ms() + n) }
+
     /// その年の何日目か（1 月 1 日が 1）
     fn i64 day_of_year() { days_from_civil(year, month, day) - days_from_civil(year, 1, 1) + 1 }
 
@@ -118,7 +127,7 @@ pub fn i64 days_in_month(i64 year, i64 month) {
 ///   "2026-10-31"（その日の 0 時 UTC）・"2026-10-31T10:37:52Z"・"2026-10-31T10:37:52.5+09:00"（t と z の小文字、T の代わりの空白もよい）
 /// 秒の小数は 9 桁まで読み、ミリ秒より細かい分は切り捨てる。時差があれば UTC に直す。ほかの形・ない日付なら Err
 pub fn Result<DateTime, str> parse(str s) {
-    let cs = s.chars();
+    let cs = s.chars().map((one) -> one.to_str());
     let bad = "日時の形が読めません（2026-10-31T10:37:52Z のように書いてください）: " + s;
     if cs.len() < 10 || cs[4] != "-" || cs[7] != "-" { return Err(bad); }
     let year = digits(ref cs, 0, 4);

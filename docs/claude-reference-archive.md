@@ -41,7 +41,7 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 | ファイル | 役割 |
 |---|---|
 | `src/lexer.rs` | 字句解析。改行はただの空白（文の区切りは `;`）。`"""..."""` だけ途中で改行できる（トークンの位置は開きの行） |
-| `src/parser.rs` | 構文解析。`if`/`while` の条件では構造体リテラルを禁止（`{` があいまいになるため）。`x += e` は `x = x + e`、`x++` は `x = x + 1` に書き換える（左辺は複製） |
+| `src/parser.rs` | 構文解析。`if`/`while` の条件では構造体リテラルを禁止（`{` があいまいになるため）。`x += e` は `x = x + e`、`x++` は `x = x + 1` に書き換える（左辺は複製。計算の要る添字は `hoist_indices` が隠れた変数 `#i行:列` の `let` にして文の前に置く。jwc も同じ） |
 | `src/ast.rs` | 構文木。`Deref` と `Field` は静的解析の結論 `Cell<Check>` を持つ。整数の型 `IntTy`（範囲・一周・自動変換の規則）もここ |
 | `src/types.rs` | 型検査。実行前に型と `mut` / `ref mut` の違反を見つける（`lib.rs` で解析・実行の前に呼ぶ） |
 | `src/analyze.rs` | 静的解析。証明できた `*p` / `p.f` の ref 世代チェックを消す |
@@ -50,6 +50,8 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 | `src/diag.rs` | 「借りた → 解放された → 使った」を時系列で出すエラー表示 |
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
+| `src/stdlib.rs` | 標準ライブラリ: `std/` の jabberwock のソースを `include_str!` で入れておく（`use std.名前;` で `modules.rs` が読む。凍結した Rust 版でも読むが、資源など jwc だけの機能を使うモジュールは止まる） |
+| `std/` | 標準ライブラリのモジュール（jabberwock で書く。一覧は docs/spec.md の 1.2）。足したら `stdlib.rs` の `MODULES` にも足し、`python3 scripts/sync_stdlib.py` で jwc/stdlib.jw を作り直す |
 | `src/project.rs` | パッケージ（alice.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは別の実行ファイル `alice`（`src/alice.rs` の `project_*`）。説明は docs/packages.md |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
@@ -73,7 +75,7 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 | `tests/interfaces.rs` | interface（Go 風）と `<T: Shape>` / `<T: ordered>`・interface を型として使う |
 | `tests/strings.rs` | 文字列の埋め込み `"x = {x}"` |
 | `tests/arrays.rs` | 配列（`i64[3]`・添字・定数の添字の範囲チェック） |
-| `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a` |
+| `tests/lists.rs` | リスト `i64[]`（push / pop / len）と `for x in a`・`contains` / `index_of` |
 | `tests/floats.rs` | 小数 f64 |
 | `tests/ints.rs` | 整数型・数の書き方・自動変換・`as` |
 | `tests/text.rs` | 文字列のメソッドと入力（`read_line()` / `args()`） |
@@ -83,6 +85,8 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 | `tests/native.rs` | clang で作った実行ファイル（clang がなければ何もしない。スレッドも）。区画の確保・使い回し・別スレッドでの解放・`Option<own T>`・文字列の長さを、interp と -O1 / -O2 で突き合わせる（`same_as_interp`） |
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
+| `tests/chars.rs` | 文字型 char（`'a'`・比べる・`as` / `to_char`・判定のメソッド・辞書のキー・match・エラー） |
+| `tests/stdlib.rs` | 標準ライブラリを Rust 版で（`use std.名前;`・Rust 版で読めるモジュール・同じ名前のファイルより優先・スレッド）。std.cli は `tests/cli_example.jw`、std.sets は `tests/sets_example.jw`、std.csv・std.base64・std.hash は `tests/text_formats_example.jw`。jwc だけのモジュールは tests/jwc.rs の `jwc_std_*`（std.fs のパスの関数などは `tests/fs_example.jw`） |
 | `tests/project.rs` | パッケージ（alice.toml・依存先・`alice new` / `run` / `test` / `build`） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |
@@ -93,7 +97,7 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 | `tests/jwc.rs` | jwc を実行ファイルにして、Rust 版と出力を突き合わせる（`--tokens` は `lib.rs` の `token_dump`、`--ast` は `ast_dump`、`--typed` は `typed_dump`、`--ir-raw` / `--ir` は `ir_dump`、`--ll` は `llvm_text` と比べる（`same_ll`）。テストのプログラムを集めた `tests/jwc_cases.txt` も使う。clang がなければ何もしない） |
 | `tests/fuzz.rs` | 解析あり・なしのAST/IRとネイティブ、jwc生成LLVMをsanitizer付きでも比べる。型の通る攻撃78件と演算の端76件はスキップを認めない。共通入力は tests/support/attacks.rs。差分テスト。種から写し・ジェネリクス・match ref・リストの操作・要素を借りた ref・メソッドの this を組み合わせたプログラムを作り、interp（と IR）と実行ファイルで比べる（`JW_FUZZ=本数`・`JW_FUZZ_SEED`・`JW_FUZZ_JWC=jwc`）。clang がなければ何もしない。**新しい取り出し経路・組み込みの操作を足したら、ここの部品にも足す** |
 | `tests/robust.rs` | 堅牢性テスト。コマンド（`--ir`・実行・`build`）を別のプロセスで動かし、極端な入力（深い入れ子・長い鎖・巨大な数など）と、例とテストのプログラムを壊した変異で、panic・スタックあふれ・内部エラー・シグナルで落ちないかを見る（時間切れは可）。メモリ破壊・情報漏洩を狙うプログラム（`ATTACKS`）は interp・解析なし・実行ファイルで必ずエラーで止まり、隠した値を出さないことを確かめる。`JW_ROBUST=本数`・`JW_ROBUST_SEED`・`JW_ROBUST_NATIVE=1`（変異も実行ファイルで）・`JW_ROBUST_ASAN=1`（ASan/UBSan つきで作る）・`JW_ROBUST_DUMP=フォルダ`（落ちた入力を残す）。**落ち方を直したら `hostile` に足す**。`generated_code_guards_undefined_operations` は書き出した割り算・ずらしの守りの形を見る（llvm.rs の守りを変えたら直す）。確かめた範囲と残りは docs/safety-testing.md・docs/safety-validation.md、CI は `.github/workflows/safety.yml`（毎晩は 20 倍） |
-| `tests/system.rs` | ファイルの読み書き・`run_command`・`exit`・`eprint`・値なしの値 `()` |
+| `tests/system.rs` | ファイルの読み書き・`run_command` / `run_output`・`assert_eq`・`exit`・`eprint`・値なしの値 `()`・時刻（`now_ns` / `unix_ms` / `sleep_ms`）・環境変数 `env_var` |
 
 `tests/sanitizers.rs` は生成LLVMのASan/MSan/TSanとCのUBSan/TSanの負例。MSan時はC関数の宣言にnoundefを付け、境界での検査漏れも確かめる。
 
@@ -135,6 +139,10 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
 - 整数の値は `Value::Int(i128, IntTy)`。計算は i128 でして、型の幅で一周させる（`IntTy::wrap`）。
 - 型検査は整数の式に「この型で使う」という印 `Expr.int` をつける（数の書き方を相手に合わせる・自動の変換）。
   interp は `eval` / `eval_flow` の最後にその型へ変換する（`convert`）。印をつけるのは `types.rs` の `convert` / `set_tree` だけ。
+- 文字 `char` は整数型の 1 つ `IntTy::Char`（値は `Value::Int(番号, IntTy::Char)`、IR / LLVM では 32 ビットの符号なし整数）。
+  `'a'` はパーサが `97 as char`（`ExprKind::Cast`）にする（jwc も同じ）。型検査が計算（`char_arith`）・数との自動の変換（`widens_to`）・数の書き方を char にすること・
+  `as char`（u8 と正しい番号の定数だけ）を弾く。表示は interp の `char_of`、llvm は `int_shape`（jw_rt.c の `fmt_int` の 2 が UTF-8）。
+  メソッドは types の `char_method`、interp の `char_method`（`num_method` から）、IR は `char.名前` の Builtin、llvm は比べるだけで書く（jwc の llvmfn も同じ順）。`n.to_char()` は `int.to_char`。
 - 小数は `Value::Float(f64)`・`Ty::Float`。数だけの式が f64 の場所にあれば、型検査が `set_float_tree` で `Expr.float` をつけ、
   interp の `convert` が整数を小数にする（中の数すべてにつけるので、計算も小数でする）。
 - 整数のあふれは一周する。定数の式（`is_const_tree`）の結果が型に入らないときだけ `types.rs` が警告を出す（そのまま書いた数ならエラー）。
@@ -149,7 +157,7 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
   `bind_fields` で受け取る。types は `variant_pat` / `sub_pat`、全部書いたかは `variant_covered`。lower は case ごとに `test_pat`（外れたら次の case へ）→
   `bind_pat` → 入れ物の drop を **同じブロック** に置く（llvm.rs はそのブロックで take した入れ物の中身を解放しないため）。
 - パーサはファイル中の `enum 名前` を先に集め、`名前.種類` を enum の値として読む（`enum_names`）。
-- ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
+- ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。値として使うブロックは、最後が return か `exit(..);` なら値なしでよい（`parse_value_block`）。`}` で終わる文（`is_block_like`）には `;` 不要。
 
 - ジェネリクス: 型検査だけの話で、interp は型を見ない（値はそのまま動く）。`Ty::Param` は定義の中の `T`、
   `Ty::Struct/Enum(名前, 型の引数)`。使う側では `instantiate` が引数（ふつうの式 → 数の式 → enum の値の順）と
@@ -210,6 +218,8 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
   `Span.file` がファイルの番号（`Outcome.files` の位置）。表示は `jabberwock::render`。
   パッケージの名前の空間: 読む関数への問い合わせは `名前`（自分のパッケージ）/ `空間*名前`（依存先の lib.jw。最初のパッケージからは `*名前`。
   キーは `名前` で `Loader.libs` に入れる）/ `P/名前`（依存先 P の中のモジュール。キーも `P/名前`）。依存先 P の中からは `P/u` → `P*u`、それ以外からは `u` → `*u` の順に試す。
+  標準ライブラリ `use std.名前;` は、問い合わせずに `stdlib::source` を読む（キーとファイルの名前は `std:名前`、書いた名前 `名前` を `Qualify.aliases` で `std:名前` に書き換える。
+  最初のファイルも aliases だけ書き換える。jwc/modules.jw は `merge_paths` で直接 `std:名前.x` にする。位置は `std` から名前まで、エラーの文も jwc と同じ）。
   `空間*名前` は読んだことがあっても毎回問い合わせる（project.rs の `reader` が `direct` で、直接の依存先かを確かめる）。
   書いた名前とキーが違えば `Qualify.alias` が `u.f` を `P/u.f` に書き換える。`Outcome.files` の名前は `名前` / `*名前` / `P/名前`（スレッドの `reloader` は
   `空間*名前` を `*名前` で探す）。表示するときは `*` を外す。project.rs の `modules` のキーも同じ形。
@@ -289,8 +299,21 @@ native専用の退役検査はclang必須・`JW_REQUIRE_RETIREMENT_TESTS=1`と�
   デッドロックは、どのスレッドが見つけても main が自分の待っている位置で知らせる（`IS_WORKER`。表示を毎回同じにするため）。
   スレッドを作れなければ spawn の位置でエラー（`start_thread` / jw_rt.c の `jw_spawn`。錠を持ったまま作り、作れてから `alive` を足す）。
   環境変数 `JW_MAX_THREADS` で上限を下げて起こせる（`threads::max_threads` / jw_rt.c の `max_threads`。`--release` の実行ファイルは見ない）。
-- ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
+- ファイル・コマンド・終了（`exit` / `read_file` / `write_file` / `run_command`）と時刻・環境変数（`now_ns` / `unix_ms` / `sleep_ms` / `env_var`）・`run_output`: 型は types.rs の `call`、動きは interp の `system`（IR の exec も同じものを呼ぶ）、
   LLVM は jw_rt.c の `jw_read_file` などと `result_of`（`Result<T, str>` を作る）。エラーの文は OS の文を使わず、interp と jw_rt.c で一字一句そろえる。
+  時刻・環境変数は jw_rt.c の `jw_now_ns` など（Windows は QueryPerformanceCounter・GetSystemTimePreciseAsFileTime・Sleep・_wgetenv）。
+  `now_ns` の起点は interp（はじめて呼んだとき）と実行ファイル（CLOCK_MONOTONIC）で違う。差だけを使うこと。
+  `env_var` / `now_ns` などの名前は組み込み（`BUILTINS`）なので、変数や関数の名前にできない（jwc の `env` とぶつかるので `env` にはしなかった）。
+  `Option<str>` を返す組み込み（env_var・u8 のリストの `to_str`）は llvm.rs / llvmfn.jw の `some_str` で作る。
+  `run_command` と `run_output` は jw_rt.c の `run_cmd` を共有する（`run_output` は標準出力をパイプで受ける。Windows は 1 番をパイプへつなぎ替えて `_wspawnvp(_P_NOWAIT)`、そのあいだ出力の錠を持つ）。
+- std.fs の下回り（`__fs_exists` / `__fs_list` / `__fs_make_dir` / `__fs_remove` / `__fs_rename` / `__fs_stat` / `__fs_append`）: 型は types.rs の `call`、動きは interp の `system` → `fs_op`（exec も）、
+  LLVM は jw_rt.c の `jw_fs_*`（資源の節。`result_of`。`__fs_list` / `__fs_stat` はリストを返す）。エラーの文は `fs_op` と jw_rt.c でそろえる。NUL を含むパスは Err（exists は false）。
+  `__fs_stat` は `[種類, 大きさ, 更新時刻, リンクか]`（種類は 0 ファイル・1 ディレクトリ・2 そのほか）で、std/fs.jw が `fs.Info` にする。
+- `assert_eq(a, b)`: 型は types.rs が `binary(BinOp::Eq, ..)` で `==` と同じに調べる。interp の `Interp::assert_eq`（exec も）、
+  llvm.rs は `binary_vals`（`binary` から値の計算を分けたもの。jwc の llvmfn.jw も同じ）で比べ、違えば Show の手伝いで両方を文字にして `jw_assert_eq_fail`。
+- リストの `contains` / `index_of`（要素は数・真偽値・文字列）: interp の `find_in`（exec も）、llvm は jw_rt.c の `jw_list_find_mem`（整数・真偽値をバイトで）/ `jw_list_find_f64` / `jw_list_find_str`。
+- f64 のメソッド（`floor` / `ceil` / `round` / `trunc` / `exp` / `ln` / `log10` / `sin` / `cos` / `tan` / `pow` / `is_nan` / `fixed`）: 型は types.rs の `num_method`（エラーの文 `F64_METHODS` は jwc/typeck.jw と同じ）、
+  動きは interp の `num_method`（exec も）。LLVM は `llvm.floor.f64` などの組み込み（tan だけ C の `tan`）、`fixed` は jw_rt.c の `jw_f64_fixed`（`%.*f`。Rust の `{:.*}` と丸めが同じことを確かめた）。
   `exit` は `World.exit`（終了コードを覚えて `exit_marker` で全スレッドを止める）。`run_inner` / `ir_mismatch` がそれをエラーでなく終了として扱う。
   exit のあとは片づけないので、残ったヒープの数は比べない。lower は exit の呼び出しのあとを `Term::Unreachable` にする。
   `eprint` は print と同じ形で `World.errput`（`Outcome.errput`）へ。突き合わせは標準エラーの先頭が errput と同じかを見る。

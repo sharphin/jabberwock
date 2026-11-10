@@ -173,7 +173,12 @@ def scalarTags : List String := ["Int", "Float", "Bool", "Str", "Unit", "Never"]
 def pureBuiltins : List String :=
   ["print", "eprint", "concat", "append", "assert",
    "int.abs", "int.max", "int.min",
+   "int.to_char",
    "f64.abs", "f64.max", "f64.min", "f64.sqrt", "f64.to_bits",
+   "f64.floor", "f64.ceil", "f64.round", "f64.trunc", "f64.exp", "f64.ln", "f64.log10",
+   "f64.sin", "f64.cos", "f64.tan", "f64.pow", "f64.is_nan", "f64.fixed",
+   "char.is_digit", "char.is_alpha", "char.is_alnum", "char.is_space", "char.is_upper", "char.is_lower",
+   "char.to_upper", "char.to_lower", "char.to_str",
    "str.len", "str.byte_len", "str.chars", "str.bytes", "str.code", "str.lines", "str.split",
    "str.trim", "str.to_upper", "str.to_lower", "str.contains", "str.starts_with", "str.ends_with",
    "str.find", "str.slice", "str.replace", "str.repeat", "str.to_int", "str.to_float"]

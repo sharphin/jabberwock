@@ -53,7 +53,7 @@ pub struct Regex {
 
     /// s のどこかに合うか
     fn bool is_match(str s) {
-        let cs = s.chars();
+        let cs = s.chars().map((one) -> one.to_str());
         let codes = cs.map((c) -> c.code());
         match run(ref codes, 0) {
             case Some(c) -> true;
@@ -63,7 +63,7 @@ pub struct Regex {
 
     /// 最初に合うところ（いちばん左。同じ位置なら、選択肢は左を、繰り返しは長い方（`*?` などは短い方）を選ぶ）
     fn Option<Match> find(str s) {
-        let cs = s.chars();
+        let cs = s.chars().map((one) -> one.to_str());
         let codes = cs.map((c) -> c.code());
         match run(ref codes, 0) {
             case Some(caps) -> Some(make_match(s, ref caps));
@@ -73,7 +73,7 @@ pub struct Regex {
 
     /// 重ならずに合うところを左から全部
     fn Match[] find_all(str s) {
-        let cs = s.chars();
+        let cs = s.chars().map((one) -> one.to_str());
         let codes = cs.map((c) -> c.code());
         let Match[] mut out = [];
         let mut from = 0;
@@ -95,7 +95,7 @@ pub struct Regex {
     /// 合うところを全部 rep に置き換える。rep の `$0`〜`$9` は合ったところとかっこの中（合わなかった組は空）、`$$` は `$`
     fn str replace_all(str s, str rep) {
         let ms = find_all(s);
-        let rc = rep.chars();
+        let rc = rep.chars().map((one) -> one.to_str());
         let mut out = "";
         let mut last = 0;
         for m in ms {
@@ -548,7 +548,7 @@ pub struct Match {
 ///   `*` `+` `?` `{m}` `{m,}` `{m,n}`（後ろに `?` を付けると短い方を選ぶ）・`\n` `\t` `\r`・`\` と記号（その記号そのもの）。
 /// 形が違えば Err（どこかを書く）
 pub fn Result<Regex, str> compile(str pattern) {
-    let mut re = Regex { pattern: pattern, groups: 0, prog: [], classes: [], src: pattern.chars(), ppos: 0, nodes: [] };
+    let mut re = Regex { pattern: pattern, groups: 0, prog: [], classes: [], src: pattern.chars().map((one) -> one.to_str()), ppos: 0, nodes: [] };
     let root = re.alt()?;
     if re.ppos < re.src.len() {
         // alt は `)` で止まる
@@ -566,7 +566,7 @@ pub fn Result<Regex, str> compile(str pattern) {
 /// 記号をそのままの文字として扱うように `\` を付ける（ユーザーの文字列をパターンに入れるとき）
 pub fn str escape(str s) {
     let mut out = "";
-    for c in s.chars() {
+    for c in s.chars().map((one) -> one.to_str()) {
         if "\\.^$|?*+()[]{{}}-".contains(c) { out += "\\"; }
         out += c;
     }

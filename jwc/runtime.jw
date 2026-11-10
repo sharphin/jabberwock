@@ -530,8 +530,34 @@ static _Noreturn void fail_generation(const WSite *at) {{
 }}
 
 // 整数を 10 進の文字にする（buf は 21 バイト以上）。書いた長さを返す
+// is_unsigned: 0 符号つき・1 符号なし・2 文字（UTF-8 にする）
 static int fmt_int(char *buf, size_t n, int64_t v, int32_t is_unsigned) {{
     (void)n;
+    if (is_unsigned == 2) {{
+        uint32_t c = (uint32_t)v;
+        int len;
+        if (c < 0x80) {{
+            buf[0] = (char)c;
+            len = 1;
+        }} else if (c < 0x800) {{
+            buf[0] = (char)(0xC0 | (c >> 6));
+            buf[1] = (char)(0x80 | (c & 0x3F));
+            len = 2;
+        }} else if (c < 0x10000) {{
+            buf[0] = (char)(0xE0 | (c >> 12));
+            buf[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+            buf[2] = (char)(0x80 | (c & 0x3F));
+            len = 3;
+        }} else {{
+            buf[0] = (char)(0xF0 | (c >> 18));
+            buf[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+            buf[2] = (char)(0x80 | ((c >> 6) & 0x3F));
+            buf[3] = (char)(0x80 | (c & 0x3F));
+            len = 4;
+        }}
+        buf[len] = 0;
+        return len;
+    }}
     char tmp[24];
     int k = 0;
     int neg = !is_unsigned && v < 0;
@@ -1626,13 +1652,16 @@ int64_t jw_str_chars(WStr *s) {{
 
 static void push_str(WList *out, WStr *x) {{ *(WStr **)jw_list_push_slot(out, 8, NULL) = x; }}
 
+// `s.chars()`: 文字（char、32 ビットの文字の番号）のリスト。文字列は正しい UTF-8
 void jw_str_chars_list(WStr *s, WList *out) {{
     int64_t i = 0;
     while (i < s->len) {{
-        int64_t j = i + 1;
-        while (j < s->len && is_cont((unsigned char)s->data[j])) j++;
-        push_str(out, jw_str_new(s->data + i, j - i));
-        i = j;
+        unsigned char b = (unsigned char)s->data[i];
+        int64_t n = b < 0x80 ? 1 : b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4;
+        uint32_t c = n == 1 ? b : n == 2 ? (b & 0x1F) : n == 3 ? (b & 0x0F) : (b & 0x07);
+        for (int64_t k = 1; k < n && i + k < s->len; k++) c = (c << 6) | ((unsigned char)s->data[i + k] & 0x3F);
+        *(uint32_t *)jw_list_push_slot(out, 4, NULL) = c;
+        i += n;
     }}
 }}
 
@@ -1691,6 +1720,36 @@ WStr *jw_chr(int64_t n, const WSite *at) {{
     else if (n < 0x10000) {{ b[0] = (char)(0xE0 | (n >> 12)); b[1] = (char)(0x80 | ((n >> 6) & 0x3F)); b[2] = (char)(0x80 | (n & 0x3F)); k = 3; }}
     else {{ b[0] = (char)(0xF0 | (n >> 18)); b[1] = (char)(0x80 | ((n >> 12) & 0x3F)); b[2] = (char)(0x80 | ((n >> 6) & 0x3F)); b[3] = (char)(0x80 | (n & 0x3F)); k = 4; }}
     return jw_str_new(b, k);
+}}
+
+// assert_eq(a, b) が等しくなかった（a / b は表示した文字列。interp の `assert_eq` と同じ文）
+void jw_assert_eq_fail(WStr *a, WStr *b, const WSite *at) {{
+    WSb *l = jw_sb_new();
+    jw_sb_cstr(l, "左は ");
+    jw_sb_str(l, a);
+    jw_sb_cstr(l, "、右は ");
+    jw_sb_str(l, b);
+    jw_sb_cstr(l, " でした");
+    WStr *t = jw_sb_finish(l);
+    char *label = malloc((size_t)t->len + 1);
+    memcpy(label, t->data, (size_t)t->len);
+    label[t->len] = 0;
+    begin_error("assert_eq に失敗しました");
+    finish_error(at, label, NULL);
+}}
+
+// x.fixed(n): 小数点以下 n 桁（printf の丸め。interp の fixed と同じ）。inf と NaN は print と同じ形
+WStr *jw_f64_fixed(double x, int64_t n, const WSite *at) {{
+    if (n < 0 || n > 100) {{
+        char label[128];
+        snprintf(label, sizeof label, "fixed(%lld) は使えません", (long long)n);
+        begin_error("桁数が範囲の外です");
+        finish_error(at, label, "小数点以下の桁数は 0〜100 です");
+    }}
+    char buf[512];
+    if (isnan(x) || isinf(x)) fmt_f64(buf, x);
+    else snprintf(buf, sizeof buf, "%.*f", (int)n, x);
+    return jw_str_new(buf, (int64_t)strlen(buf));
 }}
 
 // Rust の `lines()`: \\n で分け、行末の \\r を除く。最後の \\n のあとの空の行は数えない
@@ -2467,8 +2526,10 @@ static FILE *open_file(const char *path, const wchar_t *mode) {{
 #define MODE_READ L"rb"
 #define MODE_WRITE L"wb"
 #else
+#include <errno.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <unistd.h>
 extern char **environ;
 #define open_file(path, mode) fopen(path, mode)
 #define MODE_READ "rb"
@@ -2585,9 +2646,18 @@ static void quote_arg(WSb *b, const char *a) {{
 }}
 #endif
 
-// run_command: 動かして終わるのを待つ。動いたら 1 で *code に終了コード（シグナルで止まったら -1）、
-// 起動できなければ 0 で *err にエラーの文。args（str のリスト）はここで解放する
-int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {{
+#ifdef _WIN32
+int _pipe(int *, unsigned, int);
+int _dup(int);
+int _dup2(int, int);
+int _close(int);
+int _read(int, void *, unsigned);
+intptr_t _cwait(int *, intptr_t, int);
+#endif
+
+// コマンドを動かして終わるのを待つ。動いたら 1 で *code に終了コード（シグナルで止まったら -1）、
+// 起動できなければ 0 で *err にエラーの文。cap が NULL でなければ標準出力をそこに集める。args（str のリスト）はここで解放する
+static int32_t run_cmd(WStr *cmd, WList *args, int64_t *code, WStr **err, WSb *cap) {{
     jw_flush();
     int64_t n = args->len;
     WStr **items = (WStr **)args->data;
@@ -2609,15 +2679,70 @@ int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {{
     }}
     wargv[n + 1] = NULL;
     wchar_t *wcmd = to_wide(argv[0]);
-    intptr_t r = _wspawnvp(0 /* _P_WAIT */, wcmd, (const wchar_t *const *)wargv);
-    ok = r != -1;
-    if (ok) *code = (int64_t)(int32_t)r;
+    if (!cap) {{
+        intptr_t r = _wspawnvp(0 /* _P_WAIT */, wcmd, (const wchar_t *const *)wargv);
+        ok = r != -1;
+        if (ok) *code = (int64_t)(int32_t)r;
+    }} else {{
+        // 標準出力（1 番）を一時的にパイプへつなぎ替えて起動する（子は 1 番を受け継ぐ）。
+        // つなぎ替えているあいだ、ほかのスレッドの出力は錠で待たせる
+        int fds[2];
+        ok = _pipe(fds, 1 << 16, 0x8000 /* _O_BINARY */) == 0;
+        if (ok) {{
+            if (g_threaded) lock(&out_lock);
+            fflush(stdout);
+            int saved = _dup(1);
+            _dup2(fds[1], 1);
+            intptr_t h = _wspawnvp(1 /* _P_NOWAIT */, wcmd, (const wchar_t *const *)wargv);
+            _dup2(saved, 1);
+            _close(saved);
+            if (g_threaded) unlock(&out_lock);
+            _close(fds[1]);
+            ok = h != -1;
+            char buf[4096];
+            int k;
+            while ((k = _read(fds[0], buf, sizeof buf)) > 0) {{
+                if (ok) jw_sb_push(cap, buf, k);
+            }}
+            _close(fds[0]);
+            if (ok) {{
+                int st = 0;
+                _cwait(&st, h, 0);
+                *code = (int64_t)(int32_t)st;
+            }}
+        }}
+    }}
     free(wcmd);
     for (int64_t i = 0; i <= n; i++) free(wargv[i]);
     free(wargv);
 #else
     pid_t pid;
-    ok = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ) == 0;
+    int fds[2] = {{-1, -1}};
+    posix_spawn_file_actions_t fa;
+    if (cap) {{
+        ok = pipe(fds) == 0;
+        if (ok) {{
+            posix_spawn_file_actions_init(&fa);
+            posix_spawn_file_actions_adddup2(&fa, fds[1], 1);
+            posix_spawn_file_actions_addclose(&fa, fds[0]);
+            posix_spawn_file_actions_addclose(&fa, fds[1]);
+            ok = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ) == 0;
+            posix_spawn_file_actions_destroy(&fa);
+            close(fds[1]);
+            char buf[4096];
+            ssize_t k;
+            while ((k = read(fds[0], buf, sizeof buf)) != 0) {{
+                if (k < 0) {{
+                    if (errno == EINTR) continue;
+                    break;
+                }}
+                if (ok) jw_sb_push(cap, buf, (int64_t)k);
+            }}
+            close(fds[0]);
+        }}
+    }} else {{
+        ok = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ) == 0;
+    }}
     if (ok) {{
         int st = 0;
         while (waitpid(pid, &st, 0) < 0) {{}}
@@ -5646,9 +5771,183 @@ int32_t jw_fs_rename(WStr *from, WStr *to, WStr **err) {{
     return ok;
 }}
 
+// run_command: 出力はそのまま画面へ
+int32_t jw_run_command(WStr *cmd, WList *args, int64_t *code, WStr **err) {{ return run_cmd(cmd, args, code, err, NULL); }}
+
+// run_output: 標準出力を文字列で返す。起動できない・終了コードが 0 でない・出力が UTF-8 でないなら 0 で *err（interp の `system` と同じ文）
+int32_t jw_run_output(WStr *cmd, WList *args, WStr **out, WStr **err) {{
+    WSb *cap = jw_sb_new();
+    int64_t code = 0;
+    if (!run_cmd(cmd, args, &code, err, cap)) {{
+        sb_drop(cap);
+        return 0;
+    }}
+    if (code != 0) {{
+        sb_drop(cap);
+        char head[96];
+        snprintf(head, sizeof head, "コマンドが失敗しました（終了コード %lld）: ", (long long)code);
+        *err = message(head, cmd);
+        return 0;
+    }}
+    if (!valid_utf8((const unsigned char *)cap->p, cap->len)) {{
+        sb_drop(cap);
+        *err = message("コマンドの出力が UTF-8 ではありません: ", cmd);
+        return 0;
+    }}
+    *out = jw_sb_finish(cap);
+    return 1;
+}}
+
 void jw_exit(int64_t code) {{
     jw_flush();
     quit((int)code);
+}}
+
+// ---------------------------------------------------------------- 時刻・環境変数・バイトから文字列
+// interp の `system`（now_ns / unix_ms / sleep_ms / env_var）と `utf8_str` と同じ動き
+
+#ifdef _WIN32
+__declspec(dllimport) int __stdcall QueryPerformanceCounter(int64_t *);
+__declspec(dllimport) int __stdcall QueryPerformanceFrequency(int64_t *);
+__declspec(dllimport) void __stdcall GetSystemTimePreciseAsFileTime(uint64_t *);
+__declspec(dllimport) void __stdcall Sleep(unsigned long);
+__declspec(dllimport) int __stdcall WideCharToMultiByte(unsigned, unsigned long, const wchar_t *, int, char *, int, const char *, int *);
+wchar_t *_wgetenv(const wchar_t *);
+#else
+#include <errno.h>
+#include <time.h>
+#endif
+
+// 単調な時計（ナノ秒。起点は決めない。値の差だけに意味がある）
+int64_t jw_now_ns(void) {{
+#ifdef _WIN32
+    int64_t c, f;
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return c / f * 1000000000 + c % f * 1000000000 / f;
+#else
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+#endif
+}}
+
+// 1970-01-01 (UTC) からのミリ秒
+int64_t jw_unix_ms(void) {{
+#ifdef _WIN32
+    uint64_t ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    return ((int64_t)ft - 116444736000000000LL) / 10000;
+#else
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+#endif
+}}
+
+// n ミリ秒待つ（0 以下なら待たない）。待つ前に出力を書き出す
+void jw_sleep_ms(int64_t n) {{
+    jw_flush();
+    if (n <= 0) return;
+#ifdef _WIN32
+    while (n > 0) {{
+        int64_t k = n > 0x7FFFFFFF ? 0x7FFFFFFF : n;
+        Sleep((unsigned long)k);
+        n -= k;
+    }}
+#else
+    struct timespec t, rest;
+    t.tv_sec = (time_t)(n / 1000);
+    t.tv_nsec = (long)(n % 1000) * 1000000;
+    while (nanosleep(&t, &rest) != 0 && errno == EINTR) t = rest;
+#endif
+}}
+
+// 環境変数。あれば 1 で *out に値。名前が空・`=` や NUL を含む・値が UTF-8 でない・ないなら 0
+int32_t jw_env_var(WStr *name, WStr **out) {{
+    if (name->len == 0 || memchr(name->data, '=', (size_t)name->len) || memchr(name->data, 0, (size_t)name->len)) return 0;
+    char *key = c_str(name);
+#ifdef _WIN32
+    wchar_t *wkey = to_wide(key);
+    free(key);
+    const wchar_t *w = _wgetenv(wkey);
+    free(wkey);
+    if (!w) return 0;
+    if (!*w) {{
+        *out = jw_str_new("", 0);
+        return 1;
+    }}
+    // 0x80 = WC_ERR_INVALID_CHARS（対になっていないサロゲートは失敗にする）
+    int len = WideCharToMultiByte(65001, 0x80, w, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) return 0;
+    char *v = malloc((size_t)len);
+    WideCharToMultiByte(65001, 0x80, w, -1, v, len, NULL, NULL);
+    *out = jw_str_new(v, (int64_t)len - 1);
+    free(v);
+    return 1;
+#else
+    const char *v = getenv(key);
+    free(key);
+    if (!v) return 0;
+    int64_t n = (int64_t)strlen(v);
+    if (!valid_utf8((const unsigned char *)v, n)) return 0;
+    *out = jw_str_new(v, n);
+    return 1;
+#endif
+}}
+
+// ---------------------------------------------------------------- std.fs の __fs_append（ほかの __fs_* は上の資源の節）
+
+// ファイルの後ろに足す（なければ作る）
+int32_t jw_fs_append(WStr *path, WStr *text, WStr **err) {{
+    if (!path_ok(path, err)) return 0;
+    char *cp = c_str(path);
+#ifdef _WIN32
+    FILE *f = open_file(cp, L"ab");
+#else
+    FILE *f = open_file(cp, "ab");
+#endif
+    free(cp);
+    int ok = f != NULL;
+    if (f) {{
+        if (fwrite(text->data, 1, (size_t)text->len, f) != (size_t)text->len) ok = 0;
+        if (fclose(f) != 0) ok = 0;
+    }}
+    if (!ok) *err = message("ファイルに書けません: ", path);
+    return ok;
+}}
+
+// a.contains(x) / a.index_of(x): 等しい最初の要素の位置（なければ -1）。整数・真偽値は size バイトで比べる
+int64_t jw_list_find_mem(WList *l, int64_t size, const void *x) {{
+    for (int64_t i = 0; i < l->len; i++)
+        if (memcmp(l->data + i * size, x, (size_t)size) == 0) return i;
+    return -1;
+}}
+
+// 小数は == と同じ（NaN はどれとも等しくない。0.0 と -0.0 は等しい）
+int64_t jw_list_find_f64(WList *l, double x) {{
+    const double *d = (const double *)l->data;
+    for (int64_t i = 0; i < l->len; i++)
+        if (d[i] == x) return i;
+    return -1;
+}}
+
+int64_t jw_list_find_str(WList *l, WStr *x) {{
+    WStr **items = (WStr **)l->data;
+    for (int64_t i = 0; i < l->len; i++)
+        if (items[i]->len == x->len && memcmp(items[i]->data, x->data, (size_t)x->len) == 0) return i;
+    return -1;
+}}
+
+// u8 のリストの to_str(): 正しい UTF-8 なら 1 で *out に文字列、そうでなければ 0
+int32_t jw_list_to_str(WList *l, WStr **out) {{
+    if (l->len == 0) {{
+        *out = jw_str_new("", 0);
+        return 1;
+    }}
+    if (!valid_utf8((const unsigned char *)l->data, l->len)) return 0;
+    *out = jw_str_new(l->data, l->len);
+    return 1;
 }}
 
 // ---------------------------------------------------------------- 入口

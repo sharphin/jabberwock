@@ -68,7 +68,7 @@ fn main() {
 - 構造体の値を print すると、型の名前はモジュール名つきで出る（`geom.Point { x: 3, y: 4 }`）。
 - エラーの位置は、そのモジュールのファイルの中で示す。
 
-### 1.2 標準ライブラリ（jwc だけ）
+### 1.2 標準ライブラリ
 
 ```
 use std.math;
@@ -83,13 +83,19 @@ fn main() {
 - 同じフォルダやパッケージの `math.jw` は標準の math を置き換えない。`use math;` と `use std.math;` を同じファイルに書くとエラー（別名の `as` はまだない）。
   `use std;` は今までどおり同じフォルダの std.jw を使う。
 - 標準ライブラリの中では `use std.名前;` だけ使える。ない名前はエラー（使える名前を示す）。エラーの位置は `std/math.jw` のように示す。
-- Rust 版（`jabberwock`）は対応しない（凍結。[design-decisions.md](design-decisions.md)）。
+- 凍結した Rust 版（`jabberwock`）も `use std.名前;` を読む（2026-11-10 に main と合わせたとき、main で足してあった仕組みを残した）。
+  ただし jwc だけの機能（資源・ネットワーク・時刻などの内部の組み込み）を使うモジュールは、Rust 版では構文エラーか型のエラーで止まる。
+  Rust 版で使えるのは base64・cli・crypto・csv・gzip・hash・json・lists・math・rand・regex・sets・text・url。
 
 | モジュール | 関数 |
 |---|---|
 | `std.math` | `gcd(a, b)`・`lcm(a, b)`・`pow(base, exp)`（exp は 0 以上）・`clamp(x, lo, hi)`（どれも i64）、`pi()`・`floor(x)`・`ceil(x)`・`round(x)`（f64。round はちょうど半分なら 0 から遠い方） |
-| `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9）・`from_utf8(ref bytes)`（`Option<str>`。正しい UTF-8 でなければ None） |
-| `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`・`rename(from, to)`・`write_atomic(path, bytes)`・`write_text_atomic(path, s)`・`stat(path)` と `Info`・`is_file(path)`・`is_dir(path)`・`copy(from, to)`・`remove_all(path)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
+| `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`center(s, width, fill)`（割り切れないときは右を多く）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9）・`from_utf8(ref bytes)`（`Option<str>`。正しい UTF-8 でなければ None）・`trim_start(s)`・`trim_end(s)`・`words(s)`（空白で区切る）・`rfind(s, sub)`（`Option<i64>`）・`to_base(x, base)`・`hex(x)`・`parse_int(s, base)`（`Option<i64>`。base は 2〜36） |
+| `std.lists` | `sum(a)`・`sum_f64(a)`・`min(a)` / `max(a)`（`Option<i64>`）・`range_of(from, to)`・`slice(a, from, to)` / `slice_str`・`extend(ref mut a, ref mut b)`（b の要素を a の後ろへ動かす）・`any(a, f)`・`all(a, f)`・`binary_search(a, x)`（`Result<i64, i64>`。なければ入れる位置を Err で） |
+| `std.sets` | 集合（同じ値は 1 つ。入れた順を覚える）。`sets.IntSet`（i64）・`sets.StrSet`（str）・`sets.CharSet`（char）。`X.new()`・`X.of(リスト)`・`s.add(x)`（新しく入れば true）・`s.remove(x)`・`s.has(x)`・`s.len()`・`s.is_empty()`・`s.items()`（入れた順）・`s.union(t)`・`s.intersect(t)`・`s.minus(t)`・`s.contains_all(t)` |
+| `std.rand` | 再現できる乱数（暗号には使えない。splitmix64）。`rand.Rng.seeded(42)`（同じ種なら同じ並び）・`rand.Rng.from_time()`、`r.next()`（u64）・`r.below(n)`・`r.range(lo, hi)`・`r.float()`・`r.chance(p)`・`r.shuffle(ref mut a)`。暗号用は `std.random` |
+| `std.cli` | コマンドライン引数。`let mut p = cli.Parser.new("名前", "説明");` に `p.flag(長い名前, 短い名前, 説明)`・`p.option(長い名前, 短い名前, 説明, 既定値)`・`p.arg(名前, 説明)` を足し、`p.parse(args())` → `Result<cli.Args, str>`。`a.has(名前)`・`a.get(名前)`・`a.get_int(名前)`（`Option<i64>`）・`a.rest`（位置引数）・`a.help`（`-h` / `--help`）。`p.usage()` は使い方の文（全角の字は幅 2 でそろえる）。書き方は `--name`・`--name=値`・`--name 値`・`-v`・`-vq`・`-o 値`・`-o値`、`--` のあとと `-`・`-5` は位置引数 |
+| `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`・`rename(from, to)`・`write_atomic(path, bytes)`・`write_text_atomic(path, s)`・`stat(path)` と `Info`・`is_file(path)`・`is_dir(path)`・`copy(from, to)`・`remove_all(path)`、`make_dirs(path)`（親から順に。もうあれば何もしない）・`append_text(path, text)`（後ろに足す。なければ作る）・`walk(path)`（下のファイルすべて。リンクのディレクトリには入らない）、パスの文字列だけで決める `join(a, b)`・`parent(p)`・`file_name(p)`・`ext(p)`・`stem(p)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
 | `std.env` | `get(name)`（`Option<str>`）（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
 | `std.time` | `now()`・`sleep(ms)`・`unix_ms()`・`local_offset_ms(t)` と `Instant`（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
 | `std.json` | `parse(s)`・`stringify(ref v)`・`quote(s)` と `Json`（[1.6](#16-stdenvstdtimestdjsonjwc-だけ)） |
@@ -101,11 +107,11 @@ fn main() {
 | `std.gzip` | `decompress(ref data, limit)`・`compress(ref data)`・`crc32(ref data)`（[1.10](#110-stdgzipjwc-だけ)） |
 | `std.pg` | `connect(cfg)`・`close(db)` と `Config`・`Conn`・`Rows`（[1.11](#111-stdpgjwc-だけ)） |
 | `std.hash` | `sha256(ref data)`・`hmac_sha256(ref key, ref msg)`・`pbkdf2_sha256(ref password, ref salt, iters)`・`hex(ref data)`・`unhex(s)`・`equal(ref a, ref b)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
-| `std.base64` | `encode(ref data)`・`decode(s)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
+| `std.base64` | `encode(ref data)`・`decode(s)`・`encode_str(s)`・`decode_str(s)`（文字列を UTF-8 のバイトとして。戻したものが UTF-8 でなければ Err）（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
 | `std.random` | `bytes(n)`・`int(lo, hi)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
 | `std.crypto` | `seal(ref key, ref nonce, ref aad, ref plain)`・`open(…)`・`chacha20(…)`・`poly1305(…)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
-| `std.date` | `now()`・`from_unix_ms(t)`・`make(...)`・`parse(s)`・`is_leap(y)`・`days_in_month(y, m)` と `DateTime`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
-| `std.csv` | `parse(s)`・`format(ref rows)`・`quote(v)`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
+| `std.date` | `now()`・`from_unix_ms(t)`・`make(...)`・`parse(s)`・`is_leap(y)`・`days_in_month(y, m)` と `DateTime`（`weekday_name()`（`月`〜`日`）・`add_days(n)`・`add_ms(n)` も）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
+| `std.csv` | `parse(s)`・`format(ref rows)`・`quote(v)`・`write_row(ref row)`（1 行。改行なし）・`parse_records(s)`（1 行目を見出しにした辞書のリスト。足りない欄は空、多い欄は捨てる）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
 | `std.regex` | `compile(pattern)`・`escape(s)` と `Regex`・`Match`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
 | `std.process` | `start(cmd, argv)` と資源の型 `Child`（[1.14](#114-stdprocessjwc-だけ)） |
 | `std.io` | `read_line_for(ms)`（[1.16](#116-stdiojwc-だけ)） |
@@ -496,6 +502,7 @@ match io.read_line_for(50) {        // 50 ミリ秒まで待って 1 行
 | 整数 | `0`〜`18446744073709551615`。`0xff`（16 進）・`0b1010`（2 進）・`0o17`（8 進）とも書ける。`1_000_000` のように `_` で区切ってよい。型は使う先で決まる（[3.2](#32-数の書き方と型)） |
 | 小数 | `1.5`、`0.25`。`.` の前後に数字が要る（`1.` や `.5` は書けない）。型は `f64` |
 | 文字列 | `"..."`。使えるエスケープは `\n` `\t` `\r` `\0` `\"` `\\` と `\u{1F600}`（16 進で書いた文字の番号）。途中で改行はできない（改行を含むなら `"""..."""`。開きの `"""` の直後の改行は含めない。中では `"` をそのまま書ける）。`{式}` で値を埋め込める（`{{` `}}` は `{` `}` そのもの） |
+| 文字 | `'a'`・`'日'`。エスケープは文字列と同じものと `\'`（`'\n'`・`'\''`・`'\u{1F600}'`）。型は `char`（[3.5](#35-文字)） |
 | 真偽値 | `true` `false` |
 
 予約語: `fn` `let` `mut` `if` `else` `while` `loop` `for` `in` `break` `continue` `match` `case` `default` `return` `struct` `enum` `interface` `static` `own` `ref` `as` `true` `false` `use` `pub` `const`
@@ -514,6 +521,7 @@ match io.read_line_for(50) {        // 50 ミリ秒まで待って 1 行
 | `f64` | 小数（64 ビットの浮動小数点数。IEEE 754） |
 | `bool` | `true` / `false` |
 | `str` | 文字列（1 種類だけ） |
+| `char` | 文字（Unicode の文字 1 つ。[3.5](#35-文字)） |
 | 構造体名・enum 名 | 定義した型。型の引数があれば `Pair<i64>` のように書く |
 | `Option<T>` | `T` の値があるか、ないか（最初からある enum） |
 | `Result<T, E>` | 成功の値 `T` か、失敗の値 `E`（最初からある enum） |
@@ -558,8 +566,15 @@ match io.read_line_for(50) {        // 50 ミリ秒まで待って 1 行
 |---|---|---|
 | `x.sqrt()` | `f64` | 平方根（負の数は `NaN`） |
 | `x.abs()` | `f64`・整数 | 絶対値。整数は型の幅で一周する（`i64` の最小の値はそのまま）。符号なしの整数はそのまま |
+| `n.to_char()` | 整数 | 文字の番号 n の文字（`Option<char>`。番号が 0〜0x10FFFF でないか、0xD800〜0xDFFF なら `None`） |
 | `x.max(y)`・`x.min(y)` | `f64`・整数 | 大きいほう・小さいほう。`y` は `x` と同じ型（数の書き方は `x` の型になる。`a.max(0)`） |
 | `x.to_bits()` | `f64` | 上のとおり |
+| `x.floor()`・`x.ceil()`・`x.round()`・`x.trunc()` | `f64` | 切り下げ・切り上げ・四捨五入（ちょうど真ん中は 0 から遠いほう。`(-2.5).round()` は `-3.0`）・0 の方へ切り捨て。結果も `f64` |
+| `x.exp()`・`x.ln()`・`x.log10()` | `f64` | e の x 乗・自然対数・常用対数（0 以下の対数は `-inf` か `NaN`） |
+| `x.sin()`・`x.cos()`・`x.tan()` | `f64` | 三角関数（ラジアン） |
+| `x.pow(y)` | `f64` | x の y 乗（`y` も `f64`。`(2.0).pow(10)` は `1024.0`） |
+| `x.is_nan()` | `f64` | `NaN` か（`bool`）。`NaN` は `==` で自分とも等しくないので、これで調べる |
+| `x.fixed(n)` | `f64` | 小数点以下 n 桁の文字列（`(3.14159).fixed(2)` は `"3.14"`）。ちょうど真ん中は偶数の側へ丸める（`(2.5).fixed(0)` は `"2"`。C の printf と同じ）。`inf` / `NaN` は print と同じ形。n は 0〜100（外なら実行時エラー） |
 
 - 小数の `max` / `min` は、片方が `NaN` なら他方を返す（IEEE 754 の maxNum / minNum。Rust の `f64::max` と同じ。Go の `math.Max` は `NaN` を返すので違う）。
 
@@ -584,6 +599,33 @@ match io.read_line_for(50) {        // 50 ミリ秒まで待って 1 行
 - `let` は型を省略できる。省略すると初期値の型になる（前から順に決めるだけ）。
 - `ref mut T` は `ref T` が要るところにそのまま渡せる（逆はできない）。
 
+### 3.5 文字
+
+```
+let c = 'a';
+print(c, c.to_upper(), c as u32, '5'.is_digit());   // a A 97 true
+let n = 0x3042;
+print(n.to_char().unwrap_or('?'));                   // あ
+```
+
+- `char` は Unicode の文字 1 つ（文字の番号 0〜0x10FFFF。0xD800〜0xDFFF は除く）。コピーできる値。
+- 比べられる（`==` `<` など。文字の番号の大小）。計算（`+` など）はできない。
+- 数とは自動で変換しない（`let char c = 97;` も `c == 97` もエラー）。文字の番号は `c as u32`（ほかの整数型にもできる）。
+  整数から文字にするのは `n.to_char()`（`Option<char>`）。`as char` にできるのは `u8` と、文字の番号の定数（`'a'` は `97 as char` と同じ）だけ。
+- print と埋め込み（`"{c}"`）では文字そのものを出す。リストや構造体の中でも同じ（`[a, b]`）。
+- 辞書のキー・リストの `contains` / `index_of` / `sort`・match の case（`case 'a' ->`）に使える。
+
+| メソッド | 意味 |
+|---|---|
+| `c.is_digit()` | `0`〜`9` か |
+| `c.is_alpha()`・`c.is_alnum()` | 英字（`a`〜`z`・`A`〜`Z`）か・英字か数字か |
+| `c.is_upper()`・`c.is_lower()` | 英大文字か・英小文字か |
+| `c.is_space()` | スペース・タブ・改行（`\n` `\r`）か |
+| `c.to_upper()`・`c.to_lower()` | 英字の大文字・小文字（`char`。英字でなければそのまま） |
+| `c.to_str()` | 1 文字の文字列 |
+
+- 判定と大文字・小文字は ASCII の範囲だけを見る（`'é'.is_alpha()` は false）。
+
 ## 4. 変数
 
 ```
@@ -603,7 +645,7 @@ let u8 mut m = 0;     // 型を書くときは「型 mut 名前」
 | 書き方 | 意味 |
 |---|---|
 | `x = e;` | 代入。古い値の中の own は解放される |
-| `x += e;` `-=` `*=` `/=` `%=` | `x = x + e;` などと同じ |
+| `x += e;` `-=` `*=` `/=` `%=` | `x = x + e;` などと同じ（ただし左辺の添字は 1 回だけ計算する。`a[f()] += 1` は f を 1 回呼ぶ） |
 | `x++;` `x--;` | `x = x + 1;` などと同じ。**文としてだけ**書ける（`print(i++)` はエラー） |
 
 - 代入先に書けるのは、変数・`*p`・`p.f`・添字 `a[i]`（配列・リスト・辞書）と、それらを重ねたもの（`ps[i].x`・`p.f[i]`）。
@@ -730,7 +772,7 @@ let m = if a > b { a } else { b };
 
 - 条件は `( )` で囲まない。`{ }` は必須。条件は bool。
 - 値として使うときは `else` が必須。値は各ブロックの最後の `;` のない式。
-- 値として使う if の中でも `return` は書ける（ブロックの最後の文にすれば、そのブロックは値を持たなくてよい）。外のループへの `break` / `continue` は使えない。
+- 値として使う if の中でも `return` は書ける（ブロックの最後の文にすれば、そのブロックは値を持たなくてよい）。`exit(..);` も同じ（`case Err(e) -> { eprint(e); exit(2); }`）。外のループへの `break` / `continue` は使えない。
 - 条件の中に構造体リテラルを直接は書けない（括弧で囲めば書ける）。三項演算子はない。
 
 ### 6.4 ループ
@@ -767,7 +809,7 @@ let name = match n {              // 値として
 ```
 
 - 上から順に調べ、最初に当てはまった case だけを実行する（fall-through はない）。
-- case に書けるのは、整数・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)。形を重ねてもよい）。
+- case に書けるのは、整数・文字・bool・文字列の値と、enum の種類（[8.7](#87-match-で中身を受け取る)。形を重ねてもよい）。
 - 同じ値の case が二回あるとエラー。
 - 整数・bool・文字列の match: 値として使うときは default が必須（true と false を両方書いたときを除く）。文なら省略できる。
 - enum の match: 全部の種類を書くか default が必須（文でも）。
@@ -807,7 +849,7 @@ match "42".to_int() {
 |---|---|---|
 | `len()` | `i64` | 文字数 |
 | `byte_len()` | `i64` | バイト数（UTF-8）。`"日本語".byte_len()` は 9 |
-| `chars()` | `str[]` | 1 文字ずつのリスト（文字型はまだないので、1 文字の str） |
+| `chars()` | `char[]` | 1 文字ずつのリスト（[3.5](#35-文字)。1 文字の str が要るなら `c.to_str()`） |
 | `bytes()` | `u8[]` | バイト（UTF-8）のリスト |
 | `code()` | `i64` | 1 文字目の番号（Unicode）。`"a".code()` は 97。空の文字列なら実行時エラー |
 | `lines()` | `str[]` | 行ごとのリスト（改行は含まない） |
@@ -1211,6 +1253,8 @@ for x in v { ... } else { print("空でした"); }
   `wipe()`（`u8[]` だけ。jwc だけ。取ってある場所を全部 0 で上書きして空にする。鍵やパスワードを使い終わったとき用）。
 - `wipe()` は今の場所だけを消す。push などで大きくなったときに前の場所へ残った中身や、`str` に写した中身・関数に渡して写された中身は消せない
   （秘密の値は、大きさが決まってから作り、`str` にしないこと）。
+  `contains(x)`（x と等しい要素があるか）・`index_of(x)`（x と等しい最初の要素の位置。`Option<i64>`）は、要素が数・真偽値・文字列のリストだけ。比べ方は `==` と同じ（NaN はどれとも等しくない）。
+  `to_str()`（`u8[]` だけ。バイトを UTF-8 として読んだ文字列を `Option<str>` で返す。正しい UTF-8 でなければ None。`s.bytes()` の逆。元のリストは変えない）。
 - `map` / `filter` は配列にも使え、元のリストは変えない（mut でなくてよい）。f は要素を `for x in a` の x と同じ形で受け取る
   （コピーできればコピー、own なら `ref T`、構造体などは読むだけの `ref T`）。`filter` はコピーできる要素だけ（残す要素をコピーするため）。
 
@@ -1300,8 +1344,14 @@ let (own Node)[i64] mut nodes = [];  // own を値に持つ辞書
 | `read_file(path)` | ファイルを読む（`Result<str, str>`）。読めない・UTF-8 でないなら `Err` |
 | `write_file(path, text)` | ファイルに書く（`Result<(), str>`。あれば上書き）。書けなければ `Err` |
 | `run_command(cmd, args)` | コマンドを動かして終わるのを待つ（`Result<i64, str>`。Ok は終了コード、シグナルで止まったら -1）。`args` は `str[]`（ムーブ）。起動できなければ `Err`。出力はそのまま画面へ |
+| `run_output(cmd, args)` | コマンドを動かし、標準出力を文字列で受け取る（`Result<str, str>`）。標準入力と標準エラーはそのまま。起動できない・終了コードが 0 でない・出力が UTF-8 でないなら `Err`（`"コマンドが失敗しました（終了コード 1）: false"` のような文）。`args` は run_command と同じ |
+| `now_ns()` | 単調に増える時計の値（`i64`、ナノ秒）。起点は決めないので、2 回の差で経過時間を測る |
+| `unix_ms()` | 今の時刻（`i64`）。1970-01-01 00:00 (UTC) からのミリ秒。OS の時計なので戻ることがある |
+| `sleep_ms(n)` | n ミリ秒（`i64`）待つ。0 以下なら待たない。ほかのスレッドは動き続ける |
+| `env_var(name)` | 環境変数の値（`Option<str>`）。ない・名前が空か `=` や NUL を含む・値が UTF-8 でないなら `None` |
 | `drop(x)` | x を今すぐ解放する（x はムーブされる） |
 | `assert(条件)` | 条件が false なら実行時エラー |
+| `assert_eq(a, b)` | `a == b` でなければ実行時エラー。エラーには両方の値を出す（「左は 4、右は 5 でした」）。比べられる型と数の書き方は `==` と同じ |
 | `read_line()` | 標準入力から 1 行読む（`Option<str>`。改行は含まない）。入力が終わっていれば `None` |
 | `args()` | コマンドライン引数（`str[]`）。`jabberwock prog.jw a b` なら `["a", "b"]` |
 | `spawn(f)` | f を新しいスレッドで動かし、`task<R>` を返す（[9.1](#91-スレッド)） |
@@ -1365,7 +1415,7 @@ loop {
 |---|---|
 | あふれの確認 | `checked_add` のような明示的な関数 |
 | interface の値から元の構造体を取り出す（型で分岐） | これから |
-| `f32`・文字型 | これから |
+| `f32` | これから |
 | フォルダを分けたモジュール（`use a.b;`。`use std.名前;` は 1.2）・メソッドやフィールドごとの `pub`・`use ... as 別名` | これから |
 | 辞書のキーに構造体を使う | これから |
 | 写しの中の own を取り出すのを、実行前（型検査）のエラーにする | これから（今は実行時エラー。7.1） |

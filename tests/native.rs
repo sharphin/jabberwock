@@ -447,6 +447,188 @@ fn sorting_matches_interp() {
 }
 
 #[test]
+fn math_and_bytes_match_interp() {
+    same_as_interp(
+        "mathbytes",
+        "fn main() {
+    let x = 2.5;
+    let own f64 p = own 9.75;
+    print(x.floor(), x.ceil(), x.round(), (-2.5).round(), x.trunc(), p.floor(), p.pow(2), (0.0 / 0.0).is_nan());
+    print((0.0).exp(), (1.0).ln(), (1000.0).log10(), (0.0).sin(), (0.0).cos(), (0.0).tan(), (2.0).pow(0.5));
+    print((3.14159).fixed(2), (2.5).fixed(0), (-0.5).fixed(0), (1.0 / 0.0).fixed(3), (0.0 / 0.0).fixed(1), \"{(7.0).fixed(3)}\");
+    let u8[] mut c = \"日本\".bytes();
+    print(c.to_str());
+    c.pop();
+    print(c.to_str());
+    let u8[] e = [];
+    print(e.to_str(), env_var(\"JW_SURELY_NOT_SET_42\"), env_var(\"\"));
+    let a = now_ns();
+    sleep_ms(5);
+    print(now_ns() - a >= 5000000, unix_ms() > 1700000000000);
+    print((1.0).fixed(101));
+}",
+    );
+}
+
+#[test]
+fn chars_match_interp() {
+    same_as_interp("chars", "struct Tok { char c; i64 n; }
+fn main() {
+    let c = 'a';
+    let char d = 'Z';
+    print(c, d, '日', '\\n' as u32, '\\u{1F600}');
+    print(\"x{c}y\");
+    print(c < d, c == 'a', c != d, c.to_upper(), d.to_lower(), '5'.is_digit(), ' '.is_space());
+    print('q'.is_alpha(), '_'.is_alnum(), 'Q'.is_upper(), 'q'.is_lower(), '@'.is_alpha(), '['.is_alpha());
+    let n = c as u32;
+    print(n, (n + 1).to_char().unwrap_or('?'), 0xD800.to_char().is_none(), (-1).to_char().is_none());
+    let u8 b = 66;
+    print(b as char, 'x'.to_str() + \"!\");
+    let char[] mut cs = ['c', 'a', 'b'];
+    cs.sort();
+    print(cs, cs.contains('b'), cs.index_of('c').unwrap_or(-1));
+    let i64[char] mut m = [];
+    m['x'] = 1;
+    m['y'] = 2;
+    print(m, m['y']);
+    let t = Tok { c: 'k', n: 1 };
+    print(t);
+    match c {
+        case 'a' -> print(\"is a\");
+        default -> print(\"other\");
+    }
+    let s = \"héllo\";
+    let mut out = \"\";
+    for x in s.chars() { out += x.to_str(); }
+    print(out, 'é' as u32);
+    print(m['z']);
+}
+");
+}
+
+#[test]
+fn std_json_matches_interp() {
+    same_as_interp("stdjson", "use std.json;
+fn main() {
+    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";
+    match json.parse(text) {
+        case Ok(v) -> {
+            print(json.stringify(v));
+            print(v.get(\"name\").as_str(), v.get(\"n\").at(1).as_num(), v.get(\"zz\").as_str().is_none());
+        }
+        case Err(e) -> print(e);
+    }
+    for bad in [\"\", \"[1,\", \"tru\", \"\\\"abc\", \"[1] x\"] {
+        match json.parse(bad) {
+            case Ok(v) -> print(\"ok?\", json.stringify(v));
+            case Err(e) -> print(e);
+        }
+    }
+    print(json.quote(\"a\\nb\"));
+}
+");
+}
+
+#[test]
+fn std_csv_base64_match_interp() {
+    same_as_interp("stdformats", include_str!("text_formats_example.jw"));
+}
+
+#[test]
+fn std_sets_matches_interp() {
+    same_as_interp("stdsets", include_str!("sets_example.jw"));
+}
+
+#[test]
+fn std_cli_matches_interp() {
+    same_as_interp("stdcli", include_str!("cli_example.jw"));
+}
+
+#[test]
+fn std_rand_matches_interp() {
+    same_as_interp("stdrand", "use std.rand;
+fn main() {
+    let mut r = rand.Rng.seeded(42);
+    print(r.next(), r.next());
+    let mut counts = [0, 0, 0, 0, 0, 0];
+    for i in range(6000) { let k = r.below(6); counts[k] += 1; }
+    print(counts);
+    let mut lo = 100;
+    let mut hi = -100;
+    for i in range(1000) {
+        let x = r.range(-5, 5);
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    print(lo, hi, r.range(-9223372036854775807, 9223372036854775807) != 0);
+    let f = r.float();
+    print(f >= 0.0 && f < 1.0, r.chance(0.0), r.chance(1.0));
+    let str[] mut a = [\"a\", \"b\", \"c\", \"d\", \"e\"];
+    r.shuffle(ref mut a);
+    print(a, a.len());
+    let mut t = rand.Rng.from_time();
+    print(t.below(10) < 10);
+}
+");
+}
+
+#[test]
+fn std_modules_match_interp() {
+    same_as_interp("stdmods", "use std.text;
+use std.lists;
+fn main() {
+    print(text.pad_left(\"42\", 5, \"0\"));
+    print(\"[\" + text.pad_right(\"ab\", 4, \".\") + \"]\");
+    print(\"[\" + text.center(\"ab\", 7, \"*\") + \"]\");
+    print(\"[\" + text.trim_start(\"  hi \") + \"]\");
+    print(\"[\" + text.trim_end(\"  hi \\n\") + \"]\");
+    let ws = text.words(\"  a bc\\tdef  \");
+    let j = ws.join(\",\"); print(\"{ws.len()} {j}\");
+    print(text.rfind(\"abcabc\", \"bc\").unwrap_or(-1));
+    print(text.count(\"aaaa\", \"aa\"));
+    print(text.hex(255));
+    print(text.to_base(-10, 2));
+    print(text.parse_int(\"-ff\", 16).unwrap_or(0));
+    print(text.parse_int(\"zz\", 10).is_none());
+    let i64[] mut xs = [3, 1, 4, 1, 5];
+    print(lists.sum(xs));
+    print(lists.max(xs).unwrap_or(0));
+    print(lists.min(xs).unwrap_or(0));
+    let i64[] mut ys = [9, 2];
+    lists.extend(ref mut xs, ref mut ys);
+    print(\"{xs.len()} {ys.len()} {xs[6]}\");
+    print(lists.slice(xs, 1, 3).len());
+    print(lists.any(xs, (x) -> x > 8));
+    print(lists.all(xs, (x) -> x > 0));
+    let s = lists.range_of(0, 10);
+    print(lists.binary_search(s, 7).unwrap_or(-1));
+    match lists.binary_search(s, 70) { case Ok(i) -> print(i); case Err(i) -> print(\"ins {i}\"); }
+}
+");
+}
+
+#[test]
+fn find_and_assert_eq_match_interp() {
+    same_as_interp(
+        "findeq",
+        "fn main() {
+    let i32[] n = [-1, 300];
+    let f64[] f = [0.0 / 0.0, -0.0, 2.5];
+    let str[] s = [\"ab\", \"日本\"];
+    let bool[] t = [false, true];
+    print(n.index_of(300), n.contains(-1), f.contains(0.0 / 0.0), f.index_of(0.0), s.index_of(\"日本\"), s.contains(\"x\"), t.index_of(true));
+    let u8 a = 3;
+    assert_eq(a, 3);
+    assert_eq(\"x\", \"x\");
+    assert_eq(s[0], \"ab\");
+    match run_output(\"echo\", [\"hi\"]) { case Ok(o) -> print(o.trim()); case Err(e) -> print(e); }
+    print(run_output(\"jw-no-such-command\", []));
+    assert_eq(a + 1, 5);
+}",
+    );
+}
+
+#[test]
 fn number_methods_match_interp() {
     same_as_interp(
         "nummeth",

@@ -136,7 +136,7 @@ fn bytes_and_char_codes() {
     print(chr(97), chr(233), chr(35486), chr(128512), chr(0).byte_len());
     let mut n = 0;
     for c in \"x9_\".chars() {
-        let k = c.code();
+        let k = c as i64;
         if k >= 48 && k <= 57 { n += 1; }
     }
     let u8[] b = \"AZ\".bytes();
@@ -201,4 +201,20 @@ fn more_escapes() {
     assert!(err("print(\"\\u{D800}\");").title.contains("エスケープ"));
     assert!(err("print(\"\\u{zz}\");").title.contains("エスケープ"));
     assert!(err("print(\"\\u{41\");").title.contains("エスケープ"));
+}
+
+#[test]
+fn bytes_back_to_text() {
+    let o = main_ok("
+    let u8[] b = \"日本 ok\".bytes();
+    print(b.to_str(), b.len());
+    let u8[] mut c = [230, 151];
+    print(c.to_str());
+    c.push(165);
+    match c.to_str() { case Some(s) -> print(s + \"!\"); case None -> print(\"no\"); }
+    let u8[] e = [];
+    let u8[] sur = [237, 160, 128];
+    print(e.to_str(), sur.to_str());");
+    assert_eq!(o, "Some(日本 ok) 9\nNone\n日!\nSome() None\n");
+    assert!(err("let str[] s = [\"a\"]; print(s.to_str());").title.contains("u8"));
 }

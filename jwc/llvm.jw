@@ -25,12 +25,6 @@ const RES_DECLS = "declare i32 @jw_fs_open(ptr, i64, ptr, ptr)\n" +
     "declare i32 @jw_res_close(ptr, ptr, ptr)\n" +
     "declare void @jw_res_drop(ptr, ptr)\n" +
     "declare ptr @jw_res_view(ptr)\n" +
-    "declare i32 @jw_fs_exists(ptr)\n" +
-    "declare i32 @jw_fs_list(ptr, ptr, ptr)\n" +
-    "declare i32 @jw_fs_make_dir(ptr, ptr)\n" +
-    "declare i32 @jw_fs_remove(ptr, ptr)\n" +
-    "declare i32 @jw_fs_rename(ptr, ptr, ptr)\n" +
-    "declare i32 @jw_fs_stat(ptr, ptr, ptr)\n" +
     "declare i32 @jw_net_connect(ptr, i64, ptr, ptr)\n" +
     "declare i32 @jw_net_listen(ptr, i64, ptr, ptr)\n" +
     "declare i32 @jw_tcp_read(ptr, i64, ptr, ptr, ptr)\n" +
@@ -93,6 +87,18 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare double @llvm.fabs.f64(double)\n" +
     "declare double @llvm.maxnum.f64(double, double)\n" +
     "declare double @llvm.minnum.f64(double, double)\n" +
+    "declare double @llvm.floor.f64(double)\n" +
+    "declare double @llvm.ceil.f64(double)\n" +
+    "declare double @llvm.round.f64(double)\n" +
+    "declare double @llvm.trunc.f64(double)\n" +
+    "declare double @llvm.exp.f64(double)\n" +
+    "declare double @llvm.log.f64(double)\n" +
+    "declare double @llvm.log10.f64(double)\n" +
+    "declare double @llvm.sin.f64(double)\n" +
+    "declare double @llvm.cos.f64(double)\n" +
+    "declare double @tan(double)\n" +
+    "declare double @llvm.pow.f64(double, double)\n" +
+    "declare ptr @jw_f64_fixed(double, i64, ptr)\n" +
     "declare void @jw_print_begin()\n" +
     "declare ptr @jw_chan_new(i64, ptr)\n" +
     "declare void @jw_chan_retain(ptr)\n" +
@@ -188,6 +194,8 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare i32 @jw_read_file(ptr, ptr)\n" +
     "declare i32 @jw_write_file(ptr, ptr, ptr)\n" +
     "declare i32 @jw_run_command(ptr, ptr, ptr, ptr)\n" +
+    "declare i32 @jw_run_output(ptr, ptr, ptr, ptr)\n" +
+    "declare void @jw_assert_eq_fail(ptr, ptr, ptr) noreturn\n" +
     "declare void @jw_exit(i64) noreturn\n" +
     "declare ptr @jw_chr(i64, ptr)\n" +
     "declare ptr @jw_str_append(ptr, ptr)\n" +
@@ -195,6 +203,21 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare void @jw_str_bytes(ptr, ptr)\n" +
     "declare i64 @jw_str_code(ptr, ptr)\n" +
     "declare void @jw_args(ptr)\n" +
+    "declare i64 @jw_now_ns()\n" +
+    "declare i64 @jw_unix_ms()\n" +
+    "declare void @jw_sleep_ms(i64)\n" +
+    "declare i32 @jw_env_var(ptr, ptr)\n" +
+    "declare i32 @jw_fs_exists(ptr)\n" +
+    "declare i32 @jw_fs_list(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_fs_make_dir(ptr, ptr)\n" +
+    "declare i32 @jw_fs_remove(ptr, ptr)\n" +
+    "declare i32 @jw_fs_rename(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_fs_stat(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_fs_append(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_list_to_str(ptr, ptr)\n" +
+    "declare i64 @jw_list_find_mem(ptr, i64, ptr)\n" +
+    "declare i64 @jw_list_find_f64(ptr, double)\n" +
+    "declare i64 @jw_list_find_str(ptr, ptr)\n" +
     "\n";
 
 /// 1 回の load / store で読み書きする型（要素の印をつけてよいもの）
@@ -426,6 +449,11 @@ struct Todo {
 }
 
 /// 整数を i64 に広げる
+/// 整数を文字にするときの形（jw_rt.c の `fmt_int`: 0 符号つき・1 符号なし・2 文字）
+pub fn str int_shape(str t) {
+    if t == "char" { "2" } else if ty.signed(t) { "0" } else { "1" }
+}
+
 pub fn str widen(ref mut B b, str v, str t) {
     if ty.bits(t) == 64 { return v; }
     b.val(ext(t) + " i{ty.bits(t)} " + v + " to i64")
@@ -1428,7 +1456,7 @@ pub struct Module {
             let it = ty.int_of(t);
             let v = b.val("load i{ty.bits(it)}, ptr %p");
             let w = widen(b, v, it);
-            b.op("call void @jw_sb_int(ptr %sb, i64 " + w + ", i32 " + (if ty.signed(it) { "0" } else { "1" }) + ")");
+            b.op("call void @jw_sb_int(ptr %sb, i64 " + w + ", i32 " + int_shape(it) + ")");
         } else if k == "Float" {
             let v = b.val("load double, ptr %p");
             b.op("call void @jw_sb_float(ptr %sb, double " + v + ")");

@@ -8,7 +8,7 @@ use ty;
 
 fn str q(str s) {
     let mut out = "\"";
-    for c in s.chars() {
+    for c in s.chars().map((one) -> one.to_str()) {
         if c == "\"" || c == "\\" { out += "\\"; }
         out += c;
     }

@@ -1504,7 +1504,8 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 }
                 Ok(self.temp_of(Ty::Unit, Rvalue::Builtin(name.to_string(), strs, sp), sp))
             }
-            "exit" | "read_file" | "write_file" | "run_command" | "chr" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "chr" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var"
+            | "assert_eq" | "__fs_exists" | "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
                 let mut ops = Vec::new();
                 for a in args {
                     ops.push(self.expr(a)?);
@@ -1609,7 +1610,11 @@ impl<'a, 'p> FnLower<'a, 'p> {
                 };
                 let mut ops = vec![x];
                 ops.extend(vals);
-                let kind = if matches!(inner, Ty::Float) { "f64" } else { "int" };
+                let kind = match inner {
+                    Ty::Float => "f64",
+                    Ty::Int(IntTy::Char) => "char",
+                    _ => "int",
+                };
                 let r = self.temp_of(ty, Rvalue::Builtin(format!("{}.{}", kind, name), ops, sp), sp);
                 self.drop_temp(&temp, sp);
                 Ok(r)

@@ -150,7 +150,7 @@ pub fn str render(ref Diag d, ref str[] names, ref str[] srcs) {
         let lines = src_of(srcs, cur_file).lines();
         let ln = line_of(l.span);
         let text = if ln >= 1 && ln <= lines.len() { lines[ln - 1].replace("\t", " ") } else { "" };
-        let cs = text.chars();
+        let cs = text.chars().map((c) -> c.to_str());
         if ln != last_line {
             if last_line != 0 && ln > last_line + 1 {
                 out += "{pad} ...\n";

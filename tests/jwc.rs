@@ -138,6 +138,14 @@ fn tokens_and_lexer_errors() {
         "\tlet a = b @ c;",
         "let a = b << 2 >> 1 && c || d -> e += f -= g *= h /= i %= j ++ -- != == <= >= & | ^ ~ ? !;",
         "let s = \"日本語{x}語\";",
+        "let c = 'a'; let d = '\\n' '\\'' '\\\\' '\\u{1F600}' '日' '\"';",
+        "let c = '';",
+        "let c = 'ab';",
+        "let c = '\\q';",
+        "let c = '\\u{D800}';",
+        "let c = '\\u{zz}';",
+        "let c = 'a",
+        "let c = '",
         "",
     ];
     let dir = std::env::temp_dir().join(format!("jw-jwc-cases-{}", std::process::id()));
@@ -300,11 +308,48 @@ fn ast_with_modules() {
         ("dot_end", "use util;\nfn main() { util.; }\n"),
         ("twice", "use util;\nuse util;\nfn main() {}\n"),
         ("bad_mod", "use bad;\nfn main() {}\n"),
+        // 標準ライブラリ（同じ名前のファイル text.jw があっても、use std.text; は使わない）
+        ("text", "pub fn str pad_left(str s) { s }\n"),
+        ("std_main", "use std.text;\nuse std.lists;\nfn main() {\n    print(text.pad_left(\"42\", 5, \"0\"));\n    print(\"[\" + text.pad_right(\"ab\", 4, \".\") + \"]\");\n    print(\"[\" + text.center(\"ab\", 7, \"*\") + \"]\");\n    print(\"[\" + text.trim_start(\"  hi \") + \"]\");\n    print(\"[\" + text.trim_end(\"  hi \\n\") + \"]\");\n    let ws = text.words(\"  a bc\\tdef  \");\n    let j = ws.join(\",\"); print(\"{ws.len()} {j}\");\n    print(text.rfind(\"abcabc\", \"bc\").unwrap_or(-1));\n    print(text.count(\"aaaa\", \"aa\"));\n    print(text.hex(255));\n    print(text.to_base(-10, 2));\n    print(text.parse_int(\"-ff\", 16).unwrap_or(0));\n    print(text.parse_int(\"zz\", 10).is_none());\n    print(text.is_digits(\"7\"));\n    let i64[] mut xs = [3, 1, 4, 1, 5];\n    print(lists.sum(xs));\n    print(lists.max(xs).unwrap_or(0));\n    print(lists.min(xs).unwrap_or(0));\n    let i64[] mut ys = [9, 2];\n    lists.extend(ref mut xs, ref mut ys);\n    print(\"{xs.len()} {ys.len()} {xs[6]}\");\n    print(lists.slice(xs, 1, 3).len());\n    print(lists.any(xs, (x) -> x > 8));\n    print(lists.all(xs, (x) -> x > 0));\n    let s = lists.range_of(0, 10);\n    print(lists.binary_search(s, 7).unwrap_or(-1));\n    match lists.binary_search(s, 70) { case Ok(i) -> print(i); case Err(i) -> print(\"ins {i}\"); }\n}\n"),
+        ("std_mod", "use std.text;\nuse fmtx;\nfn main() { let text.Nope x = 1; }\n"),
+        ("fmtx", "use std.lists;\npub fn i64 total(ref i64[] a) { lists.sum(a) }\n"),
+        ("std_use", "use fmtx;\nuse std.lists;\nfn main() { let i64[] a = [1, 2]; print(fmtx.total(a), lists.max(a).unwrap_or(0)); }\n"),
+        ("std_missing", "use std.nope;\nfn main() {}\n"),
+        ("std_twice", "use std.lists;\nuse std.lists;\nfn main() {}\n"),
+        ("std_var", "use std.lists;\nfn main() { let lists = 1; }\n"),
+        ("std_bare", "use std;\nfn main() {}\n"),
+        ("std_rand", "use std.rand;\nfn main() {\n    let mut r = rand.Rng.seeded(42);\n    print(r.next(), r.next());\n    let mut counts = [0, 0, 0, 0, 0, 0];\n    for i in range(6000) { let k = r.below(6); counts[k] += 1; }\n    print(counts);\n    let mut lo = 100;\n    let mut hi = -100;\n    for i in range(1000) {\n        let x = r.range(-5, 5);\n        lo = lo.min(x);\n        hi = hi.max(x);\n    }\n    print(lo, hi, r.range(-9223372036854775807, 9223372036854775807) != 0);\n    let f = r.float();\n    print(f >= 0.0 && f < 1.0, r.chance(0.0), r.chance(1.0));\n    let str[] mut a = [\"a\", \"b\", \"c\", \"d\", \"e\"];\n    r.shuffle(ref mut a);\n    print(a, a.len());\n    let mut t = rand.Rng.from_time();\n    print(t.below(10) < 10);\n}\n"),
+        ("std_cli", include_str!("cli_example.jw")),
+        ("std_sets", include_str!("sets_example.jw")),
+        ("std_formats", include_str!("text_formats_example.jw")),
+        ("exit_value", "fn main() {\n    let n = match Some(1) { case Some(v) -> v; case None -> { eprint(\"x\"); exit(3); } };\n    let m = if n > 0 { n } else { exit(4); };\n    print(n + m);\n}\n"),
+        ("std_json", "use std.json;
+fn main() {
+    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";
+    match json.parse(text) {
+        case Ok(v) -> {
+            print(json.stringify(v));
+            print(v.get(\"name\").as_str(), v.get(\"n\").at(1).as_num(), v.get(\"zz\").as_str().is_none());
+        }
+        case Err(e) -> print(e);
+    }
+    for bad in [\"\", \"[1,\", \"tru\", \"\\\"abc\", \"[1] x\"] {
+        match json.parse(bad) {
+            case Ok(v) -> print(\"ok?\", json.stringify(v));
+            case Err(e) -> print(e);
+        }
+    }
+    print(json.quote(\"a\\nb\"));
+}
+"),
     ];
     for (n, s) in files {
         std::fs::write(dir.join(format!("{}.jw", n)), s).unwrap();
     }
-    for n in ["ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod"] {
+    for n in [
+        "ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod", "std_main", "std_mod", "std_use", "std_missing",
+        "std_twice", "std_var", "std_bare", "std_json", "std_rand", "std_cli", "exit_value", "std_sets", "std_formats",
+    ] {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));
         same_irs(&dir.join(format!("{}.jw", n)));
@@ -770,6 +815,34 @@ fn jwc_std_date_csv_regex() {
          Err 正規表現が大きすぎます（繰り返しの回数を減らしてください）\n\
          ok\n"
     );
+}
+
+/// std.fs のパスの関数・make_dirs・append_text・walk（tests/fs_example.jw）と std.date の weekday_name・add_days・add_ms
+#[test]
+fn jwc_std_fs_paths_and_date() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-fsp-{}", std::process::id()));
+    let work = dir.join("work");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = work.to_str().unwrap().replace('\\', "/");
+    let src = include_str!("fs_example.jw").replace("DIR", &d);
+    let path = dir.join("main.jw");
+    std::fs::write(&path, src).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout).replace(&d, "D"), "a/b a/b /b b\na/b [] /\nc.tar.gz gz c.tar [] .env y.txt\nfalse\nhello world\n[a.txt, new.log, x]\n/a.txt\n/new.log\n/x/y/b.jw\n11 true false false true\ntrue false false\nfalse true\n消せません: D/x\nディレクトリを作れません: D\n消せません: D/nope\n名前を変えられません: D/nope\nパスに NUL 文字があります: a\0b\nディレクトリを読めません: D/nope\nディレクトリを読めません: D/c.txt\nfalse\nfalse\nok\n");
+    let path = dir.join("d.jw");
+    std::fs::write(&path, "use std.date;\nfn main() {\n    let a = date.from_unix_ms(0);\n    \
+        print(a.weekday(), a.weekday_name(), a.add_days(31).format(), a.add_ms(-1).format(), a.add_days(3).weekday_name());\n}\n").unwrap();
+    let exe = dir.join("d");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "4 木 1970-02-01T00:00:00Z 1969-12-31T23:59:59.999Z 日\n");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）

@@ -154,6 +154,24 @@ fn main() {
     assert_eq!(o.exit_code, Some(7));
 }
 
+/// 値として使うブロックの最後が `exit(..);` なら、値がなくてよい（そこで終わる）
+#[test]
+fn exit_ends_a_value_block() {
+    let o = ok("
+fn main() {
+    let Result<i64, str> r = Err(\"だめ\");
+    let n = match r {
+        case Ok(v) -> v;
+        case Err(e) -> { eprint(e); exit(3); }
+    };
+    let m = if n > 0 { n } else { exit(4); };
+    print(n + m);
+}");
+    assert_eq!(o.output, "");
+    assert_eq!(o.errput, "だめ\n");
+    assert_eq!(o.exit_code, Some(3));
+}
+
 #[test]
 fn exit_from_another_thread() {
     let o = ok("
@@ -189,4 +207,60 @@ fn system_builtins_check_types() {
     assert!(err("fn main() { run_command(\"a\", \"b\"); }").title.contains("型"));
     assert!(err("fn main() { write_file(\"a\"); }").title.contains("引数"));
     assert!(err("fn read_file() {} fn main() {}").title.contains("組み込み"));
+}
+
+#[test]
+fn clocks_and_sleep() {
+    let o = ok("fn main() {
+    let a = now_ns();
+    sleep_ms(20);
+    sleep_ms(0);
+    sleep_ms(-3);
+    let d = now_ns() - a;
+    print(d >= 20000000, d < 60000000000, unix_ms() > 1700000000000);
+}");
+    assert_eq!(o.output, "true true true\n");
+    assert!(err("fn main() { sleep_ms(); }").title.contains("引数"));
+    assert!(err("fn main() { print(now_ns(1)); }").title.contains("引数"));
+    assert!(err("fn main() { let str s = unix_ms(); }").title.contains("型"));
+}
+
+#[test]
+fn environment_variables() {
+    // PATH はどの環境にもある。ない名前・空・`=` を含む名前は None
+    let o = ok("fn main() {
+    print(env_var(\"PATH\").is_some(), env_var(\"JW_SURELY_NOT_SET_42\"), env_var(\"\"), env_var(\"A=B\"));
+}");
+    assert_eq!(o.output, "true None None None\n");
+    assert!(err("fn main() { env_var(1); }").title.contains("型"));
+    assert!(err("fn main() { let env_var = 1; }").title.contains("関数の名前"));
+}
+
+#[test]
+fn command_output_as_text() {
+    let o = ok("fn main() {
+    match run_output(\"echo\", [\"hello\", \"world\"]) { case Ok(s) -> print(\"[{s.trim()}]\"); case Err(e) -> print(e); }
+    print(run_output(\"false\", []));
+    print(run_output(\"jw-no-such-command\", []));
+    print(run_output(\"sh\", [\"-c\", \"printf '\\\\377'\"]));
+    print(run_output(\"sh\", [\"-c\", \"exit 3\"]));
+}");
+    assert_eq!(
+        o.output,
+        "[hello world]\nErr(コマンドが失敗しました（終了コード 1）: false)\nErr(コマンドを起動できません: jw-no-such-command)\n\
+Err(コマンドの出力が UTF-8 ではありません: sh)\nErr(コマンドが失敗しました（終了コード 3）: sh)\n"
+    );
+    assert!(err("fn main() { run_output(\"ls\"); }").title.contains("引数"));
+}
+
+#[test]
+fn assert_eq_shows_both_sides() {
+    let o = ok("fn main() { let u8 a = 3; assert_eq(a, 3); assert_eq(3, a); assert_eq(\"x\", \"x\"); assert_eq(1.5, 1.5); assert_eq(true, !false); print(1); }");
+    assert_eq!(o.output, "1\n");
+    let e = run_source("fn main() { let i64 a = 4; assert_eq(a + 1, 6); }", false).error.expect("error");
+    assert_eq!(e.title, "assert_eq に失敗しました");
+    let e = run_source("fn main() { assert_eq(\"a b\", \"ab\"); }", false).error.expect("error");
+    assert!(e.render("t.jw", "fn main() { assert_eq(\"a b\", \"ab\"); }").contains("左は a b、右は ab でした"));
+    assert!(err("fn main() { assert_eq(1, \"a\"); }").title.contains("比較"));
+    assert!(err("fn main() { assert_eq(1); }").title.contains("引数"));
 }

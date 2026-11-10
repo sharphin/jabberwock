@@ -82,7 +82,7 @@ fn Result<str, str> join_url(str base, str loc) {
     let origin = if u.port == plain_port { u.scheme + "://" + name } else { u.scheme + "://" + name + ":{u.port}" };
     if loc.starts_with("/") { return Ok(origin + loc); }
     // 相対の行き先は、今の path の最後の `/` までにつなぐ
-    let cs = u.path.chars();
+    let cs = u.path.chars().map((one) -> one.to_str());
     let mut cut = 0;
     for (i, c) in cs { if c == "/" { cut = i + 1; } }
     let dir = if cut == 0 { "/" } else { u.path.slice(0, cut) };
@@ -143,7 +143,7 @@ fn i64 hex(str s) {
     let t = s.trim().to_lower();
     if t == "" || t.len() > 15 { return -1; }
     let mut n = 0;
-    for ch in t.chars() {
+    for ch in t.chars().map((one) -> one.to_str()) {
         match digits.find(ch) {
             case Some(d) -> n = n * 16 + d;
             case None -> return -1;

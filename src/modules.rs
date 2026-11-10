@@ -15,6 +15,9 @@
 //!
 //! 依存先の中の `use` は、まず自分の空間（`空間/名前`）、なければ依存先のパッケージ（`空間*名前`）を探す。最初のパッケージの中の `use` は
 //! `名前` → `*名前` の順。`files` の名前は問い合わせた名前のまま（スレッドが同じ問い合わせで読み直せるように）。
+//!
+//! 標準ライブラリ `use std.名前;` は、コンパイラの中に入れたソース（`stdlib::source`）を読む。モジュールの名前は `std:名前`、
+//! 書いた名前は `名前` で、`名前.x` を `std:名前.x` に書き換える（最初のファイルでも）。同じ名前のファイルがあっても使わない。
 
 use std::collections::{HashMap, HashSet};
 
@@ -60,6 +63,14 @@ impl<'a> Loader<'a> {
                 let mut ms: Vec<String> = Vec::new();
                 for (n, _) in self.files.iter().skip(1) {
                     let n = n.trim_start_matches('*');
+                    // 標準ライブラリはファイルの名前 `std/名前`、モジュールの名前 `std:名前`（jwc と同じ）
+                    if let Some(short) = n.strip_prefix("std/") {
+                        ms.push(format!("std:{}", short));
+                        if !ms.iter().any(|m| m == short) {
+                            ms.push(short.to_string());
+                        }
+                        continue;
+                    }
                     ms.push(n.to_string());
                     if let Some((_, short)) = n.split_once('/') {
                         if !ms.iter().any(|m| m == short) {
@@ -85,13 +96,38 @@ impl<'a> Loader<'a> {
     fn module(&mut self, name: &str, file: usize) -> R<ModuleInfo> {
         let src = self.files[file].1.clone();
         let toks = lex_file(&src, file)?;
-        let uses: Vec<(String, Span)> = toks
-            .windows(2)
-            .filter_map(|w| match (&w[0].tok, &w[1].tok) {
-                (Tok::Use, Tok::Ident(n)) => Some((n.clone(), w[1].span)),
-                _ => None,
-            })
-            .collect();
+        // (書いた名前, 位置)。`use std.名前;` の書いた名前は `名前`（位置は `std` から名前まで）
+        let mut uses: Vec<(String, Span)> = Vec::new();
+        let mut stds: Vec<bool> = Vec::new();
+        for (i, w) in toks.windows(2).enumerate() {
+            if let (Tok::Use, Tok::Ident(n)) = (&w[0].tok, &w[1].tok) {
+                match (toks.get(i + 2).map(|t| &t.tok), toks.get(i + 3)) {
+                    (Some(Tok::Dot), Some(crate::lexer::Token { tok: Tok::Ident(m), span })) if n == "std" => {
+                        uses.push((m.clone(), w[1].span.join(*span)));
+                        stds.push(true);
+                    }
+                    _ => {
+                        uses.push((n.clone(), w[1].span));
+                        stds.push(false);
+                    }
+                }
+            }
+        }
+        // 標準のモジュールと、同じ名前のふつうのモジュールを両方は使えない（jwc/modules.jw と同じ）
+        for (i, (u, span)) in uses.iter().enumerate() {
+            if uses[..i].iter().zip(&stds).any(|((v, _), s)| v == u && *s != stds[i]) {
+                return Err(Diagnostic::new(format!("`{}` という名前のモジュールを二つ使っています", u))
+                    .primary(*span, format!("標準の {} と、同じフォルダ（またはパッケージ）の {} の両方を use している", u, u))
+                    .note("どちらか一つにしてください"));
+            }
+        }
+        let std_uses: HashSet<String> = uses.iter().zip(&stds).filter(|(_, s)| **s).map(|((u, _), _)| u.clone()).collect();
+        if name.starts_with("std:") {
+            if let Some(((u, span), _)) = uses.iter().zip(&stds).find(|(_, s)| !**s) {
+                return Err(Diagnostic::new(format!("標準ライブラリの中で `use {};` は使えません", u))
+                    .primary(*span, "`use std.名前;` だけ使える"));
+            }
+        }
         self.loading.push(name.to_string());
         // 依存先のパッケージの中なら、その空間
         let space: Option<String> = match name.split_once('/') {
@@ -107,7 +143,9 @@ impl<'a> Loader<'a> {
             }
             // (問い合わせ, モジュールの名前)。依存先の lib.jw の問い合わせは `空間*名前`（最初のパッケージなら `*名前`）で、
             // 読む関数は、その空間のパッケージが直接の依存先として書いたものだけ返す
+            // 標準ライブラリは `std:名前`（同じ名前のファイルがあっても、コンパイラの中にあるものを使う）
             let candidates: Vec<(String, String)> = match &space {
+                _ if std_uses.contains(u) => vec![(format!("std:{}", u), format!("std:{}", u))],
                 Some(sp) => vec![(format!("{}/{}", sp, u), format!("{}/{}", sp, u)), (format!("{}*{}", sp, u), u.clone())],
                 None => vec![(u.clone(), u.clone()), (format!("*{}", u), u.clone())],
             };
@@ -124,7 +162,11 @@ impl<'a> Loader<'a> {
                     break;
                 }
                 // 依存先のパッケージは、読んだことがあっても毎回この空間から使えるかを問い合わせる
-                if let Some(text) = (self.read)(&query) {
+                let text = match query.strip_prefix("std:") {
+                    Some(m) if std_uses.contains(u) => crate::stdlib::source(m).map(|t| t.to_string()),
+                    _ => (self.read)(&query),
+                };
+                if let Some(text) = text {
                     // `*名前` は依存先のパッケージだけ（最初のパッケージの同じ名前のモジュールは使わない）
                     if lib && self.infos.contains_key(&key) && self.libs.contains(&key) {
                         found = Some(key);
@@ -134,17 +176,25 @@ impl<'a> Loader<'a> {
                         self.libs.insert(key.clone());
                         // ファイルの名前はどの空間から読んでも `*名前`
                         format!("*{}", u)
+                    } else if std_uses.contains(u) {
+                        // 標準ライブラリのファイルの名前は `std/名前`（jwc と同じ。エラーの位置もこの名前で出す）
+                        format!("std/{}", u)
                     } else {
                         query
                     };
                     self.files.push((query, text));
-                    let info = self.module(&key, self.files.len() - 1)?;
+                    let mut info = self.module(&key, self.files.len() - 1)?;
+                    info.std = key.starts_with("std:");
                     self.infos.insert(key.clone(), info);
                     found = Some(key);
                     break;
                 }
             }
             let Some(key) = found else {
+                if std_uses.contains(u) {
+                    return Err(Diagnostic::new(format!("標準ライブラリに `{}` はありません", u))
+                        .primary(*span, format!("使えるのは {}", crate::stdlib::names().join("・"))));
+                }
                 return Err(Diagnostic::new(format!("モジュール `{}` が見つかりません", u))
                     .primary(*span, format!("同じフォルダに {}.jw がない", u)));
             };
@@ -159,6 +209,9 @@ impl<'a> Loader<'a> {
         if !name.is_empty() {
             qualify(&mut prog, name, &info, &aliases);
             prog.consts = prog.consts.iter().map(|c| format!("{}.{}", name, c)).collect();
+        } else if !aliases.is_empty() {
+            // 最初のファイルは自分の名前を書き換えず、`use std.名前;` の `名前.x` だけ `std:名前.x` にする
+            qualify(&mut prog, name, &ModuleInfo::default(), &aliases);
         }
         self.parts.push(prog);
         Ok(info)
@@ -184,7 +237,7 @@ fn info_of(p: &Program) -> ModuleInfo {
     for i in &p.interfaces {
         names.insert(i.name.clone(), (NameKind::Interface, public(&i.name)));
     }
-    ModuleInfo { names, variants }
+    ModuleInfo { names, variants, std: false }
 }
 
 /// モジュールの中の名前を、モジュール名をつけた名前に書き換える
@@ -250,6 +303,10 @@ fn qualify(p: &mut Program, module: &str, info: &ModuleInfo, aliases: &HashMap<S
 
 impl<'a> Qualify<'a> {
     fn name(&self, n: &str) -> String {
+        // 最初のファイル（名前が空）は、自分の名前を書き換えない
+        if self.module.is_empty() {
+            return n.to_string();
+        }
         format!("{}.{}", self.module, n)
     }
 
