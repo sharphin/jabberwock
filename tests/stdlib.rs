@@ -138,6 +138,21 @@ fn main() {
 }
 ";
 
+/// std.fs の例（tests/fs_example.jw。`DIR` を作業用のフォルダに置き換えて使う。最後にすべて消すので、何回動かしても同じ）
+pub const FS: &str = include_str!("fs_example.jw");
+
+/// テストごとのフォルダ（テストは並んで走る）
+pub fn fs_src(name: &str) -> String {
+    let d = std::env::temp_dir().join(format!("jw-fs-{}-{}", std::process::id(), name));
+    let _ = std::fs::remove_dir_all(&d);
+    FS.replace("DIR", &d.to_str().unwrap().replace('\\', "/"))
+}
+
+#[test]
+fn fs_module() {
+    assert_eq!(ok(&fs_src("stdlib")), "a/b a/b /b b\na/b [] /\nc.tar.gz gz c.tar [] .env y.txt\nfalse\nhello world\n[a.txt, new.log, x]\n/a.txt\n/new.log\n/x/y/b.jw\n11 true false false true\ntrue false false\nfalse true\n消せません: D/x\nディレクトリを作れません: D\n消せません: D/nope\n名前を変えられません: D/nope\nパスに NUL 文字があります: a\0b\nディレクトリを読めません: D/nope\nディレクトリを読めません: D/c.txt\nfalse\nfalse\nok\n");
+}
+
 /// 同じ種なら同じ並び（splitmix64 の最初の値は、知られている値と同じ）
 #[test]
 fn rand_module() {
@@ -179,7 +194,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("json, lists, rand, strings"), "{}", e);
+    assert!(e.contains("fs, json, lists, rand, strings"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す

@@ -472,7 +472,8 @@ impl<'a> FnAnalyzer<'a> {
                         }
                     }
                     "drop" | "assert" | "spawn" | "chan" | "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "chr"
-                    | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" | "assert_eq" => {
+                    | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" | "assert_eq" | "__fs_exists" | "__fs_list" | "__fs_make_dir" | "__fs_remove"
+                    | "__fs_rename" | "__fs_stat" | "__fs_append" => {
                         for a in args {
                             self.expr(a, false);
                         }

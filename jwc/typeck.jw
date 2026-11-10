@@ -46,6 +46,7 @@ fn bool is_builtin(str n) {
     n == "print" || n == "eprint" || n == "drop" || n == "assert" || n == "read_line" || n == "args" || n == "spawn"
         || n == "chan" || n == "exit" || n == "read_file" || n == "write_file" || n == "run_command" || n == "chr"
         || n == "now_ns" || n == "unix_ms" || n == "sleep_ms" || n == "env_var" || n == "run_output" || n == "assert_eq"
+        || n == "__fs_exists" || n == "__fs_list" || n == "__fs_make_dir" || n == "__fs_remove" || n == "__fs_rename" || n == "__fs_stat" || n == "__fs_append"
 }
 
 /// 最後の `.` の位置（なければ -1）
@@ -2800,6 +2801,18 @@ pub struct Checker {
             }
             for (i, a) in argv { expect(a, params[i])?; }
             if ty.is(ret, "Never") { return Ok(ret); }
+            return Ok(ty.Ty.Enum("Result", own [ret, ty.Ty.Str]));
+        }
+        // std.fs の下回り（std/fs.jw が包む）
+        if name.starts_with("__fs_") {
+            let two = name == "__fs_rename" || name == "__fs_append";
+            let n = if two { 2 } else { 1 };
+            if argv.len() != n { return Err(arity_error(name, n, argv.len(), span)); }
+            for a in argv { expect(a, ty.Ty.Str)?; }
+            if name == "__fs_exists" { return Ok(ty.Ty.Bool); }
+            let mut ret = ty.Ty.Unit;
+            if name == "__fs_list" { ret = ty.Ty.List(own ty.Ty.Str); }
+            if name == "__fs_stat" { ret = ty.Ty.List(own ty.i64t()); }
             return Ok(ty.Ty.Enum("Result", own [ret, ty.Ty.Str]));
         }
         if name == "now_ns" || name == "unix_ms" {

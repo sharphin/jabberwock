@@ -152,6 +152,13 @@ const PRELUDE = "; jabberwock が書き出した LLVM IR\n" +
     "declare i64 @jw_unix_ms()\n" +
     "declare void @jw_sleep_ms(i64)\n" +
     "declare i32 @jw_env_var(ptr, ptr)\n" +
+    "declare i32 @jw_fs_exists(ptr)\n" +
+    "declare i32 @jw_fs_list(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_fs_make_dir(ptr, ptr)\n" +
+    "declare i32 @jw_fs_remove(ptr, ptr)\n" +
+    "declare i32 @jw_fs_rename(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_fs_stat(ptr, ptr, ptr)\n" +
+    "declare i32 @jw_fs_append(ptr, ptr, ptr)\n" +
     "declare i32 @jw_list_to_str(ptr, ptr)\n" +
     "declare i64 @jw_list_find_mem(ptr, i64, ptr)\n" +
     "declare i64 @jw_list_find_f64(ptr, double)\n" +

@@ -535,6 +535,15 @@ fn main() {
 ");
 }
 
+/// std.fs（tests/fs_example.jw。`DIR` をテストごとのフォルダにする）
+#[test]
+fn std_fs_matches_interp() {
+    let d = std::env::temp_dir().join(format!("jw-fs-{}-native", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    let src = include_str!("fs_example.jw").replace("DIR", &d.to_str().unwrap().replace('\\', "/"));
+    same_as_interp("stdfs", &src);
+}
+
 #[test]
 fn std_rand_matches_interp() {
     same_as_interp("stdrand", "use std.rand;

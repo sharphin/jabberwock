@@ -1480,6 +1480,8 @@ struct FnGen {
         let mut v = llvm.vt("0", ty.Ty.Unit);
         if kind == "str" { v = llvm.vt(b.val("load ptr, ptr " + from), ty.Ty.Str); }
         if kind == "int" { v = llvm.vt(b.val("load i64, ptr " + from), ty.i64t()); }
+        if kind == "strs" { v = llvm.vt(b.val("load %list, ptr " + from), ty.Ty.List(own ty.Ty.Str)); }
+        if kind == "ints" { v = llvm.vt(b.val("load %list, ptr " + from), ty.Ty.List(own ty.i64t())); }
         let ov = make_enum(m, want, "Ok", [v])?;
         b.op("store " + lt + " " + ov + ", ptr " + res);
         b.br(done);
@@ -1963,6 +1965,32 @@ struct FnGen {
             let eok = b.val("call i32 @jw_env_var(ptr " + vals[0].v + ", ptr " + eout + ")");
             release(vals, all);
             return some_str(m, want, eok, eout);
+        }
+        if name == "__fs_exists" {
+            let fok = b.val("call i32 @jw_fs_exists(ptr " + vals[0].v + ")");
+            release(vals, all);
+            return Ok(llvm.vt(b.val("icmp ne i32 " + fok + ", 0"), ty.Ty.Bool));
+        }
+        if name == "__fs_list" || name == "__fs_stat" {
+            let fout = b.alloca("%list");
+            b.op("store %list zeroinitializer, ptr " + fout);
+            let ferr = b.alloca("ptr");
+            let fok = b.val("call i32 @jw_" + name.slice(2, name.len()) + "(ptr " + vals[0].v + ", ptr " + fout + ", ptr " + ferr + ")");
+            release(vals, all);
+            let kind = if name == "__fs_list" { "strs" } else { "ints" };
+            return result_of(m, want, fok, ferr, kind, fout);
+        }
+        if name == "__fs_make_dir" || name == "__fs_remove" {
+            let ferr = b.alloca("ptr");
+            let fok = b.val("call i32 @jw_" + name.slice(2, name.len()) + "(ptr " + vals[0].v + ", ptr " + ferr + ")");
+            release(vals, all);
+            return result_of(m, want, fok, ferr, "unit", "");
+        }
+        if name == "__fs_rename" || name == "__fs_append" {
+            let ferr = b.alloca("ptr");
+            let fok = b.val("call i32 @jw_" + name.slice(2, name.len()) + "(ptr " + vals[0].v + ", ptr " + vals[1].v + ", ptr " + ferr + ")");
+            release(vals, all);
+            return result_of(m, want, fok, ferr, "unit", "");
         }
         if name == "args" {
             let out = b.alloca("%list");

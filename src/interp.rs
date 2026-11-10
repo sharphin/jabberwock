@@ -26,9 +26,10 @@ type R<T> = Result<T, Diagnostic>;
 pub(crate) type ThreadBody = Box<dyn FnOnce(&mut Interp) -> R<Value> + Send>;
 
 pub(crate) const MAX_DEPTH: usize = 5000;
-pub(crate) const BUILTINS: [&str; 19] = [
+pub(crate) const BUILTINS: [&str; 26] = [
     "print", "eprint", "drop", "assert", "read_line", "args", "spawn", "chan", "exit", "read_file", "write_file", "run_command", "chr",
     "now_ns", "unix_ms", "sleep_ms", "env_var", "run_output", "assert_eq",
+    "__fs_exists", "__fs_list", "__fs_make_dir", "__fs_remove", "__fs_rename", "__fs_stat", "__fs_append",
 ];
 
 /// `now_ns()` の起点（はじめて呼んだとき。値の差だけに意味がある）
@@ -524,6 +525,32 @@ impl Interp {
                     Ok(v) => some(Value::Str(text_rc(v.as_str()))),
                     Err(_) => none(),
                 })
+            }
+            "__fs_exists" => {
+                let path = text(&vals[0]);
+                Ok(Value::Bool(!path.contains('\0') && std::fs::metadata(&path).is_ok()))
+            }
+            "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
+                let path = text(&vals[0]);
+                let other = if name == "__fs_rename" { text(&vals[1]) } else { String::new() };
+                if path.contains('\0') || other.contains('\0') {
+                    let bad = if path.contains('\0') { &path } else { &other };
+                    return Ok(result(false, msg(format!("パスに NUL 文字があります: {}", bad))));
+                }
+                match fs_op(name, &path, &other, &vals) {
+                    Err(m) => Ok(result(false, msg(m))),
+                    Ok(FsDone::Unit) => Ok(result(true, Value::Unit)),
+                    Ok(FsDone::Names(names)) => {
+                        let items = names.iter().map(|n| Value::Str(text_rc(n.as_str()))).collect();
+                        let list = self.new_list(items);
+                        Ok(Value::Enum { variant: Rc::from("Ok"), fields: vec![list], copy: false })
+                    }
+                    Ok(FsDone::Ints(ns)) => {
+                        let items = ns.iter().map(|&n| Value::Int(n as i128, IntTy::I64)).collect();
+                        let list = self.new_list(items);
+                        Ok(Value::Enum { variant: Rc::from("Ok"), fields: vec![list], copy: false })
+                    }
+                }
             }
             _ => unreachable!("not a system builtin: {} at {:?}", name, span),
         }
@@ -2429,7 +2456,8 @@ impl Interp {
                 Ok(Value::Unit)
             }
             "read_line" => self.read_line(span),
-            "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var" => {
+            "exit" | "read_file" | "write_file" | "run_command" | "run_output" | "now_ns" | "unix_ms" | "sleep_ms" | "env_var"
+            | "__fs_exists" | "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
                 let vals = self.eval_all(args)?;
                 self.system(name, vals, span)
             }
@@ -3608,5 +3636,70 @@ pub(crate) fn binary(op: BinOp, l: Value, r: Value, span: Span) -> R<Value> {
             span,
             format!("{} と {} にはこの演算を使えません", l.type_name(), r.type_name()),
         )),
+    }
+}
+
+enum FsDone {
+    Unit,
+    Names(Vec<String>),
+    Ints(Vec<i64>),
+}
+
+/// std.fs の下回り（`__fs_list` など）。エラーの文は jw_rt.c の `jw_fs_list` などと同じ（OS の文は使わない）
+fn fs_op(name: &str, path: &str, other: &str, vals: &[Value]) -> Result<FsDone, String> {
+    use std::fs;
+    match name {
+        // 中の名前（`.` と `..` は除く。バイトの順に並べる。UTF-8 でない名前があれば読めないとする）
+        "__fs_list" => {
+            let fail = || format!("ディレクトリを読めません: {}", path);
+            let mut names = Vec::new();
+            for e in fs::read_dir(path).map_err(|_| fail())? {
+                let e = e.map_err(|_| fail())?;
+                names.push(e.file_name().into_string().map_err(|_| fail())?);
+            }
+            names.sort();
+            Ok(FsDone::Names(names))
+        }
+        "__fs_make_dir" => fs::create_dir(path).map(|_| FsDone::Unit).map_err(|_| format!("ディレクトリを作れません: {}", path)),
+        // ファイルか、空のディレクトリ（リンクはリンクそのものを消す）
+        "__fs_remove" => {
+            let dir = fs::symlink_metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+            let r = if dir { fs::remove_dir(path) } else { fs::remove_file(path) };
+            r.map(|_| FsDone::Unit).map_err(|_| format!("消せません: {}", path))
+        }
+        "__fs_rename" => fs::rename(path, other).map(|_| FsDone::Unit).map_err(|_| format!("名前を変えられません: {}", path)),
+        "__fs_append" => {
+            use std::io::Write;
+            let Value::Str(t) = &vals[1] else { unreachable!("type checked: str") };
+            let r = fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(t.as_bytes()));
+            r.map(|_| FsDone::Unit).map_err(|_| format!("ファイルに書けません: {}", path))
+        }
+        // [種類（0 ファイル・1 ディレクトリ・2 そのほか）, 大きさ, 更新時刻（ミリ秒）, リンクか]。リンクはたどった先（先がなければ種類 2）
+        "__fs_stat" => {
+            let lm = fs::symlink_metadata(path).map_err(|_| format!("情報を読めません: {}", path))?;
+            let link = lm.file_type().is_symlink();
+            let m = if link { fs::metadata(path).ok() } else { Some(lm) };
+            let Some(m) = m else { return Ok(FsDone::Ints(vec![2, 0, 0, 1])) };
+            let kind = if m.is_dir() { 1 } else if m.is_file() { 0 } else { 2 };
+            let size = if kind == 0 { m.len() as i64 } else { 0 };
+            Ok(FsDone::Ints(vec![kind, size, modified_ms(&m), link as i64]))
+        }
+        _ => unreachable!("not an fs builtin: {}", name),
+    }
+}
+
+/// 更新時刻（1970 年からのミリ秒）。jw_rt.c と同じく、秒 * 1000 + ナノ秒 / 10^6（Windows は秒の単位）
+fn modified_ms(m: &std::fs::Metadata) -> i64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        m.mtime().wrapping_mul(1000).wrapping_add(m.mtime_nsec() / 1_000_000)
+    }
+    #[cfg(not(unix))]
+    {
+        match m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+            Some(d) => d.as_secs() as i64 * 1000,
+            None => 0,
+        }
     }
 }

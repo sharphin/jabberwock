@@ -2536,6 +2536,24 @@ impl<'a> Checker<'a> {
                 }
                 return Ok(if ret == Ty::Never { ret } else { Ty::Enum("Result".to_string(), vec![ret, Ty::Str]) });
             }
+            // std.fs の下回り（std/fs.jw が包む）
+            "__fs_exists" | "__fs_list" | "__fs_make_dir" | "__fs_remove" | "__fs_rename" | "__fs_stat" | "__fs_append" => {
+                let two = name == "__fs_rename" || name == "__fs_append";
+                let n = if two { 2 } else { 1 };
+                if args.len() != n {
+                    return Err(arity_error(name, n, args.len(), span));
+                }
+                for a in args {
+                    self.expect(a, &Ty::Str)?;
+                }
+                let ret = match name {
+                    "__fs_exists" => return Ok(Ty::Bool),
+                    "__fs_list" => Ty::List(Box::new(Ty::Str)),
+                    "__fs_stat" => Ty::List(Box::new(I64)),
+                    _ => Ty::Unit,
+                };
+                return Ok(Ty::Enum("Result".to_string(), vec![ret, Ty::Str]));
+            }
             "now_ns" | "unix_ms" => {
                 if !args.is_empty() {
                     return Err(arity_error(name, 0, args.len(), span));

@@ -281,6 +281,13 @@ declare i64 @jw_now_ns()
 declare i64 @jw_unix_ms()
 declare void @jw_sleep_ms(i64)
 declare i32 @jw_env_var(ptr, ptr)
+declare i32 @jw_fs_exists(ptr)
+declare i32 @jw_fs_list(ptr, ptr, ptr)
+declare i32 @jw_fs_make_dir(ptr, ptr)
+declare i32 @jw_fs_remove(ptr, ptr)
+declare i32 @jw_fs_rename(ptr, ptr, ptr)
+declare i32 @jw_fs_stat(ptr, ptr, ptr)
+declare i32 @jw_fs_append(ptr, ptr, ptr)
 declare i32 @jw_list_to_str(ptr, ptr)
 declare i64 @jw_list_find_mem(ptr, i64, ptr)
 declare i64 @jw_list_find_f64(ptr, double)
@@ -3864,6 +3871,32 @@ impl<'m, 'p> FnGen<'m, 'p> {
                 let ok = self.b.val(format!("call i32 @jw_env_var(ptr {}, ptr {})", vals[0].0, out));
                 release(self, &vals);
                 self.some_str(want, &ok, &out)
+            }
+            "__fs_exists" => {
+                let ok = self.b.val(format!("call i32 @jw_fs_exists(ptr {})", vals[0].0));
+                release(self, &vals);
+                Ok((self.b.val(format!("icmp ne i32 {}, 0", ok)), Ty::Bool))
+            }
+            "__fs_list" | "__fs_stat" => {
+                let out = self.b.alloca("%list");
+                self.b.op(format!("store %list zeroinitializer, ptr {}", out));
+                let err = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_{}(ptr {}, ptr {}, ptr {})", &name[2..], vals[0].0, out, err));
+                release(self, &vals);
+                let elem = if name == "__fs_list" { Ty::Str } else { Ty::Int(IntTy::I64) };
+                self.result_of(want, &ok, &err, |me| Ok((me.b.val(format!("load %list, ptr {}", out)), Ty::List(Box::new(elem)))))
+            }
+            "__fs_make_dir" | "__fs_remove" => {
+                let err = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_{}(ptr {}, ptr {})", &name[2..], vals[0].0, err));
+                release(self, &vals);
+                self.result_of(want, &ok, &err, |_| Ok(("0".to_string(), Ty::Unit)))
+            }
+            "__fs_rename" | "__fs_append" => {
+                let err = self.b.alloca("ptr");
+                let ok = self.b.val(format!("call i32 @jw_{}(ptr {}, ptr {}, ptr {})", &name[2..], vals[0].0, vals[1].0, err));
+                release(self, &vals);
+                self.result_of(want, &ok, &err, |_| Ok(("0".to_string(), Ty::Unit)))
             }
             "args" => {
                 let out = self.b.alloca("%list");

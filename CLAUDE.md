@@ -25,7 +25,7 @@
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
 | `src/stdlib.rs` | 標準ライブラリ: `std/` の jabberwock のソースを `include_str!` で入れておく（`use std.名前;` で `modules.rs` が読む） |
-| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
+| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`・`fs.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
 | `src/project.rs` | パッケージ（alice.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは別の実行ファイル `alice`（`src/alice.rs` の `project_*`）。説明は docs/packages.md |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
@@ -59,7 +59,7 @@
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/chars.rs` | 文字型 char（`'a'`・比べる・`as` / `to_char`・判定のメソッド・辞書のキー・match・エラー） |
-| `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド） |
+| `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド）。std.fs の例は `tests/fs_example.jw`（`DIR` をテストごとのフォルダに置き換える。native / jwc も使う） |
 | `tests/project.rs` | パッケージ（alice.toml・依存先・`alice new` / `run` / `test` / `build`） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |
@@ -277,6 +277,9 @@
   `env_var` / `now_ns` などの名前は組み込み（`BUILTINS`）なので、変数や関数の名前にできない（jwc の `env` とぶつかるので `env` にはしなかった）。
   `Option<str>` を返す組み込み（env_var・u8 のリストの `to_str`）は llvm.rs / llvmfn.jw の `some_str` で作る。
   `run_command` と `run_output` は jw_rt.c の `run_cmd` を共有する（`run_output` は標準出力をパイプで受ける。Windows は 1 番をパイプへつなぎ替えて `_wspawnvp(_P_NOWAIT)`、そのあいだ出力の錠を持つ）。
+- std.fs の下回り（`__fs_exists` / `__fs_list` / `__fs_make_dir` / `__fs_remove` / `__fs_rename` / `__fs_stat` / `__fs_append`）: 型は types.rs の `call`、動きは interp の `system` → `fs_op`（exec も）、
+  LLVM は jw_rt.c の `jw_fs_*`（`result_of`。`__fs_list` / `__fs_stat` はリストを返す）。エラーの文は `fs_op` と jw_rt.c でそろえる。NUL を含むパスは Err（exists は false）。
+  `__fs_stat` は `[種類, 大きさ, 更新時刻, リンクか]`（種類は 0 ファイル・1 ディレクトリ・2 そのほか）で、std/fs.jw が `fs.Info` にする。
 - `assert_eq(a, b)`: 型は types.rs が `binary(BinOp::Eq, ..)` で `==` と同じに調べる。interp の `Interp::assert_eq`（exec も）、
   llvm.rs は `binary_vals`（`binary` から値の計算を分けたもの。jwc の llvmfn.jw も同じ）で比べ、違えば Show の手伝いで両方を文字にして `jw_assert_eq_fail`。
 - リストの `contains` / `index_of`（要素は数・真偽値・文字列）: interp の `find_in`（exec も）、llvm は jw_rt.c の `jw_list_find_mem`（整数・真偽値をバイトで）/ `jw_list_find_f64` / `jw_list_find_str`。
