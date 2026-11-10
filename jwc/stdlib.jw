@@ -367,6 +367,98 @@ pub fn str stem(str path) {{
 }}
 """);
     }
+    if name == "http" {
+        return Some("""
+// std.http: HTTP / HTTPS の要求を送る。`use std.http;` で `let r = http.get("https://example.com/")?;` `r.status` `r.body` のように使う。
+// 中では OS の `curl` コマンドを呼ぶ（Linux・macOS・Windows 10 以降には入っている）。なければ Err。
+// リダイレクトはたどる。本文は UTF-8 の文字列だけ（画像などのバイナリは受け取れない）。
+
+/// 応答
+pub struct Response {{
+    // 状態コード（200 など）
+    i64 status;
+    // ヘッダー（名前は小文字。リダイレクトしたら最後の応答のもの）
+    str[str] headers;
+    str body;
+
+    /// 状態コードが 200 番台か
+    fn bool ok() {{ status >= 200 && status < 300 }}
+
+    /// ヘッダーの値（名前の大文字・小文字は区別しない。なければ None）
+    fn Option<str> header(str name) {{
+        let k = name.to_lower();
+        if headers.contains(k) {{ return Some(headers[k]); }}
+        None
+    }}
+}}
+
+/// GET
+pub fn Result<Response, str> get(str url) {{
+    let str[] h = [];
+    request("GET", url, h, "")
+}}
+
+/// POST（content_type は `application/json` など）
+pub fn Result<Response, str> post(str url, str body, str content_type) {{
+    let str[] h = ["Content-Type: " + content_type];
+    request("POST", url, h, body)
+}}
+
+/// 方法（`GET` `POST` `PUT` `DELETE` など）・ヘッダー（`名前: 値` の形）・本文（空なら送らない）を決めて送る
+pub fn Result<Response, str> request(str method, str url, ref str[] headers, str body) {{
+    if !url.starts_with("http://") && !url.starts_with("https://") {{
+        return Err("URL は http:// か https:// で始めてください: " + url);
+    }}
+    if method == "" || method.starts_with("-") {{
+        return Err("方法の名前がおかしいです: " + method);
+    }}
+    let str[] mut a = ["-sS", "-L", "-D", "-", "-w", "\\n%{{{{http_code}}}}", "-X", method];
+    for h in headers {{
+        a.push("-H");
+        a.push(h);
+    }}
+    if body != "" {{
+        a.push("--data-raw");
+        a.push(body);
+    }}
+    a.push(url);
+    let out = match run_output("curl", a) {{
+        case Ok(o) -> o;
+        case Err(e) -> return Err("HTTP の要求に失敗しました（" + url + "）: " + e);
+    }};
+    parse(out)
+}}
+
+/// curl の出力（ヘッダー・本文・改行・状態コード）を分ける
+fn Result<Response, str> parse(str out) {{
+    let cs = out.chars();
+    let mut last = cs.len() - 1;
+    while last >= 0 && cs[last] != '\\n' {{ last--; }}
+    if last < 0 {{ return Err("HTTP の応答を読めません"); }}
+    let status = match out.slice(last + 1, out.len()).to_int() {{
+        case Some(n) -> n;
+        case None -> return Err("HTTP の応答を読めません");
+    }};
+    let mut rest = out.slice(0, last);
+    let str[str] mut headers = [];
+    while rest.starts_with("HTTP/") {{
+        let end = match rest.find("\\r\\n\\r\\n") {{
+            case Some(i) -> i;
+            case None -> rest.len();
+        }};
+        headers = [];
+        for line in rest.slice(0, end).lines() {{
+            match line.find(":") {{
+                case Some(i) -> headers[line.slice(0, i).trim().to_lower()] = line.slice(i + 1, line.len()).trim();
+                case None -> {{}}
+            }}
+        }}
+        rest = if end + 4 <= rest.len() {{ rest.slice(end + 4, rest.len()) }} else {{ "" }};
+    }}
+    Ok(Response {{ status: status, headers: headers, body: rest }})
+}}
+""");
+    }
     if name == "json" {
         return Some("""
 // std.json: JSON を読む・書く。`use std.json;` で `json.parse(text)` / `json.stringify(v)` のように使う。
@@ -1237,5 +1329,5 @@ pub fn Option<i64> parse_int(str s, i64 base) {{
 
 /// 標準ライブラリのモジュールの名前
 pub fn str[] names() {
-    ["cli", "fs", "json", "lists", "rand", "sets", "strings"]
+    ["cli", "fs", "http", "json", "lists", "rand", "sets", "strings"]
 }

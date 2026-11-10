@@ -153,6 +153,68 @@ fn fs_module() {
     assert_eq!(ok(&fs_src("stdlib")), "a/b a/b /b b\na/b [] /\nc.tar.gz gz c.tar [] .env y.txt\nfalse\nhello world\n[a.txt, new.log, x]\n/a.txt\n/new.log\n/x/y/b.jw\n11 true false false true\ntrue false false\nfalse true\n消せません: D/x\nディレクトリを作れません: D\n消せません: D/nope\n名前を変えられません: D/nope\nパスに NUL 文字があります: a\0b\nディレクトリを読めません: D/nope\nディレクトリを読めません: D/c.txt\nfalse\nfalse\nok\n");
 }
 
+/// テスト用の小さな HTTP サーバーを別のスレッドで動かし、そのポートを返す（std.http のテスト。native も使う）
+pub fn serve_http() -> u16 {
+    use std::io::{Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let Ok(mut s) = s else { continue };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            // ヘッダーの終わりまで読み、Content-Length の分だけ本文を読む
+            let head_end = loop {
+                let n = s.read(&mut chunk).unwrap_or(0);
+                if n == 0 { break None; }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") { break Some(i + 4); }
+            };
+            let Some(head_end) = head_end else { continue };
+            let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+            let len = head.lines().find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                if k.eq_ignore_ascii_case("content-length") { v.trim().parse::<usize>().ok() } else { None }
+            }).unwrap_or(0);
+            while buf.len() < head_end + len {
+                let n = s.read(&mut chunk).unwrap_or(0);
+                if n == 0 { break; }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let body = String::from_utf8_lossy(&buf[head_end..]).to_string();
+            let mut words = head.split_whitespace();
+            let (method, path) = (words.next().unwrap_or("").to_string(), words.next().unwrap_or("").to_string());
+            let name = head.lines().find_map(|l| l.strip_prefix("X-Name: ")).unwrap_or("").to_string();
+            let ctype = head.lines().find_map(|l| l.strip_prefix("Content-Type: ")).unwrap_or("").to_string();
+            let (status, extra, out) = match path.as_str() {
+                "/x.json" => ("200 OK", "Content-Type: application/json\r\n".to_string(), "{\"a\": 1}".to_string()),
+                "/echo" => ("201 Created", format!("X-Type: {}\r\n", ctype), format!("{} {} {}", method, body, name)),
+                "/moved" => ("302 Found", "Location: /x.json\r\n".to_string(), String::new()),
+                _ => ("404 Not Found", String::new(), "なし".to_string()),
+            };
+            let reply = format!("HTTP/1.1 {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}", status, extra, out.len(), out);
+            let _ = s.write_all(reply.as_bytes());
+        }
+    });
+    port
+}
+
+/// curl があるか（std.http は curl を呼ぶ）
+pub fn have_curl() -> bool {
+    std::process::Command::new("curl").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+pub const HTTP_OUT: &str = "200 true {\"a\": 1} application/json true\n1.0\n404 false なし\n201 POST {\"b\": [1, 2]}  application/json\n201 PUT  ジャバ\n200 {\"a\": 1}\nURL は http:// か https:// で始めてください: ftp://x\n方法の名前がおかしいです: -x\n";
+
+#[test]
+fn http_module() {
+    if !have_curl() {
+        return;
+    }
+    let src = include_str!("http_example.jw").replace("PORT", &serve_http().to_string());
+    assert_eq!(ok(&src), HTTP_OUT);
+}
+
 /// std.sets（tests/sets_example.jw）
 #[test]
 fn sets_module() {
@@ -230,7 +292,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("cli, fs, json, lists, rand, sets, strings"), "{}", e);
+    assert!(e.contains("cli, fs, http, json, lists, rand, sets, strings"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す

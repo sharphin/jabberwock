@@ -544,6 +544,30 @@ fn std_fs_matches_interp() {
     same_as_interp("stdfs", &src);
 }
 
+/// std.http（tests/http_example.jw を、テストの中の小さなサーバーに向けて）
+#[test]
+fn std_http_matches_interp() {
+    if std::process::Command::new("curl").arg("--version").output().is_err() {
+        return;
+    }
+    let port = {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for s in l.incoming() {
+                let Ok(mut s) = s else { continue };
+                let mut buf = [0u8; 65536];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+            }
+        });
+        port
+    };
+    let src = format!("use std.http;\nfn main() {{\n    match http.get(\"http://127.0.0.1:{}/\") {{\n        case Ok(r) -> print(r.status, r.ok(), r.body, r.header(\"content-type\").unwrap_or(\"-\"));\n        case Err(e) -> print(e);\n    }}\n    match http.get(\"x\") {{ case Ok(r) -> print(r.status); case Err(e) -> print(e); }}\n}}\n", port);
+    same_as_interp("stdhttp", &src);
+}
+
 #[test]
 fn std_sets_matches_interp() {
     same_as_interp("stdsets", include_str!("sets_example.jw"));
