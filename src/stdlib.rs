@@ -6,6 +6,7 @@
 pub const MODULES: &[(&str, &str)] = &[
     ("json", include_str!("../std/json.jw")),
     ("lists", include_str!("../std/lists.jw")),
+    ("rand", include_str!("../std/rand.jw")),
     ("strings", include_str!("../std/strings.jw")),
 ];
 

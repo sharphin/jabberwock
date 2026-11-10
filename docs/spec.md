@@ -84,6 +84,7 @@ fn main() {
 |---|---|
 | `std.strings` | `pad_left(s, 幅, 埋める字)` `pad_right` `center` `trim_start(s)` `trim_end(s)` `words(s)`（空白で区切る） `rfind(s, sub)` → `Option<i64>` `count(s, sub)`（重ならない回数） `to_base(x, 基数)` `hex(x)` `parse_int(s, 基数)` → `Option<i64>`（1 文字の判定は char のメソッド `c.is_digit()` など） |
 | `std.json` | `parse(text)` → `Result<own json.Value, str>` `stringify(ref v)` `pretty(ref v, 字下げ)` `quote(s)` `get_str(ref v, key)` / `get_num` / `get_bool` → `Option`。値は `enum Value { Null; Bool(bool b); Num(f64 n); Str(str s); Arr(own (own Value)[] items); Obj(own (own Value)[str] fields); }`（object は入れた順を覚える。`match ref *v { case Obj(f) -> ... }` で中を見る） |
+| `std.rand` | 乱数（暗号には使えない。splitmix64）。`let mut r = rand.Rng.seeded(42);`（同じ種なら同じ並び）か `rand.Rng.from_time()`。`r.next()`（u64）`r.below(n)`（0 以上 n 未満）`r.range(lo, hi)`（lo 以上 hi 未満）`r.float()`（0.0 以上 1.0 未満）`r.chance(p)` `r.shuffle(ref mut a)` |
 | `std.lists` | `sum(a)` `sum_f64(a)` `min(a)` / `max(a)` → `Option<i64>` `range_of(from, to)` `slice(a, from, to)` / `slice_str` `extend(ref mut a, ref mut b)`（b の要素を a の後ろへ動かす） `any(a, f)` `all(a, f)` `binary_search(a, x)` → `Result<i64, i64>`（なければ入れる位置を Err で） |
 
 ## 2. 字句

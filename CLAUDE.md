@@ -25,7 +25,7 @@
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
 | `src/stdlib.rs` | 標準ライブラリ: `std/` の jabberwock のソースを `include_str!` で入れておく（`use std.名前;` で `modules.rs` が読む） |
-| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
+| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
 | `src/project.rs` | パッケージ（alice.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは別の実行ファイル `alice`（`src/alice.rs` の `project_*`）。説明は docs/packages.md |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |

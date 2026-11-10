@@ -536,6 +536,34 @@ fn main() {
 }
 
 #[test]
+fn std_rand_matches_interp() {
+    same_as_interp("stdrand", "use std.rand;
+fn main() {
+    let mut r = rand.Rng.seeded(42);
+    print(r.next(), r.next());
+    let mut counts = [0, 0, 0, 0, 0, 0];
+    for i in range(6000) { let k = r.below(6); counts[k] += 1; }
+    print(counts);
+    let mut lo = 100;
+    let mut hi = -100;
+    for i in range(1000) {
+        let x = r.range(-5, 5);
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    print(lo, hi, r.range(-9223372036854775807, 9223372036854775807) != 0);
+    let f = r.float();
+    print(f >= 0.0 && f < 1.0, r.chance(0.0), r.chance(1.0));
+    let str[] mut a = [\"a\", \"b\", \"c\", \"d\", \"e\"];
+    r.shuffle(ref mut a);
+    print(a, a.len());
+    let mut t = rand.Rng.from_time();
+    print(t.below(10) < 10);
+}
+");
+}
+
+#[test]
 fn std_modules_match_interp() {
     same_as_interp("stdmods", "use std.strings;
 use std.lists;
