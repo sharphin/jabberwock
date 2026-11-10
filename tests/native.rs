@@ -545,6 +545,11 @@ fn std_fs_matches_interp() {
 }
 
 #[test]
+fn std_cli_matches_interp() {
+    same_as_interp("stdcli", include_str!("cli_example.jw"));
+}
+
+#[test]
 fn std_rand_matches_interp() {
     same_as_interp("stdrand", "use std.rand;
 fn main() {

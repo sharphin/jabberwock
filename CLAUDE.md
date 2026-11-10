@@ -25,7 +25,7 @@
 | `src/threads.rs` | スレッド（interp 用）: `World`（出力・待ち合わせ・デッドロック検出・エラー）、`Portable`（ヒープから切り離した値）、`Chan` / `Task` |
 | `src/modules.rs` | モジュールの読み込み（`Loader`）と、モジュールの中の名前を `geom.area` に書き換える `qualify` |
 | `src/stdlib.rs` | 標準ライブラリ: `std/` の jabberwock のソースを `include_str!` で入れておく（`use std.名前;` で `modules.rs` が読む） |
-| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`・`fs.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
+| `std/` | 標準ライブラリのモジュール（jabberwock で書く。`strings.jw`・`lists.jw`・`json.jw`・`rand.jw`・`fs.jw`・`cli.jw`）。足したら `stdlib.rs` の `MODULES` にも足し、jwc/stdlib.jw を作り直す |
 | `src/project.rs` | パッケージ（alice.toml の読み取り・依存先とモジュールの場所・`new`）。コマンドは別の実行ファイル `alice`（`src/alice.rs` の `project_*`）。説明は docs/packages.md |
 | `src/lib.rs` | `run_source` / `run_source_with`（解析なしで比較できる）/ `run_with_modules`・`render`（複数ファイルのエラー表示）/ `ir_text`（`--ir`）/ `ir_dump`（`--ir-raw`。解析の前の IR、jwc との突き合わせ用）/ `ir_mismatch`（IR との突き合わせ）/ `llvm_build`（`jabberwock build`）/ `native_mismatch`（実行ファイルとの突き合わせ） |
 | `src/ir/mod.rs` | IR（中間表現）の形と表示。設計は `docs/ir-design.md` |
@@ -59,7 +59,7 @@
 | `bench/` | jabberwock・Go・C++・Rust で同じ処理のベンチマーク（`bench/run.sh`、結果は `bench/README.md`）。時間の中央値・最大メモリは `bench/measure.c`、jabberwock は 3 通り（ふつう・`--no-elide`・`--unchecked`）と検査の数（`--stats`・`--count-checks`）、C++ は境界チェックつきも。ビルド時間・大きさ・起動・スレッド数・速くした書き方は `bench/extra.sh`。検査の数の見張りは `bench/checks.sh`（`bench/checks.txt` と比べる。CI の bench-checks） |
 | `tests/modules.rs` | モジュール（`use`・`pub`・`geom.area(p)`・エラーの位置） |
 | `tests/chars.rs` | 文字型 char（`'a'`・比べる・`as` / `to_char`・判定のメソッド・辞書のキー・match・エラー） |
-| `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド）。std.fs の例は `tests/fs_example.jw`（`DIR` をテストごとのフォルダに置き換える。native / jwc も使う） |
+| `tests/stdlib.rs` | 標準ライブラリ（`use std.名前;`・std の各モジュール・同じ名前のファイルより優先・スレッド）。std.fs の例は `tests/fs_example.jw`（`DIR` をテストごとのフォルダに置き換える。native / jwc も使う）、std.cli は `tests/cli_example.jw` |
 | `tests/project.rs` | パッケージ（alice.toml・依存先・`alice new` / `run` / `test` / `build`） |
 | `tests/maps.rs` | 辞書 `i64[str]`・`for (k, v) in m`・`for (i, x) in a` |
 | `tests/closures.rs` | クロージャ・関数の値・`sort` / `sort_by` / `sort_unstable`（並び方と長さを変えた `sort_patterns.jw` も） |
@@ -128,7 +128,7 @@
   `bind_fields` で受け取る。types は `variant_pat` / `sub_pat`、全部書いたかは `variant_covered`。lower は case ごとに `test_pat`（外れたら次の case へ）→
   `bind_pat` → 入れ物の drop を **同じブロック** に置く（llvm.rs はそのブロックで take した入れ物の中身を解放しないため）。
 - パーサはファイル中の `enum 名前` を先に集め、`名前.種類` を enum の値として読む（`enum_names`）。
-- ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。`}` で終わる文（`is_block_like`）には `;` 不要。
+- ブロックの値は `Block.tail` が true のときだけ（最後の文が `;` のない式）。値として使うブロックは、最後が return か `exit(..);` なら値なしでよい（`parse_value_block`）。`}` で終わる文（`is_block_like`）には `;` 不要。
 
 - ジェネリクス: 型検査だけの話で、interp は型を見ない（値はそのまま動く）。`Ty::Param` は定義の中の `T`、
   `Ty::Struct/Enum(名前, 型の引数)`。使う側では `instantiate` が引数（ふつうの式 → 数の式 → enum の値の順）と

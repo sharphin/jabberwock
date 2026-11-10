@@ -72,6 +72,18 @@ fn bool is_return(ref ast.Stmt s) {
     }
 }
 
+/// return か `exit(..);` か（値として使うブロックの最後に置ける）
+fn bool is_return_or_exit(ref ast.Stmt s) {
+    match ref s {
+        case Return(h, v, sp) -> true;
+        case Ex(e) -> match ref e.kind {
+            case Call(n, xs) -> n == "exit";
+            default -> false;
+        };
+        default -> false;
+    }
+}
+
 fn bool is_variant_pat(ref ast.Pat p) {
     match ref p {
         case Variant(n, b, s, h, subs) -> true;
@@ -1223,9 +1235,9 @@ struct Parser {
     /// 値として使う if / match のブロック。最後に `;` のない式（値）が必要
     fn mut Result<ast.Block, diag.Diag> parse_value_block(bool as_value) {
         let b = parse_block()?;
-        // 最後が return なら値は要らない（そこで関数を抜ける）
+        // 最後が return か `exit(..);` なら値は要らない（そこで抜ける）
         let n = b.stmts.len();
-        let returns = n > 0 && is_return(b.stmts[n - 1]);
+        let returns = n > 0 && is_return_or_exit(b.stmts[n - 1]);
         if as_value && !b.tail && !returns {
             return Err(diag.error_note("値として使うブロックの最後に値がありません", b.end, "このブロックの値が決まらない",
                 "最後の式の `;` を外すと、それがブロックの値になります"));

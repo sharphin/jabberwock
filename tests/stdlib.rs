@@ -153,6 +153,36 @@ fn fs_module() {
     assert_eq!(ok(&fs_src("stdlib")), "a/b a/b /b b\na/b [] /\nc.tar.gz gz c.tar [] .env y.txt\nfalse\nhello world\n[a.txt, new.log, x]\n/a.txt\n/new.log\n/x/y/b.jw\n11 true false false true\ntrue false false\nfalse true\n消せません: D/x\nディレクトリを作れません: D\n消せません: D/nope\n名前を変えられません: D/nope\nパスに NUL 文字があります: a\0b\nディレクトリを読めません: D/nope\nディレクトリを読めません: D/c.txt\nfalse\nfalse\nok\n");
 }
 
+/// std.cli（tests/cli_example.jw）
+#[test]
+fn cli_module() {
+    assert_eq!(ok(include_str!("cli_example.jw")), "true false true x None [a.txt, b] false
+true true true file Some(12) [-v, --x] false
+true true true y None [-, -5] false
+Err: 知らないオプションです: --nope
+Err: 知らないオプションです: -z
+Err: --out に値がありません
+Err: --verbose は値をとりません
+false false false - None [] true
+false false false - None [] true
+使い方: wc [オプション] <file>
+行を数える
+
+引数:
+  <file>            読むファイル
+
+オプション:
+  -v, --verbose     詳しく出す
+  -o, --out <値>    出力先（既定: -）
+      --count <値>  回数
+  -h, --help        この説明を出す
+使い方: x
+
+オプション:
+  -h, --help  この説明を出す
+");
+}
+
 /// 同じ種なら同じ並び（splitmix64 の最初の値は、知られている値と同じ）
 #[test]
 fn rand_module() {
@@ -194,7 +224,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("fs, json, lists, rand, strings"), "{}", e);
+    assert!(e.contains("cli, fs, json, lists, rand, strings"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す
