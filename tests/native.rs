@@ -545,6 +545,11 @@ fn std_fs_matches_interp() {
 }
 
 #[test]
+fn std_sets_matches_interp() {
+    same_as_interp("stdsets", include_str!("sets_example.jw"));
+}
+
+#[test]
 fn std_cli_matches_interp() {
     same_as_interp("stdcli", include_str!("cli_example.jw"));
 }
