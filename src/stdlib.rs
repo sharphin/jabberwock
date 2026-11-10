@@ -5,6 +5,8 @@
 /// (モジュールの名前, ソース)。名前の順
 pub const MODULES: &[(&str, &str)] = &[
     ("cli", include_str!("../std/cli.jw")),
+    ("csv", include_str!("../std/csv.jw")),
+    ("encoding", include_str!("../std/encoding.jw")),
     ("fs", include_str!("../std/fs.jw")),
     ("http", include_str!("../std/http.jw")),
     ("json", include_str!("../std/json.jw")),
@@ -12,6 +14,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("rand", include_str!("../std/rand.jw")),
     ("sets", include_str!("../std/sets.jw")),
     ("strings", include_str!("../std/strings.jw")),
+    ("time", include_str!("../std/time.jw")),
 ];
 
 /// `std.名前` のソース

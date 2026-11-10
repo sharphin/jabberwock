@@ -286,6 +286,8 @@ fn ast_with_modules() {
         ("std_cli", include_str!("cli_example.jw")),
         ("std_sets", include_str!("sets_example.jw")),
         ("std_http", include_str!("http_example.jw")),
+        ("std_time", include_str!("time_example.jw")),
+        ("std_formats", include_str!("text_formats_example.jw")),
         ("exit_value", "fn main() {\n    let n = match Some(1) { case Some(v) -> v; case None -> { eprint(\"x\"); exit(3); } };\n    let m = if n > 0 { n } else { exit(4); };\n    print(n + m);\n}\n"),
         ("std_json", "use std.json;\nfn main() {\n    let text = \"\"\"{{\"name\": \"jab\\\\\"ber\", \"n\": [1, 2.5, -3e2, true, null], \"o\": {{}}, \"u\": \"\\\\u00e9\\\\ud83d\\\\ude00\", \"e\": []}}\"\"\";\n    match json.parse(text) {\n        case Ok(v) -> {\n            print(json.stringify(v));\n            print(json.pretty(v, 2));\n            match ref *v {\n                case Obj(f) -> print(f.len(), f.contains(\"n\"));\n                default -> print(\"?\");\n            }\n            print(json.get_str(v, \"name\").unwrap_or(\"-\"), json.get_num(v, \"n\").is_none(), json.get_str(v, \"zz\").is_none());\n        }\n        case Err(e) -> print(e);\n    }\n    for bad in [\"\", \"[1,\", \"{{\\\"a\\\" 1}}\", \"tru\", \"\\\"abc\", \"[1] x\", \"01\", \"-\", \"\\\"\\\\x\\\"\"] {\n        match json.parse(bad) {\n            case Ok(v) -> print(\"ok?\", json.stringify(v));\n            case Err(e) -> print(e);\n        }\n    }\n    let own json.Value v = own json.Value.Arr(own [own json.Value.Str(\"a\\nb\"), own json.Value.Num(0.5)]);\n    print(json.stringify(v));\n}\n"),
     ];
@@ -294,7 +296,7 @@ fn ast_with_modules() {
     }
     for n in [
         "ok_main", "missing", "cycle", "not_pub", "no_name", "dot_end", "twice", "bad_mod", "std_main", "std_mod", "std_use", "std_missing",
-        "std_twice", "std_var", "std_bare", "std_json", "std_rand", "std_fs", "std_cli", "exit_value", "std_sets", "std_http",
+        "std_twice", "std_var", "std_bare", "std_json", "std_rand", "std_fs", "std_cli", "exit_value", "std_sets", "std_http", "std_time", "std_formats",
     ] {
         same_ast(&dir.join(format!("{}.jw", n)));
         same_typed(&dir.join(format!("{}.jw", n)));
