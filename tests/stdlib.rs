@@ -113,6 +113,37 @@ fn json_module() {
     assert_eq!(ok(JSON), "{\"name\":\"jab\\\"ber\",\"n\":[1,2.5,-300,true,null],\"o\":{},\"u\":\"é😀\",\"e\":[]}\n{\n  \"name\": \"jab\\\"ber\",\n  \"n\": [\n    1,\n    2.5,\n    -300,\n    true,\n    null\n  ],\n  \"o\": {},\n  \"u\": \"é😀\",\n  \"e\": []\n}\n5 true\njab\"ber true true\nJSON を読めません（1 文字目）: 値がありません\nJSON を読めません（4 文字目）: 値がありません\nJSON を読めません（6 文字目）: `:` が要ります\nJSON を読めません（4 文字目）: `true` と書くところです\nJSON を読めません（5 文字目）: 文字列が閉じていません\nJSON を読めません（5 文字目）: 値のあとに余分な文字があります\nJSON を読めません（3 文字目）: 数の先頭に 0 は書けません\nJSON を読めません（2 文字目）: 数の書き方がおかしいです\nJSON を読めません（4 文字目）: 未知のエスケープ `\\x` です\n[\"a\\nb\",0.5]\n");
 }
 
+pub const RAND: &str = "use std.rand;
+fn main() {
+    let mut r = rand.Rng.seeded(42);
+    print(r.next(), r.next());
+    let mut counts = [0, 0, 0, 0, 0, 0];
+    for i in range(6000) { let k = r.below(6); counts[k] += 1; }
+    print(counts);
+    let mut lo = 100;
+    let mut hi = -100;
+    for i in range(1000) {
+        let x = r.range(-5, 5);
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    print(lo, hi, r.range(-9223372036854775807, 9223372036854775807) != 0);
+    let f = r.float();
+    print(f >= 0.0 && f < 1.0, r.chance(0.0), r.chance(1.0));
+    let str[] mut a = [\"a\", \"b\", \"c\", \"d\", \"e\"];
+    r.shuffle(ref mut a);
+    print(a, a.len());
+    let mut t = rand.Rng.from_time();
+    print(t.below(10) < 10);
+}
+";
+
+/// 同じ種なら同じ並び（splitmix64 の最初の値は、知られている値と同じ）
+#[test]
+fn rand_module() {
+    assert_eq!(ok(RAND), "13679457532755275413 2949826092126892291\n[985, 991, 1014, 1026, 985, 999]\n-5 4 true\ntrue false true\n[d, a, b, e, c] 5\ntrue\n");
+}
+
 /// 同じ名前のファイルがあっても、標準ライブラリはコンパイラの中のものを使う。ふつうの `use strings;` はそのファイル
 #[test]
 fn std_is_not_overridden_by_local_files() {
@@ -148,7 +179,7 @@ fn main() {
 fn errors() {
     let e = err("use std.nope;\nfn main() {}");
     assert!(e.contains("標準ライブラリに `std.nope` はありません"), "{}", e);
-    assert!(e.contains("json, lists, strings"), "{}", e);
+    assert!(e.contains("json, lists, rand, strings"), "{}", e);
     let e = err("use std.strings;\nfn main() { print(strings.nothing(1)); }");
     assert!(e.contains("モジュール `strings` に `nothing` はありません"), "{}", e);
     // 標準ライブラリの中のエラーは std/strings.jw の位置で出す
