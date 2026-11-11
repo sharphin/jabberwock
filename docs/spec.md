@@ -85,13 +85,16 @@ fn main() {
 - 標準ライブラリの中では `use std.名前;` だけ使える。ない名前はエラー（使える名前を示す）。エラーの位置は `std/math.jw` のように示す。
 - 凍結した Rust 版（`jabberwock`）も `use std.名前;` を読む（2026-11-10 に main と合わせたとき、main で足してあった仕組みを残した）。
   ただし jwc だけの機能（資源・ネットワーク・時刻などの内部の組み込み）を使うモジュールは、Rust 版では構文エラーか型のエラーで止まる。
-  Rust 版で使えるのは base64・cli・crypto・csv・gzip・hash・json・lists・math・rand・regex・sets・text・url。
+  Rust 版で使えるのは base64・cli・crypto・csv・deque・gzip・hash・json・lists・math・rand・regex・sets・text・url。
 
 | モジュール | 関数 |
 |---|---|
 | `std.math` | `gcd(a, b)`・`lcm(a, b)`・`pow(base, exp)`（exp は 0 以上）・`clamp(x, lo, hi)`（どれも i64）、`pi()`・`floor(x)`・`ceil(x)`・`round(x)`（f64。round はちょうど半分なら 0 から遠い方） |
 | `std.text` | `pad_left(s, width, fill)`・`pad_right(s, width, fill)`（fill は 1 文字）・`center(s, width, fill)`（割り切れないときは右を多く）・`reverse(s)`・`count(s, sub)`（重ならずに数える。sub が空なら実行時エラー）・`is_digits(s)`（空でなく全部 0〜9）・`from_utf8(ref bytes)`（`Option<str>`。正しい UTF-8 でなければ None）・`trim_start(s)`・`trim_end(s)`・`words(s)`（空白で区切る）・`rfind(s, sub)`（`Option<i64>`）・`to_base(x, base)`・`hex(x)`・`parse_int(s, base)`（`Option<i64>`。base は 2〜36） |
 | `std.lists` | `sum(a)`・`sum_f64(a)`・`min(a)` / `max(a)`（`Option<i64>`）・`range_of(from, to)`・`slice(a, from, to)` / `slice_str`・`extend(ref mut a, ref mut b)`（b の要素を a の後ろへ動かす）・`any(a, f)`・`all(a, f)`・`binary_search(a, x)`（`Result<i64, i64>`。なければ入れる位置を Err で） |
+| `std.deque` | 両端キュー `deque.Deque<T>`。`Deque.new()`・`q.push_back(v)`・`q.push_front(v)`・`q.pop_front()`・`q.pop_back()`（`Option<T>`。空なら None）・`q.len()`・`q.is_empty()`（[1.17](#117-stddequestdheapstdlogjwc-だけ)） |
+| `std.heap` | 優先度つきキュー `heap.Heap<T>`（優先度 i64 の小さいものから）。`Heap.new()`・`h.push(key, v)`・`h.pop()`（`Option<T>`）・`h.peek_key()`（`Option<i64>`）・`h.len()`・`h.is_empty()`（[1.17](#117-stddequestdheapstdlogjwc-だけ)） |
+| `std.log` | 標準エラーへのログ。`log.Logger.new()`・`lg.debug(msg)`・`lg.info(msg)`・`lg.warn(msg)`・`lg.error(msg)`・`lg.set_level(l)`・`lg.set_time(on)` と `Level`（[1.17](#117-stddequestdheapstdlogjwc-だけ)） |
 | `std.sets` | 集合（同じ値は 1 つ。入れた順を覚える）。`sets.IntSet`（i64）・`sets.StrSet`（str）・`sets.CharSet`（char）。`X.new()`・`X.of(リスト)`・`s.add(x)`（新しく入れば true）・`s.remove(x)`・`s.has(x)`・`s.len()`・`s.is_empty()`・`s.items()`（入れた順）・`s.union(t)`・`s.intersect(t)`・`s.minus(t)`・`s.contains_all(t)` |
 | `std.rand` | 再現できる乱数（暗号には使えない。splitmix64）。`rand.Rng.seeded(42)`（同じ種なら同じ並び）・`rand.Rng.from_time()`、`r.next()`（u64）・`r.below(n)`・`r.range(lo, hi)`・`r.float()`・`r.chance(p)`・`r.shuffle(ref mut a)`。暗号用は `std.random` |
 | `std.cli` | コマンドライン引数。`let mut p = cli.Parser.new("名前", "説明");` に `p.flag(長い名前, 短い名前, 説明)`・`p.option(長い名前, 短い名前, 説明, 既定値)`・`p.arg(名前, 説明)` を足し、`p.parse(args())` → `Result<cli.Args, str>`。`a.has(名前)`・`a.get(名前)`・`a.get_int(名前)`（`Option<i64>`）・`a.rest`（位置引数）・`a.help`（`-h` / `--help`）。`p.usage()` は使い方の文（全角の字は幅 2 でそろえる）。書き方は `--name`・`--name=値`・`--name 値`・`-v`・`-vq`・`-o 値`・`-o値`、`--` のあとと `-`・`-5` は位置引数 |
@@ -492,6 +495,33 @@ match io.read_line_for(50) {        // 50 ミリ秒まで待って 1 行
 - `read_line_for(ms)`（`Result<Option<str>, str>`）: 標準入力を ms ミリ秒まで待って 1 行読む（0 なら待たずに今ある分だけ。負なら実行時エラー）。
   行の切り方は read_line と同じ（終わりの改行と、その前の \r を取る。最後の行に改行がなくてもよい）。read_line と同じ入れ物から読むので、まぜて使ってよい。
   読む前に print の出力を書き出す。Windows の端末から読むときは、キーのほかの出来事（マウスなど）でも読みに行くので、ms より長く待つことがある。
+
+### 1.17 std.deque・std.heap・std.log（jwc だけ）
+
+```
+use std.deque;
+use std.heap;
+use std.log;
+
+let deque.Deque<str> mut q = deque.Deque.new();
+q.push_back("b");
+q.push_front("a");
+print(q.pop_front(), q.pop_back());      // Some(a) Some(b)
+
+let heap.Heap<str> mut h = heap.Heap.new();
+h.push(3, "c");
+h.push(1, "a");
+print(h.pop());                          // Some(a)（優先度の小さいものから）
+
+let mut lg = log.Logger.new();
+lg.info("始めます");                      // 標準エラーに「2026-11-11T12:00:00.000Z INFO 始めます」
+```
+
+- Deque は前と後ろの 2 本のリストで持つ。片側が空になると、反対側の半分を移す（ならせば 1 回あたり定数の手間）。
+- Heap は 2 分ヒープ。同じ優先度どうしの出てくる順は決めていない（同じ入れ方なら毎回同じ）。大きいものから出したいなら、優先度に `-` をつけて入れる。
+- Logger は `Info` 以上を時刻つき（UTC。std.date の `format`）で出す。`set_level(log.Level.Debug)` で細かいものも出す。`set_time(false)` で時刻を外す（`INFO 始めます`）。
+  重さは `Debug < Info < Warn < Error`。出力は eprint と同じ。
+- Heap はリストの `swap`（jwc だけ）を使い、Logger は std.date を使うので、Rust 版では使えない。Deque は Rust 版でも使える。
 
 ## 2. 字句
 
@@ -897,7 +927,7 @@ let w = ref mut a;      // 書き換えてよい
   - それ以外（整数・構造体・enum・配列・リストをそのまま持つ場所）なら、その場所そのものを借りる。
     変数に再代入すると、借りた ref からも新しい値が見える。
 - リストの要素（とその中のフィールド）も借りられる（`ref mut ps[i]`・`ref ps[i].x`・`ps[i].bump()`）。要素を借りた ref は、
-  - そのリストの**要素が動く**と無効になる: 長さが変わる（`push`・`pop`・`insert`・`remove`・`drain`）、並びが変わる（`sort`・`sort_by`・`sort_unstable`・`sort_unstable_by`・`reverse`）。
+  - そのリストの**要素が動く**と無効になる: 長さが変わる（`push`・`pop`・`insert`・`remove`・`drain`）、並びが変わる（`sort`・`sort_by`・`sort_unstable`・`sort_unstable_by`・`reverse`・`swap`）。
   - リストが解放される（スコープを抜ける・再代入・`drop`）か、ほかのスレッドへ送られても無効になる。
   - リストを別の変数へムーブしても、要素に代入しても有効なまま（own の先を借りた ref と同じ。代入した新しい値が見える）。
   - リストの中のリスト（`i64[][]`）の要素を借りた ref は、内側のリストだけを見る（外側に `push` しても有効）。
@@ -1251,7 +1281,8 @@ for x in v { ... } else { print("空でした"); }
   `reverse()`（逆順にする）、`drain()`（全部の要素を新しいリストに移して返す。元は空になる）、`sort()`、`sort_by(f)`、`sort_unstable()`、`sort_unstable_by(f)`、
   `map(f)`（要素ごとに f を呼んだ結果の新しいリスト）、`filter(f)`（f が true を返した要素だけの新しいリスト）、
   `join(sep)`（`str[]` だけ。要素を sep でつないだ文字列。元のリストは変えない）、
-  `wipe()`（`u8[]` だけ。jwc だけ。取ってある場所を全部 0 で上書きして空にする。鍵やパスワードを使い終わったとき用）。
+  `wipe()`（`u8[]` だけ。jwc だけ。取ってある場所を全部 0 で上書きして空にする。鍵やパスワードを使い終わったとき用）、
+  `swap(i, j)`（jwc だけ。i 番目と j 番目を入れ替える。どちらかが範囲の外なら実行時エラー）。
 - `wipe()` は今の場所だけを消す。push などで大きくなったときに前の場所へ残った中身や、`str` に写した中身・関数に渡して写された中身は消せない
   （秘密の値は、大きさが決まってから作り、`str` にしないこと）。
   `contains(x)`（x と等しい要素があるか）・`index_of(x)`（x と等しい最初の要素の位置。`Option<i64>`）は、要素が数・真偽値・文字列のリストだけ。比べ方は `==` と同じ（NaN はどれとも等しくない）。

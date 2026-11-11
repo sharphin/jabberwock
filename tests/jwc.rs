@@ -869,6 +869,24 @@ fn jwc_map_values_clear_and_checked() {
     assert!(err.contains("無効になった参照を使いました") && err.contains("`clear` で辞書から取り除かれた"), "{}", err);
 }
 
+// std.deque・std.heap・std.log（jwc だけ。heap はリストの swap を使う）
+#[test]
+fn jwc_std_deque_heap_log() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-dql-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "use std.deque;\nuse std.heap;\nuse std.log;\nfn main() {\n    let deque.Deque<str> mut q = deque.Deque.new();\n    q.push_back(\"b\"); q.push_back(\"c\"); q.push_front(\"a\");\n    print(q.len(), q.pop_back(), q.pop_front(), q.pop_front(), q.pop_front());\n    let deque.Deque<i64> mut d = deque.Deque.new();\n    for i in range(6) { d.push_front(i); }\n    print(d.pop_back(), d.pop_back(), d.pop_front(), d.len());\n    let heap.Heap<str> mut h = heap.Heap.new();\n    for (i, k) in [5, 1, 4, 1, 3, 9, 2] { h.push(k, \"v{i}\"); }\n    print(h.peek_key());\n    let str[] mut out = [];\n    while !h.is_empty() { out.push(h.pop().unwrap_or(\"\")); }\n    print(out, h.pop());\n    let mut lg = log.Logger.new();\n    lg.set_time(false);\n    lg.debug(\"見えない\");\n    lg.info(\"始めます\");\n    lg.set_level(log.Level.Debug);\n    lg.debug(\"細かい\");\n    lg.set_level(log.Level.Error);\n    lg.warn(\"見えない\");\n    lg.error(\"失敗\");\n}\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout),
+        "3 Some(c) Some(a) Some(b) None\nSome(0) Some(1) Some(5) 3\nSome(1)\n[v1, v3, v6, v4, v2, v0, v5] None\n");
+    assert_eq!(String::from_utf8_lossy(&got.stderr), "INFO 始めます\nDEBUG 細かい\nERROR 失敗\n");
+}
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

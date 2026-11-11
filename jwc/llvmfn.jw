@@ -2749,6 +2749,20 @@ struct FnGen {
                 b.op("store " + xl + " " + v + ", ptr " + dst);
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }
+            if name == "swap" {
+                // 2 つの添字を確かめてから入れ替える（要素を借りた ref は無効になる）
+                let i = index(m, vals[0].v, vals[0].t, len, arg_span)?;
+                let j = index(m, vals[1].v, vals[1].t, len, arg_span)?;
+                let data = b.val("load ptr, ptr " + pr.ptr);
+                let pi = b.val("getelementptr " + xl + ", ptr " + data + ", i64 " + i);
+                let pj = b.val("getelementptr " + xl + ", ptr " + data + ", i64 " + j);
+                let vi = b.val("load " + xl + ", ptr " + pi);
+                let vj = b.val("load " + xl + ", ptr " + pj);
+                b.op("store " + xl + " " + vj + ", ptr " + pi);
+                b.op("store " + xl + " " + vi + ", ptr " + pj);
+                b.op("call void @jw_list_moved(ptr " + pr.ptr + ", ptr " + moved + ")");
+                return Ok(llvm.vt("0", ty.Ty.Unit));
+            }
             if name == "reverse" {
                 b.op("call void @jw_list_reverse(ptr " + pr.ptr + ", i64 " + size + ", ptr " + moved + ")");
                 return Ok(llvm.vt("0", ty.Ty.Unit));

@@ -9,14 +9,17 @@ pub fn str[] names() {
     out.push("crypto");
     out.push("csv");
     out.push("date");
+    out.push("deque");
     out.push("env");
     out.push("fs");
     out.push("gzip");
     out.push("hash");
+    out.push("heap");
     out.push("http");
     out.push("io");
     out.push("json");
     out.push("lists");
+    out.push("log");
     out.push("math");
     out.push("net");
     out.push("pg");
@@ -1177,6 +1180,73 @@ fn str pad(i64 n, i64 width) {{
 }}
 """);
     }
+    if name == "deque" {
+        return Some("""
+// std.deque: 両端キュー。`use std.deque;` で `let deque.Deque<i64> mut q = deque.Deque.new(); q.push_back(1);` のように使う。
+// 前と後ろの 2 本のリストで持つ（front は逆順）。片側が空になったら、もう片側から移す（ならせば 1 回あたり定数の手間）。
+
+/// 両端から入れて取り出せる列
+pub struct Deque<T> {{
+    T[] front;
+    T[] back;
+
+    /// 空の列
+    static fn Deque<T> new() {{ Deque {{ front: [], back: [] }} }}
+
+    fn i64 len() {{ front.len() + back.len() }}
+
+    fn bool is_empty() {{ front.len() + back.len() == 0 }}
+
+    /// 後ろに入れる
+    fn mut push_back(T v) {{ back.push(v); }}
+
+    /// 前に入れる
+    fn mut push_front(T v) {{ front.push(v); }}
+
+    /// 前から取り出す（空なら None）
+    fn mut Option<T> pop_front() {{
+        if front.len() == 0 {{ move_half(true); }}
+        front.pop()
+    }}
+
+    /// 後ろから取り出す（空なら None）
+    fn mut Option<T> pop_back() {{
+        if back.len() == 0 {{ move_half(false); }}
+        back.pop()
+    }}
+
+    /// 空になった側へ、反対側の半分（1 つなら 1 つ）を順番を保って移す
+    fn mut move_half(bool to_front) {{
+        let from = if to_front {{ back.len() }} else {{ front.len() }};
+        // 移さずに残す数（反対側の端に近いほう）
+        let keep = from / 2;
+        let T[] mut rest = [];
+        if to_front {{
+            // back の前の (from - keep) 個を front へ（front は逆順なので、後ろから積む）
+            move_n(ref mut back, ref mut rest, keep);
+            move_n(ref mut back, ref mut front, from - keep);
+            move_n(ref mut rest, ref mut back, keep);
+        }} else {{
+            move_n(ref mut front, ref mut rest, keep);
+            move_n(ref mut front, ref mut back, from - keep);
+            move_n(ref mut rest, ref mut front, keep);
+        }}
+    }}
+}}
+
+/// a の後ろから n 個を取り出して、順に b の後ろへ積む
+fn move_n<T>(ref mut T[] a, ref mut T[] b, i64 n) {{
+    let mut i = 0;
+    while i < n {{
+        match a.pop() {{
+            case Some(v) -> b.push(v);
+            case None -> return;
+        }}
+        i += 1;
+    }}
+}}
+""");
+    }
     if name == "env" {
         return Some("""
 // 標準ライブラリ std.env: 環境変数。`use std.env;` と書いて `env.get("HOME")` のように使う
@@ -2001,6 +2071,68 @@ pub fn bool equal(ref u8[] a, ref u8[] b) {{
     let mut d = 0;
     for (i, x) in a {{ d = d | ((x ^ b[i]) as i64); }}
     d == 0
+}}
+""");
+    }
+    if name == "heap" {
+        return Some("""
+// std.heap: 優先度つきキュー。`use std.heap;` で `let heap.Heap<str> mut h = heap.Heap.new(); h.push(3, "c");` のように使う。
+// 優先度（i64）の小さいものから取り出す（大きいものからにするなら、優先度に - をつけて入れる）。
+// 同じ優先度どうしの順番は決まっていない（ただし、同じ入れ方なら毎回同じ順になる）。
+
+/// 優先度の小さいものから出てくる列（2 分ヒープ）
+pub struct Heap<T> {{
+    i64[] keys;
+    T[] vals;
+
+    /// 空の列
+    static fn Heap<T> new() {{ Heap {{ keys: [], vals: [] }} }}
+
+    fn i64 len() {{ keys.len() }}
+
+    fn bool is_empty() {{ keys.len() == 0 }}
+
+    /// 優先度 key で v を入れる
+    fn mut push(i64 key, T v) {{
+        keys.push(key);
+        vals.push(v);
+        let mut i = keys.len() - 1;
+        while i > 0 {{
+            let p = (i - 1) / 2;
+            if keys[p] <= keys[i] {{ break; }}
+            keys.swap(i, p);
+            vals.swap(i, p);
+            i = p;
+        }}
+    }}
+
+    /// いちばん小さい優先度（空なら None）
+    fn Option<i64> peek_key() {{
+        if keys.len() == 0 {{ None }} else {{ Some(keys[0]) }}
+    }}
+
+    /// いちばん優先度の小さいものを取り出す（空なら None）
+    fn mut Option<T> pop() {{
+        let n = keys.len();
+        if n == 0 {{ return None; }}
+        keys.swap(0, n - 1);
+        vals.swap(0, n - 1);
+        keys.pop();
+        let out = vals.pop();
+        let m = n - 1;
+        let mut i = 0;
+        loop {{
+            let l = i * 2 + 1;
+            if l >= m {{ break; }}
+            let mut c = l;
+            if l + 1 < m && keys[l + 1] < keys[l] {{ c = l + 1; }}
+            if keys[i] <= keys[c] {{ break; }}
+            keys.swap(i, c);
+            vals.swap(i, c);
+            i = c;
+        }}
+        out
+    }}
 }}
 """);
     }
@@ -3017,6 +3149,67 @@ pub fn Result<i64, i64> binary_search(ref i64[] a, i64 x) {{
         if a[mid] < x {{ lo = mid + 1; }} else {{ hi = mid; }}
     }}
     Err(lo)
+}}
+""");
+    }
+    if name == "log" {
+        return Some("""
+// std.log: 標準エラーへのログ。`use std.log;` で次のように使う
+//   let mut lg = log.Logger.new();       // Info 以上を、時刻つきで出す
+//   lg.info("始めます");                  // 2026-11-11T12:00:00.000Z INFO 始めます
+//   lg.set_level(log.Level.Debug);
+// 時刻は UTC（std.date の format）。テストなどで時刻を出したくなければ set_time(false)。
+use std.date;
+
+/// ログの重さ（Debug < Info < Warn < Error）
+pub enum Level {{ Debug; Info; Warn; Error; }}
+
+fn i64 rank(ref Level l) {{
+    match l {{
+        case Debug -> 0;
+        case Info -> 1;
+        case Warn -> 2;
+        case Error -> 3;
+    }}
+}}
+
+fn str label(ref Level l) {{
+    match l {{
+        case Debug -> "DEBUG";
+        case Info -> "INFO";
+        case Warn -> "WARN";
+        case Error -> "ERROR";
+    }}
+}}
+
+/// どこまで出すかと、時刻をつけるかを持つ
+pub struct Logger {{
+    i64 min;
+    bool time;
+
+    /// Info 以上を時刻つきで出す
+    static fn Logger new() {{ Logger {{ min: 1, time: true }} }}
+
+    /// l より軽いものは出さない
+    fn mut set_level(Level l) {{ min = rank(l); }}
+
+    /// 行の頭に時刻をつけるか
+    fn mut set_time(bool on) {{ time = on; }}
+
+    /// l の重さで msg を 1 行出す（軽すぎれば出さない）
+    fn write(Level l, str msg) {{
+        if rank(l) < min {{ return; }}
+        if time {{
+            eprint(date.now().format(), label(l), msg);
+        }} else {{
+            eprint(label(l), msg);
+        }}
+    }}
+
+    fn debug(str msg) {{ write(Level.Debug, msg); }}
+    fn info(str msg) {{ write(Level.Info, msg); }}
+    fn warn(str msg) {{ write(Level.Warn, msg); }}
+    fn error(str msg) {{ write(Level.Error, msg); }}
 }}
 """);
     }

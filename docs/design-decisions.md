@@ -937,3 +937,13 @@ let x = pick(true, 1, 2);
 - jwc だけ（Rust 版は凍結）。`values()` は `get` と同じくコピーできる値だけ。`clear()` は辞書全体を解放して空の辞書に取り替える（own の値を借りた ref は、世代の検査で「`clear` で辞書から取り除かれた」と止まる）。
 - `checked_add`・`checked_sub`・`checked_mul` は 128 ビットで計算して、元の型に戻して同じなら `Some`。ふつうの `+` などは今までどおり一周する。
 - 解析（analyze.jw の pure_builtin・Lean の検査器の一覧）には足していない。足すまでは要素を動かしうるものとして扱われる（安全側）。
+
+## std.deque・std.heap・std.log とリストの swap（2026-11-11）
+
+- stdlib-gaps の P1 の残り。どれも jabberwock で書いた std。
+- Deque は 2 本のリスト（front は逆順）で持つ。Option に unwrap がなく、型の引数の値はコピーできないので、要素は pop と push で動かす。
+- Heap は優先度を i64 に決めた（構造体の型の引数には ordered などの条件をつけられず、構造体のフィールドに関数の値も置けないため、比べ方を渡せない）。
+  要素を動かすために、リストに `swap(i, j)` を足した（jwc だけ）。要素が動くので、要素を借りた ref は `reverse` と同じく無効になる。
+  エラーの文（「リストにメソッド … はありません」の一覧）は Rust 版とそろえるため、swap を並べない。
+- Logger は標準エラーへ 1 行ずつ出す。時刻は UTC の std.date の format。大域の状態がないので、Logger の値を持ち回る。
+- Rust 版の MODULES（src/stdlib.rs）にも 3 つを足した（ない名前のエラーで示す一覧を jwc とそろえるため。データだけの変更）。Rust 版で動くのは deque だけ。

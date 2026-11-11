@@ -2410,6 +2410,9 @@ pub struct Checker {
         } else if name == "insert" {
             want = 2;
         } else if name == "reverse" {
+        } else if name == "swap" {
+            // i 番目と j 番目を入れ替える（jwc だけ。下のエラーの文は Rust 版とそろえるため並べない）
+            want = 2;
         } else if name == "wipe" {
             // 秘密の値（鍵・パスワード）を使い終わったら、場所ごと 0 で上書きして空にする。u8[] だけ
             if !(ty.is(elem, "Int") && ty.show(elem) == "u8") {
@@ -2499,7 +2502,11 @@ pub struct Checker {
             return Ok(ty.Ty.List(own r));
         }
         // 添字（insert・remove の最初の引数）は整数、要素（push・insert の最後の引数）は要素の型
-        if name == "remove" || name == "insert" { index_value(argv[0])?; }
+        if name == "remove" || name == "insert" || name == "swap" { index_value(argv[0])?; }
+        if name == "swap" {
+            index_value(argv[1])?;
+            return Ok(ret);
+        }
         if name == "insert" {
             expect(argv[1], elem)?;
         } else if name != "remove" && argv.len() > 0 {
