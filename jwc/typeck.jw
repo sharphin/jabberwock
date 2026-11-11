@@ -2526,6 +2526,11 @@ pub struct Checker {
             mutable = true;
         } else if name == "keys" {
             ret = ty.Ty.List(own ty.cl(k));
+        } else if name == "values" {
+            // values・clear は jwc だけ（Rust 版は凍結）。下のエラーの文は Rust 版とそろえるため、この 2 つを並べない
+            ret = ty.Ty.List(own ty.cl(v));
+        } else if name == "clear" {
+            mutable = true;
         } else {
             return Err(diag.make("辞書にメソッド `{name}` はありません").at(span,
                 "辞書のメソッドは `len()`・`contains(k)`・`get(k)`・`remove(k)`・`keys()` です"));
@@ -2533,8 +2538,8 @@ pub struct Checker {
         if argv.len() != params.len() {
             return Err(arity_error(name, params.len(), argv.len(), span));
         }
-        if name == "get" && !copyable(v) {
-            return Err(diag.make("`{ty.show(v)}` はコピーできないので get で取り出せません")
+        if (name == "get" || name == "values") && !copyable(v) {
+            return Err(diag.make("`{ty.show(v)}` はコピーできないので {name} で取り出せません")
                 .at(span, "辞書の中の値はそのまま残るので、写しを作れない値は取り出せない")
                 .with_note("`m[k].x` のように場所として読むか、`remove(k)` で取り出してください"));
         }
@@ -3225,8 +3230,8 @@ pub struct Checker {
     }
 
     /// 数のメソッド。f64 は `to_bits` / `sqrt` / `floor` などの数学の関数 / `pow` / `is_nan` / `fixed` / `abs` / `max` / `min`、
-    /// 整数は `abs` / `max` / `min`。
-    /// `max` / `min` の引数は receiver と同じ型（数の書き方はそれに合わせる）
+    /// 整数は `abs` / `max` / `min` / `to_char` / `checked_add` / `checked_sub` / `checked_mul`。
+    /// `max` / `min` / `checked_*` の引数は receiver と同じ型（数の書き方はそれに合わせる）
     /// 文字のメソッド（判定と大文字・小文字は ASCII の範囲だけ見る）
     fn mut Result<ty.Ty, diag.Diag> char_method(str name, ref ast.Expr[] argv, i64 span) {
         let ret = if name == "is_digit" || name == "is_alpha" || name == "is_alnum" || name == "is_space" || name == "is_upper" || name == "is_lower" {
@@ -3263,6 +3268,10 @@ pub struct Checker {
         } else if name == "abs" {
         } else if name == "max" || name == "min" {
             arity = 1;
+        } else if !float && (name == "checked_add" || name == "checked_sub" || name == "checked_mul") {
+            // あふれたら None（ふつうの + - * は一周する）。jwc だけなので、下のエラーの文には並べない（Rust 版とそろえる）
+            arity = 1;
+            ret = ty.opt(ty.cl(t));
         } else if float {
             return Err(diag.make("f64 にメソッド `{name}` はありません")
                 .at(span, "f64 のメソッドは `to_bits()`・`sqrt()`・`floor()`・`ceil()`・`round()`・`trunc()`・`exp()`・`ln()`・`log10()`・`sin()`・`cos()`・`tan()`・`pow(y)`・`is_nan()`・`fixed(n)`・`abs()`・`max(y)`・`min(y)` です"));

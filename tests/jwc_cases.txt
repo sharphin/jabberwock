@@ -2758,7 +2758,7 @@ struct P {
 }
 fn main() {
 let m = ["a": 1];
-m.clear();
+m.sort();
 }
 #####
 fn args() {

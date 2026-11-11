@@ -845,6 +845,30 @@ fn jwc_std_fs_paths_and_date() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// jwc だけの機能: 辞書の values()・clear() と、整数の checked_add・checked_sub・checked_mul（Rust 版は凍結）
+#[test]
+fn jwc_map_values_clear_and_checked() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-mapck-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "struct P { str s; }\nfn main() {\n    let i64[str] mut m = [];\n    m[\"a\"] = 1; m[\"b\"] = 2;\n    \
+        print(m.values());\n    m.clear();\n    print(m.len(), m.values());\n    m[\"c\"] = 3;\n    print(m.keys(), m.values());\n    \
+        let i64 big = 9223372036854775807;\n    print(big.checked_add(1), big.checked_sub(1), (3).checked_mul(4));\n    \
+        let u8 x = 200;\n    print(x.checked_add(55), x.checked_add(56), x.checked_sub(201));\n    \
+        let i8 y = -128;\n    print(y.checked_mul(-1), y.checked_sub(0));\n    \
+        let (own P)[i64] mut q = [];\n    q[1] = own P { s: \"x\" };\n    let r = ref q[1];\n    q.clear();\n    print(r.s);\n}\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout),
+        "[1, 2]\n0 []\n[c] [3]\nNone Some(9223372036854775806) Some(12)\nSome(255) None None\nNone Some(-128)\n");
+    let err = String::from_utf8_lossy(&got.stderr);
+    assert!(err.contains("無効になった参照を使いました") && err.contains("`clear` で辞書から取り除かれた"), "{}", err);
+}
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

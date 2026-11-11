@@ -2318,6 +2318,23 @@ struct FnGen {
             let none = make_enum(m, want, "None", [])?;
             return Ok(llvm.vt(b.val("select i1 " + ok + ", " + lt + " " + some + ", " + lt + " " + none), ty.cl(want)));
         }
+        // あふれ検査つきの計算: 128 ビットで計算して、元の型に収まれば Some
+        if name == "int.checked_add" || name == "int.checked_sub" || name == "int.checked_mul" {
+            let it = ty.int_of(vals[0].t);
+            let lt = "i{ty.bits(it)}";
+            let ext = if ty.signed(it) { "sext" } else { "zext" };
+            let x = b.val(ext + " " + lt + " " + vals[0].v + " to i128");
+            let y = b.val(ext + " " + lt + " " + vals[1].v + " to i128");
+            let op = name.slice(12, name.len());
+            let r = b.val(op + " i128 " + x + ", " + y);
+            let t = b.val("trunc i128 " + r + " to " + lt);
+            let back = b.val(ext + " " + lt + " " + t + " to i128");
+            let ok = b.val("icmp eq i128 " + back + ", " + r);
+            let ot = m.lt(want)?;
+            let some = make_enum(m, want, "Some", [llvm.vt(t, ty.Ty.Int(it))])?;
+            let none = make_enum(m, want, "None", [])?;
+            return Ok(llvm.vt(b.val("select i1 " + ok + ", " + ot + " " + some + ", " + ot + " " + none), ty.cl(want)));
+        }
         // 文字のメソッド（ASCII の範囲だけ見る。interp の char_method と同じ）
         if name.starts_with("char.") {
             let c = vals[0].v;
@@ -2543,6 +2560,32 @@ struct FnGen {
                 m.store_key(ref mut b, kt, kv, dst)?;
                 b.loop_end(e);
                 return Ok(llvm.vt(b.val("load %list, ptr " + out), ty.Ty.List(own kt)));
+            }
+            if name == "values" {
+                // 値の写しのリスト（型検査がコピーできる値だけにしている）
+                let out = b.alloca("%list");
+                b.op("store %list zeroinitializer, ptr " + out);
+                let len = b.val("call i64 @jw_map_len(ptr " + mp + ")");
+                let size = m.sizeof(vty)?;
+                let vl = m.lt(vty)?;
+                b.op("call void @jw_list_reserve(ptr " + out + ", i64 " + size + ", i64 " + len + ")");
+                let e = b.loop_begin(len);
+                let vp = b.val("call ptr @jw_map_val(ptr " + mp + ", i64 " + e.i + ")");
+                let v = read_copy(m, vp, vty)?;
+                let dst = b.val("call ptr @jw_list_push_slot(ptr " + out + ", i64 " + size + ", ptr null)");
+                b.op("store " + vl + " " + v + ", ptr " + dst);
+                b.loop_end(e);
+                return Ok(llvm.vt(b.val("load %list, ptr " + out), ty.Ty.List(own vty)));
+            }
+            if name == "clear" {
+                // 中身を全部解放して、空の辞書に取り替える
+                let site = m.site(span, "`clear` で辞書から取り除かれた");
+                let d = m.helper("Drop", pr.t);
+                b.op("call void " + d + "(ptr " + pr.ptr + ", ptr " + site + ")");
+                let vsize = m.sizeof(vty)?;
+                let nm = b.val("call ptr @jw_map_new(i64 " + vsize + ", i32 {llvm.key_kind(kt)})");
+                b.op("store ptr " + nm + ", ptr " + pr.ptr);
+                return Ok(llvm.vt("0", ty.Ty.Unit));
             }
             let kv = coerce(m, vals[0].v, vals[0].t, kt)?;
             let k64 = key64(kv, kt)?;
