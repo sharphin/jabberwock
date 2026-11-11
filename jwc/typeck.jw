@@ -2319,7 +2319,9 @@ pub struct Checker {
             lt = expr_h(l, h)?;
         } else {
             lt = expr_h(l, outer)?;
-            let h = if ty.is(lt, "Int") || ty.is(lt, "Float") { hint_of(ty.cl(lt)) } else { copy_hint(outer) };
+            // enum どうしの == では、右の `None` などの型を左に合わせる
+            let eq_enum = (op == "==" || op == "!=") && ty.is(lt, "Enum");
+            let h = if ty.is(lt, "Int") || ty.is(lt, "Float") || eq_enum { hint_of(ty.cl(lt)) } else { copy_hint(outer) };
             rt = expr_h(r, h)?;
         }
         let bad = diag.make("型が合わない演算です").at(span, "`{ty.show(lt)}` と `{ty.show(rt)}` にはこの演算を使えません");
@@ -2363,7 +2365,21 @@ pub struct Checker {
         }
         if ty.eq(lt, rt) && is_ordered_param(lt) { return Ok(ty.Ty.Bool); }
         if ty.eq(lt, rt) && (ty.is(lt, "Bool") || ty.is(lt, "Str") || ty.is(lt, "Float")) { return Ok(ty.Ty.Bool); }
+        // enum どうし（jwc だけ）: 中身が整数・f64・bool・str と、そういう enum だけのとき
+        if ty.eq(lt, rt) && ty.is(lt, "Enum") && eq_comparable(lt, 0) { return Ok(ty.Ty.Bool); }
         Err(diag.make("型が合わない比較です").at(span, "`{ty.show(lt)}` と `{ty.show(rt)}` は比較できません"))
+    }
+
+    /// `==` で比べられる enum の中身か
+    fn bool eq_comparable(ref ty.Ty t, i64 depth) {
+        if ty.is(t, "Int") || ty.is(t, "Float") || ty.is(t, "Bool") || ty.is(t, "Str") || ty.is(t, "Unit") { return true; }
+        if !ty.is(t, "Enum") || depth > 16 { return false; }
+        for v in variants_of(t) {
+            for x in v.tys {
+                if !eq_comparable(x, depth + 1) { return false; }
+            }
+        }
+        true
     }
 
     /// `from` の値を `to` の場所に入れられるか（`assignable` に、構造体 → interface を足したもの）

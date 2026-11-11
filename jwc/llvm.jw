@@ -800,7 +800,6 @@ pub struct Module {
 
     // ------------------------------------------------------------ 型の手伝いの関数
 
-    /// 辞書のキー（i64 にしたもの）を、キーの型の値として `dst` に置く
     /// 構造体のキーを、中身を並べたバイト列の str にする（整数・bool は 8 バイト、str は長さ 8 バイトと中身。構造体は中を順に）。
     /// 新しい str（数 1）を返す。v はそのまま（呼んだ側が捨てる）
     fn mut Result<str, str> enc_key(ref mut B b, ref ty.Ty t, str v) {
@@ -887,6 +886,7 @@ pub struct Module {
         Ok(acc)
     }
 
+    /// 辞書のキー（i64 にしたもの）を、キーの型の値として `dst` に置く
     fn mut Result<(), str> store_key(ref mut B b, ref ty.Ty k, str kv, str dst) {
         if ty.is(k, "Struct") {
             // 辞書の中の str から、新しい構造体の値を作る
@@ -972,6 +972,10 @@ pub struct Module {
             sig = "ptr %p, ptr %q, ptr %env";
             ret = "i32";
         }
+        if h == "Eq" {
+            sig = "ptr %p, ptr %q";
+            ret = "i1";
+        }
         let mut result = "ret void";
         if h == "Drop" {
             gen_drop(ref mut b, t)?;
@@ -989,6 +993,9 @@ pub struct Module {
             result = "ret i1 " + r;
         } else if h == "Send" {
             gen_send(ref mut b, t)?;
+        } else if h == "Eq" {
+            let r = gen_eq(ref mut b, t)?;
+            result = "ret i1 " + r;
         } else {
             let r = gen_less(ref mut b, t)?;
             let r2 = b.val("zext i1 " + r + " to i32");
@@ -1954,6 +1961,76 @@ pub struct Module {
             }
         }
         Ok(flags)
+    }
+
+    /// enum どうしの `==`（jwc だけ）: 種類が同じで、中身がどれも等しいか。中身は整数・f64・bool・str・そういう enum（型検査が確かめる）
+    fn mut Result<str, str> gen_eq(ref mut B b, ref ty.Ty t) {
+        if !ty.is(t, "Enum") { return eq_at(ref mut b, t, "%p", "%q"); }
+        let vs = variants(t)?;
+        let tg = enum_tag(b, t, "%p")?;
+        let tg2 = enum_tag(b, t, "%q")?;
+        let res = b.alloca("i1");
+        let same = b.val("icmp eq i32 " + tg + ", " + tg2);
+        b.op("store i1 " + same + ", ptr " + res);
+        let done = b.l();
+        let go = b.l();
+        b.op("br i1 " + same + ", label %" + go + ", label %" + done);
+        b.label(go);
+        let pl = enum_payload(b, t, "%p")?;
+        let pl2 = enum_payload(b, t, "%q")?;
+        let str[] mut cases = [];
+        let str[] mut bodies = [];
+        for (vi, vr) in vs {
+            if vr.tys.len() == 0 { continue; }
+            let mut sub = new_b(b.n);
+            let lb = sub.l();
+            cases.push("i32 {vi}, label %" + lb);
+            sub.label(lb);
+            let vlt = variant_lt(vr.tys)?;
+            let mut all = "true";
+            for (i, f) in vr.tys {
+                let fp = sub.val("getelementptr " + vlt + ", ptr " + pl + ", i32 0, i32 {i}");
+                let fq = sub.val("getelementptr " + vlt + ", ptr " + pl2 + ", i32 0, i32 {i}");
+                let e = eq_at(ref mut sub, f, fp, fq)?;
+                all = sub.val("and i1 " + all + ", " + e);
+            }
+            sub.op("store i1 " + all + ", ptr " + res);
+            sub.br(done);
+            b.n = sub.n;
+            bodies.push(sub.body());
+        }
+        b.op("switch i32 " + tg + ", label %" + done + " [ " + cases.join(" ") + " ]");
+        b.text.push(bodies.join(""));
+        b.label(done);
+        Ok(b.val("load i1, ptr " + res))
+    }
+
+    /// p と q の場所にある値が等しいか（`==` と同じ。f64 の NaN は自分とも等しくない）
+    fn mut Result<str, str> eq_at(ref mut B b, ref ty.Ty f, str p, str q) {
+        let k = ty.tag(f);
+        if k == "Int" || k == "Bool" {
+            let x = lt(f)?;
+            let a = b.val("load " + x + ", ptr " + p);
+            let c = b.val("load " + x + ", ptr " + q);
+            return Ok(b.val("icmp eq " + x + " " + a + ", " + c));
+        }
+        if k == "Float" {
+            let a = b.val("load double, ptr " + p);
+            let c = b.val("load double, ptr " + q);
+            return Ok(b.val("fcmp oeq double " + a + ", " + c));
+        }
+        if k == "Str" {
+            let a = b.val("load ptr, ptr " + p);
+            let c = b.val("load ptr, ptr " + q);
+            let r = b.val("call i32 @jw_str_eq(ptr " + a + ", ptr " + c + ")");
+            return Ok(b.val("icmp ne i32 " + r + ", 0"));
+        }
+        if k == "Unit" { return Ok("true"); }
+        if k == "Enum" {
+            let h = helper("Eq", f);
+            return Ok(b.val("call i1 " + h + "(ptr " + p + ", ptr " + q + ")"));
+        }
+        Err(ty.show(f) + " の ==")
     }
 
     fn mut Result<str, str> gen_less(ref mut B b, ref ty.Ty t) {

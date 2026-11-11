@@ -1041,6 +1041,42 @@ fn main() {
 }
 "#;
 
+// enum どうしの ==（jwc だけ）
+#[test]
+fn jwc_enum_eq() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-enumeq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, ENUM_EQ_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "true false true true\nfalse true true\ntrue false\ntrue false\nfalse true\ntrue\n");
+    std::fs::write(&path, "enum E { A(own i64 x); B; }\nfn main() { print(E.B == E.B); }\n").unwrap();
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("型が合わない比較です"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+const ENUM_EQ_SRC: &str = r#"enum Shape { Circle(f64 r); Rect(i64 w, i64 h); Named(str n); Empty; }
+enum Tok { Num(i64 n); Op(char c); }
+fn main() {
+    let a = Shape.Rect(1, 2);
+    print(a == Shape.Rect(1, 2), a == Shape.Rect(2, 1), a != Shape.Empty, Shape.Named("x") == Shape.Named("x"));
+    let o = Some(3);
+    print(o == None, o == Some(3), o != Some(4));
+    let Option<str> s = Some("あ");
+    print(s == Some("あ"), s == None);
+    let Result<Option<i64>, str> r = Ok(Some(1));
+    print(r == Ok(Some(1)), r == Err("e"));
+    print(Shape.Circle(0.0 / 0.0) == Shape.Circle(0.0 / 0.0), Tok.Op('+') == Tok.Op('+'));
+    let ts = [Tok.Num(1), Tok.Op('-')];
+    print(ts[1] == Tok.Op('-'));
+}
+"#;
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

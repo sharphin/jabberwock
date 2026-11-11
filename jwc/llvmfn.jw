@@ -1709,6 +1709,23 @@ struct FnGen {
             return Err(op + " の真偽値");
         }
         if k == "Unit" { return Ok(llvm.vt(if op == "Eq" { "true" } else { "false" }, ty.Ty.Bool)); }
+        if k == "Enum" && (op == "Eq" || op == "Ne") {
+            // enum どうしの比較（jwc だけ）: 場所に置いて比べ、終わったら両方を捨てる
+            let et = m.lt(t)?;
+            let pa = b.alloca(et);
+            let pb = b.alloca(et);
+            b.op("store " + et + " " + x + ", ptr " + pa);
+            b.op("store " + et + " " + y + ", ptr " + pb);
+            let h = m.helper("Eq", t);
+            let e = b.val("call i1 " + h + "(ptr " + pa + ", ptr " + pb + ")");
+            if m.needs_drop(t)? {
+                let d = m.helper("Drop", t);
+                b.op("call void " + d + "(ptr " + pa + ", ptr null)");
+                b.op("call void " + d + "(ptr " + pb + ", ptr null)");
+            }
+            let r = if op == "Eq" { e } else { b.val("xor i1 " + e + ", true") };
+            return Ok(llvm.vt(r, ty.Ty.Bool));
+        }
         if k == "Str" {
             let mut r = llvm.vt("", ty.Ty.Str);
             if op == "Add" {
