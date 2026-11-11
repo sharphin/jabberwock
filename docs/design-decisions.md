@@ -928,3 +928,4 @@ let x = pick(true, 1, 2);
   std.cli・std.sets・std.lists・std.rand はそのまま足した（std.rand は再現できる乱数、std.random は暗号用で役目が違う）。
 - `__fs_*` の組み込みは名前と形が両方で同じだったので、jw_rt.c・llvmfn.jw は向こうのもの（資源の節）を残し、`__fs_append` だけ足した。
   jwc では向こうと同じく std.fs の中だけで使える。
+- 作業ブランチを main にする（2026-11-11、オーナーの指示）: 合わせたあとは main で進める。`safety-ci-resume` は 11/10 の合わせる前の位置のまま残し、そこへは足さない。

@@ -7,7 +7,7 @@
 ## 守ること（オーナーの指示）
 
 - オーナーとは日本語・平易な言葉で、短く報告する。実行していない検証を「成功」と言わない（成功・失敗・未実行を分ける）。
-- 作業ブランチは `safety-ci-resume`。許可なく `main` へマージしない。ドラフト PR は作らない。
+- 作業は `main` で進める（2026-11-11、オーナーの指示。`safety-ci-resume` は 11/10 に main へ合わせ終えた古いブランチ）。ドラフト PR は作らない。
 - GitHub Actions は公開リポジトリ `jabberwock_test` で回す（公開なら時間の上限がないため）。
 - push 前に `cargo test --no-fail-fast` と `cargo clippy --all-targets`。IR・llvm.rs・jw_rt.c を変えたら `JW_NATIVE=1 cargo test --no-fail-fast` も。
 - 外部クレートは使わない。Rust 1.65 で動くこと（`is_some_and`・`div_ceil`・`is_multiple_of` などは使わない）。`cargo fmt` は全体にかけない。周りの書き方（日本語のコメント）に合わせる。
