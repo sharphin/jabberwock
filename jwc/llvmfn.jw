@@ -529,7 +529,7 @@ struct FnGen {
                     } else if kk == "Map" {
                         let kty = ty.map_key(r.t);
                         let vty = ty.inner(r.t);
-                        let k64 = key64(kr.v, kty)?;
+                        let k64 = key64(m, kr.v, kty)?;
                         let mp = b.val("load ptr, ptr " + r.ptr);
                         let i = b.val("call i64 @jw_map_find(ptr " + mp + ", i64 " + k64 + ")");
                         let missing = b.val("icmp slt i64 " + i + ", 0");
@@ -543,7 +543,7 @@ struct FnGen {
                             let skip = b.l();
                             b.br(skip);
                             b.label(no);
-                            release_key(kr.v, kty);
+                            release_key(kr.v, k64, kty);
                             b.br(skip);
                             b.label(skip);
                             let i2 = b.val("load i64, ptr " + ip);
@@ -553,11 +553,28 @@ struct FnGen {
                             let ok = b.if_true(missing);
                             let shape = if ty.is(kty, "Int") { llvm.int_shape(ty.int_of(kty)) } else { "0" };
                             let s = m.site(key_span, "");
-                            b.op("call void @jw_fail_nokey(i32 {llvm.key_kind(kty)}, i64 " + k64 + ", i32 " + shape +
-                                ", ptr " + s + ")");
+                            if ty.is(kty, "Struct") {
+                                // 構造体のキーは表示した形で出す（種類 3: 文字列をそのまま。jwc だけ）
+                                let sp = b.val("inttoptr i64 " + k64 + " to ptr");
+                                let off = b.alloca("i64");
+                                b.op("store i64 0, ptr " + off);
+                                let kv2 = m.dec_key(ref mut b, kty, sp, off)?;
+                                let tl = m.lt(kty)?;
+                                let kp = b.alloca(tl);
+                                b.op("store " + tl + " " + kv2 + ", ptr " + kp);
+                                let sb = b.val("call ptr @jw_sb_new()");
+                                let f = m.helper("Show", kty);
+                                b.op("call void " + f + "(ptr " + kp + ", ptr " + sb + ", i64 0, ptr " + s + ")");
+                                let shown = b.val("call ptr @jw_sb_finish(ptr " + sb + ")");
+                                let si = b.val("ptrtoint ptr " + shown + " to i64");
+                                b.op("call void @jw_fail_nokey(i32 3, i64 " + si + ", i32 0, ptr " + s + ")");
+                            } else {
+                                b.op("call void @jw_fail_nokey(i32 {llvm.key_kind(kty)}, i64 " + k64 + ", i32 " + shape +
+                                    ", ptr " + s + ")");
+                            }
                             b.op("unreachable");
                             b.label(ok);
-                            release_key(kr.v, kty);
+                            release_key(kr.v, k64, kty);
                             r.ptr = b.val("call ptr @jw_map_val(ptr " + mp + ", i64 " + i + ")");
                         }
                         r.t = vty;
@@ -594,15 +611,29 @@ struct FnGen {
     }
 
     /// 辞書のキーを i64 にする
-    fn mut Result<str, str> key64(str kv, ref ty.Ty kt) {
+    fn mut Result<str, str> key64(ref mut llvm.Module m, str kv, ref ty.Ty kt) {
         if ty.is(kt, "Str") { return Ok(b.val("ptrtoint ptr " + kv + " to i64")); }
+        if ty.is(kt, "Struct") {
+            // 構造体のキーは、中身を並べた str にする（jwc だけ）。元の値はここで捨てる（中は整数・bool・str だけ）
+            let sp = m.enc_key(ref mut b, kt, kv)?;
+            let tl = m.lt(kt)?;
+            let tmp = b.alloca(tl);
+            b.op("store " + tl + " " + kv + ", ptr " + tmp);
+            let d = m.helper("Drop", kt);
+            b.op("call void " + d + "(ptr " + tmp + ", ptr null)");
+            return Ok(b.val("ptrtoint ptr " + sp + " to i64"));
+        }
         if ty.is(kt, "Bool") { return Ok(b.val("zext i1 " + kv + " to i64")); }
         if ty.is(kt, "Int") { return Ok(llvm.widen(ref mut b, kv, ty.int_of(kt))); }
         Err("辞書のキー " + ty.show(kt))
     }
 
-    fn mut release_key(str kv, ref ty.Ty kt) {
+    fn mut release_key(str kv, str k64, ref ty.Ty kt) {
         if ty.is(kt, "Str") { b.op("call void @jw_str_release(ptr " + kv + ")"); }
+        if ty.is(kt, "Struct") {
+            let sp = b.val("inttoptr i64 " + k64 + " to ptr");
+            b.op("call void @jw_str_release(ptr " + sp + ")");
+        }
     }
 
     // ------------------------------------------------------------ 値
@@ -1046,7 +1077,7 @@ struct FnGen {
                     let kv = coerce(m, kx.v, kx.t, kt)?;
                     let vx = operand(m, vs[j])?;
                     let vv = coerce(m, vx.v, vx.t, vty)?;
-                    let k64 = key64(kv, kt)?;
+                    let k64 = key64(m, kv, kt)?;
                     let i = b.val("call i64 @jw_map_find(ptr " + mp + ", i64 " + k64 + ")");
                     let missing = b.val("icmp slt i64 " + i + ", 0");
                     let yes = b.l();
@@ -1060,7 +1091,7 @@ struct FnGen {
                     b.br(done);
                     b.label(no);
                     // 同じキー: 後の値が残り、前の値は捨てる
-                    release_key(kv, kt);
+                    release_key(kv, k64, kt);
                     let p2 = b.val("call ptr @jw_map_val(ptr " + mp + ", i64 " + i + ")");
                     let old = b.val("load " + vl + ", ptr " + p2);
                     b.op("store " + vl + " " + vv + ", ptr " + p2);
@@ -2588,9 +2619,9 @@ struct FnGen {
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }
             let kv = coerce(m, vals[0].v, vals[0].t, kt)?;
-            let k64 = key64(kv, kt)?;
+            let k64 = key64(m, kv, kt)?;
             let i = b.val("call i64 @jw_map_find(ptr " + mp + ", i64 " + k64 + ")");
-            release_key(kv, kt);
+            release_key(kv, k64, kt);
             let found = b.val("icmp sge i64 " + i + ", 0");
             if name == "contains" { return Ok(llvm.vt(found, ty.Ty.Bool)); }
             if name == "get" || name == "remove" {
@@ -2608,7 +2639,7 @@ struct FnGen {
                 } else {
                     let vl = m.lt(vty)?;
                     v = b.val("load " + vl + ", ptr " + vp);
-                    if ty.is(kt, "Str") {
+                    if llvm.str_keyed(kt) {
                         let key = b.val("call i64 @jw_map_key(ptr " + mp + ", i64 " + i + ")");
                         let kp = b.val("inttoptr i64 " + key + " to ptr");
                         b.op("call void @jw_str_release(ptr " + kp + ")");

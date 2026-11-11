@@ -589,6 +589,10 @@ _Noreturn void jw_fail_nokey(int32_t kind, int64_t key, int32_t is_unsigned, con
     if (kind == 1) {
         WStr *s = (WStr *)(intptr_t)key;
         snprintf(shown, sizeof shown, "\"%.*s\"", (int)(s->len > 800 ? 800 : s->len), s->data);
+    } else if (kind == 3) {
+        // 表示した形の文字列（jwc の構造体のキー）
+        WStr *s = (WStr *)(intptr_t)key;
+        snprintf(shown, sizeof shown, "%.*s", (int)(s->len > 800 ? 800 : s->len), s->data);
     } else if (kind == 2) {
         snprintf(shown, sizeof shown, "%s", key ? "true" : "false");
     } else {

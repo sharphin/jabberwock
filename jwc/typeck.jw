@@ -577,6 +577,20 @@ pub struct Checker {
     // ------------------------------------------------ 表を引く
 
     fn bool is_struct(str n) { s_at.contains(n) }
+
+    /// 辞書のキーにできる型か: 整数・str・bool と、それ（とそういう構造体）だけを持つ構造体（構造体は jwc だけ）
+    fn bool keyable(ref ty.Ty t, i64 depth) {
+        if ty.is(t, "Int") || ty.is(t, "Str") || ty.is(t, "Bool") { return true; }
+        if !ty.is(t, "Struct") || depth > 16 || !is_struct(ty.name_of(t)) { return false; }
+        let d = s_at[ty.name_of(t)];
+        // フィールドの型をまだ調べていない構造体（構造体のフィールドで、後ろに書いた構造体をキーにしたとき）は使えない
+        if sdefs[d].tys.len() != sdefs[d].fields.len() { return false; }
+        let m = ty.targs(sdefs[d].tparams, ty.args_of(t));
+        for f in sdefs[d].tys {
+            if !keyable(ty.subst(f, m), depth + 1) { return false; }
+        }
+        true
+    }
     fn bool is_enum(str n) { e_at.contains(n) }
     fn bool is_iface(str n) { i_at.contains(n) }
     fn bool is_fn(str n) { f_at.contains(n) }
@@ -701,7 +715,7 @@ pub struct Checker {
             case List(x) -> Ok(ty.Ty.List(own resolve(x)?));
             case Map(v, k) -> {
                 let kt = resolve(k)?;
-                if !(ty.is(kt, "Int") || ty.is(kt, "Str") || ty.is(kt, "Bool")) {
+                if !keyable(kt, 0) {
                     return Err(diag.make("`{ty.show(kt)}` は辞書のキーにできません").at(k.span, "キーにできるのは整数・str・bool だけ"));
                 }
                 Ok(ty.Ty.Map(own kt, own resolve(v)?))
@@ -1926,7 +1940,7 @@ pub struct Checker {
                     // 入れる先の型がなければ、最初の組から決める
                     kt = value(kvs[0])?;
                     vt = value(kvs[1])?;
-                    if !(ty.is(kt, "Int") || ty.is(kt, "Str") || ty.is(kt, "Bool")) {
+                    if !keyable(kt, 0) {
                         return Err(diag.make("`{ty.show(kt)}` は辞書のキーにできません").at(kvs[0].span, "キーにできるのは整数・str・bool だけ"));
                     }
                 }

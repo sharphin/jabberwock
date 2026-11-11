@@ -263,8 +263,11 @@ pub fn bool is_iface_ptr(ref ty.Ty t) {
 
 /// 辞書のキーの種類（実行時ライブラリの `kind`）
 pub fn i64 key_kind(ref ty.Ty k) {
-    if ty.is(k, "Str") { 1 } else if ty.is(k, "Bool") { 2 } else { 0 }
+    if str_keyed(k) { 1 } else if ty.is(k, "Bool") { 2 } else { 0 }
 }
+
+/// 辞書の中でキーを str として持つか。構造体のキーは、中身を並べたバイト列の str にして持つ（jwc だけ。enc_key / dec_key）
+pub fn bool str_keyed(ref ty.Ty k) { ty.is(k, "Str") || ty.is(k, "Struct") }
 
 pub fn str ext(str t) { if ty.signed(t) { "sext" } else { "zext" } }
 
@@ -798,7 +801,103 @@ pub struct Module {
     // ------------------------------------------------------------ 型の手伝いの関数
 
     /// 辞書のキー（i64 にしたもの）を、キーの型の値として `dst` に置く
+    /// 構造体のキーを、中身を並べたバイト列の str にする（整数・bool は 8 バイト、str は長さ 8 バイトと中身。構造体は中を順に）。
+    /// 新しい str（数 1）を返す。v はそのまま（呼んだ側が捨てる）
+    fn mut Result<str, str> enc_key(ref mut B b, ref ty.Ty t, str v) {
+        let slot = b.alloca("ptr");
+        let zero = b.alloca("i64");
+        let e = b.val("call ptr @jw_str_new(ptr " + zero + ", i64 0)");
+        b.op("store ptr " + e + ", ptr " + slot);
+        enc_into(b, t, v, slot)?;
+        Ok(b.val("load ptr, ptr " + slot))
+    }
+
+    fn mut Result<(), str> enc_into(ref mut B b, ref ty.Ty t, str v, str slot) {
+        let tl = lt(t)?;
+        let fs = struct_fields(t)?;
+        for (i, f) in fs {
+            let x = b.val("extractvalue " + tl + " " + v + ", {i}");
+            if ty.is(f, "Struct") {
+                enc_into(b, f, x, slot)?;
+                continue;
+            }
+            let tmp = b.alloca("i64");
+            if ty.is(f, "Str") {
+                let lp = b.val("getelementptr i8, ptr " + x + ", i64 8");
+                let sl = b.val("load i64, ptr " + lp);
+                b.op("store i64 " + sl + ", ptr " + tmp);
+            } else if ty.is(f, "Bool") {
+                let w = b.val("zext i1 " + x + " to i64");
+                b.op("store i64 " + w + ", ptr " + tmp);
+            } else if ty.is(f, "Int") {
+                let w = widen(ref mut b, x, ty.int_of(f));
+                b.op("store i64 " + w + ", ptr " + tmp);
+            } else {
+                return Err("辞書のキーの中の " + ty.show(f));
+            }
+            let piece = b.val("call ptr @jw_str_new(ptr " + tmp + ", i64 8)");
+            let acc = b.val("load ptr, ptr " + slot);
+            let n1 = b.val("call ptr @jw_str_concat(ptr " + acc + ", ptr " + piece + ")");
+            b.op("call void @jw_str_release(ptr " + acc + ")");
+            b.op("call void @jw_str_release(ptr " + piece + ")");
+            b.op("store ptr " + n1 + ", ptr " + slot);
+            if ty.is(f, "Str") {
+                let n2 = b.val("call ptr @jw_str_concat(ptr " + n1 + ", ptr " + x + ")");
+                b.op("call void @jw_str_release(ptr " + n1 + ")");
+                b.op("store ptr " + n2 + ", ptr " + slot);
+            }
+        }
+        Ok(())
+    }
+
+    /// enc_key の逆: str sp の off（i64 の場所）から読んで、型 t の新しい値を作る
+    fn mut Result<str, str> dec_key(ref mut B b, ref ty.Ty t, str sp, str off) {
+        let tl = lt(t)?;
+        let fs = struct_fields(t)?;
+        let mut acc = "undef";
+        for (i, f) in fs {
+            let mut x = "";
+            if ty.is(f, "Struct") {
+                x = dec_key(b, f, sp, off)?;
+            } else {
+                let o = b.val("load i64, ptr " + off);
+                let at = b.val("add i64 " + o + ", 16");
+                let p = b.val("getelementptr i8, ptr " + sp + ", i64 " + at);
+                let w = b.val("load i64, ptr " + p + ", align 1");
+                let o2 = b.val("add i64 " + o + ", 8");
+                if ty.is(f, "Str") {
+                    let at2 = b.val("add i64 " + at + ", 8");
+                    let q = b.val("getelementptr i8, ptr " + sp + ", i64 " + at2);
+                    x = b.val("call ptr @jw_str_new(ptr " + q + ", i64 " + w + ")");
+                    let o3 = b.val("add i64 " + o2 + ", " + w);
+                    b.op("store i64 " + o3 + ", ptr " + off);
+                } else {
+                    b.op("store i64 " + o2 + ", ptr " + off);
+                    if ty.is(f, "Bool") {
+                        x = b.val("icmp ne i64 " + w + ", 0");
+                    } else {
+                        let bt = ty.bits(ty.int_of(f));
+                        x = if bt < 64 { b.val("trunc i64 " + w + " to i{bt}") } else { w };
+                    }
+                }
+            }
+            let fl = lt(f)?;
+            acc = b.val("insertvalue " + tl + " " + acc + ", " + fl + " " + x + ", {i}");
+        }
+        Ok(acc)
+    }
+
     fn mut Result<(), str> store_key(ref mut B b, ref ty.Ty k, str kv, str dst) {
+        if ty.is(k, "Struct") {
+            // 辞書の中の str から、新しい構造体の値を作る
+            let sp = b.val("inttoptr i64 " + kv + " to ptr");
+            let off = b.alloca("i64");
+            b.op("store i64 0, ptr " + off);
+            let v = dec_key(b, k, sp, off)?;
+            let tl = lt(k)?;
+            b.op("store " + tl + " " + v + ", ptr " + dst);
+            return Ok(());
+        }
         if ty.is(k, "Str") {
             let p = b.val("inttoptr i64 " + kv + " to ptr");
             b.op("store ptr " + p + ", ptr " + dst);
@@ -1063,7 +1162,7 @@ pub struct Module {
             let mp = b.val("load ptr, ptr %p");
             let len = b.val("call i64 @jw_map_len(ptr " + mp + ")");
             let e = b.loop_begin(len);
-            if ty.is(kt, "Str") {
+            if str_keyed(kt) {
                 let kv = b.val("call i64 @jw_map_key(ptr " + mp + ", i64 " + e.i + ")");
                 let kp = b.val("inttoptr i64 " + kv + " to ptr");
                 b.op("call void @jw_str_release(ptr " + kp + ")");
@@ -1153,7 +1252,7 @@ pub struct Module {
             }
         } else if k == "Map" {
             let mp = b.val("load ptr, ptr %p");
-            if ty.is(ty.map_key(t), "Str") { b.op("call void @jw_map_unshare_keys(ptr " + mp + ")"); }
+            if str_keyed(ty.map_key(t)) { b.op("call void @jw_map_unshare_keys(ptr " + mp + ")"); }
             let vty = ty.inner(t);
             if needs_drop(vty)? {
                 let len = b.val("call i64 @jw_map_len(ptr " + mp + ")");
@@ -1337,7 +1436,7 @@ pub struct Module {
             let len = b.val("call i64 @jw_map_len(ptr " + mp + ")");
             let e = b.loop_begin(len);
             let kv = b.val("call i64 @jw_map_key(ptr " + mp + ", i64 " + e.i + ")");
-            if ty.is(kt, "Str") {
+            if str_keyed(kt) {
                 let kp = b.val("inttoptr i64 " + kv + " to ptr");
                 b.op("call void @jw_str_retain(ptr " + kp + ")");
             }
@@ -1578,6 +1677,11 @@ pub struct Module {
             let kp = b.alloca(klt);
             store_key(b, kt, kv, kp)?;
             show_call(b, kt, kp, d1);
+            if ty.is(kt, "Struct") {
+                // 表示のために作った構造体の値を捨てる（中の str だけ）
+                let dk = helper("Drop", kt);
+                b.op("call void " + dk + "(ptr " + kp + ", ptr null)");
+            }
             lit(b, ": ");
             let vp = b.val("call ptr @jw_map_val(ptr " + mp + ", i64 " + e.i + ")");
             show_call(b, vty, vp, d1);

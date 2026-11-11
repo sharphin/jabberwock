@@ -994,6 +994,53 @@ fn jwc_use_as_alias() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// 辞書のキーに構造体（jwc だけ）
+#[test]
+fn jwc_map_struct_keys() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-skey-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, MAP_STRUCT_KEYS_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "15 2 true false\n[P { x: 1, y: 2 }: 15, P { x: -3, y: 4 }: 20]\n1 2 15\n-3 4 20\n-3\n\
+        Some(15) None 1\n[K { name: あい, at: P { x: 0, y: 0 }, on: true, small: 255 }: a, K { name: , at: P { x: 0, y: 0 }, on: false, small: 0 }: b]\n\
+        Some(a)\n[P { x: 5, y: 5 }: five]\n[a, b]\n");
+    assert!(String::from_utf8_lossy(&got.stderr).contains("辞書にキー P { x: 7, y: 8 } がありません"));
+}
+
+const MAP_STRUCT_KEYS_SRC: &str = r#"struct P { i64 x; i64 y; }
+struct K { str name; P at; bool on; u8 small; }
+fn main() {
+    let i64[P] mut m = [];
+    m[P { x: 1, y: 2 }] = 10;
+    m[P { x: -3, y: 4 }] = 20;
+    m[P { x: 1, y: 2 }] += 5;
+    print(m[P { x: 1, y: 2 }], m.len(), m.contains(P { x: -3, y: 4 }), m.contains(P { x: 9, y: 9 }));
+    print(m);
+    for (k, v) in m { print(k.x, k.y, v); }
+    let ks = m.keys();
+    print(ks[1].x);
+    print(m.remove(P { x: 1, y: 2 }), m.get(P { x: 1, y: 2 }), m.len());
+    let str[K] mut n = [];
+    n[K { name: "あい", at: P { x: 0, y: 0 }, on: true, small: 255 }] = "a";
+    n[K { name: "", at: P { x: 0, y: 0 }, on: false, small: 0 }] = "b";
+    print(n);
+    print(n.get(K { name: "あい", at: P { x: 0, y: 0 }, on: true, small: 255 }));
+    let lit = [P { x: 5, y: 5 }: "five"];
+    print(lit);
+    let mut c = n.values();
+    c.sort();
+    print(c);
+    n.clear();
+    print(m[P { x: 7, y: 8 }]);
+}
+"#;
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

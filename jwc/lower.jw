@@ -1817,7 +1817,7 @@ pub struct Lower {
             case Index(base, idx) -> {
                 if !is_place(base) { return Err("一時的な値の中の場所"); }
                 // 添字を先に評価してから、配列の場所を求める（interp の `place` と同じ順）
-                let key = expr(idx)?;
+                let key = key_expr(idx)?;
                 let mut p = place(base)?;
                 project(ref mut p, e, base, key, true)?;
                 Ok(p)
@@ -1840,7 +1840,7 @@ pub struct Lower {
         let mut has_key = false;
         match ref e.kind {
             case Index(b, idx) -> {
-                key = expr(idx)?;
+                key = key_expr(idx)?;
                 has_key = true;
             }
             default -> {}
@@ -1859,6 +1859,21 @@ pub struct Lower {
         let mut p = ir.local(t, base.span);
         project(ref mut p, e, base, key, has_key)?;
         Ok(ReadPlace { p: p, t: t })
+    }
+
+    /// 添字の値。構造体のキー（jwc だけ）を変数で書いたときは、ムーブせずに写す
+    /// （`m[k] += 1` は隠れた変数の k を 2 回使うため。キーは辞書に入るときに中身を写すので、元を残してよい）
+    fn mut Result<ir.Operand, str> key_expr(ref ast.Expr idx) {
+        if ty.is(ty_of(idx), "Struct") {
+            match ref idx.kind {
+                case Var(n) -> {
+                    let l = lookup(n);
+                    if l >= 0 { return Ok(ir.copy_of(ir.local(l, idx.span))); }
+                }
+                default -> {}
+            }
+        }
+        expr(idx)
     }
 
     /// `base` の場所 `p` から、`e`（`*base`・`base.f`・`base[k]`）の場所へ進む。own / ref の先は自動でたどる
