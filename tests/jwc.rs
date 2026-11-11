@@ -966,6 +966,34 @@ fn main() {
 }
 "#;
 
+// `use ... as 別名`（jwc だけ）。同じフォルダの math と標準の math を両方使う
+#[test]
+fn jwc_use_as_alias() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-alias-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("math.jw"), "pub fn i64 twice(i64 x) { x * 2 }\npub struct P { i64 v; }\n").unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "use std.math as sm;\nuse math;\nuse std.text as t;\nfn main() {\n    \
+        print(sm.gcd(12, 18), math.twice(4), t.pad_left(\"7\", 3, \"0\"));\n    let math.P p = math.P { v: 1 };\n    print(p.v);\n}\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "6 8 007\n1\n");
+    for (src, want) in [
+        ("use std.math as m;\nfn main() { print(math.gcd(2, 4)); }\n", "未定義の変数 `math`"),
+        ("use std.math as x;\nuse std.text as x;\nfn main() {}\n", "`x` という名前のモジュールを二つ使っています"),
+        ("use std.math as m;\nfn main() { let m = 1; print(m); }\n", "`m` はモジュールの名前です"),
+    ] {
+        std::fs::write(&path, src).unwrap();
+        let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success() && err.contains(want), "{}", err);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

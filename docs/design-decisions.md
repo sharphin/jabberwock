@@ -954,3 +954,10 @@ let x = pick(true, 1, 2);
   HEAD は答えに本文がないのに Content-Length がつくので、今の「閉じるまで読んで Content-Length で切る」読み方と合わず、外した。
   301・302 で GET に変えるのは今までどおり POST だけ（PUT・DELETE などはメソッドを保ってたどる。fetch の決まりと同じ）。
 - `csv.parse_sep(s, sep)`・`csv.format_sep(ref rows, sep)` を足した。sep は char（`"`・改行は Err）。parse・format・quote・write_row は `,` のまま。
+
+## use ... as 別名（2026-11-11）
+
+- `use std.math as sm;`・`use geom as g;`。jwc だけ（Rust 版は凍結。構文エラーになる）。
+- 読み替えは modules.jw の merge_paths で、`sm.gcd` を `std:math.gcd` に 1 つの名前としてまとめる（今までの `math.gcd` と同じ道）。parser は `as 名前` を読み飛ばすだけ。
+- 元の名前は使えなくする（別名をつけたら、そのファイルでは別名だけ）。同じモジュールを別名なしと別名ありで二回 use するのは、parser の「二回あります」で止まる。
+- `use math;` と `use std.math;` を両方書いたときのエラーの文は Rust 版とそろえたまま（as を勧める注は足さない）。別名どうしが重なったときのエラーは jwc だけの文。

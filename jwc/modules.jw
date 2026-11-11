@@ -201,10 +201,14 @@ pub struct Loader {
         let i64[] mut use_spans = [];
         // `use std.名前;` か
         let bool[] mut stds = [];
+        // ソースの中で使う名前（`use x as y;` なら y。jwc だけ）
+        let str[] mut locals = [];
+        let bool[] mut aliased = [];
         let mut k = 0;
         while k + 1 < toks.len() {
             if toks[k].kind == "use" && toks[k + 1].kind == "ident" {
                 let std = toks[k + 1].text == "std" && k + 3 < toks.len() && toks[k + 2].kind == "." && toks[k + 3].kind == "ident";
+                let last = if std { k + 3 } else { k + 1 };
                 if std {
                     uses.push(toks[k + 3].text);
                     use_spans.push(diag.join(toks[k + 1].span, toks[k + 3].span));
@@ -213,14 +217,28 @@ pub struct Loader {
                     use_spans.push(toks[k + 1].span);
                 }
                 stds.push(std);
+                if last + 2 < toks.len() && toks[last + 1].kind == "as" && toks[last + 2].kind == "ident" {
+                    locals.push(toks[last + 2].text);
+                    aliased.push(true);
+                } else {
+                    locals.push(uses[uses.len() - 1]);
+                    aliased.push(false);
+                }
             }
             k += 1;
         }
         for (i, u) in uses {
             for j in range(i) {
-                if uses[j] == u && stds[j] != stds[i] {
+                if locals[j] != locals[i] { continue; }
+                if !aliased[i] && !aliased[j] && stds[j] != stds[i] {
                     return Err(diag.error_note("`{u}` という名前のモジュールを二つ使っています", use_spans[i],
                         "標準の {u} と、同じフォルダ（またはパッケージ）の {u} の両方を use している", "どちらか一つにしてください"));
+                }
+                if (aliased[i] || aliased[j]) && (uses[j] != u || stds[j] != stds[i]) {
+                    // ここから下は jwc だけ（Rust 版に as はない）
+                    let a = locals[i];
+                    return Err(diag.error_note("`{a}` という名前のモジュールを二つ使っています", use_spans[i],
+                        "別のモジュールが同じ名前 {a} になる", "`as` のあとの名前を変えてください"));
                 }
             }
         }
@@ -285,7 +303,8 @@ pub struct Loader {
         let str[] mut structs = [];
         let str[] mut enums = [];
         let str[str] mut variants = [];
-        for (i, u) in uses {
+        for (i, u0) in uses {
+            let u = locals[i];
             if has(mods, u) { continue; }
             for (j, d) in done {
                 if d == keys[i] {
