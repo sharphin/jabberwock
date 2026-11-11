@@ -1,11 +1,15 @@
 // 標準ライブラリ std.csv: CSV（RFC 4180）の読み書き。`use std.csv;` と書いて使う
 //   let rows = csv.parse("name,age\r\n\"山田, 太郎\",30\r\n")?;   // str[][]: [[name, age], [山田, 太郎, 30]]
 //   let s = csv.format(ref rows);                                  // "name,age\r\n\"山田, 太郎\",30\r\n"
-// .jw だけで書いている。区切りは `,`、行の終わりは CRLF か LF。値はどれも文字列（数や型には直さない）。
+// .jw だけで書いている。区切りは `,`（parse_sep・format_sep で変えられる）、行の終わりは CRLF か LF。値はどれも文字列（数や型には直さない）。
 
 /// CSV を読む。`"` で囲んだ値の中には `,`・改行・`""`（`"` 1 つ）を書ける。
 /// 終わりの改行のあとに空の行は作らない。囲んでいない値の中の `"`・閉じた `"` のあとの余計な文字・閉じていない `"` は Err（何行目かを書く）
-pub fn Result<str[][], str> parse(str s) {
+pub fn Result<str[][], str> parse(str s) { parse_sep(s, ',') }
+
+/// 区切りを sep にして読む（`'\t'` なら TSV）。sep が `"`・改行なら Err。エラーの文は parse と同じ（`,` と書く）
+pub fn Result<str[][], str> parse_sep(str s, char sep) {
+    if sep == '"' || sep == '\n' || sep == '\r' { return Err("CSV の区切りに `\"` と改行は使えません"); }
     let cs = s.chars();
     let str[][] mut rows = [];
     let str[] mut row = [];
@@ -39,11 +43,11 @@ pub fn Result<str[][], str> parse(str s) {
                 }
             }
             if !closed { return Err("CSV の {start} 行目の `\"` が閉じていません"); }
-            if i < cs.len() && cs[i] != ',' && cs[i] != '\n' && cs[i] != '\r' {
+            if i < cs.len() && cs[i] != sep && cs[i] != '\n' && cs[i] != '\r' {
                 return Err("CSV の {line} 行目: 閉じた `\"` のあとに `,` か改行がありません");
             }
             fresh = false;
-        } else if c == ',' {
+        } else if c == sep {
             row.push(field);
             field = "";
             fresh = true;
@@ -76,29 +80,35 @@ pub fn Result<str[][], str> parse(str s) {
 /// CSV にする。`,`・`"`・改行を含む値は `"` で囲み、`"` は `""` にする。行の終わりはどれも CRLF
 pub fn str format(ref str[][] rows) {
     let mut out = "";
-    for row in rows {
-        for (i, v) in row {
-            if i > 0 { out += ","; }
-            out += quote(v);
-        }
-        out += "\r\n";
-    }
+    for row in rows { out += join_row(ref row, ','); out += "\r\n"; }
     out
 }
 
+/// 区切りを sep にして書く（sep を含む値も `"` で囲む）。sep が `"`・改行なら Err
+pub fn Result<str, str> format_sep(ref str[][] rows, char sep) {
+    if sep == '"' || sep == '\n' || sep == '\r' { return Err("CSV の区切りに `\"` と改行は使えません"); }
+    let mut out = "";
+    for row in rows { out += join_row(ref row, sep); out += "\r\n"; }
+    Ok(out)
+}
+
 /// 1 行を書く（改行はつけない）
-pub fn str write_row(ref str[] row) {
+pub fn str write_row(ref str[] row) { join_row(ref row, ',') }
+
+fn str join_row(ref str[] row, char sep) {
     let mut out = "";
     for (i, f) in row {
-        if i > 0 { out += ","; }
-        out += quote(f);
+        if i > 0 { out += sep.to_str(); }
+        out += quote_sep(f, sep);
     }
     out
 }
 
 /// 値 1 つを CSV の形にする（要るときだけ `"` で囲む）
-pub fn str quote(str v) {
-    if v.contains(",") || v.contains("\"") || v.contains("\n") || v.contains("\r") {
+pub fn str quote(str v) { quote_sep(v, ',') }
+
+fn str quote_sep(str v, char sep) {
+    if v.contains(sep.to_str()) || v.contains("\"") || v.contains("\n") || v.contains("\r") {
         "\"" + v.replace("\"", "\"\"") + "\""
     } else {
         v

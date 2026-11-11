@@ -835,11 +835,15 @@ pub fn Option<u8[]> open(ref u8[] key, ref u8[] nonce, ref u8[] aad, ref u8[] se
 // 標準ライブラリ std.csv: CSV（RFC 4180）の読み書き。`use std.csv;` と書いて使う
 //   let rows = csv.parse("name,age\\r\\n\\"山田, 太郎\\",30\\r\\n")?;   // str[][]: [[name, age], [山田, 太郎, 30]]
 //   let s = csv.format(ref rows);                                  // "name,age\\r\\n\\"山田, 太郎\\",30\\r\\n"
-// .jw だけで書いている。区切りは `,`、行の終わりは CRLF か LF。値はどれも文字列（数や型には直さない）。
+// .jw だけで書いている。区切りは `,`（parse_sep・format_sep で変えられる）、行の終わりは CRLF か LF。値はどれも文字列（数や型には直さない）。
 
 /// CSV を読む。`"` で囲んだ値の中には `,`・改行・`""`（`"` 1 つ）を書ける。
 /// 終わりの改行のあとに空の行は作らない。囲んでいない値の中の `"`・閉じた `"` のあとの余計な文字・閉じていない `"` は Err（何行目かを書く）
-pub fn Result<str[][], str> parse(str s) {{
+pub fn Result<str[][], str> parse(str s) {{ parse_sep(s, ',') }}
+
+/// 区切りを sep にして読む（`'\\t'` なら TSV）。sep が `"`・改行なら Err。エラーの文は parse と同じ（`,` と書く）
+pub fn Result<str[][], str> parse_sep(str s, char sep) {{
+    if sep == '"' || sep == '\\n' || sep == '\\r' {{ return Err("CSV の区切りに `\\"` と改行は使えません"); }}
     let cs = s.chars();
     let str[][] mut rows = [];
     let str[] mut row = [];
@@ -873,11 +877,11 @@ pub fn Result<str[][], str> parse(str s) {{
                 }}
             }}
             if !closed {{ return Err("CSV の {{start}} 行目の `\\"` が閉じていません"); }}
-            if i < cs.len() && cs[i] != ',' && cs[i] != '\\n' && cs[i] != '\\r' {{
+            if i < cs.len() && cs[i] != sep && cs[i] != '\\n' && cs[i] != '\\r' {{
                 return Err("CSV の {{line}} 行目: 閉じた `\\"` のあとに `,` か改行がありません");
             }}
             fresh = false;
-        }} else if c == ',' {{
+        }} else if c == sep {{
             row.push(field);
             field = "";
             fresh = true;
@@ -910,29 +914,35 @@ pub fn Result<str[][], str> parse(str s) {{
 /// CSV にする。`,`・`"`・改行を含む値は `"` で囲み、`"` は `""` にする。行の終わりはどれも CRLF
 pub fn str format(ref str[][] rows) {{
     let mut out = "";
-    for row in rows {{
-        for (i, v) in row {{
-            if i > 0 {{ out += ","; }}
-            out += quote(v);
-        }}
-        out += "\\r\\n";
-    }}
+    for row in rows {{ out += join_row(ref row, ','); out += "\\r\\n"; }}
     out
 }}
 
+/// 区切りを sep にして書く（sep を含む値も `"` で囲む）。sep が `"`・改行なら Err
+pub fn Result<str, str> format_sep(ref str[][] rows, char sep) {{
+    if sep == '"' || sep == '\\n' || sep == '\\r' {{ return Err("CSV の区切りに `\\"` と改行は使えません"); }}
+    let mut out = "";
+    for row in rows {{ out += join_row(ref row, sep); out += "\\r\\n"; }}
+    Ok(out)
+}}
+
 /// 1 行を書く（改行はつけない）
-pub fn str write_row(ref str[] row) {{
+pub fn str write_row(ref str[] row) {{ join_row(ref row, ',') }}
+
+fn str join_row(ref str[] row, char sep) {{
     let mut out = "";
     for (i, f) in row {{
-        if i > 0 {{ out += ","; }}
-        out += quote(f);
+        if i > 0 {{ out += sep.to_str(); }}
+        out += quote_sep(f, sep);
     }}
     out
 }}
 
 /// 値 1 つを CSV の形にする（要るときだけ `"` で囲む）
-pub fn str quote(str v) {{
-    if v.contains(",") || v.contains("\\"") || v.contains("\\n") || v.contains("\\r") {{
+pub fn str quote(str v) {{ quote_sep(v, ',') }}
+
+fn str quote_sep(str v, char sep) {{
+    if v.contains(sep.to_str()) || v.contains("\\"") || v.contains("\\n") || v.contains("\\r") {{
         "\\"" + v.replace("\\"", "\\"\\"") + "\\""
     }} else {{
         v
@@ -2180,6 +2190,18 @@ pub fn Result<Response, str> get(str target) {{ request("GET", target, "", "") }
 /// POST する（content_type は `application/json` など）
 pub fn Result<Response, str> post(str target, str content_type, str body) {{ request("POST", target, content_type, body) }}
 
+/// メソッドを選んで頼む（GET・POST・PUT・PATCH・DELETE・OPTIONS）。body が空でなければ content_type をつけて送る。
+/// follow が false なら、リダイレクトをたどらずに最初の答えを返す（Location は headers["location"]）
+pub fn Result<Response, str> send(str method, str target, str content_type, str body, bool follow) {{
+    let ok = method == "GET" || method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE" || method == "OPTIONS";
+    if !ok {{ return Err("使えないメソッドです（GET・POST・PUT・PATCH・DELETE・OPTIONS）: " + method); }}
+    if !follow {{
+        if content_type.contains("\\r") || content_type.contains("\\n") {{ return Err("content_type に改行があります"); }}
+        return once(method, target, content_type, body);
+    }}
+    request(method, target, content_type, body)
+}}
+
 fn Result<url.Url, str> parse_url(str s) {{
     let u = url.parse(s)?;
     if u.scheme != "http" && u.scheme != "https" {{ return Err("http:// か https:// で始まる URL ではありません: " + s); }}
@@ -2236,7 +2258,7 @@ fn Result<Response, str> once(str method, str target, str content_type, str body
     let plain_port = if u.scheme == "https" {{ 443 }} else {{ 80 }};
     let host = if u.port == plain_port {{ name }} else {{ name + ":{{u.port}}" }};
     let mut req = "{{method}} {{u.target()}} HTTP/1.1\\r\\nHost: {{host}}\\r\\nConnection: close\\r\\nUser-Agent: jabberwock\\r\\nAccept-Encoding: gzip\\r\\n";
-    if method == "POST" {{ req += "Content-Type: {{content_type}}\\r\\nContent-Length: {{body.byte_len()}}\\r\\n"; }}
+    if method == "POST" || body.byte_len() > 0 {{ req += "Content-Type: {{content_type}}\\r\\nContent-Length: {{body.byte_len()}}\\r\\n"; }} else if method == "PUT" || method == "PATCH" {{ req += "Content-Length: 0\\r\\n"; }}
     req += "\\r\\n" + body;
     let u8[] mut all = [];
     if u.scheme == "https" {{

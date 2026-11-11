@@ -887,6 +887,85 @@ fn jwc_std_deque_heap_log() {
     assert_eq!(String::from_utf8_lossy(&got.stderr), "INFO 始めます\nDEBUG 細かい\nERROR 失敗\n");
 }
 
+// std.http の send（メソッドとリダイレクトをたどるか）と std.csv の区切りの指定
+#[test]
+fn jwc_std_http_send_and_csv_sep() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-send-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, HTTP_SEND_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "302 Some(/x)\n200 ok\n200\n\
+        Ok(DELETE /d HTTP/1.1|PUT /p HTTP/1.1 Content-Type: application/json Content-Length: 2|PATCH /q HTTP/1.1 Content-Length: 0|)\n\
+        使えないメソッドです（GET・POST・PUT・PATCH・DELETE・OPTIONS）: HEAD\n[[a, b c, x\ty], [1, 2]]\na;b c;x\ty\r\n1;2\r\n 18\n\
+        Err(CSV の区切りに `\"` と改行は使えません) [[a, b], [c, d]]\nok\n");
+}
+
+const HTTP_SEND_SRC: &str = r#"use std.net;
+use std.http;
+use std.csv;
+use std.text;
+
+fn Result<str, str> serve(i64 port, i64 n) {
+    let mut l = net.listen("127.0.0.1", port)?;
+    let mut seen = "";
+    for i in range(n) {
+        let mut c = l.accept()?;
+        let got = c.read(4096)?;
+        match text.from_utf8(ref got) {
+            case Some(s) -> {
+                let ls = s.lines();
+                seen += ls[0];
+                for x in ls { if x.starts_with("Content-") { seen += " " + x; } }
+                seen += "|";
+            }
+            case None -> {}
+        }
+        if i == 0 {
+            c.write_text("HTTP/1.1 302 Found\r\nLocation: /x\r\nContent-Length: 0\r\n\r\n")?;
+        } else {
+            c.write_text("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")?;
+        }
+        net.close(c)?;
+    }
+    Ok(seen)
+}
+
+fn Result<(), str> run() {
+    let mut probe = net.listen("127.0.0.1", 0)?;
+    let port = probe.port();
+    net.stop(probe)?;
+    let t = spawn(() -> serve(port, 3));
+    let mut tries = 0;
+    loop {
+        match http.send("DELETE", "http://127.0.0.1:{port}/d", "", "", false) {
+            case Ok(a) -> { print(a.status, a.headers.get("location")); break; }
+            case Err(e) -> { tries += 1; if tries > 1000 { return Err(e); } }
+        }
+    }
+    let b = http.send("PUT", "http://127.0.0.1:{port}/p", "application/json", "{{}}", true)?;
+    print(b.status, b.text()?);
+    let c = http.send("PATCH", "http://127.0.0.1:{port}/q", "", "", true)?;
+    print(c.status);
+    print(t.join());
+    match http.send("HEAD", "http://127.0.0.1:{port}/", "", "", true) { case Ok(x) -> print("?"); case Err(e) -> print(e); }
+    let rows = csv.parse_sep("a\tb c\t\"x\ty\"\n1\t2\n", '\t')?;
+    print(rows);
+    print(csv.format_sep(ref rows, ';')?, csv.format_sep(ref rows, '\t')?.len());
+    print(csv.parse_sep("a", '"'), csv.parse("a,b\n\"c\",d")?);
+    Ok(())
+}
+
+fn main() {
+    match run() { case Ok(u) -> print("ok"); case Err(e) -> print("Err", e); }
+}
+"#;
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

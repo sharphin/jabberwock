@@ -114,7 +114,7 @@ fn main() {
 | `std.random` | `bytes(n)`・`int(lo, hi)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
 | `std.crypto` | `seal(ref key, ref nonce, ref aad, ref plain)`・`open(…)`・`chacha20(…)`・`poly1305(…)`（[1.12](#112-stdhashstdbase64stdrandomjwc-だけ)） |
 | `std.date` | `now()`・`from_unix_ms(t)`・`make(...)`・`parse(s)`・`is_leap(y)`・`days_in_month(y, m)` と `DateTime`（`weekday_name()`（`月`〜`日`）・`add_days(n)`・`add_ms(n)` も）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
-| `std.csv` | `parse(s)`・`format(ref rows)`・`quote(v)`・`write_row(ref row)`（1 行。改行なし）・`parse_records(s)`（1 行目を見出しにした辞書のリスト。足りない欄は空、多い欄は捨てる）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
+| `std.csv` | `parse(s)`・`format(ref rows)`・`parse_sep(s, sep)`・`format_sep(ref rows, sep)`（区切りを char で指定。`'\t'` なら TSV。sep が `"`・改行なら Err）・`quote(v)`・`write_row(ref row)`（1 行。改行なし）・`parse_records(s)`（1 行目を見出しにした辞書のリスト。足りない欄は空、多い欄は捨てる）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
 | `std.regex` | `compile(pattern)`・`escape(s)` と `Regex`・`Match`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
 | `std.process` | `start(cmd, argv)` と資源の型 `Child`（[1.14](#114-stdprocessjwc-だけ)） |
 | `std.io` | `read_line_for(ms)`（[1.16](#116-stdiojwc-だけ)） |
@@ -197,7 +197,12 @@ use std.http;
 let r = http.get("http://127.0.0.1:8080/a?b=1")?;          // http.Response
 print(r.status, r.headers["content-type"], r.text()?);
 let p = http.post("http://127.0.0.1:8080/p", "application/json", "{{}}")?;
+let d = http.send("DELETE", "http://127.0.0.1:8080/x", "", "", false)?;   // メソッドを選ぶ。false ならリダイレクトをたどらない
 ```
+
+- `send(method, url, content_type, body, follow)`: method は GET・POST・PUT・PATCH・DELETE・OPTIONS（ほかは Err。HEAD は使えない）。
+  body が空でなければ `Content-Type` と `Content-Length` を送る（POST は空でも送る。PUT・PATCH の空の本文は `Content-Length: 0` だけ）。
+  follow が false なら最初の答えをそのまま返す（3xx でも Ok。行き先は `headers["location"]`）。true なら get・post と同じようにたどる。
 
 - HTTP/1.1 のクライアント。std.net・std.tls の上に .jw だけで書いている（`std/http.jw`）。http:// と https://（[1.9](#19-stdtlsjwc-だけ) の規則で証明書を確かめる）。ほかの scheme は Err。
   Host ヘッダーは、port がその scheme の決まりの番号（http は 80、https は 443）なら port を書かない。
