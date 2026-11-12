@@ -945,7 +945,18 @@ WStr *jw_str_int(int64_t v, int32_t is_unsigned) {{
 }}
 
 // Rust の `{{:?}}` と同じ形（いちばん短く元に戻る桁。1e16 以上と 1e-4 未満は指数の形）
-static void fmt_f64(char *out, double x) {{
+// s を読むと x に戻るか（is32 なら f32 として。jwc の f32 だけが使う）
+static int fl_back(const char *s, double x, int is32) {{
+    if (is32) return strtof(s, NULL) == (float)x;
+    return strtod(s, NULL) == x;
+}}
+
+static void fmt_fl(char *out, double x, int is32);
+
+static void fmt_f64(char *out, double x) {{ fmt_fl(out, x, 0); }}
+
+// 戻る中で一番短い書き方（is32 なら f32 の値 x を f32 として）
+static void fmt_fl(char *out, double x, int is32) {{
     if (isnan(x)) {{
         strcpy(out, "NaN");
         return;
@@ -962,7 +973,7 @@ static void fmt_f64(char *out, double x) {{
     int p;
     for (p = 1; p <= 17; p++) {{
         snprintf(tmp, sizeof tmp, "%.*e", p - 1, x);
-        if (strtod(tmp, NULL) == x) break;
+        if (fl_back(tmp, x, is32)) break;
     }}
     // ちょうど真ん中（printf は偶数へ丸める）なら、Rust と同じく大きいほうを選ぶ
     {{
@@ -1008,7 +1019,7 @@ static void fmt_f64(char *out, double x) {{
                     (*d)++;
                     break;
                 }}
-                if (strtod(up, NULL) == x) strcpy(tmp, up);
+                if (fl_back(up, x, is32)) strcpy(tmp, up);
             }}
         }}
     }}
@@ -1057,6 +1068,13 @@ static void fmt_f64(char *out, double x) {{
 void jw_sb_float(WSb *b, double x) {{
     char buf[64];
     fmt_f64(buf, x);
+    jw_sb_cstr(b, buf);
+}}
+
+// f32（jwc だけ）
+void jw_sb_f32(WSb *b, float x) {{
+    char buf[64];
+    fmt_fl(buf, (double)x, 1);
     jw_sb_cstr(b, buf);
 }}
 
@@ -5931,6 +5949,14 @@ int64_t jw_list_find_mem(WList *l, int64_t size, const void *x) {{
 // 小数は == と同じ（NaN はどれとも等しくない。0.0 と -0.0 は等しい）
 int64_t jw_list_find_f64(WList *l, double x) {{
     const double *d = (const double *)l->data;
+    for (int64_t i = 0; i < l->len; i++)
+        if (d[i] == x) return i;
+    return -1;
+}}
+
+// f32 のリスト（jwc だけ）
+int64_t jw_list_find_f32(WList *l, float x) {{
+    const float *d = (const float *)l->data;
     for (int64_t i = 0; i < l->len; i++)
         if (d[i] == x) return i;
     return -1;

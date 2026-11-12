@@ -7,6 +7,8 @@ pub enum Ty {
     Int(str t);
     // 小数（f64）
     Float;
+    // 32 ビットの小数（f32）。jwc だけ。種類の名前（tag）は f64 と同じ "Float"。比べるときは is_f32 で分ける
+    F32;
     Bool;
     Str;
     // 値なし（戻り値のない関数の呼び出しなど）
@@ -143,6 +145,14 @@ pub fn CV cv_div(ref CV a, ref CV b, bool rem) {
 
 pub fn Ty i64t() { Ty.Int("i64") }
 
+/// f32 か（f64 とは種類の名前が同じなので、これで分ける）
+pub fn bool is_f32(ref Ty t) {
+    match ref t {
+        case F32 -> true;
+        default -> false;
+    }
+}
+
 pub fn Ty opt(Ty t) { Ty.Enum("Option", own [t]) }
 
 pub fn Ty list_of(Ty t) { Ty.List(own t) }
@@ -151,6 +161,7 @@ pub fn Ty cl(ref Ty t) {
     match ref t {
         case Int(x) -> Ty.Int(x);
         case Float -> Ty.Float;
+        case F32 -> Ty.F32;
         case Bool -> Ty.Bool;
         case Str -> Ty.Str;
         case Unit -> Ty.Unit;
@@ -182,6 +193,7 @@ pub fn str tag(ref Ty t) {
     match ref t {
         case Int(x) -> "Int";
         case Float -> "Float";
+        case F32 -> "Float";
         case Bool -> "Bool";
         case Str -> "Str";
         case Unit -> "Unit";
@@ -290,6 +302,8 @@ pub fn bool eqs(ref Ty[] a, ref Ty[] b) {
 pub fn bool eq(ref Ty a, ref Ty b) {
     match ref a {
         case Int(x) -> int_of(b) == x;
+        case Float -> is(b, "Float") && !is_f32(b);
+        case F32 -> is_f32(b);
         case Struct(n, xs) -> {
             match ref b {
                 case Struct(m, ys) -> n == m && eqs(xs, ys);
@@ -371,6 +385,7 @@ pub fn str show(ref Ty t) {
     match ref t {
         case Int(x) -> x;
         case Float -> "f64";
+        case F32 -> "f32";
         case Bool -> "bool";
         case Str -> "str";
         case Unit -> "値なし";

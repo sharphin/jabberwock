@@ -2240,3 +2240,53 @@ fn jwc_build_retries_without_lto() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "7\n");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// f32（jwc だけ）
+#[test]
+fn jwc_f32() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-f32-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, F32_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&got.stdout),
+        "3.1\n0.1 3.0 1.55\n0.15 -0.15 false true\n0.1 0.10000000149011612 0.1\n16777216.0 2 -1\n1.25,-0.5\n\
+         [1.0, 2.25, 3.5] true false\n1.4142135 8.0 1036831949 5.0 2.0 0.100\n3.4e38 inf 1e-7\n"
+    );
+    std::fs::write(&path, "fn main() {\n    let f32 a = 1.0;\n    let f64 b = 2.0;\n    print(a + b);\n}\n").unwrap();
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("f32 と f64 をまぜて"), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+const F32_SRC: &str = r#"struct P { f32 x; f32 y; }
+
+fn f32 half(f32 v) { v / 2.0 }
+
+fn main() {
+    let f32 a = 0.1;
+    let f32 b = 3;
+    let c = a + b;
+    print(c);
+    print(a, b, half(c));
+    let d = 1.5 * a;
+    print(d, -d, d < a, d == d);
+    let x = 0.1;
+    print(x, a as f64, x as f32);
+    print(16777217 as f32, (2.9 as f32) as i64, (-1.5 as f32) as i32);
+    let p = P { x: 1.25, y: -0.5 };
+    print("{p.x},{p.y}");
+    let f32[] mut xs = [3.5, 1.0, 2.25];
+    xs.sort();
+    print(xs, xs.contains(2.25), xs.contains(2.0));
+    let f32 s = 2;
+    print(s.sqrt(), s.pow(3.0), a.to_bits(), s.max(5.0), (0.0 - s).abs(), a.fixed(3));
+    let f32 big = 340000000000000000000000000000000000000.0;
+    print(big, big * 10.0, 0.0000001 as f32);
+}
+"#;

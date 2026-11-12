@@ -222,6 +222,8 @@ pub struct Info {
     // 整数の変換の印（なければ ""）・小数の印・自動で借りる印
     str[] ints;
     bool[] floats;
+    // 小数の印のうち、f32 にするもの（jwc だけ）
+    bool[] f32s;
     bool[] borrows;
     // enum の値: 読むとコピーか（-1: 決めない、0: ムーブ、1: コピー）
     i64[] copies;
@@ -252,7 +254,7 @@ pub struct Info {
 
 pub fn Info new_info(i64 n) {
     let mut info = Info {
-        has_ty: [], tys: [], ints: [], floats: [], borrows: [], copies: [], seqs: [], lists: [], menums: [], mtakes: [],
+        has_ty: [], tys: [], ints: [], floats: [], f32s: [], borrows: [], copies: [], seqs: [], lists: [], menums: [], mtakes: [],
         consumes: [], lam_at: [], lams: [], targ_at: [], targ_maps: [], var_at: [], var_spans: [], var_tys: [],
         ret_at: [], ret_names: [], ret_tys: [],
     };
@@ -261,6 +263,7 @@ pub fn Info new_info(i64 n) {
         info.tys.push(ty.Ty.Unit);
         info.ints.push("");
         info.floats.push(false);
+        info.f32s.push(false);
         info.borrows.push(false);
         info.copies.push(-1);
         info.seqs.push("");
@@ -331,6 +334,15 @@ fn diag.Diag map_borrow_error(i64 span) {
 // ---------------------------------------------------------------- 構文木を見るだけの関数
 
 /// 整数の数だけでできた式か（`300`、`-1`、`60 * 60`）
+/// 小数の書き方（`1.5`・`-1.5`）か
+fn bool is_float_lit(ref ast.Expr e) {
+    match ref e.kind {
+        case Float(v) -> true;
+        case Unary(op, x) -> op == "-" && is_float_lit(x);
+        default -> false;
+    }
+}
+
 pub fn bool is_const_tree(ref ast.Expr e) {
     match ref e.kind {
         case Int(n) -> true;
@@ -638,13 +650,14 @@ pub struct Checker {
         }
     }
 
-    fn mut set_float_tree(ref ast.Expr e) {
+    fn mut set_float_tree(ref ast.Expr e, bool is32) {
         info.floats[e.id] = true;
+        info.f32s[e.id] = is32;
         match ref e.kind {
-            case Unary(op, x) -> set_float_tree(x);
+            case Unary(op, x) -> set_float_tree(x, is32);
             case Binary(op, l, r) -> {
-                set_float_tree(l);
-                set_float_tree(r);
+                set_float_tree(l, is32);
+                set_float_tree(r, is32);
             }
             default -> {}
         }
@@ -730,8 +743,9 @@ pub struct Checker {
                 if n == "()" { return Ok(ty.Ty.Unit); }
                 if n == "str" { return Ok(ty.Ty.Str); }
                 if n == "f64" { return Ok(ty.Ty.Float); }
+                if n == "f32" { return Ok(ty.Ty.F32); }
                 if ty.is_int_name(n) { return Ok(ty.Ty.Int(n)); }
-                if n == "isize" || n == "f32" {
+                if n == "isize" {
                     return Err(diag.make("型 `{n}` はまだ使えません")
                         .at(t.span, "今使える数の型は整数（i8〜i64、u8〜u64、usize）と f64 だけです"));
                 }
@@ -1837,15 +1851,17 @@ pub struct Checker {
         if is_const_tree(e) {
             if hint_is(hint, "Float") {
                 // 整数の書き方でも、小数の場所では小数として計算する
-                set_float_tree(e);
-                return Ok(ty.Ty.Float);
+                let is32 = ty.is_f32(hint.t);
+                set_float_tree(e, is32);
+                return Ok(ty.cl(hint.t));
             }
             // 数の書き方は文字にならない（`'a'` か `97 as char` と書く）
             let it = if hint_is(hint, "Int") && ty.int_of(hint.t) != "char" { ty.int_of(hint.t) } else { "i64" };
             return const_expr(e, it);
         }
         match ref e.kind {
-            case Float(v) -> Ok(ty.Ty.Float);
+            // 小数の書き方は、f32 の場所では f32（jwc だけ）
+            case Float(v) -> if hint_is(hint, "Float") && ty.is_f32(hint.t) { Ok(ty.Ty.F32) } else { Ok(ty.Ty.Float) };
             case Try(x) -> try_expr(x, e.span, hint);
             case Index(base, idx) -> {
                 let t = expr(base)?;
@@ -2313,7 +2329,8 @@ pub struct Checker {
         let outer = if arith { copy_hint(hint) } else { none() };
         let mut lt = ty.Ty.Unit;
         let mut rt = ty.Ty.Unit;
-        if is_const_tree(l) {
+        if is_const_tree(l) || is_float_lit(l) {
+            // 小数の書き方（`1.5 * x`）も、右の型（f32 か f64 か）に合わせる
             rt = expr_h(r, outer)?;
             let h = if ty.is(rt, "Int") || ty.is(rt, "Float") { hint_of(ty.cl(rt)) } else { copy_hint(outer) };
             lt = expr_h(l, h)?;
@@ -2340,7 +2357,10 @@ pub struct Checker {
         if op == "+" && ty.is(lt, "Str") && ty.is(rt, "Str") { return Ok(ty.Ty.Str); }
         if arith {
             if both_int { return Ok(ty.Ty.Int(common_of(l, lt, r, rt, span)?)); }
-            if ty.is(lt, "Float") && ty.is(rt, "Float") { return Ok(ty.Ty.Float); }
+            if ty.is(lt, "Float") && ty.is(rt, "Float") {
+                if ty.eq(lt, rt) { return Ok(ty.cl(lt)); }
+                return Err(bad.with_note("f32 と f64 をまぜて計算するときは、`x as f64` のように型をそろえてください"));
+            }
             if (ty.is(lt, "Float") && ty.is(rt, "Int")) || (ty.is(lt, "Int") && ty.is(rt, "Float")) {
                 return Err(bad.with_note("整数と小数をまぜて計算するときは、`x as f64` のように型をそろえてください"));
             }
@@ -2351,7 +2371,7 @@ pub struct Checker {
                 common_of(l, lt, r, rt, span)?;
                 return Ok(ty.Ty.Bool);
             }
-            if (ty.is(lt, "Str") && ty.is(rt, "Str")) || (ty.is(lt, "Float") && ty.is(rt, "Float")) { return Ok(ty.Ty.Bool); }
+            if (ty.is(lt, "Str") && ty.is(rt, "Str")) || (ty.is(lt, "Float") && ty.eq(lt, rt)) { return Ok(ty.Ty.Bool); }
             if ty.eq(lt, rt) && is_ordered_param(lt) { return Ok(ty.Ty.Bool); }
             if ty.is(lt, "Param") || ty.is(rt, "Param") {
                 return Err(bad.with_note("型の引数どうしを比べるには `<T: ordered>` と条件をつけてください"));
@@ -3292,7 +3312,7 @@ pub struct Checker {
         if !float && name == "to_char" {
             ret = ty.opt(ty.Ty.Int("char"));
         } else if float && name == "to_bits" {
-            ret = ty.Ty.Int("u64");
+            ret = ty.Ty.Int(if ty.is_f32(t) { "u32" } else { "u64" });
         } else if float && (name == "sqrt" || name == "floor" || name == "ceil" || name == "round" || name == "trunc"
                 || name == "exp" || name == "ln" || name == "log10" || name == "sin" || name == "cos" || name == "tan") {
         } else if float && name == "pow" {
@@ -3310,8 +3330,8 @@ pub struct Checker {
             arity = 1;
             ret = ty.opt(ty.cl(t));
         } else if float {
-            return Err(diag.make("f64 にメソッド `{name}` はありません")
-                .at(span, "f64 のメソッドは `to_bits()`・`sqrt()`・`floor()`・`ceil()`・`round()`・`trunc()`・`exp()`・`ln()`・`log10()`・`sin()`・`cos()`・`tan()`・`pow(y)`・`is_nan()`・`fixed(n)`・`abs()`・`max(y)`・`min(y)` です"));
+            return Err(diag.make("{ty.show(t)} にメソッド `{name}` はありません")
+                .at(span, "{ty.show(t)} のメソッドは `to_bits()`・`sqrt()`・`floor()`・`ceil()`・`round()`・`trunc()`・`exp()`・`ln()`・`log10()`・`sin()`・`cos()`・`tan()`・`pow(y)`・`is_nan()`・`fixed(n)`・`abs()`・`max(y)`・`min(y)` です"));
         } else {
             return Err(diag.make("`{ty.show(t)}` にメソッド `{name}` はありません")
                 .at(span, "整数のメソッドは `abs()`・`max(y)`・`min(y)`・`to_char()` だけです"));

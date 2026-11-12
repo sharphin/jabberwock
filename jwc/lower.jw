@@ -282,7 +282,7 @@ pub struct Lower {
         let info = ref ck.info;
         if info.has_ty[e.id] { return ty.subst(info.tys[e.id], subst); }
         // 定数の式の中は型を記録しない。印の型
-        if info.floats[e.id] { return ty.Ty.Float; }
+        if info.floats[e.id] { return if info.f32s[e.id] { ty.Ty.F32 } else { ty.Ty.Float }; }
         if info.ints[e.id] != "" { return ty.Ty.Int(info.ints[e.id]); }
         ty.Ty.Unit
     }
@@ -1238,13 +1238,17 @@ pub struct Lower {
         let is_float = info.floats[e.id];
         let it = info.ints[e.id];
         if !is_float && it == "" { return Ok(v); }
-        let target = if is_float { ty.Ty.Float } else { ty.Ty.Int(it) };
+        let target = if is_float && info.f32s[e.id] { ty.Ty.F32 } else if is_float { ty.Ty.Float } else { ty.Ty.Int(it) };
         match ref v {
             case Const(c) -> {
                 match c {
                     case Int(neg, mag, t0) -> {
                         if is_float {
                             let f = if neg { 0.0 - (mag as f64) } else { mag as f64 };
+                            if ty.is_f32(target) {
+                                // f32 の定数は f64 の定数を変換して作る
+                                return Ok(temp_of(ty.Ty.F32, ir.Rvalue.Cast(own ir.Operand.Const(ir.Const.Float(f)), own ty.Ty.F32), e.span));
+                            }
                             return Ok(ir.Operand.Const(ir.Const.Float(f)));
                         }
                         return Ok(ir.Operand.Const(ir.wrap(neg, mag, it)));
@@ -1262,7 +1266,12 @@ pub struct Lower {
         let sp = e.span;
         match ref e.kind {
             case Int(n) -> Ok(ir.Operand.Const(ir.Const.Int(false, n, "i64")));
-            case Float(x) -> Ok(ir.Operand.Const(ir.Const.Float(x)));
+            case Float(x) -> {
+                if ty.is_f32(et) {
+                    return Ok(temp_of(ty.Ty.F32, ir.Rvalue.Cast(own ir.Operand.Const(ir.Const.Float(x)), own ty.Ty.F32), sp));
+                }
+                Ok(ir.Operand.Const(ir.Const.Float(x)))
+            }
             case Bool(b) -> Ok(bool_op(b));
             case Unit -> Ok(unit_op());
             case Str(s) -> Ok(str_op(s));
@@ -1279,7 +1288,7 @@ pub struct Lower {
             }
             case Cast(inner, te) -> {
                 let target = match ref te.kind {
-                    case Name(n) -> if ty.is_int_name(n) { ty.Ty.Int(n) } else { ty.Ty.Float };
+                    case Name(n) -> if ty.is_int_name(n) { ty.Ty.Int(n) } else if n == "f32" { ty.Ty.F32 } else { ty.Ty.Float };
                     default -> return Err("数でない型への as");
                 };
                 let v = expr(inner)?;

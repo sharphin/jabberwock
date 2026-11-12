@@ -290,7 +290,7 @@ fn main() {
     print(s.w);
 }
 #####
-fn f(f32 n) {
+fn f(isize n) {
 }
 fn main() {
 }
@@ -3647,7 +3647,7 @@ fn main() {
 }
 #####
 fn main() {
-let f32 x = 1.0;
+let isize x = 1;
 }
 #####
 enum A { X, Y }

@@ -226,7 +226,7 @@ pub fn str tbaa_header() { TBAA_HEADER }
 pub fn str tbaa_element() { TBAA_ELEMENT }
 
 pub fn bool scalar_lt(str lt) {
-    lt == "i1" || lt == "i8" || lt == "i16" || lt == "i32" || lt == "i64" || lt == "double" || lt == "ptr"
+    lt == "i1" || lt == "i8" || lt == "i16" || lt == "i32" || lt == "i64" || lt == "float" || lt == "double" || lt == "ptr"
 }
 
 pub fn i64 ceil_div(i64 a, i64 d) { (a + d - 1) / d }
@@ -551,6 +551,9 @@ pub struct Module {
         if body.contains("@jw_list_wipe(") { only += "declare void @jw_list_wipe(ptr, i64, ptr)\n"; }
         if body.contains("@jw_read_line_for(") { only += "declare i64 @jw_read_line_for(i64, ptr, ptr)\n"; }
         if body.contains("@jw_stdin_ended(") { only += "declare i32 @jw_stdin_ended()\n"; }
+        // f32（jwc だけ）
+        if body.contains("@jw_sb_f32(") { only += "declare void @jw_sb_f32(ptr, float)\n"; }
+        if body.contains("@jw_list_find_f32(") { only += "declare i64 @jw_list_find_f32(ptr, float)\n"; }
         PRELUDE + res + only + types.join("") + "\n" + globals.join("") + "\n" + body + TBAA
     }
 
@@ -564,7 +567,7 @@ pub struct Module {
     fn mut Result<str, str> lt(ref ty.Ty t) {
         let k = ty.tag(t);
         if k == "Int" { return Ok("i{ty.bits(ty.int_of(t))}"); }
-        if k == "Float" { return Ok("double"); }
+        if k == "Float" { return Ok(if ty.is_f32(t) { "float" } else { "double" }); }
         if k == "Bool" { return Ok("i1"); }
         if k == "Str" || k == "Map" || k == "Task" || k == "Chan" || k == "Res" { return Ok("ptr"); }
         if k == "Unit" || k == "Never" { return Ok("i8"); }
@@ -672,6 +675,7 @@ pub struct Module {
             let s = ty.bits(ty.int_of(t)) / 8;
             return Ok([s, s]);
         }
+        if ty.is_f32(t) { return Ok([4, 4]); }
         if k == "Float" || k == "Str" || k == "Map" || k == "Task" || k == "Chan" || k == "Res" { return Ok([8, 8]); }
         if k == "Bool" || k == "Unit" || k == "Never" { return Ok([1, 1]); }
         if k == "Own" { return Ok(if is_iface_ptr(t) { [16, 8] } else { [8, 8] }); }
@@ -1564,8 +1568,14 @@ pub struct Module {
             let w = widen(b, v, it);
             b.op("call void @jw_sb_int(ptr %sb, i64 " + w + ", i32 " + int_shape(it) + ")");
         } else if k == "Float" {
-            let v = b.val("load double, ptr %p");
-            b.op("call void @jw_sb_float(ptr %sb, double " + v + ")");
+            if ty.is_f32(t) {
+                // f32 は f32 として一番短い書き方にする
+                let v32 = b.val("load float, ptr %p");
+                b.op("call void @jw_sb_f32(ptr %sb, float " + v32 + ")");
+            } else {
+                let v = b.val("load double, ptr %p");
+                b.op("call void @jw_sb_float(ptr %sb, double " + v + ")");
+            }
         } else if k == "Bool" {
             let v = b.val("load i1, ptr %p");
             let tr = cstr("true");
@@ -2015,9 +2025,10 @@ pub struct Module {
             return Ok(b.val("icmp eq " + x + " " + a + ", " + c));
         }
         if k == "Float" {
-            let a = b.val("load double, ptr " + p);
-            let c = b.val("load double, ptr " + q);
-            return Ok(b.val("fcmp oeq double " + a + ", " + c));
+            let x = lt(f)?;
+            let a = b.val("load " + x + ", ptr " + p);
+            let c = b.val("load " + x + ", ptr " + q);
+            return Ok(b.val("fcmp oeq " + x + " " + a + ", " + c));
         }
         if k == "Str" {
             let a = b.val("load ptr, ptr " + p);
@@ -2043,9 +2054,10 @@ pub struct Module {
             return Ok(b.val("icmp " + (if ty.signed(it) { "slt" } else { "ult" }) + " i{bt} " + a + ", " + c));
         }
         if k == "Float" {
-            let a = b.val("load double, ptr %p");
-            let c = b.val("load double, ptr %q");
-            return Ok(b.val("fcmp olt double " + a + ", " + c));
+            let x = lt(t)?;
+            let a = b.val("load " + x + ", ptr %p");
+            let c = b.val("load " + x + ", ptr %q");
+            return Ok(b.val("fcmp olt " + x + " " + a + ", " + c));
         }
         if k == "Str" {
             let a = b.val("load ptr, ptr %p");
