@@ -1077,6 +1077,40 @@ fn main() {
 }
 "#;
 
+// 構造体のフィールドに関数の値（jwc だけ）
+#[test]
+fn jwc_fn_fields() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-fnfield-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, FN_FIELDS_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "10 15 Btn { label: m, on: <関数> }\n8\nhi!\n9\n");
+}
+
+const FN_FIELDS_SRC: &str = r#"struct Btn { str label; fn i64(i64) on; }
+struct Box<T> { fn T(T) f; }
+fn i64 press(ref Btn b, i64 x) { b.on(x) }
+fn Btn make(i64 n) { Btn { label: "m", on: (x) -> x * n } }
+fn main() {
+    let bs = [make(2), make(3)];
+    print(press(bs[0], 5), bs[1].on(5), bs[1]);
+    let o = own 7;
+    let b = Btn { label: "o", on: (x) -> x + *o };
+    print(b.on(1));
+    let Box<str> bx = Box { f: (s) -> s + "!" };
+    print(bx.f("hi"));
+    let mut m = Btn { label: "z", on: (x) -> x };
+    m.on = (x) -> x - 1;
+    print(m.on(10));
+}
+"#;
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]

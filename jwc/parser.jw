@@ -529,12 +529,31 @@ struct Parser {
         r
     }
 
+    /// `fn i64(i64) on;` のような関数の値のフィールドか（メソッドの `fn i64 name(...) {` と分ける。jwc だけ）。
+    /// 最初の `(` に対応する `)` のあとが「名前 `;`」（か「名前 `}`」）ならフィールド
+    fn bool fn_field_ahead() {
+        let mut j = pos + 1;
+        while j < toks.len() && toks[j].kind != "(" && toks[j].kind != "{{" && toks[j].kind != ";" { j += 1; }
+        if j >= toks.len() || toks[j].kind != "(" { return false; }
+        let mut depth = 0;
+        while j < toks.len() {
+            let k = toks[j].kind;
+            if k == "(" { depth += 1; }
+            if k == ")" {
+                depth -= 1;
+                if depth == 0 { break; }
+            }
+            j += 1;
+        }
+        j + 2 < toks.len() && toks[j + 1].kind == "ident" && (toks[j + 2].kind == ";" || toks[j + 2].kind == "}}")
+    }
+
     fn mut Result<Items, diag.Diag> items(bool is_enum, str n, ref str[] tparams) {
         let mut it = no_items();
         loop {
             skip_semis();
             if eat("}}") { break; }
-            if peek() == "fn" || peek() == "static" {
+            if (peek() == "fn" && !fn_field_ahead()) || peek() == "static" {
                 parse_method(n, tparams, ref mut it)?;
                 continue;
             }

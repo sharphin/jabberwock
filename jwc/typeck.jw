@@ -3391,6 +3391,22 @@ pub struct Checker {
             info.menums[e.id] = sname;
         }
         let full = sname + "." + name;
+        // 関数の値のフィールドを呼ぶ（`b.on(1)`。jwc だけ）。メソッドとフィールドは同じ名前にできないので、取り違えない
+        if ty.is(st, "Struct") && is_struct(sname) {
+            let d = s_at[sname];
+            for (fi, fname) in sdefs[d].fields {
+                if fname == name && fi < sdefs[d].tys.len() {
+                    let fm = ty.targs(sdefs[d].tparams, ty.args_of(st));
+                    let ft = ty.subst(sdefs[d].tys[fi], fm);
+                    if ty.is(ft, "Fn") {
+                        let ps = ty.fn_params(ft);
+                        if argv.len() != ps.len() { return Err(arity_error(name, ps.len(), argv.len(), span)); }
+                        for (i, a) in argv { expect(a, ps[i])?; }
+                        return Ok(ty.inner(ft));
+                    }
+                }
+            }
+        }
         if !is_fn(full) {
             let prefix = sname + ".";
             let str[] mut names = [];

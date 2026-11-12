@@ -1587,6 +1587,13 @@ pub struct Lower {
 
     /// receiver の場所。own / ref なら先をたどる（interp は種類を調べるため、いつも世代チェックをする）。
     /// `temp_l` は一時的な receiver を入れた変数（-1: 場所の receiver、-2: 定数）。定数なら ok が false
+    /// 構造体 st の fi 番目のフィールドが関数の値か
+    fn Result<bool, str> fn_field(ref ty.Ty st, i64 fi) {
+        let d = ck.s_at[ty.name_of(st)];
+        if fi >= ck.sdefs[d].tys.len() { return Ok(false); }
+        Ok(ty.is(ck.sdefs[d].tys[fi], "Fn"))
+    }
+
     fn mut Result<ReadPlace, str> recv_place(ref ast.Expr recv, i64 temp_l, bool ptr) {
         if temp_l == -2 { return Ok(ReadPlace { p: ir.local(0, 0), t: -2 }); }
         let mut pl = if temp_l == -1 { place(recv)? } else { ir.local(temp_l, recv.span) };
@@ -1614,6 +1621,19 @@ pub struct Lower {
         let mut vals = exprs(argv)?;
         let k = ty.tag(inner);
         let is_enum = k == "Enum";
+        // 関数の値のフィールドを呼ぶ（jwc だけ）: フィールドの場所から写して呼ぶ（変数の `f(x)` と同じ）
+        if k == "Struct" && ck.s_at.contains(ty.name_of(inner)) {
+            let fi = field_index(prog.structs[ck.s_at[ty.name_of(inner)]], name);
+            if fi >= 0 && fn_field(inner, fi)? {
+                let rp = recv_place(recv, temp_l, ptr)?;
+                if rp.t == -2 { return Err("定数の receiver"); }
+                let mut fp = ir.clone_place(rp.p);
+                fp.proj.push(ir.Proj.Field(fi, sp));
+                let r = temp_of(et, ir.Rvalue.CallValue(own ir.copy_of(fp), own vals, sp), sp);
+                drop_temp_l(temp_l, sp);
+                return Ok(r);
+            }
+        }
         if k == "Float" || k == "Int" || k == "Str" {
             let rp = recv_place(recv, temp_l, ptr)?;
             let x = if rp.t == -2 { ir.clone_op(temp_op) } else { ir.copy_of(ir.clone_place(rp.p)) };
