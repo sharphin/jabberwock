@@ -2290,3 +2290,119 @@ fn main() {
     print(big, big * 10.0, 0.0000001 as f32);
 }
 "#;
+
+fn jwc_build_run(dir: &std::path::Path, src: &str) -> (bool, String, String) {
+    let path = dir.join("main.jw");
+    std::fs::write(&path, src).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    if !out.status.success() {
+        return (false, String::new(), String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    let got = Command::new(&exe).output().unwrap();
+    (true, String::from_utf8_lossy(&got.stdout).into_owned(), String::new())
+}
+
+// メソッドを値にする（`Point.len2`）と、interface の ref から元の構造体を取り出す（`s as ref Rect`）。jwc だけ
+#[test]
+fn jwc_method_values_and_iface_cast() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-mval-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ok, out, err) = jwc_build_run(&dir, METHOD_VALUES_SRC);
+    assert!(ok, "{}", err);
+    assert_eq!(out, "25 25\n41\n(4, 5)\n25 0\n[2, 4]\n");
+    let (ok, out, err) = jwc_build_run(&dir, IFACE_CAST_SRC);
+    assert!(ok, "{}", err);
+    assert_eq!(out, "rect 2 3\nother 16\n3\n5\n");
+    let (ok, _, err) = jwc_build_run(&dir, "interface S { fn i64 a(); }\nstruct O { i64 z; }\nfn f(ref S s) {\n    let x = s as ref O;\n}\nfn main() {}\n");
+    assert!(!ok && err.contains("`O` は `S` に当てはまる構造体ではありません"), "{}", err);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+// 型の中のフィールド・メソッドごとの pub（jwc だけ）
+#[test]
+fn jwc_member_pub() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-mpub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("geom.jw"), "pub struct Point {\n    pub i64 x;\n    i64 secret;\n    pub static fn Point at(i64 x) { Point { x: x, secret: x * 10 } }\n    pub fn i64 peek() { hidden() + 1 }\n    fn i64 hidden() { secret }\n}\npub struct Open { i64 a; fn i64 get() { a } }\n").unwrap();
+    let (ok, out, err) = jwc_build_run(&dir, "use geom;\nfn main() {\n    let p = geom.Point.at(4);\n    print(p.x, p.peek());\n    let o = geom.Open { a: 2 };\n    print(o.a, o.get());\n}\n");
+    assert!(ok, "{}", err);
+    assert_eq!(out, "4 41\n2 2\n");
+    for (body, want) in [
+        ("print(p.secret);", "`geom.Point.secret` は pub ではありません"),
+        ("print(p.hidden());", "`geom.Point.hidden` は pub ではありません"),
+        ("let q = geom.Point { x: 1, secret: 2 };", "`geom.Point.secret` は pub ではありません"),
+    ] {
+        let src = format!("use geom;\nfn main() {{\n    let p = geom.Point.at(4);\n    {}\n}}\n", body);
+        let (ok, _, err) = jwc_build_run(&dir, &src);
+        assert!(!ok && err.contains(want), "{}", err);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+const METHOD_VALUES_SRC: &str = r#"struct Point {
+    i64 x;
+    i64 y;
+    fn i64 len2() { x * x + y * y }
+    fn mut move_by(i64 d) { x += d; y += d; }
+    fn take str show() { "({x}, {y})" }
+    static fn Point at(i64 x, i64 y) { Point { x: x, y: y } }
+}
+enum Shape {
+    Sq(i64 s);
+    Empty;
+    fn i64 area() {
+        match this {
+            case Sq(s) -> s * s;
+            case Empty -> 0;
+        }
+    }
+}
+fn i64 apply(fn i64(ref Point) f, ref Point p) { f(p) }
+fn main() {
+    let mk = Point.at;
+    let mut p = mk(3, 4);
+    let f = Point.len2;
+    print(f(ref p), apply(Point.len2, ref p));
+    let g = Point.move_by;
+    g(ref mut p, 1);
+    print(p.len2());
+    let h = Point.show;
+    print(h(p));
+    let a = Shape.area;
+    let s = Shape.Sq(5);
+    print(a(ref s), Shape.Empty.area());
+    let mut ps = [Point.at(1, 1), Point.at(0, 2)];
+    print(ps.map(Point.len2));
+}
+"#;
+
+const IFACE_CAST_SRC: &str = r#"interface Shape { fn i64 area(); }
+struct Rect { i64 w; i64 h; fn i64 area() { w * h } fn mut grow() { w += 1; } }
+struct Sq { i64 s; fn i64 area() { s * s } }
+fn describe(ref Shape s) {
+    match s as ref Rect {
+        case Some(r) -> print("rect", r.w, r.h);
+        case None -> print("other", s.area());
+    }
+}
+fn bump(ref mut Shape s) {
+    match s as ref mut Rect {
+        case Some(r) -> r.grow();
+        case None -> {}
+    }
+}
+fn main() {
+    let mut r = Rect { w: 2, h: 3 };
+    let q = Sq { s: 4 };
+    describe(ref r);
+    describe(ref q);
+    bump(ref mut r);
+    print(r.w);
+    let own Shape o = own Sq { s: 5 };
+    let x = (ref o) as ref Sq;
+    match x { case Some(v) -> print(v.s); case None -> print("none"); }
+}
+"#;

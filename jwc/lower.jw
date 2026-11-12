@@ -1287,6 +1287,11 @@ pub struct Lower {
                 Ok(temp_of(et, ir.Rvalue.Closure(f, own []), sp))
             }
             case Cast(inner, te) -> {
+                if ty.is(et, "Enum") {
+                    // `s as ref Rect`（Option<ref Rect> になる）
+                    let iv = expr(inner)?;
+                    return Ok(temp_of(et, ir.Rvalue.Builtin("iface.cast", own [iv], sp), sp));
+                }
                 let target = match ref te.kind {
                     case Name(n) -> if ty.is_int_name(n) { ty.Ty.Int(n) } else if n == "f32" { ty.Ty.F32 } else { ty.Ty.Float };
                     default -> return Err("数でない型への as");

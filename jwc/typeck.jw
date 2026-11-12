@@ -572,6 +572,8 @@ pub struct Checker {
     LambdaScope[] lstack;
     diag.Diag[] warns;
     str[] mods;
+    // pub でないフィールド・メソッド（`geom.Point.x`。jwc だけ）。そのモジュールの外からは使えない
+    bool[str] privs;
     // モジュールごとに use した名前（空白でつなぐ）
     str[str] mod_uses;
     str[] cnames;
@@ -1407,6 +1409,36 @@ pub struct Checker {
         }
     }
 
+    /// pub をつけなかったメソッドを privs に入れる（型の中で 1 つでも pub をつけたとき）
+    fn mut add_private_methods(str tn, ref str[] pubs, ref ast.FnDef[] fns) {
+        let prefix = tn + ".";
+        for f in fns {
+            if f.name.starts_with(prefix) {
+                let mn = f.name.slice(prefix.len(), f.name.len());
+                if !mn.contains(".") && !has(pubs, mn) { privs[f.name] = true; }
+            }
+        }
+    }
+
+    /// 名前（`geom.Point.x`）のモジュール（最初のファイルなら ""）
+    fn str mod_of(str name) {
+        let mut found = "";
+        for m in mods {
+            if found == "" && name.len() > m.len() && name.starts_with(m + ".") { found = m; }
+        }
+        found
+    }
+
+    /// pub でないフィールド・メソッドを、型のモジュールの外から使っていないか（jwc だけ）
+    fn Result<(), diag.Diag> member_visible(str full, i64 span) {
+        if privs.contains(full) && mod_of(full) != cur_mod {
+            return Err(diag.make("`{ty.std_name(full)}` は pub ではありません")
+                .at(span, "定義したモジュールの外からは使えない")
+                .with_note("型の中で pub をつけたフィールド・メソッドだけが、外から使えます"));
+        }
+        Ok(())
+    }
+
     /// モジュールの中から main の型は使えない（名前はモジュールごとに閉じる）
     fn Result<(), diag.Diag> not_main_type(str name, i64 span) {
         if cur_mod != "" && in_main(name) && !in_prelude(name) {
@@ -2012,6 +2044,7 @@ pub struct Checker {
             }
             case Cast(x, te) -> {
                 let target = resolve(te)?;
+                if ty.is(target, "Ref") { return iface_cast(x, target); }
                 if !(ty.is(target, "Int") || ty.is(target, "Float")) {
                     return Err(diag.make("`as` で変換できるのは数の型（整数と f64）と char だけです")
                         .at(te.span, "`{ty.show(target)}` は数の型ではありません"));
@@ -2054,13 +2087,26 @@ pub struct Checker {
                 // 名前のある関数を値として使う（`v.sort_by(less)`）
                 if is_fn(name) {
                     not_main_fn(name, e.span)?;
+                    member_visible(name, e.span)?;
                     let si = f_at[name];
-                    if sigs[si].method || sigs[si].tparams.len() > 0 {
+                    // メソッドも値にできる（jwc だけ）。this は最初の引数になる（`Point.len2` は `fn i64(ref Point)`）
+                    if sigs[si].tparams.len() > 0 {
                         return Err(diag.make("`{name}` は値として使えません")
                             .at(e.span, "メソッドや型の引数のある関数は、まだ値にできない")
                             .with_note("`(a) -> f(a)` のようにクロージャで包んでください"));
                     }
                     return Ok(ty.Ty.Fn(own ty.cls(sigs[si].params), own ty.cl(sigs[si].ret)));
+                }
+                // `型名.名前` で、メソッドでないもの（パーサが値にしたもの）
+                if name.contains(".") {
+                    let ps = name.split(".");
+                    let mn = ps[ps.len() - 1];
+                    let tn = name.slice(0, name.len() - mn.len() - 1);
+                    if is_enum(tn) {
+                        let ast.Expr[] no_args = [];
+                        return variant_expr(e, tn, mn, no_args, hint);
+                    }
+                    return Err(diag.make("`{ty.std_name(tn)}` にメソッド `{mn}` はありません").at(e.span, "このメソッドは定義されていません"));
                 }
                 Err(diag.make("未定義の変数 `{name}`").at(e.span, "この名前は見つかりません"))
             }
@@ -2109,6 +2155,7 @@ pub struct Checker {
                 let d = s_at[ty.name_of(st)];
                 let fi = sdefs[d].field_index(name);
                 if fi < 0 { return Err(no_field(sdefs[d], name, e.span)); }
+                member_visible(sdefs[d].name + "." + name, e.span)?;
                 let argv = ty.args_of(st);
                 let m = ty.targs(sdefs[d].tparams, argv);
                 Ok(ty.subst(sdefs[d].tys[fi], m))
@@ -2119,6 +2166,8 @@ pub struct Checker {
                 }
                 not_main_type(name, e.span)?;
                 let d = s_at[name];
+                // pub でないフィールドがある構造体は、外では作れない
+                for f in sdefs[d].fields { member_visible(name + "." + f, e.span)?; }
                 let bool[] mut seen = [];
                 for f in sdefs[d].fields { seen.push(false); }
                 let ty.Ty[] mut params = [];
@@ -2403,6 +2452,27 @@ pub struct Checker {
     }
 
     /// `from` の値を `to` の場所に入れられるか（`assignable` に、構造体 → interface を足したもの）
+    /// `s as ref Rect`: interface を借りた ref から、元の構造体を借りた ref を取り出す（jwc だけ）。
+    /// 中身が Rect なら Some、違えば None
+    fn mut Result<ty.Ty, diag.Diag> iface_cast(ref ast.Expr x, ref ty.Ty target) {
+        let got = expr(x)?;
+        let want = ty.inner(target);
+        if !(ty.is(got, "Ref") && ty.is(ty.inner(got), "Iface")) {
+            return Err(diag.make("`as ref 型` で取り出せるのは、interface を借りた ref からだけです")
+                .at(x.span, "ここは `{ty.show(got)}` です")
+                .with_note("own の interface なら `(ref o) as ref Rect` のように借りてから取り出してください"));
+        }
+        let iface = ty.inner(got);
+        if !ty.is(want, "Struct") || !fits_iface(want, iface) {
+            return Err(diag.make("`{ty.show(want)}` は `{ty.show(iface)}` に当てはまる構造体ではありません")
+                .at(x.span, "ここは `{ty.show(got)}` です"));
+        }
+        if ty.ref_mut(target) && !ty.ref_mut(got) {
+            return Err(diag.make("`ref mut` では取り出せません").at(x.span, "ここは書き換えない ref です"));
+        }
+        Ok(ty.opt(ty.cl(target)))
+    }
+
     fn bool fits(ref ty.Ty from, ref ty.Ty to) {
         if ty.assignable(from, to) { return true; }
         if ty.is(from, "Ref") && ty.is(to, "Ref") && (ty.ref_mut(from) || !ty.ref_mut(to)) {
@@ -3015,6 +3085,7 @@ pub struct Checker {
     }
 
     fn mut Result<ty.Ty, diag.Diag> call(str name, ref ast.Expr[] argv, i64 span, ref Hint hint) {
+        member_visible(name, span)?;
         if name == "__env_get" || name == "__time_now_ns" || name == "__time_unix_ms" || name == "__time_sleep_ms" || name == "__time_local_offset" {
             // 標準ライブラリ std.env・std.time の中だけで使う
             let home = if name == "__env_get" { "std:env" } else { "std:time" };
@@ -3411,6 +3482,7 @@ pub struct Checker {
             info.menums[e.id] = sname;
         }
         let full = sname + "." + name;
+        member_visible(full, span)?;
         // 関数の値のフィールドを呼ぶ（`b.on(1)`。jwc だけ）。メソッドとフィールドは同じ名前にできないので、取り違えない
         if ty.is(st, "Struct") && is_struct(sname) {
             let d = s_at[sname];
@@ -3723,7 +3795,7 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
     let mut c = Checker {
         sdefs: [], s_at: [], edefs: [], e_at: [], sigs: [], f_at: [], idefs: [], i_at: [], scopes: [],
         cur_ret: ty.Ty.Unit, cur_tps: [], b_names: [], b_vals: [], cur_fields: [], lstack: [], warns: [],
-        mods: prog.modules.map((x) -> x), mod_uses: uses, cnames: prog.consts.map((x) -> x), cur_mod: "",
+        mods: prog.modules.map((x) -> x), privs: [], mod_uses: uses, cnames: prog.consts.map((x) -> x), cur_mod: "",
         has_pending: false, pending: ty.tmap(), borrow_spans: prog.borrow_lambdas.map((x) -> x), info: new_info(prog.nodes),
         resources: prog.resources.map((x) -> x),
     };
@@ -3737,6 +3809,12 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
             return Err(diag.make("構造体 `{s.name}` が二重に定義されています").at(s.span, "ここで再定義されている"));
         }
         c.s_at[s.name] = c.sdefs.len();
+        if s.pubs.len() > 0 {
+            for f in s.fields {
+                if !has(s.pubs, f) { c.privs[s.name + "." + f] = true; }
+            }
+            c.add_private_methods(s.name, s.pubs, prog.fns);
+        }
         c.sdefs.push(SInfo { name: s.name, tparams: s.tparams.map((x) -> x), fields: s.fields.map((x) -> x), tys: [], span: s.span });
     }
     for en in prog.enums {
@@ -3746,6 +3824,7 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
         let VInfo[] mut vs = [];
         for v in en.variants { vs.push(VInfo { name: v.name, tys: [] }); }
         c.e_at[en.name] = c.edefs.len();
+        if en.pubs.len() > 0 { c.add_private_methods(en.name, en.pubs, prog.fns); }
         c.edefs.push(EInfo { name: en.name, tparams: en.tparams.map((x) -> x), vs: vs, span: en.span, ready: false });
     }
     for i in prog.interfaces {

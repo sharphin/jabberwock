@@ -2367,6 +2367,25 @@ struct FnGen {
             b.op("call void @jw_args(ptr " + out + ")");
             return Ok(llvm.vt(b.val("load %list, ptr " + out), ty.Ty.List(own ty.Ty.Str)));
         }
+        if name == "iface.cast" {
+            // interface を借りた ref の型の番号が、want（Option<ref 構造体>）の構造体なら Some
+            let wargs = ty.args_of(want);
+            let rt = ty.cl(wargs[0]);
+            let tidn = m.tid(ty.inner(rt));
+            let iv = vals[0].v;
+            let tg = b.val("extractvalue %iref " + iv + ", 4");
+            let same = b.val("icmp eq i64 " + tg + ", {tidn}");
+            let mut acc = "undef";
+            let fts = ["ptr", "ptr", "i64", "ptr"];
+            for k in range(4) {
+                let f = b.val("extractvalue %iref " + iv + ", {k}");
+                acc = b.val("insertvalue %ref " + acc + ", " + fts[k] + " " + f + ", {k}");
+            }
+            let sv = make_enum(m, want, "Some", [llvm.vt(acc, ty.cl(rt))])?;
+            let nv = make_enum(m, want, "None", [])?;
+            let lt = m.lt(want)?;
+            return Ok(llvm.vt(b.val("select i1 " + same + ", " + lt + " " + sv + ", " + lt + " " + nv), ty.cl(want)));
+        }
         if name.starts_with("f64.") {
             if vals.len() > 0 && ty.is_f32(vals[0].t) {
                 // f32: to_bits は u32。ほかは f64 に広げて計算し、小数の結果は f32 に戻す

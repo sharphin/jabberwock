@@ -130,6 +130,8 @@ pub struct StructDef {
     str[] fields;
     TypeExpr[] field_types;
     i64 span;
+    // `pub` をつけたフィールド・メソッドの名前（jwc だけ）。空なら全部 pub（型が pub なら外から使える）
+    str[] pubs;
 }
 
 pub struct VariantDef {
@@ -144,6 +146,8 @@ pub struct EnumDef {
     str[] tparams;
     VariantDef[] variants;
     i64 span;
+    // `pub` をつけたメソッドの名前（jwc だけ）。空なら全部 pub
+    str[] pubs;
 }
 
 pub struct InterfaceDef {

@@ -4079,7 +4079,7 @@ struct S {
     }
 }
 fn main() {
-let v = S.v;
+let v = S.;
 }
 #####
 fn main() {

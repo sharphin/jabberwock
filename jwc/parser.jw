@@ -204,10 +204,12 @@ struct Items {
     i64[] mspans;
     ast.FnDef[] statics;
     i64[] sspans;
+    // `pub` をつけたフィールド・メソッド（jwc だけ）
+    str[] pubs;
 }
 
 fn Items no_items() {
-    Items { fields: [], field_types: [], variants: [], methods: [], mspans: [], statics: [], sspans: [] }
+    Items { fields: [], field_types: [], variants: [], methods: [], mspans: [], statics: [], sspans: [], pubs: [] }
 }
 
 /// 入れ子の深さの上限（Rust 版の parser::MAX_NEST と同じ）
@@ -558,9 +560,19 @@ struct Parser {
         loop {
             skip_semis();
             if eat("}}") { break; }
+            // `pub` は、型が pub のとき外から使えるフィールド・メソッドの印（1 つでもつければ、つけていないものは外から使えない）
+            let pspan = span();
+            let is_pub = eat("pub");
             if (peek() == "fn" && !fn_field_ahead()) || peek() == "static" {
+                let nm = it.methods.len();
+                let ns = it.statics.len();
                 parse_method(n, tparams, ref mut it)?;
+                if is_pub && it.statics.len() > ns { it.pubs.push(it.statics[ns].name); }
+                if is_pub && it.methods.len() > nm { it.pubs.push(it.methods[nm].name); }
                 continue;
+            }
+            if is_enum && is_pub {
+                return Err(diag.error("種類に pub はつけられません", pspan, "pub をつけられるのはメソッドだけです"));
             }
             if is_enum {
                 if it.methods.len() > 0 || it.statics.len() > 0 {
@@ -617,6 +629,7 @@ struct Parser {
             }
             it.fields.push(f);
             it.field_types.push(t);
+            if is_pub { it.pubs.push(f); }
             if peek() == "," {
                 return Err(diag.error("構文エラー: フィールドの区切りは `;` です", span(), "ここを `;` にしてください"));
             }
@@ -669,7 +682,7 @@ struct Parser {
         for v in it.variants { vnames.push(v.name); }
         let str[] none = [];
         finish_methods(n, none, vnames, ref mut it, out)?;
-        Ok(ast.EnumDef { name: n, tparams: tparams, variants: it.variants.drain(), span: s })
+        Ok(ast.EnumDef { name: n, tparams: tparams, variants: it.variants.drain(), span: s, pubs: it.pubs.drain() })
     }
 
     fn mut Result<ast.StructDef, diag.Diag> parse_struct(ref mut ast.FnDef[] out) {
@@ -683,7 +696,7 @@ struct Parser {
         let str[] mut fields = [];
         for f in it.fields { fields.push(f); }
         finish_methods(n, fields, none, ref mut it, out)?;
-        Ok(ast.StructDef { name: n, tparams: tparams, fields: it.fields.drain(), field_types: it.field_types.drain(), span: s })
+        Ok(ast.StructDef { name: n, tparams: tparams, fields: it.fields.drain(), field_types: it.field_types.drain(), span: s, pubs: it.pubs.drain() })
     }
 
     /// 構造体・enum の中の `fn` / `fn mut` / `static fn` 1 つ。`this`（`ref 型名<T..>`）を最初の引数に足す
@@ -1851,8 +1864,8 @@ struct Parser {
             bump();
             let f = expect_ident("静的メソッドの名前")?;
             if peek() != "(" {
-                return Err(diag.error("構造体名のあとには静的メソッドの呼び出しを書きます", diag.join(start, prev_span()),
-                    "`Point.origin()` のように `(...)` が必要"));
+                // `Point.len2`: メソッドを関数の値にする（jwc だけ。型検査で確かめる）
+                return Ok(ast.mk(ast.ExprKind.Var(n + "." + f), diag.join(start, prev_span())));
             }
             let xs = parse_args(true)?;
             return Ok(call_expr(n + "." + f, xs, diag.join(start, prev_span())));
@@ -1870,6 +1883,10 @@ struct Parser {
                 // `Shape.make(...)`: enum の静的メソッドの呼び出し
                 let xs = parse_args(true)?;
                 return Ok(call_expr(n + "." + vn, xs, diag.join(start, prev_span())));
+            }
+            if is_static {
+                // `Shape.area`: メソッドを関数の値にする（jwc だけ。メソッドでなければ型検査で種類がないエラー）
+                return Ok(ast.mk(ast.ExprKind.Var(n + "." + vn), diag.join(start, prev_span())));
             }
             if peek() == "(" {
                 let xs = parse_args(false)?;

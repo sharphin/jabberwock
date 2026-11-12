@@ -392,6 +392,7 @@ fn ast.Program qualify(ast.Program p, str module, ref Info info) {
     for s in p.structs {
         structs.push(ast.StructDef {
             name: q.name(s.name), tparams: strs(s.tparams), fields: strs(s.fields), field_types: q.tys(s.field_types, s.tparams), span: s.span,
+            pubs: strs(s.pubs),
         });
     }
     let ast.EnumDef[] mut enums = [];
@@ -400,7 +401,7 @@ fn ast.Program qualify(ast.Program p, str module, ref Info info) {
         for v in e.variants {
             vs.push(ast.VariantDef { name: v.name, types: q.tys(v.types, e.tparams), names: strs(v.names), span: v.span });
         }
-        enums.push(ast.EnumDef { name: q.name(e.name), tparams: strs(e.tparams), variants: vs, span: e.span });
+        enums.push(ast.EnumDef { name: q.name(e.name), tparams: strs(e.tparams), variants: vs, span: e.span, pubs: strs(e.pubs) });
     }
     let ast.InterfaceDef[] mut ifaces = [];
     for i in p.interfaces {
