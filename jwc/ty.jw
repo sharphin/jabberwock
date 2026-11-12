@@ -364,7 +364,8 @@ fn str shows(ref Ty[] ts) {
 }
 
 /// 標準ライブラリの名前（`std:json.Json`）は、使う側の書き方（`json.Json`）で見せる
-pub fn str std_name(str n) { if n.starts_with("std:") { n.slice(4, n.len()) } else { n } }
+/// 表示する名前: 標準ライブラリの `std:` を外し、フォルダ分けのモジュールの `a:b` は `a.b` にする
+pub fn str std_name(str n) { if n.starts_with("std:") { n.slice(4, n.len()) } else if n.contains(":") { n.replace(":", ".") } else { n } }
 
 pub fn str show(ref Ty t) {
     match ref t {

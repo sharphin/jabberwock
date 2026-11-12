@@ -204,19 +204,32 @@ pub struct Loader {
         // ソースの中で使う名前（`use x as y;` なら y。jwc だけ）
         let str[] mut locals = [];
         let bool[] mut aliased = [];
+        // フォルダ分けの use なら、フォルダ（`a/b`）。ほかは空
+        let str[] mut folders = [];
         let mut k = 0;
         while k + 1 < toks.len() {
             if toks[k].kind == "use" && toks[k + 1].kind == "ident" {
-                let std = toks[k + 1].text == "std" && k + 3 < toks.len() && toks[k + 2].kind == "." && toks[k + 3].kind == "ident";
-                let last = if std { k + 3 } else { k + 1 };
-                if std {
-                    uses.push(toks[k + 3].text);
-                    use_spans.push(diag.join(toks[k + 1].span, toks[k + 3].span));
-                } else {
-                    uses.push(toks[k + 1].text);
-                    use_spans.push(toks[k + 1].span);
+                // `use a.b.c;` の名前の並び（`use std.x;` は標準ライブラリ、ほかはフォルダ a/b の c.jw。jwc だけ）
+                let str[] mut segs = [toks[k + 1].text];
+                let mut last = k + 1;
+                while last + 2 < toks.len() && toks[last + 1].kind == "." && toks[last + 2].kind == "ident" {
+                    segs.push(toks[last + 2].text);
+                    last += 2;
                 }
+                if segs[0] == "std" && segs.len() > 2 {
+                    return Err(diag.error("標準ライブラリにフォルダはありません", diag.join(toks[k + 1].span, toks[last].span), "`use std.名前;` と書いてください"));
+                }
+                let std = segs[0] == "std" && segs.len() == 2;
+                uses.push(segs[segs.len() - 1]);
+                use_spans.push(diag.join(toks[k + 1].span, toks[last].span));
                 stds.push(std);
+                if !std && segs.len() > 1 {
+                    let str[] mut dirs = [];
+                    for (i, x) in segs { if i + 1 < segs.len() { dirs.push(x); } }
+                    folders.push(dirs.join("/"));
+                } else {
+                    folders.push("");
+                }
                 if last + 2 < toks.len() && toks[last + 1].kind == "as" && toks[last + 2].kind == "ident" {
                     locals.push(toks[last + 2].text);
                     aliased.push(true);
@@ -234,7 +247,7 @@ pub struct Loader {
                     return Err(diag.error_note("`{u}` という名前のモジュールを二つ使っています", use_spans[i],
                         "標準の {u} と、同じフォルダ（またはパッケージ）の {u} の両方を use している", "どちらか一つにしてください"));
                 }
-                if (aliased[i] || aliased[j]) && (uses[j] != u || stds[j] != stds[i]) {
+                if (aliased[i] || aliased[j] || folders[i] != "" || folders[j] != "") && (uses[j] != u || stds[j] != stds[i] || folders[j] != folders[i]) {
                     // ここから下は jwc だけ（Rust 版に as はない）
                     let a = locals[i];
                     return Err(diag.error_note("`{a}` という名前のモジュールを二つ使っています", use_spans[i],
@@ -255,6 +268,13 @@ pub struct Loader {
                 path = "std/" + u + ".jw";
             } else if name.starts_with("std:") {
                 return Err(diag.error("標準ライブラリの中で `use {u};` は使えません", use_spans[i], "`use std.名前;` だけ使える"));
+            } else if folders[i] != "" {
+                // `use a.b;`: 最初のファイルのフォルダから a/b.jw を読む。中の名前は `a:b.f`（表示は `a.b.f`）
+                if packaged {
+                    return Err(diag.error("パッケージではフォルダ分けの use はまだ使えません", use_spans[i], "`use 名前;` で同じフォルダのモジュールを使ってください"));
+                }
+                key = folders[i].replace("/", ":") + ":" + u;
+                path = dir + folders[i] + "/" + u + ".jw";
             } else if packaged {
                 match package_paths.get(local) {
                     case Some(p) -> path = p;
@@ -286,7 +306,8 @@ pub struct Loader {
             } else { match read_file(path) {
                 case Ok(t) -> t;
                 case Err(e) -> return Err(diag.error("モジュール `{u}` が見つかりません", use_spans[i],
-                    if packaged { "パッケージのファイルを読めません: " + path + ": " + e } else { "同じフォルダに {u}.jw がない" }));
+                    if packaged { "パッケージのファイルを読めません: " + path + ": " + e }
+                    else if folders[i] != "" { "フォルダ " + folders[i] + " に {u}.jw がない" } else { "同じフォルダに {u}.jw がない" }));
             } };
             names.push(key);
             paths.push(path);

@@ -357,6 +357,11 @@ struct Parser {
                     bump();
                     n = "std." + expect_ident("標準ライブラリのモジュールの名前")?;
                 }
+                // `use a.b;`: フォルダ a の b.jw（読み込みは modules.jw。jwc だけ）
+                while peek() == "." {
+                    bump();
+                    n = n + "." + expect_ident("モジュールの名前")?;
+                }
                 // `use x as y;`: ソースの中では y と書く（読み替えは modules.jw。jwc だけ）
                 if peek() == "as" {
                     bump();

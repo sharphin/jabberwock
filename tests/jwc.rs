@@ -1111,6 +1111,36 @@ fn main() {
 }
 "#;
 
+// フォルダ分けのモジュール `use a.b;`（jwc だけ）
+#[test]
+fn jwc_folder_modules() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-folder-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("geo/shapes")).unwrap();
+    std::fs::write(dir.join("geo/shapes/circle.jw"), "use util;\npub struct C { f64 r; }\npub fn f64 area(ref C c) { util.pi() * c.r * c.r }\n").unwrap();
+    std::fs::write(dir.join("util.jw"), "pub fn f64 pi() { 3.0 }\n").unwrap();
+    std::fs::write(dir.join("geo/vec.jw"), "pub struct V { i64 x; }\npub fn V make(i64 x) { V { x: x } }\n").unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "use geo.shapes.circle;\nuse geo.vec as v;\nuse util;\nfn main() {\n    let c = circle.C { r: 2.0 };\n    \
+        print(circle.area(c), v.make(3).x, util.pi());\n    let v.V w = v.make(1);\n    print(w);\n}\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "12.0 3 3.0\ngeo.vec.V { x: 1 }\n");
+    for (src, want) in [
+        ("use geo.nope;\nfn main() {}\n", "フォルダ geo に nope.jw がない"),
+        ("use std.a.b;\nfn main() {}\n", "標準ライブラリにフォルダはありません"),
+        ("use geo.vec;\nuse vec;\nfn main() {}\n", "`vec` という名前のモジュールを二つ使っています"),
+    ] {
+        std::fs::write(&path, src).unwrap();
+        let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success() && err.contains(want), "{}", err);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // std.clipboard は今は Windows だけ。ほかの OS では決まった Err（Windows では samples/windows/clipboard_check.jw で確かめる）
 #[cfg(unix)]
 #[test]
