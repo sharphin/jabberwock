@@ -2452,3 +2452,47 @@ fn jwc_folder_modules_in_packages() {
         "{}", String::from_utf8_lossy(&out.stderr));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// std.process.start_env: 子のプロセスにだけ環境変数を渡す（jwc だけ。sh を使うので unix だけ）
+#[cfg(unix)]
+#[test]
+fn jwc_std_process_start_env() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-procenv-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, PROC_ENV_SRC).unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // 親の JW_A は子では置き換わり、親の PATH は受け継ぐ
+    let got = Command::new(&exe).env("JW_A", "parent").output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "one|path\ntwo=2\n\nOk(0)\n環境変数の名前が正しくありません: A=B\n");
+}
+
+const PROC_ENV_SRC: &str = r#"use std.process;
+use std.text;
+fn Result<i64, str> run() {
+    let mut c = process.start_env("sh", ["-c", "echo \"$JW_A|$(test -n \"$PATH\" && echo path)\"; printenv JW_B"], ["JW_A": "one", "JW_B": "two=2"])?;
+    c.set_timeout(2000)?;
+    let mut all = "";
+    loop {
+        let out = c.read(4096)?;
+        if out.len() == 0 { break; }
+        match text.from_utf8(ref out) {
+            case Some(s) -> all = all + s;
+            case None -> {}
+        }
+    }
+    print(all);
+    c.wait()
+}
+fn main() {
+    print(run());
+    match process.start_env("sh", [], ["A=B": "x"]) {
+        case Ok(c2) -> print("bad");
+        case Err(e) -> print(e);
+    }
+}
+"#;

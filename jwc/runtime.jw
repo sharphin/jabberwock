@@ -3060,6 +3060,8 @@ typedef struct {{
 __declspec(dllimport) int __stdcall CreatePipe(void **, void **, WSecAttr *, unsigned long);
 __declspec(dllimport) int __stdcall SetHandleInformation(void *, unsigned long, unsigned long);
 __declspec(dllimport) int __stdcall CreateProcessW(const wchar_t *, wchar_t *, void *, void *, int, unsigned long, void *, const wchar_t *, WStartupW *, WProcInfo *);
+__declspec(dllimport) wchar_t *__stdcall GetEnvironmentStringsW(void);
+__declspec(dllimport) int __stdcall FreeEnvironmentStringsW(wchar_t *);
 __declspec(dllimport) int __stdcall ReadFile(void *, void *, unsigned long, unsigned long *, void *);
 __declspec(dllimport) int __stdcall WriteFile(void *, const void *, unsigned long, unsigned long *, void *);
 __declspec(dllimport) int __stdcall PeekNamedPipe(void *, void *, unsigned long, unsigned long *, unsigned long *, unsigned long *);
@@ -3100,7 +3102,14 @@ static int child_free(void *p) {{
 }}
 
 // 起こす。argv[0] がコマンド（PATH から探す）
-static int child_spawn(char **argv, int64_t n, WChild *c) {{
+// 最初の = の位置（なければ NULL）
+static const wchar_t *wide_eq(const wchar_t *p) {{
+    for (; *p; p++)
+        if (*p == L'=') return p;
+    return NULL;
+}}
+
+static int child_spawn(char **argv, int64_t n, char **envs, int64_t ne, WChild *c) {{
     WSecAttr sa;
     memset(&sa, 0, sizeof sa);
     sa.nLength = sizeof sa;
@@ -3136,6 +3145,49 @@ static int child_spawn(char **argv, int64_t n, WChild *c) {{
     jw_str_release(line);
     wchar_t *wline = to_wide(cl);
     free(cl);
+    // 環境変数を足す・置き換えるとき（jwc の start_env）は、親の環境に重ねたブロックを作る（名前は大文字小文字を区別しない）
+    wchar_t *block = NULL;
+    if (envs) {{
+        wchar_t **wenv = jw_checked_malloc(sizeof(wchar_t *) * (size_t)(ne ? ne : 1));
+        size_t total = 1;
+        for (int64_t i = 0; i < ne; i++) {{
+            wenv[i] = to_wide(envs[i]);
+            total += wcslen(wenv[i]) + 1;
+        }}
+        wchar_t *cur = GetEnvironmentStringsW();
+        for (wchar_t *e = cur; e && *e; e += wcslen(e) + 1) total += wcslen(e) + 1;
+        block = jw_checked_malloc(sizeof(wchar_t) * total);
+        wchar_t *w = block;
+        for (wchar_t *e = cur; e && *e; e += wcslen(e) + 1) {{
+            int skip = 0;
+            // `=C:` のような隠れた項目は名前の先頭が = なので、そのまま残す
+            const wchar_t *eq = wide_eq(e + 1);
+            size_t len = eq ? (size_t)(eq - e) : wcslen(e);
+            for (int64_t i = 0; i < ne && !skip; i++) {{
+                const wchar_t *eq2 = wide_eq(wenv[i]);
+                size_t len2 = eq2 ? (size_t)(eq2 - wenv[i]) : wcslen(wenv[i]);
+                if (len == len2) {{
+                    size_t k = 0;
+                    // 英字だけ大文字にそろえて比べる（環境変数の名前はふつう ASCII）
+                    while (k < len && (e[k] >= L'a' && e[k] <= L'z' ? e[k] - 32 : e[k]) == (wenv[i][k] >= L'a' && wenv[i][k] <= L'z' ? wenv[i][k] - 32 : wenv[i][k])) k++;
+                    skip = k == len;
+                }}
+            }}
+            if (skip) continue;
+            size_t l = wcslen(e) + 1;
+            memcpy(w, e, sizeof(wchar_t) * l);
+            w += l;
+        }}
+        for (int64_t i = 0; i < ne; i++) {{
+            size_t l = wcslen(wenv[i]) + 1;
+            memcpy(w, wenv[i], sizeof(wchar_t) * l);
+            w += l;
+            free(wenv[i]);
+        }}
+        *w = 0;
+        free(wenv);
+        if (cur) FreeEnvironmentStringsW(cur);
+    }}
     WStartupExW si;
     memset(&si, 0, sizeof si);
     si.StartupInfo.cb = sizeof si;
@@ -3146,7 +3198,9 @@ static int child_spawn(char **argv, int64_t n, WChild *c) {{
     si.lpAttributeList = attrs;
     WProcInfo pi;
     memset(&pi, 0, sizeof pi);
-    if (ok) ok = CreateProcessW(NULL, wline, NULL, NULL, 1, 0x80000 /* EXTENDED_STARTUPINFO_PRESENT */, NULL, NULL, &si.StartupInfo, &pi);
+    // 0x400: CREATE_UNICODE_ENVIRONMENT
+    if (ok) ok = CreateProcessW(NULL, wline, NULL, NULL, 1, 0x80000 /* EXTENDED_STARTUPINFO_PRESENT */ | (block ? 0x400 : 0), block, NULL, &si.StartupInfo, &pi);
+    free(block);
     DeleteProcThreadAttributeList(attrs);
     free(attrs);
     free(wline);
@@ -3262,7 +3316,7 @@ static int child_free(void *p) {{
     return 1;
 }}
 
-static int child_spawn(char **argv, int64_t n, WChild *c) {{
+static int child_spawn(char **argv, int64_t n, char **envs, int64_t ne, WChild *c) {{
     (void)n;
     int in[2], out[2];
     if (pipe(in) != 0) return 0;
@@ -3280,8 +3334,26 @@ static int child_spawn(char **argv, int64_t n, WChild *c) {{
     posix_spawn_file_actions_adddup2(&fa, out[1], 1);
     posix_spawn_file_actions_addclose(&fa, in[0]);
     posix_spawn_file_actions_addclose(&fa, out[1]);
+    // 環境変数を足す・置き換えるとき（jwc の start_env）は、親の環境に重ねたものを渡す（自分の環境は変えない）
+    char **envp = environ;
+    if (envs) {{
+        int64_t have = 0;
+        for (char **e = environ; e && *e; e++) have++;
+        envp = jw_checked_malloc(sizeof(char *) * (size_t)(have + ne + 1));
+        int64_t k = 0;
+        for (char **e = environ; e && *e; e++) {{
+            const char *eq = strchr(*e, '=');
+            size_t len = eq ? (size_t)(eq - *e) : strlen(*e);
+            int skip = 0;
+            for (int64_t i = 0; i < ne && !skip; i++) skip = strncmp(*e, envs[i], len) == 0 && envs[i][len] == '=';
+            if (!skip) envp[k++] = *e;
+        }}
+        for (int64_t i = 0; i < ne; i++) envp[k++] = envs[i];
+        envp[k] = NULL;
+    }}
     pid_t pid;
-    int ok = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ) == 0;
+    int ok = posix_spawnp(&pid, argv[0], &fa, NULL, argv, envp) == 0;
+    if (envs) free(envp);
     posix_spawn_file_actions_destroy(&fa);
     close(in[0]);
     close(out[1]);
@@ -3358,13 +3430,22 @@ static int child_kill_os(WChild *c) {{ return kill(c->pid, SIGKILL) == 0; }}
 
 static WChild *child_get(void *h, const WSite *at) {{ return res_get((uint64_t)(uintptr_t)h, RES_CHILD, at)->ptr; }}
 
-// 起こす。args（str のリスト）はここで解放する
-int32_t jw_process_start(WStr *cmd, WList *args, void **out, WStr **err) {{
+// 起こす。args（str のリスト）と envs（"名前=値" のリスト。NULL なら親の環境のまま）はここで解放する
+static int32_t process_start(WStr *cmd, WList *args, WList *envl, void **out, WStr **err) {{
     jw_flush();
     int64_t n = args->len;
     WStr **items = (WStr **)args->data;
+    int64_t ne = envl ? envl->len : 0;
+    WStr **eitems = envl ? (WStr **)envl->data : NULL;
     int bad = memchr(cmd->data, 0, (size_t)cmd->len) != NULL || cmd->len == 0;
     for (int64_t i = 0; i < n; i++) bad = bad || memchr(items[i]->data, 0, (size_t)items[i]->len) != NULL;
+    // 名前は空でなく、= と NUL を含まない（std.process の側でも確かめる）
+    for (int64_t i = 0; i < ne; i++) {{
+        const char *d = eitems[i]->data;
+        size_t l = (size_t)eitems[i]->len;
+        const char *eq = memchr(d, '=', l);
+        bad = bad || memchr(d, 0, l) != NULL || eq == NULL || eq == d;
+    }}
     WChild *c = jw_checked_calloc(1, sizeof(WChild));
 #ifndef _WIN32
     c->in = c->out = -1;
@@ -3375,12 +3456,25 @@ int32_t jw_process_start(WStr *cmd, WList *args, void **out, WStr **err) {{
         argv[0] = c_str(cmd);
         for (int64_t i = 0; i < n; i++) argv[i + 1] = c_str(items[i]);
         argv[n + 1] = NULL;
-        ok = child_spawn(argv, n, c);
+        char **envs = NULL;
+        if (envl) {{
+            envs = jw_checked_malloc(sizeof(char *) * (size_t)(ne ? ne : 1));
+            for (int64_t i = 0; i < ne; i++) envs[i] = c_str(eitems[i]);
+        }}
+        ok = child_spawn(argv, n, envs, ne, c);
         for (int64_t i = 0; i <= n; i++) free(argv[i]);
         free(argv);
+        if (envs) {{
+            for (int64_t i = 0; i < ne; i++) free(envs[i]);
+            free(envs);
+        }}
     }}
     for (int64_t i = 0; i < n; i++) jw_str_release(items[i]);
     jw_list_free(args, sizeof(WStr *), NULL);
+    if (envl) {{
+        for (int64_t i = 0; i < ne; i++) jw_str_release(eitems[i]);
+        jw_list_free(envl, sizeof(WStr *), NULL);
+    }}
     if (!ok) {{
         free(c);
         *err = message("コマンドを起動できません: ", cmd);
@@ -3396,6 +3490,13 @@ int32_t jw_process_start(WStr *cmd, WList *args, void **out, WStr **err) {{
     res_at(res_slot(tok))->ptr = c;
     *out = (void *)(uintptr_t)tok;
     return 1;
+}}
+
+int32_t jw_process_start(WStr *cmd, WList *args, void **out, WStr **err) {{ return process_start(cmd, args, NULL, out, err); }}
+
+// jwc だけ: 子のプロセスにだけ環境変数を足して・置き換えて渡す（自分の環境は変えない）
+int32_t jw_process_start_env(WStr *cmd, WList *args, WList *envs, void **out, WStr **err) {{
+    return process_start(cmd, args, envs, out, err);
 }}
 
 int32_t jw_child_read(void *h, int64_t n, WList *out, WStr **err, const WSite *at) {{

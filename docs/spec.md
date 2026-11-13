@@ -143,7 +143,7 @@ fn main() {
 | `std.date` | `now()`・`from_unix_ms(t)`・`make(...)`・`parse(s)`・`is_leap(y)`・`days_in_month(y, m)` と `DateTime`（`weekday_name()`（`月`〜`日`）・`add_days(n)`・`add_ms(n)` も）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
 | `std.csv` | `parse(s)`・`format(ref rows)`・`parse_sep(s, sep)`・`format_sep(ref rows, sep)`（区切りを char で指定。`'\t'` なら TSV。sep が `"`・改行なら Err）・`quote(v)`・`write_row(ref row)`（1 行。改行なし）・`parse_records(s)`（1 行目を見出しにした辞書のリスト。足りない欄は空、多い欄は捨てる）（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
 | `std.regex` | `compile(pattern)`・`escape(s)` と `Regex`・`Match`（[1.13](#113-stddatestdcsvstdregexjwc-だけ)） |
-| `std.process` | `start(cmd, argv)` と資源の型 `Child`（[1.14](#114-stdprocessjwc-だけ)） |
+| `std.process` | `start(cmd, argv)`・`start_env(cmd, argv, ref env)` と資源の型 `Child`（[1.14](#114-stdprocessjwc-だけ)） |
 | `std.io` | `read_line_for(ms)`（[1.16](#116-stdiojwc-だけ)） |
 | `std.clipboard` | `set_text(s, secret)`・`get_text()`・`clear_if(n)`・`clear()`（[1.15](#115-stdclipboardjwc-だけwindows-だけ)） |
 
@@ -280,7 +280,7 @@ let v = json.parse("{{\"a\": [1, \"x\"]}}")?;     // json.Json
 print(v.get("a").at(1).as_str(), json.stringify(ref v));   // Some(x) {"a":[1,"x"]}
 ```
 
-- `env.get(name)`: 環境変数（名前が空・`=` や NUL を含む・値が UTF-8 でないなら None）。設定する関数はまだない。
+- `env.get(name)`: 環境変数（名前が空・`=` や NUL を含む・値が UTF-8 でないなら None）。自分の環境変数を設定する関数（env.set）は作らない（ほかのスレッドが同時に読むと壊れうるため）。子のプロセスにだけ渡すときは `process.start_env`（1.14）。
 - `time.now()`: 単調な時計の読み（`Instant { ns }`）。壁時計の修正に影響されず、差だけに意味がある。`t.elapsed_ns()`・`t.elapsed_ms()`。
   `time.sleep(ms)`（負なら実行時エラー。待つ前に print の出力を書き出す）。
 - `time.unix_ms()`: 壁時計（1970-01-01 UTC からのミリ秒）。時刻の修正で戻ることがあるので、かかった時間は now で測る。暦（年月日）への直しは std.date（1.13）。
@@ -491,6 +491,9 @@ let code = c.wait()?;                                // 終了コード
 
 - `process.start(cmd, argv)`（`Result<Child, str>`）: cmd を PATH からも探して、待たずに起こす。子の標準入力・標準出力は親とパイプでつなぎ、
   標準エラーは親のものをそのまま使う。ほかに開いているファイルやソケットは子へ渡さない。起こせなければ Err。cmd・argv に文字 0 があれば Err。
+- `process.start_env(cmd, argv, ref env)`（`Result<Child, str>`）: start と同じだが、子にだけ環境変数 env（`str[str]`。名前 → 値）を足して・置き換えて渡す。
+  自分の環境は変えない。そのほかの環境変数は親のものを受け継ぐ。名前が空か `=` を含めば Err（文字 0 があれば起こせない Err）。
+  Windows では名前の大文字小文字を区別しない（英字だけ）。
 - `Child` は資源で、規則は 1.3 と同じ（ムーブだけ・送れない）。持ち主がいなくなるとパイプを閉じる（子は止めない）。
 - Child のメソッド（持ち主が mut であること）: `read(n)`（`u8[]`。最大 n バイト。子が出力を閉じたら空）・`write(bytes)`・`write_text(s)`・
   `set_timeout(ms)`（読む待ち時間。時間切れは `Err("時間切れです")`。ms が負なら実行時エラー）・`close_input()`（子には入力の終わりに見える。2 度目は何もしない）・

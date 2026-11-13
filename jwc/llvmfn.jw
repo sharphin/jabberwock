@@ -2076,6 +2076,18 @@ struct FnGen {
             release(vals, 1);
             return result_of(m, want, ok, err, "res", out);
         }
+        if name == "__process_start_env" {
+            // 子のプロセスにだけ環境変数を渡す（jwc だけ）。2 つのリストは実行時ライブラリが解放する
+            let lst = b.alloca("%list");
+            b.op("store %list " + vals[1].v + ", ptr " + lst);
+            let el = b.alloca("%list");
+            b.op("store %list " + vals[2].v + ", ptr " + el);
+            let out = b.alloca("ptr");
+            let err = b.alloca("ptr");
+            let ok = b.val("call i32 @jw_process_start_env(ptr " + vals[0].v + ", ptr " + lst + ", ptr " + el + ", ptr " + out + ", ptr " + err + ")");
+            release(vals, 1);
+            return result_of(m, want, ok, err, "res", out);
+        }
         if name == "child.read" {
             let out = b.alloca("%list");
             b.op("store %list zeroinitializer, ptr " + out);

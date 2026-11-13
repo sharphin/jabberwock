@@ -1050,3 +1050,10 @@ let x = pick(true, 1, 2);
   そのまま使う（reference-access）。必ず失敗する取り出しを実行前のエラーにしたのは owner-transition を強める向き。f32 は型とメモリの表現（typing-and-permission）の中。
 - なので conditions と引用はそのままにして、`formal/safety-scope-policy.json` の spec.md のハッシュだけを今の版にした。
 - そのあとの formal_tool.py の結果: FINAL は NOT_PROVEN（refinement は 0/250。証明の成果物がないため）、基盤は OPERATIONAL、TOOL_ERROR はなし。
+
+## env.set は作らず、子のプロセスにだけ環境変数を渡す（2026-11-13、オーナーの選択）
+
+- 自分の環境を変える setenv は、ほかのスレッドの getenv（名前解決などライブラリの中も含む）と同時に動くと壊れうる。jabberwock はスレッドを使えるので入れない。
+- 同じ用途（子に LANG などを渡す）は `process.start_env(cmd, argv, ref env)` で満たす。親の environ を写し、同じ名前を置き換え・足したものを posix_spawnp に渡す。
+  Windows は GetEnvironmentStringsW に重ねたブロックを CreateProcessW に渡す（CREATE_UNICODE_ENVIRONMENT）。Windows では試していない（Windows の確認は後回し中）。
+- spec.md の変更は std の節（1.6・1.14）だけなので、決めごと（2026-10-30）どおり safety-scope-policy の spec.md のハッシュを更新した。
