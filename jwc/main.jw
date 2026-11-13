@@ -143,7 +143,11 @@ fn Result<str, str> llvm_build(str path, str src, bool release, ref packages.Map
     analyze.analyze(ref mut prog);
     let str[] none = [];
     let srcs = if release { none } else { l.srcs.map((x) -> x) };
-    match llvmfn.emit(prog, c, ns, srcs) {
+    let diag.Diag[] mut fails = [];
+    let built = llvmfn.emit(prog, c, ns.map((x) -> x), srcs, ref mut fails);
+    // 実行すれば必ず失敗する取り出しは、実行前のエラー（jwc だけ）
+    if fails.len() > 0 { return Err(diag.render(fails[0], ns, l.srcs)); }
+    match built {
         case Ok(text) -> Ok(text);
         case Err(why) -> Err("まだ LLVM に書き出せない書き方があります: " + why + "\n");
     }
@@ -341,7 +345,10 @@ fn main() {
                                 case Ok(ip) -> {
                                     let mut prog = ip;
                                     if a[0] == "--ll" { analyze.analyze(ref mut prog); }
-                                    match llvmfn.emit(prog, c, ns, l.srcs) {
+                                    let diag.Diag[] mut fails = [];
+                                    let built = llvmfn.emit(prog, c, ns.map((x) -> x), l.srcs, ref mut fails);
+                                    if fails.len() > 0 { fail_ll(diag.render(fails[0], ns, l.srcs)); }
+                                    match built {
                                         case Ok(text) -> print(chop(text));
                                         case Err(why) -> fail_ll("まだ LLVM に書き出せない書き方があります: " + why + "\n");
                                     }

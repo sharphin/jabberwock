@@ -541,6 +541,15 @@ pub struct Module {
     // interface として使った構造体の型の番号（type id）
     ty.Ty[] tids;
     i64 n;
+    // 実行すれば必ず失敗する取り出し（jwc だけ。実行前のエラーにする）と、その位置
+    diag.Diag[] fails;
+    i64[] fail_spans;
+
+    /// 実行すれば必ず失敗する取り出しを、実行前のエラーとして覚える
+    fn mut fail_at(str title, i64 span, str label, str note) {
+        fails.push(diag.make(title).at(span, label).with_note(note));
+        fail_spans.push(span);
+    }
 
     fn str output() {
         let body = code.join("");
@@ -1513,6 +1522,15 @@ pub struct Module {
         Ok("false")
     }
 
+    /// 値として取り出すと必ずエラーになる型か（gen_hazard が "true" になるもの）
+    fn mut Result<bool, str> sure_hazard(ref ty.Ty t) {
+        let k = ty.tag(t);
+        if k == "Own" || k == "Struct" || k == "List" || k == "Map" || k == "Task" || k == "Res" { return Ok(true); }
+        if k == "Enum" { return Ok(!trivial(t)? && enum_moves(t)?); }
+        if k == "Array" { return Ok(ty.arr_len(t) > 0 && sure_hazard(ty.inner(t))?); }
+        Ok(false)
+    }
+
     /// 値として取り出すとエラーになりうる型か
     fn mut Result<bool, str> can_hazard(ref ty.Ty t) {
         let k = ty.tag(t);
@@ -2080,6 +2098,6 @@ fn bool own_one(ref ty.Ty[] fs) { fs.len() == 1 && ty.is(fs[0], "Own") && !ty.is
 pub fn Module new_module(ref ir.Program prog, ref typeck.Checker ck, str[] files) {
     Module {
         prog: prog, ck: ck, files: files, types: [], globals: [], code: [], named: [], strs: [], cstrs: [], sites: [], helpers: [], todo: [],
-        tids: [], n: 0,
+        tids: [], n: 0, fails: [], fail_spans: [],
     }
 }

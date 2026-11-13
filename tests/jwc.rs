@@ -458,8 +458,21 @@ fn same_ll(path: &Path) {
     let read = move |m: &str| std::fs::read_to_string(dir.join(format!("{}.jw", m))).ok();
     let out = Command::new(jwc()).args(["--ll", name]).output().expect("jwc を起動できる");
     let n = name.to_string();
+    let src2 = src.clone();
     let want = big(move || jabberwock::llvm_text(&src, &read, &n));
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
     match want {
+        // 実行すれば必ず失敗する取り出しは、jwc だけ実行前のエラー（決めごと 2026-11-13）。
+        // Rust 版を実行すると同じ文の実行時エラーになることを確かめる
+        Ok(_) if !out.status.success() && err.contains("は取り出せません") => {
+            let dir2 = path.parent().unwrap().to_path_buf();
+            let run = big(move || {
+                let read2 = move |m: &str| std::fs::read_to_string(dir2.join(format!("{}.jw", m))).ok();
+                jabberwock::run_program(&src2, &read2, false, true, Box::new(std::io::empty()), Vec::new()).error.map(|d| d.title)
+            });
+            let title = err.lines().next().unwrap_or("").trim_start_matches("error: ").to_string();
+            assert_eq!(run, Some(title), "{}", name);
+        }
         Ok(want) => assert_eq!(String::from_utf8_lossy(&out.stdout), want, "{}", name),
         Err(e) => assert_eq!(String::from_utf8_lossy(&out.stderr), e + "\n", "{}", name),
     }

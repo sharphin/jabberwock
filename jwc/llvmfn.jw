@@ -694,6 +694,11 @@ struct FnGen {
             }
             if cant != "" {
                 let always = cant == "true";
+                if always {
+                    // 必ず失敗するので、実行前のエラーにする（jwc だけ）
+                    m.fail_at("クロージャに取り込んだ `" + fun.locals[l].name + "` は取り出せません", span,
+                        "クロージャは何度も呼べるので、取り込んだ値をムーブできない", "`ref` で借りるか、中の値をコピーして使ってください");
+                }
                 let ok = b.if_true(cant);
                 let title = m.cstr("クロージャに取り込んだ `" + fun.locals[l].name + "` は取り出せません");
                 let lab = m.cstr("クロージャは何度も呼べるので、取り込んだ値をムーブできない");
@@ -1296,6 +1301,11 @@ struct FnGen {
             case CopyOut(pl, what, span) -> {
                 let pr = place(m, pl, false)?;
                 if m.can_hazard(pr.t)? {
+                    if m.sure_hazard(pr.t)? {
+                        // 必ず失敗するので、実行前のエラーにする（jwc だけ。Rust 版は実行時エラー）
+                        m.fail_at(what + "にある " + llvm.type_name(pr.t) + " は取り出せません", span, "所有権をここから動かすことはできない",
+                            llvm.copy_out_note(what));
+                    }
                     let h = m.helper("Hazard", pr.t);
                     let bad = b.val("call i1 " + h + "(ptr " + pr.ptr + ")");
                     let ok = b.if_true(bad);
@@ -2938,11 +2948,20 @@ fn FnGen new_gen(ref ir.Func f, i64 idx) {
 
 /// プログラム全体を LLVM のテキストにする。`files` はファイルの番号から名前。
 /// `sources` はファイルの中身（エラーでソースの行を出すため）。空なら位置だけ出す（`--release`）
-pub fn Result<str, str> emit(ref ir.Program prog, ref typeck.Checker ck, str[] files, ref str[] sources) {
+/// `fails` には、実行すれば必ず失敗する取り出し（実行前のエラー）のうち、いちばん前のものを入れる
+pub fn Result<str, str> emit(ref ir.Program prog, ref typeck.Checker ck, str[] files, ref str[] sources, ref mut diag.Diag[] fails) {
     let mut m = llvm.new_module(prog, ck, files);
     for (i, f) in prog.fns {
         let mut g = new_gen(f, i);
         g.run(ref mut m)?;
+    }
+    if m.fails.len() > 0 {
+        let mut best = 0;
+        for (i, s) in m.fail_spans {
+            if s < m.fail_spans[best] { best = i; }
+        }
+        fails.push(m.fails.remove(best));
+        return Ok("");
     }
     if !prog.by_name.contains("main") { return Err("main がない"); }
     let main_i = prog.by_name["main"];
