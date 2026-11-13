@@ -116,6 +116,10 @@ bench/checks.sh
 - `scripts/runtime_generation_binding.py` はC/Leanの世代番号関連の構造照合。
 - `scripts/runtime_preprocessing_evidence.py` はClang前処理結果を記録する。
 - `scripts/formal_tool.py` は各工程の一括起動と集約を担当する。
+- Lean の入れ方（クラウドの作業環境は毎回消えるので、そのつど入れる。2026-11-13 にオーナーが了承）:
+  `https://github.com/leanprover/lean4/releases/download/v4.24.0/lean-4.24.0-linux.zip` を `/root/lean` に展開する（zstd がない環境が多いので .zip）。
+  `PATH` には**後ろに**足す（`PATH=$PATH:/root/lean/lean-4.24.0-linux/bin`）。前に足すと Lean に入っている clang を拾い、
+  `stddef.h` が見つからず safety-correspondence が INVALID_EVIDENCE になる。念のため `JW_CLANG=/usr/bin/clang` も渡す。
 - ソースハッシュ、名前、構文一致、テストPASSだけでは実装の正当性証明にならない。
 - 証拠は対象ソース・ビルド条件・ツールの実行結果に結び付ける。
 - 無効な証拠、欠落、ソースの変化、矛盾を成功扱いしない。

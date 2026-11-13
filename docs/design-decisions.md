@@ -1041,3 +1041,12 @@ let x = pick(true, 1, 2);
 - Rust 版とは出力がそろわなくなる（オーナーが jwc を優先すると選んだ）。突き合わせのテスト（same_ll）は、jwc がこのエラーにしたものだけ、
   Rust 版で実行すると同じ文の実行時エラーになることを確かめる形にした。
 - 通らない道の中の取り出しもエラーになる（実行しなくても、書いた時点で誤り）。
+
+## safety-scope-policy の見直し（2026-11-13、オーナー了承）
+
+- 11/11〜11/13 の言語の節の変更（f32・辞書の構造体キー・enum の ==・関数の値のフィールド・checked_*・リストの swap・use as・フォルダ分け・
+  メソッドの値・interface からの取り出し・フィールドとメソッドごとの pub・必ず失敗する取り出しを実行前のエラーに）を見直した。
+- どれも安全性の条件（conditions）を弱めない。swap は「要素が動くと無効になる」に入れた（reference-access）。interface からの取り出しは元の ref の世代の検査を
+  そのまま使う（reference-access）。必ず失敗する取り出しを実行前のエラーにしたのは owner-transition を強める向き。f32 は型とメモリの表現（typing-and-permission）の中。
+- なので conditions と引用はそのままにして、`formal/safety-scope-policy.json` の spec.md のハッシュだけを今の版にした。
+- そのあとの formal_tool.py の結果: FINAL は NOT_PROVEN（refinement は 0/250。証明の成果物がないため）、基盤は OPERATIONAL、TOOL_ERROR はなし。
