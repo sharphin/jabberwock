@@ -2406,3 +2406,36 @@ fn main() {
     match x { case Some(v) -> print(v.s); case None -> print("none"); }
 }
 "#;
+
+// パッケージの中のフォルダ分けのモジュール（jwc だけ）。どのパッケージでも、その src のフォルダから数える
+#[test]
+fn jwc_folder_modules_in_packages() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-pkgfolder-{}", std::process::id()));
+    let write = |path: &str, text: &str| {
+        let p = dir.join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("app/alice.toml", "[package]\nname = \"app\"\n[dependencies]\nshapes = { path = \"../shapes\" }\n");
+    write("shapes/alice.toml", "[package]\nname = \"shapes\"\n");
+    write("app/src/geo/vec.jw", "pub fn str who() { \"app geo.vec\" }");
+    write("shapes/src/parts/p.jw", "use util; pub fn str who() { \"shapes parts.p \" + util.who() }");
+    write("shapes/src/util.jw", "pub fn str who() { \"util\" }");
+    write("shapes/src/lib.jw", "use parts.p; pub fn str who() { p.who() }");
+    write("app/src/main.jw", "use shapes; use geo.vec; fn main() { print(vec.who()); print(shapes.who()); }");
+    let project = jabberwock::project::Project::load(&dir.join("app")).unwrap();
+    let map = dir.join("packages.map");
+    std::fs::write(&map, project.package_map(&project.main_file()).unwrap()).unwrap();
+    let exe = dir.join("app-native");
+    let output = Command::new(jwc()).args(["build", "--package-map"]).arg(&map)
+        .args(["--clang", &native::clang(), "-o"]).arg(&exe).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let output = Command::new(exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "app geo.vec\nshapes parts.p util\n");
+    write("app/src/main.jw", "use geo.nope; fn main() {}");
+    let out = Command::new(jwc()).args(["--ll", "--package-map"]).arg(&map).output().unwrap();
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("フォルダ geo に nope.jw がない"),
+        "{}", String::from_utf8_lossy(&out.stderr));
+    let _ = std::fs::remove_dir_all(dir);
+}

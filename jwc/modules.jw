@@ -161,6 +161,30 @@ pub struct Loader {
     str[] loading;
     ast.Program[] parts;
 
+    /// パッケージの src のフォルダ（最後に `/` つき。分からなければ ""）。最初のパッケージ（""）でモジュールがほかになければ入口のフォルダ
+    fn str package_src(str space) {
+        let mut found = "";
+        if space != "" {
+            match package_paths.get("*" + space) {
+                case Some(p) -> found = p;
+                case None -> {}
+            }
+        }
+        if found == "" {
+            for (k, v) in package_paths {
+                // 最初のパッケージのモジュールは名前だけ（`util`）、依存先は `pkg/util`
+                let mine = if space == "" { !k.contains("/") && !k.starts_with("*") } else { k.starts_with(space + "/") };
+                if found == "" && mine { found = v; }
+            }
+        }
+        if found == "" { return if space == "" { dir } else { "" }; }
+        let mut cut = 0;
+        for (i, c) in found.chars() {
+            if c == '/' || c == '\\' { cut = i + 1; }
+        }
+        found.slice(0, cut)
+    }
+
     /// 最初のファイルと、そこから `use` でたどれるモジュールをすべて読み、1 つのプログラムにする
     fn mut Result<ast.Program, diag.Diag> load(str src) {
         names.push("");
@@ -270,11 +294,17 @@ pub struct Loader {
                 return Err(diag.error("標準ライブラリの中で `use {u};` は使えません", use_spans[i], "`use std.名前;` だけ使える"));
             } else if folders[i] != "" {
                 // `use a.b;`: 最初のファイルのフォルダから a/b.jw を読む。中の名前は `a:b.f`（表示は `a.b.f`）
-                if packaged {
-                    return Err(diag.error("パッケージではフォルダ分けの use はまだ使えません", use_spans[i], "`use 名前;` で同じフォルダのモジュールを使ってください"));
-                }
                 key = folders[i].replace("/", ":") + ":" + u;
                 path = dir + folders[i] + "/" + u + ".jw";
+                if packaged {
+                    // パッケージの中では、そのパッケージの src のフォルダから数える（名前は `pkg/a:b`）
+                    let root = package_src(space);
+                    if root == "" {
+                        return Err(diag.error("パッケージ `{space}` のフォルダが分かりません", use_spans[i], "パッケージマップを作り直してください"));
+                    }
+                    path = root + folders[i] + "/" + u + ".jw";
+                    if space != "" { key = space + "/" + key; }
+                }
             } else if packaged {
                 match package_paths.get(local) {
                     case Some(p) -> path = p;
@@ -306,8 +336,8 @@ pub struct Loader {
             } else { match read_file(path) {
                 case Ok(t) -> t;
                 case Err(e) -> return Err(diag.error("モジュール `{u}` が見つかりません", use_spans[i],
-                    if packaged { "パッケージのファイルを読めません: " + path + ": " + e }
-                    else if folders[i] != "" { "フォルダ " + folders[i] + " に {u}.jw がない" } else { "同じフォルダに {u}.jw がない" }));
+                    if folders[i] != "" { "フォルダ " + folders[i] + " に {u}.jw がない" }
+                    else if packaged { "パッケージのファイルを読めません: " + path + ": " + e } else { "同じフォルダに {u}.jw がない" }));
             } };
             names.push(key);
             paths.push(path);
