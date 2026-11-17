@@ -1796,6 +1796,14 @@ struct FnGen {
         }
         // tan は LLVM の古い版に組み込みの関数がないので、C の tan を呼ぶ
         if name == "f64.tan" { return Ok(llvm.vt(b.val("call double @tan(double " + vals[0].v + ")"), ty.Ty.Float)); }
+        if name == "f64.log2" { return Ok(llvm.vt(b.val("call double @llvm.log2.f64(double " + vals[0].v + ")"), ty.Ty.Float)); }
+        // 逆三角関数も LLVM に組み込みの関数がないので、C の関数を呼ぶ（atan2 は y.atan2(x)。C と同じ引数の順）
+        if name == "f64.asin" || name == "f64.acos" || name == "f64.atan" {
+            return Ok(llvm.vt(b.val("call double @" + name.slice(4, name.len()) + "(double " + vals[0].v + ")"), ty.Ty.Float));
+        }
+        if name == "f64.atan2" {
+            return Ok(llvm.vt(b.val("call double @atan2(double " + vals[0].v + ", double " + vals[1].v + ")"), ty.Ty.Float));
+        }
         if name == "f64.pow" {
             let pv = b.val("call double @llvm.pow.f64(double " + vals[0].v + ", double " + vals[1].v + ")");
             return Ok(llvm.vt(pv, ty.Ty.Float));
@@ -2890,6 +2898,62 @@ struct FnGen {
                 b.op("store " + xl + " " + vj + ", ptr " + pi);
                 b.op("store " + xl + " " + vi + ", ptr " + pj);
                 b.op("call void @jw_list_moved(ptr " + pr.ptr + ", ptr " + moved + ")");
+                return Ok(llvm.vt("0", ty.Ty.Unit));
+            }
+            if name == "first" || name == "last" {
+                // 写しを Some にする（型検査がコピーできる要素だけにしている）。空なら None
+                let flt = m.lt(want)?;
+                let fres = b.alloca(flt);
+                let fempty = b.val("icmp eq i64 " + len + ", 0");
+                let fyes = b.l();
+                let fno = b.l();
+                let fdone = b.l();
+                b.op("br i1 " + fempty + ", label %" + fyes + ", label %" + fno);
+                b.label(fyes);
+                let fnv = make_enum(m, want, "None", [])?;
+                b.op("store " + flt + " " + fnv + ", ptr " + fres);
+                b.br(fdone);
+                b.label(fno);
+                let fi = if name == "first" { "0" } else { b.val("sub i64 " + len + ", 1") };
+                let fdata = b.val("load ptr, ptr " + pr.ptr);
+                let fep = b.val("getelementptr " + xl + ", ptr " + fdata + ", i64 " + fi);
+                let fv = read_copy(m, fep, x)?;
+                let fsv = make_enum(m, want, "Some", [llvm.vt(fv, ty.cl(x))])?;
+                b.op("store " + flt + " " + fsv + ", ptr " + fres);
+                b.br(fdone);
+                b.label(fdone);
+                return Ok(llvm.vt(b.val("load " + flt + ", ptr " + fres), ty.cl(want)));
+            }
+            if name == "clear" || name == "truncate" {
+                // 後ろの要素を解放して長さを縮める（clear は 0 まで）。要素を借りた ref は無効になる
+                let mut keep = "0";
+                if name == "truncate" {
+                    if !ty.is(vals[0].t, "Int") { return Err("整数でない長さ"); }
+                    keep = llvm.widen(ref mut b, vals[0].v, ty.int_of(vals[0].t));
+                    let tneg = b.val("icmp slt i64 " + keep + ", 0");
+                    let tok = b.if_true(tneg);
+                    let title = m.cstr("truncate の長さが負です");
+                    let ts = m.site(arg_span, "");
+                    let lab = m.cstr("長さは 0 以上にします");
+                    b.op("call void @jw_fail(ptr " + title + ", ptr " + ts + ", ptr " + lab + ", ptr null)");
+                    b.op("unreachable");
+                    b.label(tok);
+                    let tbig = b.val("icmp sgt i64 " + keep + ", " + len);
+                    keep = b.val("select i1 " + tbig + ", i64 " + len + ", i64 " + keep);
+                }
+                b.op("call void @jw_list_moved(ptr " + pr.ptr + ", ptr " + moved + ")");
+                if m.needs_drop(x)? {
+                    let gone = m.site(span, "`" + name + "` でリストから取り除かれた");
+                    let d = m.helper("Drop", x);
+                    let cnt = b.val("sub i64 " + len + ", " + keep);
+                    let e = b.loop_begin(cnt);
+                    let at = b.val("add i64 " + keep + ", " + e.i);
+                    let cdata = b.val("load ptr, ptr " + pr.ptr);
+                    let cep = b.val("getelementptr " + xl + ", ptr " + cdata + ", i64 " + at);
+                    b.op("call void " + d + "(ptr " + cep + ", ptr " + gone + ")");
+                    b.loop_end(e);
+                }
+                b.op("store i64 " + keep + ", ptr " + lp);
                 return Ok(llvm.vt("0", ty.Ty.Unit));
             }
             if name == "reverse" {

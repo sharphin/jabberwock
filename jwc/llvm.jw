@@ -558,6 +558,12 @@ pub struct Module {
         // jwc だけの関数（Rust 版と突き合わせる出力を変えないよう、使ったときだけ宣言する）
         let mut only = "";
         if body.contains("@jw_list_wipe(") { only += "declare void @jw_list_wipe(ptr, i64, ptr)\n"; }
+        // 小数の log2 と逆三角関数（jwc だけ。使ったときだけ宣言して、Rust 版と同じ出力を保つ）
+        if body.contains("@llvm.log2.f64(") { only += "declare double @llvm.log2.f64(double)\n"; }
+        if body.contains("@asin(") { only += "declare double @asin(double)\n"; }
+        if body.contains("@acos(") { only += "declare double @acos(double)\n"; }
+        if body.contains("@atan(") { only += "declare double @atan(double)\n"; }
+        if body.contains("@atan2(") { only += "declare double @atan2(double, double)\n"; }
         if body.contains("@jw_read_line_for(") { only += "declare i64 @jw_read_line_for(i64, ptr, ptr)\n"; }
         if body.contains("@jw_stdin_ended(") { only += "declare i32 @jw_stdin_ended()\n"; }
         // f32（jwc だけ）

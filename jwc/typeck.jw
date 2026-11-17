@@ -2532,6 +2532,20 @@ pub struct Checker {
         } else if name == "insert" {
             want = 2;
         } else if name == "reverse" {
+        } else if name == "first" || name == "last" {
+            // 最初・最後の要素の写し（jwc だけ。下のエラーの文は Rust 版とそろえるため並べない）
+            if !copyable(elem) {
+                return Err(diag.make("`{ty.show(elem)}` はコピーできないので {name} で取り出せません")
+                    .at(span, "リストの中の要素はそのまま残るので、写しを作れない要素は取り出せない")
+                    .with_note("`a[0].x` のように場所として読むか、`pop()` / `remove(i)` で取り出してください"));
+            }
+            ret = ty.opt(ty.cl(elem));
+            mutable = false;
+        } else if name == "clear" {
+            // 全部の要素を解放して空にする（jwc だけ）
+        } else if name == "truncate" {
+            // 長さを n までに縮める。後ろの要素は解放する（jwc だけ）
+            want = 1;
         } else if name == "swap" {
             // i 番目と j 番目を入れ替える（jwc だけ。下のエラーの文は Rust 版とそろえるため並べない）
             want = 2;
@@ -2624,7 +2638,8 @@ pub struct Checker {
             return Ok(ty.Ty.List(own r));
         }
         // 添字（insert・remove の最初の引数）は整数、要素（push・insert の最後の引数）は要素の型
-        if name == "remove" || name == "insert" || name == "swap" { index_value(argv[0])?; }
+        if name == "remove" || name == "insert" || name == "swap" || name == "truncate" { index_value(argv[0])?; }
+        if name == "truncate" { return Ok(ret); }
         if name == "swap" {
             index_value(argv[1])?;
             return Ok(ret);
@@ -3390,7 +3405,9 @@ pub struct Checker {
             ret = ty.Ty.Int(if ty.is_f32(t) { "u32" } else { "u64" });
         } else if float && (name == "sqrt" || name == "floor" || name == "ceil" || name == "round" || name == "trunc"
                 || name == "exp" || name == "ln" || name == "log10" || name == "sin" || name == "cos" || name == "tan") {
-        } else if float && name == "pow" {
+        } else if float && (name == "log2" || name == "asin" || name == "acos" || name == "atan") {
+            // jwc だけ（Rust 版は凍結）。下のエラーの文は Rust 版とそろえるため並べない
+        } else if float && (name == "pow" || name == "atan2") {
             arity = 1;
         } else if float && name == "is_nan" {
             ret = ty.Ty.Bool;

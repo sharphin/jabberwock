@@ -929,6 +929,28 @@ fn jwc_map_values_clear_and_checked() {
     assert!(err.contains("無効になった参照を使いました") && err.contains("`clear` で辞書から取り除かれた"), "{}", err);
 }
 
+// jwc だけの機能: リストの first・last・clear・truncate と、小数の log2・asin・acos・atan・atan2（Rust 版は凍結）
+#[test]
+fn jwc_list_first_last_clear_truncate_and_math() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-lstm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "struct P { str s; }\nfn main() {\n    let str[] mut a = [\"x\", \"y\", \"z\", \"w\"];\n    print(a.first(), a.last());\n    \
+        a.truncate(9);\n    a.truncate(2);\n    print(a, a.len(), a.last());\n    a.clear();\n    print(a, a.first(), a.last());\n    a.push(\"q\");\n    print(a);\n    \
+        print((8.0).log2(), (1.0).asin() * 2.0, (1.0).acos(), (1.0).atan() * 4.0, (1.0).atan2(-1.0), (0.5 as f32).asin());\n    \
+        let (own P)[] mut ps = [own P { s: \"a\" }, own P { s: \"b\" }];\n    let r = ref ps[1];\n    ps.truncate(1);\n    print(ps.len());\n    let n = 0 - 1;\n    if r.s == \"b\" { ps.truncate(n); }\n}\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout),
+        "Some(x) Some(w)\n[x, y] 2 Some(y)\n[] None None\n[q]\n3.0 3.141592653589793 0.0 3.141592653589793 2.356194490192345 0.5235988\n1\n");
+    let err = String::from_utf8_lossy(&got.stderr);
+    assert!(err.contains("無効になった参照を使いました") && err.contains("`truncate` でリストから取り除かれた"), "{}", err);
+}
+
 // std.deque・std.heap・std.log（jwc だけ。heap はリストの swap を使う）
 #[test]
 fn jwc_std_deque_heap_log() {
