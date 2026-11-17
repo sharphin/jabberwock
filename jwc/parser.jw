@@ -233,6 +233,8 @@ struct Parser {
     str[] this_methods;
     str[] this_statics;
     str owner;
+    // 読んでいる構造体の型の引数の条件（`struct Set<T: key>`。メソッドの型の引数にも写す）
+    str[] owner_bounds;
     // 見えているローカルの名前と、スコープの始まり
     str[] locals;
     i64[] marks;
@@ -689,14 +691,26 @@ struct Parser {
         let start = expect("struct", "`struct`")?;
         let n = expect_ident("構造体名")?;
         let s = diag.join(start, prev_span());
-        let tparams = parse_tparams()?;
+        // 構造体の型の引数には、組み込みの条件 `key` だけつけられる（jwc だけ）
+        let tspan = span();
+        let mut tb = parse_tparams_bounded()?;
+        for b in tb.bounds {
+            if b != "" && b != "key" {
+                // エラーの文は Rust 版とそろえる（key は jwc だけ）
+                return Err(diag.error("構造体と enum の型の引数には条件をつけられません", tspan, "`<T: ...>` の条件は関数とメソッドにだけ書けます"));
+            }
+        }
+        let tparams = tb.names.drain();
+        let sbounds = tb.bounds.drain();
+        owner_bounds = sbounds.map((x) -> x);
         expect("{{", "`{{`")?;
         let mut it = items_twice(false, n, tparams)?;
+        owner_bounds = [];
         let str[] none = [];
         let str[] mut fields = [];
         for f in it.fields { fields.push(f); }
         finish_methods(n, fields, none, ref mut it, out)?;
-        Ok(ast.StructDef { name: n, tparams: tparams, fields: it.fields.drain(), field_types: it.field_types.drain(), span: s, pubs: it.pubs.drain() })
+        Ok(ast.StructDef { name: n, tparams: tparams, bounds: sbounds, fields: it.fields.drain(), field_types: it.field_types.drain(), span: s, pubs: it.pubs.drain() })
     }
 
     /// 構造体・enum の中の `fn` / `fn mut` / `static fn` 1 つ。`this`（`ref 型名<T..>`）を最初の引数に足す
@@ -738,9 +752,9 @@ struct Parser {
         }
         let str[] mut tps = [];
         let str[] mut bounds = [];
-        for t in tparams {
+        for (i, t) in tparams {
             tps.push(t);
-            bounds.push("");
+            bounds.push(if i < owner_bounds.len() { owner_bounds[i] } else { "" });
         }
         for t in f.tparams { tps.push(t); }
         for b in f.bounds { bounds.push(b); }
@@ -2000,7 +2014,7 @@ pub fn Result<ast.Program, diag.Diag> parse_with(lexer.Token[] toks, ref str[] m
     let mut p = Parser {
         toks: toks, pos: 0, no_struct_lit: false, loop_depth: 0, in_value_if: false,
         enum_names: enum_names, struct_names: struct_names, enum_variants: variants,
-        bind_ready: false, in_method: false, this_fields: [], this_methods: [], this_statics: [], owner: "",
+        bind_ready: false, in_method: false, this_fields: [], this_methods: [], this_statics: [], owner: "", owner_bounds: [],
         locals: [], marks: [], use_consts: false, in_const: false, const_names: [], const_vals: [],
         raw_call: false, borrow_lambdas: [], nest: 0, hoisted: [],
     };

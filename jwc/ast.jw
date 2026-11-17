@@ -127,6 +127,8 @@ pub struct FnDef {
 pub struct StructDef {
     str name;
     str[] tparams;
+    // 型の引数ごとの条件（"" か "key"。jwc だけ）
+    str[] bounds;
     str[] fields;
     TypeExpr[] field_types;
     i64 span;

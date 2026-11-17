@@ -123,6 +123,7 @@ fn main() {
 | `std.heap` | 優先度つきキュー `heap.Heap<T>`（優先度 i64 の小さいものから）。`Heap.new()`・`h.push(key, v)`・`h.pop()`（`Option<T>`）・`h.peek_key()`（`Option<i64>`）・`h.len()`・`h.is_empty()`（[1.17](#117-stddequestdheapstdlogjwc-だけ)） |
 | `std.log` | 標準エラーへのログ。`log.Logger.new()`・`lg.debug(msg)`・`lg.info(msg)`・`lg.warn(msg)`・`lg.error(msg)`・`lg.set_level(l)`・`lg.set_time(on)` と `Level`（[1.17](#117-stddequestdheapstdlogjwc-だけ)） |
 | `std.sets` | 集合（同じ値は 1 つ。入れた順を覚える）。`sets.IntSet`（i64）・`sets.StrSet`（str）・`sets.CharSet`（char）。`X.new()`・`X.of(リスト)`・`s.add(x)`（新しく入れば true）・`s.remove(x)`・`s.has(x)`・`s.len()`・`s.is_empty()`・`s.items()`（入れた順）・`s.union(t)`・`s.intersect(t)`・`s.minus(t)`・`s.contains_all(t)` |
+| `std.set` | 汎用の集合 `set.Set<T>`（jwc だけ）。T は `key` を満たす型（下の「組み込みの条件 key」）。メソッドは std.sets と同じに、`s.extend(リスト)`・`s.clear()` を足したもの。`Set.of(xs)` と `extend(xs)` はリストを受け取って使い切る。`set.Set.of([1, 2])` のように書いた `[...]` から T は決まらないので、`let set.Set<i64> s = set.Set.of([1, 2]);` か、型を書いたリストを渡す |
 | `std.rand` | 再現できる乱数（暗号には使えない。splitmix64）。`rand.Rng.seeded(42)`（同じ種なら同じ並び）・`rand.Rng.from_time()`、`r.next()`（u64）・`r.below(n)`・`r.range(lo, hi)`・`r.float()`・`r.chance(p)`・`r.shuffle(ref mut a)`。暗号用は `std.random` |
 | `std.cli` | コマンドライン引数。`let mut p = cli.Parser.new("名前", "説明");` に `p.flag(長い名前, 短い名前, 説明)`・`p.option(長い名前, 短い名前, 説明, 既定値)`・`p.arg(名前, 説明)` を足し、`p.parse(args())` → `Result<cli.Args, str>`。`a.has(名前)`・`a.get(名前)`・`a.get_int(名前)`（`Option<i64>`）・`a.rest`（位置引数）・`a.help`（`-h` / `--help`）。`p.usage()` は使い方の文（全角の字は幅 2 でそろえる）。書き方は `--name`・`--name=値`・`--name 値`・`-v`・`-vq`・`-o 値`・`-o値`、`--` のあとと `-`・`-5` は位置引数 |
 | `std.fs` | `open(path)`・`create(path)`・`append(path)`・`close(f)` と資源の型 `File`、`exists(path)`・`list_dir(path)`・`make_dir(path)`・`remove(path)`・`rename(from, to)`・`write_atomic(path, bytes)`・`write_text_atomic(path, s)`・`stat(path)` と `Info`・`is_file(path)`・`is_dir(path)`・`copy(from, to)`・`remove_all(path)`、`make_dirs(path)`（親から順に。もうあれば何もしない）・`append_text(path, text)`（後ろに足す。なければ作る）・`walk(path)`（下のファイルすべて。リンクのディレクトリには入らない）、パスの文字列だけで決める `join(a, b)`・`parent(p)`・`file_name(p)`・`ext(p)`・`stem(p)`（[1.3](#13-資源と-stdfsjwc-だけ)） |
@@ -1242,9 +1243,12 @@ fn T max<T: ordered>(T a, T b) { // ordered: 大小を比べられる（整数�
   - 引数と戻り値の型が同じであること。interface で書き換えないメソッドを、構造体が `fn mut` で持っているときは当てはまらない。
 - 条件は型の引数のあとに `: 名前` で書く。いくつもつけるなら `<T: Shape + ordered>`。
 - 組み込みの条件 `ordered`: 整数・f64・str。`<` `<=` `>` `>=` `==` `!=` が使える。
+- 組み込みの条件 `key`（jwc だけ）: 辞書のキーにできる型（整数・str・bool・char と、そういうフィールドだけの構造体。[8.10](#810-辞書)）。
+  `<T: key>` の T は辞書のキーにできる（`bool[T]`）。`==` などの比べる演算は使えない（キーを引くのは辞書のメソッドで）。
+  T は構造体のことがあり、コピーできるとは限らないので、T の値を 2 回使うとムーブのエラーになる（`m.contains(x)` のあとに `m[x]` は書けない）。
 - 条件は呼び出しの場所で確かめる。満たさなければ、足りないメソッドを示してエラー。
   型の引数のまま別のジェネリックな関数へ渡すときは、こちらにも同じ条件が要る。
-- 条件は関数とメソッドの型の引数にだけつけられる（構造体・enum の型の引数にはつけられない）。
+- 条件は関数とメソッドの型の引数にだけつけられる（enum の型の引数にはつけられない）。構造体の型の引数には `key` だけつけられる（jwc だけ。ほかの条件は「構造体と enum の型の引数には条件をつけられません」のエラー。`struct Set<T: key> { bool[T] m; }`）。その構造体の型を書いた場所・構造体を作った場所で、中身の型が条件を満たすか確かめる。メソッドにも同じ条件がつく。
 - **interface は型としても使える**（own か ref を通して）。当てはまる構造体なら何でも入れられ、メソッドは中身の構造体のものが呼ばれる。
 
   ```

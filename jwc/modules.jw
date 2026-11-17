@@ -431,7 +431,7 @@ fn ast.Program qualify(ast.Program p, str module, ref Info info) {
     let ast.StructDef[] mut structs = [];
     for s in p.structs {
         structs.push(ast.StructDef {
-            name: q.name(s.name), tparams: strs(s.tparams), fields: strs(s.fields), field_types: q.tys(s.field_types, s.tparams), span: s.span,
+            name: q.name(s.name), tparams: strs(s.tparams), bounds: strs(s.bounds), fields: strs(s.fields), field_types: q.tys(s.field_types, s.tparams), span: s.span,
             pubs: strs(s.pubs),
         });
     }

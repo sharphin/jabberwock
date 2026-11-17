@@ -951,6 +951,34 @@ fn jwc_list_first_last_clear_truncate_and_math() {
     assert!(err.contains("無効になった参照を使いました") && err.contains("`truncate` でリストから取り除かれた"), "{}", err);
 }
 
+// jwc だけの機能: 組み込みの条件 key（関数と構造体の型の引数）と std.set の Set<T>（Rust 版は凍結）
+#[test]
+fn jwc_key_bound_and_std_set() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-keyset-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "use std.set;\nstruct P { i64 x; i64 y; }\nfn i64 count<T: key>(T a, T b) {\n    let bool[T] mut m = [];\n    m[a] = true;\n    m[b] = true;\n    m.len()\n}\nfn main() {\n    let set.Set<str> mut s = set.Set.new();\n    print(s.add(\"a\"), s.add(\"b\"), s.add(\"a\"), s.len(), s.has(\"b\"), s.items());\n    let char[] cs = ['x', 'y', 'x'];\n    let mut c = set.Set.of(cs);\n    print(c.items(), c.has('y'));\n    let set.Set<P> mut ps = set.Set.new();\n    ps.add(P { x: 1, y: 2 });\n    ps.add(P { x: 1, y: 2 });\n    ps.add(P { x: 3, y: 4 });\n    print(ps.len(), ps.has(P { x: 3, y: 4 }), ps.items());\n    let i64[] l1 = [1, 2, 3];\n    let i64[] l2 = [2, 3, 4];\n    let i64[] l3 = [1, 3];\n    let a = set.Set.of(l1);\n    let b = set.Set.of(l2);\n    print(a.union(b).items(), a.intersect(b).items(), a.minus(b).items(), a.contains_all(set.Set.of(l3)));\n    print(count(\"a\", \"a\"), count(1, 2), ps.remove(P { x: 1, y: 2 }), ps.len());\n    ps.clear();\n    print(ps.is_empty());\n}\nstruct Q<T: key> { T k; }\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&got.stdout),
+        "true true false 2 true [a, b]\n[x, y] true\n2 true [P { x: 1, y: 2 }, P { x: 3, y: 4 }]\n[1, 2, 3, 4] [2, 3] [1] true\n1 2 true 1\ntrue\n");
+    // 条件を満たさない型はコンパイルのエラー
+    for (prog, want) in [
+        ("use std.set;\nfn main() { let set.Set<f64> s = set.Set.new(); }\n", "条件 `key` を満たしません"),
+        ("fn i64 one<T: key>(T x) { 1 }\nfn main() { print(one(1.5)); }\n", "条件 `key` を満たしません"),
+        ("fn i64 one<T>(T x) { let bool[T] m = []; m.len() }\nfn main() { print(one(1)); }\n", "辞書のキーにできません"),
+        ("struct Q<T: ordered> { T x; }\nfn main() {}\n", "構造体と enum の型の引数には条件をつけられません"),
+    ] {
+        std::fs::write(&path, prog).unwrap();
+        let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+        assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains(want), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // std.deque・std.heap・std.log（jwc だけ。heap はリストの swap を使う）
 #[test]
 fn jwc_std_deque_heap_log() {

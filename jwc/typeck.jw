@@ -29,6 +29,8 @@ fn i64 cap_add(i64 a, i64 b) {
 }
 
 const ORDERED = "ordered";
+// 組み込みの条件 key: 辞書のキーにできる型（jwc だけ）
+const KEY = "key";
 
 const STR_METHODS = "len, byte_len, chars, bytes, code, lines, split, trim, to_upper, to_lower, contains, starts_with, ends_with, find, slice, replace, repeat, to_int, to_float";
 
@@ -86,6 +88,8 @@ fn bool hint_is(ref Hint h, str k) { h.some && ty.is(h.t, k) }
 struct SInfo {
     str name;
     str[] tparams;
+    // 型の引数ごとの条件（"" か "key"）
+    str[] bounds;
     str[] fields;
     ty.Ty[] tys;
     i64 span;
@@ -595,6 +599,8 @@ pub struct Checker {
     /// 辞書のキーにできる型か: 整数・str・bool と、それ（とそういう構造体）だけを持つ構造体（構造体は jwc だけ）
     fn bool keyable(ref ty.Ty t, i64 depth) {
         if ty.is(t, "Int") || ty.is(t, "Str") || ty.is(t, "Bool") { return true; }
+        // `<T: key>` の T（jwc だけ）。使う場所で中身の型がキーにできるか確かめる
+        if ty.is(t, "Param") { return has(bound_list(bound_of(ty.name_of(t))), KEY); }
         if !ty.is(t, "Struct") || depth > 16 || !is_struct(ty.name_of(t)) { return false; }
         let d = s_at[ty.name_of(t)];
         // フィールドの型をまだ調べていない構造体（構造体のフィールドで、後ろに書いた構造体をキーにしたとき）は使えない
@@ -710,6 +716,7 @@ pub struct Checker {
                 let argv = resolve_all(xs)?;
                 if is_struct(n) {
                     let d = s_at[n];
+                    struct_bounds(n, argv, t.span)?;
                     let m = ty.targs(sdefs[d].tparams, argv);
                     for f in sdefs[d].tys { check_size(ty.subst(f, m), t.span)?; }
                     Ok(ty.Ty.Struct(n, own argv))
@@ -2200,6 +2207,7 @@ pub struct Checker {
                 let ast.Expr[] no_args = [];
                 let m = instantiate(tparams, params, no_args, inits, true, pre_p, pre_h, false)?;
                 let targs = all_bound(tparams, m, e.span, name)?;
+                struct_bounds(name, targs, e.span)?;
                 Ok(ty.Ty.Struct(name, own targs))
             }
             case If(cond, then, has_els, els) -> {
@@ -2947,6 +2955,20 @@ pub struct Checker {
 
     // ------------------------------------------------ 条件と interface
 
+    /// 構造体の型の引数の条件（`struct Set<T: key>`）を、中身の型が満たすか
+    fn Result<(), diag.Diag> struct_bounds(str n, ref ty.Ty[] argv, i64 span) {
+        let d = s_at[n];
+        for (i, b) in sdefs[d].bounds {
+            if b == "" || i >= argv.len() { continue; }
+            match satisfies(argv[i], b) {
+                case Ok(u) -> {}
+                case Err(why) -> return Err(diag.make("`{ty.show(argv[i])}` は `{n}` の型の引数 `{sdefs[d].tparams[i]}` の条件 `{b}` を満たしません")
+                    .at(span, why));
+            }
+        }
+        Ok(())
+    }
+
     /// `<T: ordered>` の T か
     fn bool is_ordered_param(ref ty.Ty t) {
         ty.is(t, "Param") && has(bound_list(bound_of(ty.name_of(t))), ORDERED)
@@ -2962,6 +2984,13 @@ pub struct Checker {
             // 型の引数のまま渡すなら、こちらの関数にも同じ条件が要る
             let p = ty.name_of(t);
             return if has(bound_list(bound_of(p)), bound) { Ok(()) } else { Err("`{p}` に条件 `{bound}` がついていません") };
+        }
+        if bound == KEY {
+            return if keyable(t, 0) {
+                Ok(())
+            } else {
+                Err("`{ty.show(t)}` は辞書のキーにできません（key は整数・str・bool と、そういうフィールドだけの構造体）")
+            };
         }
         if bound == ORDERED {
             return if ty.is(t, "Int") || ty.is(t, "Float") || ty.is(t, "Str") {
@@ -3861,7 +3890,7 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
             }
             c.add_private_methods(s.name, s.pubs, prog.fns);
         }
-        c.sdefs.push(SInfo { name: s.name, tparams: s.tparams.map((x) -> x), fields: s.fields.map((x) -> x), tys: [], span: s.span });
+        c.sdefs.push(SInfo { name: s.name, tparams: s.tparams.map((x) -> x), bounds: s.bounds.map((x) -> x), fields: s.fields.map((x) -> x), tys: [], span: s.span });
     }
     for en in prog.enums {
         if c.is_struct(en.name) || c.is_enum(en.name) {
@@ -3874,7 +3903,7 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
         c.edefs.push(EInfo { name: en.name, tparams: en.tparams.map((x) -> x), vs: vs, span: en.span, ready: false });
     }
     for i in prog.interfaces {
-        if c.is_struct(i.name) || c.is_enum(i.name) || c.is_iface(i.name) || i.name == ORDERED {
+        if c.is_struct(i.name) || c.is_enum(i.name) || c.is_iface(i.name) || i.name == ORDERED || i.name == KEY {
             return Err(diag.make("型 `{i.name}` が二重に定義されています").at(i.span, "同じ名前の型がすでにある"));
         }
         c.i_at[i.name] = c.idefs.len();
@@ -3895,7 +3924,12 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
     for s in prog.structs {
         c.enter_mod(s.name);
         c.cur_tps = s.tparams.map((x) -> x);
+        // `struct Set<T: key>` のフィールドでは T を辞書のキーにできる
+        c.b_names = s.tparams.map((x) -> x);
+        c.b_vals = s.bounds.map((x) -> x);
         let tys = c.resolve_all(s.field_types)?;
+        c.b_names = [];
+        c.b_vals = [];
         c.sdefs[c.s_at[s.name]].tys = tys;
     }
     for en in prog.enums {
@@ -3925,8 +3959,8 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
         c.enter_mod(f.name);
         for b0 in f.bounds {
             for b in bound_list(b0) {
-                if b != ORDERED { c.not_main_type(b, f.span)?; }
-                if b != ORDERED && !c.is_iface(b) {
+                if b != ORDERED && b != KEY { c.not_main_type(b, f.span)?; }
+                if b != ORDERED && b != KEY && !c.is_iface(b) {
                     return Err(diag.make("条件 `{b}` は定義されていません")
                         .at(f.span, "型の引数の条件には interface の名前か `ordered` を書きます"));
                 }
@@ -3934,9 +3968,14 @@ pub fn Result<Checker, diag.Diag> check(ref ast.Program prog) {
         }
         c.enter_mod(f.name);
         c.cur_tps = f.tparams.map((x) -> x);
+        // 条件 key の T は、引数と戻り値の型でも辞書のキー・`Set<T>` の T にできる
+        c.b_names = f.tparams.map((x) -> x);
+        c.b_vals = f.bounds.map((x) -> x);
         let ty.Ty[] mut params = [];
         for p in f.params { params.push(c.resolve(p.ty)?); }
         let ret = if f.has_ret { c.resolve(f.ret)? } else { ty.Ty.Unit };
+        c.b_names = [];
+        c.b_vals = [];
         let method = f.name.contains(".") && f.params.len() > 0 && f.params[0].name == "this";
         c.f_at[f.name] = c.sigs.len();
         c.sigs.push(FnSig {

@@ -1,0 +1,101 @@
+// std.set: 汎用の集合 Set<T>。`use std.set;` で `let set.Set<str> mut s = set.Set.new(); s.add("a");` のように使う（jwc だけ）。
+// T は辞書のキーにできる型（整数・str・bool・char と、そういうフィールドだけの構造体）。中身は辞書（値は true）。
+// 入れた順を覚える（items() はその順）。std.sets の IntSet・StrSet・CharSet は Rust 版でも使える型ごとの版。
+
+/// T の集合（同じ値は 1 つだけ。入れた順を覚える）
+pub struct Set<T: key> {
+    bool[T] m;
+
+    /// 空の集合
+    static fn Set<T> new() { Set { m: [] } }
+
+    /// リストの値を入れた集合（リストは受け取って使い切る）
+    static fn Set<T> of(T[] xs) {
+        let Set<T> mut s = Set.new();
+        s.extend(xs);
+        s
+    }
+
+    /// 入れる。新しく入ったら true（もうあれば false）
+    fn mut bool add(T x) {
+        // T はコピーできないことがあるので、x は 1 回だけ使う
+        let n = m.len();
+        m[x] = true;
+        m.len() > n
+    }
+
+    /// リストの値を全部入れる（リストは受け取って使い切る）
+    fn mut extend(T[] xs) {
+        // T はコピーできないことがあるので、for で回さず後ろから取り出す
+        let mut ys = xs;
+        ys.reverse();
+        loop {
+            match ys.pop() {
+                case Some(x) -> { m[x] = true; }
+                case None -> break;
+            }
+        }
+    }
+
+    /// 除く。あったら true
+    fn mut bool remove(T x) { m.remove(x).is_some() }
+
+    /// x があるか
+    fn bool has(T x) { m.contains(x) }
+
+    fn i64 len() { m.len() }
+
+    fn bool is_empty() { m.len() == 0 }
+
+    /// 全部を除く
+    fn mut clear() { m.clear(); }
+
+    /// 中の値のリスト（入れた順）
+    fn T[] items() { m.keys() }
+
+    /// どちらかにあるもの（この集合の順、続けて other だけにあるもの）
+    fn Set<T> union(ref Set<T> other) {
+        let Set<T> mut s = Set.new();
+        s.extend(m.keys());
+        s.extend(other.m.keys());
+        s
+    }
+
+    /// 両方にあるもの（この集合の順）
+    fn Set<T> intersect(ref Set<T> other) { pick(other, true) }
+
+    /// この集合にあって other にないもの（この集合の順）
+    fn Set<T> minus(ref Set<T> other) { pick(other, false) }
+
+    /// other の値をすべて含むか
+    fn bool contains_all(ref Set<T> other) {
+        let mut ys = other.m.keys();
+        loop {
+            match ys.pop() {
+                case Some(y) -> { if !m.contains(y) { return false; } }
+                case None -> break;
+            }
+        }
+        true
+    }
+
+    /// この集合の値のうち、other にある（inside が false ならない）ものの集合（この集合の順）
+    fn Set<T> pick(ref Set<T> other, bool inside) {
+        // 調べるのに 1 つ使うので、写しを 2 つ作って並べて取り出す
+        let mut a = m.keys();
+        let mut b = m.keys();
+        a.reverse();
+        b.reverse();
+        let Set<T> mut s = Set.new();
+        loop {
+            match a.pop() {
+                case Some(x) -> {
+                    let y = b.pop().unwrap();
+                    if other.m.contains(x) == inside { s.m[y] = true; }
+                }
+                case None -> break;
+            }
+        }
+        s
+    }
+}

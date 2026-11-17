@@ -30,6 +30,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("rand", include_str!("../std/rand.jw")),
     ("random", include_str!("../std/random.jw")),
     ("regex", include_str!("../std/regex.jw")),
+    ("set", include_str!("../std/set.jw")),
     ("sets", include_str!("../std/sets.jw")),
     ("text", include_str!("../std/text.jw")),
     ("time", include_str!("../std/time.jw")),
