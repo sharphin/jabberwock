@@ -6449,8 +6449,8 @@ fn main() {
 #####
 fn main() { assert_eq(1, "a"); }
 #####
-struct P { i64 x; }
-fn main() { let P[] ps = []; print(ps.index_of(P { x: 1 })); }
+struct P { f64 x; }
+fn main() { let P[] ps = []; print(ps.index_of(P { x: 1.0 })); }
 #####
 struct Tok { char c; i64 n; }
 fn main() {

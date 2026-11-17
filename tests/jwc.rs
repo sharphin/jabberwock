@@ -951,6 +951,22 @@ fn jwc_list_first_last_clear_truncate_and_math() {
     assert!(err.contains("無効になった参照を使いました") && err.contains("`truncate` でリストから取り除かれた"), "{}", err);
 }
 
+// jwc だけの機能: 辞書のキーにできる構造体のリストの contains・index_of（Rust 版は凍結）
+#[test]
+fn jwc_struct_list_contains() {
+    if !have_clang() { return; }
+    let dir = std::env::temp_dir().join(format!("jw-jwc-slc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("main.jw");
+    std::fs::write(&path, "struct P { i64 x; str s; }\nstruct Q { P p; bool b; }\nstruct F { f64 v; }\nfn main() {\n    let P[] mut ps = [];\n    ps.push(P { x: 1, s: \"a\" });\n    ps.push(P { x: 2, s: \"b\" });\n    ps.push(P { x: 2, s: \"b\" });\n    print(ps.contains(P { x: 2, s: \"b\" }), ps.index_of(P { x: 2, s: \"b\" }), ps.contains(P { x: 2, s: \"a\" }), ps.index_of(P { x: 9, s: \"\" }));\n    let Q[] mut qs = [];\n    qs.push(Q { p: P { x: 1, s: \"z\" }, b: true });\n    print(qs.index_of(Q { p: P { x: 1, s: \"z\" }, b: true }), qs.contains(Q { p: P { x: 1, s: \"z\" }, b: false }));\n    let P[] empty = [];\n    print(empty.contains(P { x: 0, s: \"\" }));\n}\n").unwrap();
+    let exe = dir.join("main");
+    let out = Command::new(jwc()).args(["build", "--clang", &native::clang(), "-o"]).arg(&exe).arg(&path).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let got = Command::new(&exe).output().unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(String::from_utf8_lossy(&got.stdout), "true Some(1) false None\nSome(0) false\nfalse\n");
+}
+
 // jwc だけの機能: 組み込みの条件 key（関数と構造体の型の引数）と std.set の Set<T>（Rust 版は凍結）
 #[test]
 fn jwc_key_bound_and_std_set() {

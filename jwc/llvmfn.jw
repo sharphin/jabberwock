@@ -2805,6 +2805,32 @@ struct FnGen {
                 } else if ty.is(x, "Str") {
                     at = b.val("call i64 @jw_list_find_str(ptr " + pr.ptr + ", ptr " + vals[0].v + ")");
                     b.op("call void @jw_str_release(ptr " + vals[0].v + ")");
+                } else if ty.is(x, "Struct") {
+                    // 辞書のキーにできる構造体（jwc だけ）: 辞書と同じく中身を並べた str にして比べる
+                    let want_s = m.enc_key(ref mut b, x, vals[0].v)?;
+                    let atp = b.alloca("i64");
+                    b.op("store i64 -1, ptr " + atp);
+                    let e = b.loop_begin(len);
+                    let sdata = b.val("load ptr, ptr " + pr.ptr);
+                    let sep = b.val("getelementptr " + xl + ", ptr " + sdata + ", i64 " + e.i);
+                    let sv = b.val("load " + xl + ", ptr " + sep);
+                    let got_s = m.enc_key(ref mut b, x, sv)?;
+                    let same = b.val("call i32 @jw_str_eq(ptr " + want_s + ", ptr " + got_s + ")");
+                    b.op("call void @jw_str_release(ptr " + got_s + ")");
+                    let hit = b.val("icmp ne i32 " + same + ", 0");
+                    let prev = b.val("load i64, ptr " + atp);
+                    let first = b.val("icmp slt i64 " + prev + ", 0");
+                    let take = b.val("and i1 " + hit + ", " + first);
+                    let nv = b.val("select i1 " + take + ", i64 " + e.i + ", i64 " + prev);
+                    b.op("store i64 " + nv + ", ptr " + atp);
+                    b.loop_end(e);
+                    b.op("call void @jw_str_release(ptr " + want_s + ")");
+                    // 探す値は使い終わったので捨てる
+                    let stmp = b.alloca(xl);
+                    b.op("store " + xl + " " + vals[0].v + ", ptr " + stmp);
+                    let sd = m.helper("Drop", x);
+                    b.op("call void " + sd + "(ptr " + stmp + ", ptr null)");
+                    at = b.val("load i64, ptr " + atp);
                 } else {
                     let cv = coerce(m, vals[0].v, vals[0].t, x)?;
                     let ftmp = b.alloca(xl);

@@ -2564,7 +2564,9 @@ pub struct Checker {
             }
         } else if name == "contains" || name == "index_of" {
             // 等しい要素を探す（比べ方は `==` と同じ。要素は数・真偽値・文字列）
-            if !(ty.is(elem, "Int") || ty.is(elem, "Float") || ty.is(elem, "Bool") || ty.is(elem, "Str")) || argv.len() != 1 {
+            // jwc では、辞書のキーにできる構造体（中身を並べて比べる）も
+            let skey = ty.is(elem, "Struct") && keyable(elem, 0);
+            if !(ty.is(elem, "Int") || ty.is(elem, "Float") || ty.is(elem, "Bool") || ty.is(elem, "Str") || skey) || argv.len() != 1 {
                 return Err(diag.make("{name} は数・真偽値・文字列のリストに使います")
                     .at(span, "`{ty.show(elem)}` のリストです（探す値を 1 つ渡します）"));
             }
